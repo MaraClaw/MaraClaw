@@ -59,14 +59,14 @@ export function Features() {
   return (
     <section id="features" className="scroll-mt-20 py-20 sm:py-28">
       <div className="container-page">
-        <Reveal className="mx-auto max-w-2xl text-center">
+        <Reveal className="mx-auto max-w-4xl text-center">
           <p className="text-sm font-semibold tracking-wide text-primary uppercase">
             Platform
           </p>
-          <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+          <h2 className="mt-3 whitespace-nowrap font-display text-[clamp(1.05rem,3.8vw,2.25rem)] font-semibold tracking-tight text-foreground">
             Everything an agent needs to work like a teammate
           </h2>
-          <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
             MaraClaw turns OpenClaw agents into managed digital employees -
             provisioned, supervised, and integrated for real team workflows.
           </p>
