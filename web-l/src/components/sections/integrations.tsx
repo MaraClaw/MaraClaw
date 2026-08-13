@@ -15,6 +15,7 @@ const integrations = [
   'Email',
   'Webhooks',
   'SSO',
+  'Skills',
   'MCP servers',
 ]
 
