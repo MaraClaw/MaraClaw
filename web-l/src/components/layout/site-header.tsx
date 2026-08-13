@@ -1,6 +1,7 @@
 import { Menu } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import {
@@ -43,12 +44,7 @@ export function SiteHeader() {
     >
       <div className="container-page flex h-16 items-center justify-between gap-4">
         <a href="#top" className="group flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className="flex size-9 items-center justify-center rounded-xl bg-primary text-lg shadow-[0_8px_20px_-10px_oklch(0.5_0.14_38/0.7)]"
-          >
-            🦞
-          </span>
+          <MaraClawLogo className="size-9 shadow-[0_8px_20px_-10px_oklch(0.5_0.14_38/0.7)]" />
           <span className="font-display text-base font-semibold tracking-tight text-foreground">
             MaraClaw
           </span>
