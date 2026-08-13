@@ -20,9 +20,12 @@ Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** im
 
 ```
 web-a/
+├── Dockerfile           # Node 26 build → nginx-unprivileged :8080
+├── docker/nginx.conf    # SPA fallback, asset cache, /healthz, CSP
+├── .dockerignore
 ├── vite.config.ts       # port 5174, /api proxy → engine
 ├── components.json      # shadcn-style aliases
-├── .env.example         # VITE_API_BASE_URL
+├── .env.example         # VITE_API_BASE_URL, VITE_AUTH_BYPASS
 └── src/
     ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
     ├── routes/          # route table + ProtectedRoute
@@ -74,8 +77,12 @@ npm install
 npm run dev
 npm run build
 npm run lint
+
+docker build -t maraclaw-web-a .
+docker run --rm -p 8080:8080 maraclaw-web-a
 ```
 
+Production image: multi-stage Node **26.7.0** + `nginxinc/nginx-unprivileged` on **8080**. Pass public API origin only via `--build-arg VITE_API_BASE_URL=...` if not using same-origin `/api` proxy.
 ## ANTI-PATTERNS
 
 - Do not put marketing pages or end-user chat here.
