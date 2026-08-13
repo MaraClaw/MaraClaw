@@ -183,7 +183,11 @@ async def self_create_company(data: TenantCreate, current_user: UserRecord = Dep
             detail="Company creation is not allowed via this link. Please join your assigned organization.",
         )
 
-    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=True)
+    from app.core.security import raise_if_password_change_required
+
+    raise_if_password_change_required(current_user)
+
+    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=False)
     if not allowed and current_user.role != "platform_admin":
         raise HTTPException(status_code=403, detail="Company self-creation is currently disabled")
 
@@ -263,6 +267,10 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
     Supports both:
     - Registration flow (user has no tenant yet): assigns tenant directly
     - Switch-org flow (user already has a tenant): creates a new User record"""
+    from app.core.security import raise_if_password_change_required
+
+    raise_if_password_change_required(current_user)
+
     code_obj = await invitation_code_dao.get_active_by_code(data.invitation_code)
     if not code_obj:
         raise HTTPException(status_code=400, detail="Invalid invitation code")
@@ -354,7 +362,7 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 @router.get("/registration-config")
 async def get_registration_config():
     """Public - returns whether self-creation of companies is allowed."""
-    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=True)
+    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=False)
     return {"allow_self_create_company": allowed}
 
 

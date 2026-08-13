@@ -185,10 +185,9 @@ async def register_init(
     if data.password:
         password_hash = await hash_password_async(data.password)
 
-    # 3. Check if this is the first user (platform admin setup)
-    is_first_user = await identity_dao.is_empty()
-
-    # 4. Check duplicate/existing identity first (outside transaction)
+    # 3. Check duplicate/existing identity first (outside transaction)
+    # Platform admin is seeded from PLATFORM_ADMIN_EMAIL/PASSWORD — open registration
+    # never elevates to platform_admin.
     identity = await identity_dao.get_by_email(data.email)
     if identity:
         # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
@@ -219,39 +218,21 @@ async def register_init(
             email=data.email,
             username=data.username,
             password=data.password,
-            is_platform_admin=is_first_user,
+            is_platform_admin=False,
             email_config=email_config,
             password_hash=password_hash,
         )
 
         tenant_uuid = None
-        if is_first_user:
-            tenant = await tenant_dao.get_by_slug("default")
-            if not tenant:
-                tenant = await tenant_dao.create(
-                    obj_in={
-                        "name": "Default",
-                        "slug": "default",
-                        "im_provider": "web_only",
-                    }
-                )
-            tenant_uuid = tenant.id
-
-        if tenant_uuid:
-            user = await user_dao.get_by_identity_and_tenant(identity.id, tenant_uuid)
-        else:
-            user = await user_dao.get_by_identity_and_tenant(identity.id, None)
+        user = await user_dao.get_by_identity_and_tenant(identity.id, None)
 
         if not user:
             user = await registration_service.create_user_with_identity(
                 identity=identity,
                 display_name=data.display_name or data.username,
-                role="platform_admin" if is_first_user else "member",
+                role="member",
                 tenant_id=tenant_uuid,
             )
-            if is_first_user:
-                await user_dao.update(db_obj=user, obj_in={"is_active": True})
-                user.is_active = True
             user.identity = identity
         else:
             user.identity = identity
@@ -335,42 +316,25 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
     # 2. Resolve email config once outside transaction
     email_config = await resolve_email_config_async()
 
-    # 3. Check if first user outside transaction
-    is_first_user = await user_dao.is_empty()
-
-    # 4. Check if this email is already registered globally outside transaction
+    # 3. Check if this email is already registered globally outside transaction
+    # Platform admin is seeded from env — open registration never elevates to platform_admin.
     identity = await identity_dao.get_by_email(data.email)
     if identity:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered, please login directly."
         )
 
-    tenant_uuid = None
-    if is_first_user:
-        tenant = await tenant_dao.get_by_slug("default")
-        if not tenant:
-            tenant = await tenant_dao.create(
-                obj_in={
-                    "name": "Default",
-                    "slug": "default",
-                    "im_provider": "web_only",
-                }
-            )
-        tenant_uuid = tenant.id
-        role = "platform_admin"
-    else:
-        tenant, _ = await registration_service.get_tenant_for_registration(
-            email=data.email, invitation_code=data.invitation_code
-        )
-        if tenant:
-            tenant_uuid = tenant.id
-        role = "member"
+    tenant, _ = await registration_service.get_tenant_for_registration(
+        email=data.email, invitation_code=data.invitation_code
+    )
+    tenant_uuid = tenant.id if tenant else None
+    role = "member"
 
     identity = await registration_service.find_or_create_identity(
         email=data.email,
         username=data.username,
         password=data.password,
-        is_platform_admin=is_first_user,
+        is_platform_admin=False,
         email_config=email_config,
         password_hash=password_hash,
     )
@@ -385,12 +349,6 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
             detail="Username already taken. Please choose a different username.",
         )
 
-    if is_first_user:
-        identity = await identity_dao.update(
-            db_obj=identity,
-            obj_in={"email_verified": True, "is_active": True},
-        )
-
     user = await registration_service.create_user_with_identity(
         identity=identity,
         display_name=data.display_name or data.username,
@@ -400,20 +358,11 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
         email_config=email_config,
     )
 
-    # 5. Seed default agents for first user outside main registration transaction block
-    if is_first_user:
-        try:
-            from app.services.agent_seeder import seed_default_agents
-
-            await seed_default_agents()
-        except Exception as e:
-            logger.warning(f"Failed to seed default agents: {e}")
-
-    # 6. Send verification email only when the identity still needs it (outside transaction)
+    # 4. Send verification email only when the identity still needs it (outside transaction)
     if not identity.email_verified:
         await _send_verification_email_task(user, background_tasks, settings)
 
-    # 7. Generate access token and build response payload outside transaction
+    # 5. Generate access token and build response payload outside transaction
     token = create_access_token(str(user.id), user.role)
     return RegisterInitResponse(
         user_id=user.id,
@@ -550,12 +499,17 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
                 detail="Your organization has been disabled.",
             )
 
-    # 6. Generate Token
+    # 6. Generate Token (login succeeds even when password change is required;
+    # general API access is blocked by get_current_user until the password is changed).
     token = create_access_token(str(user.id), user.role)
+    must_change = bool(getattr(identity, "must_change_password", False))
+    user_out = UserOut.model_validate(user)
+    user_out.must_change_password = must_change
     return TokenResponse(
         access_token=token,
-        user=UserOut.model_validate(user),
+        user=user_out,
         identity=IdentityOut.model_validate(identity),
+        must_change_password=must_change,
         needs_company_setup=user.tenant_id is None,
     )
 
@@ -660,7 +614,10 @@ async def reset_password(data: ResetPasswordRequest):
     identity = await identity_dao.get(identity_id)
     if not identity or not identity.is_active:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
-    await identity_dao.update(db_obj=identity, obj_in={"password_hash": new_hash})
+    await identity_dao.update(
+        db_obj=identity,
+        obj_in={"password_hash": new_hash, "must_change_password": False},
+    )
 
     return {"ok": True}
 
@@ -670,6 +627,7 @@ async def get_me(current_user: UserRecord = Depends(get_authenticated_user)):
     """Get current user profile."""
     data = UserOut.model_validate(current_user)
     data.is_platform_admin = bool(getattr(getattr(current_user, "identity", None), "is_platform_admin", False))
+    data.must_change_password = bool(getattr(current_user, "must_change_password", False))
     return data
 
 
@@ -831,6 +789,12 @@ async def change_password(
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
 
+    if old_password == new_password:
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different from the current password",
+        )
+
     # Look up user & identity outside transaction
     user = await user_dao.get_with_identity(current_user.id)
     if not user:
@@ -851,9 +815,12 @@ async def change_password(
     tx_identity = await identity_dao.get(identity.id)
     if not tx_identity:
         raise HTTPException(status_code=404, detail="Identity not found")
-    await identity_dao.update(db_obj=tx_identity, obj_in={"password_hash": new_hash})
+    await identity_dao.update(
+        db_obj=tx_identity,
+        obj_in={"password_hash": new_hash, "must_change_password": False},
+    )
 
-    return {"ok": True}
+    return {"ok": True, "must_change_password": False}
 
 
 # ─── SSO/OAuth Endpoints ─────────────────────────────────────────────

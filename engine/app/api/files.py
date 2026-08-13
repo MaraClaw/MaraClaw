@@ -17,7 +17,6 @@ from app.config import get_settings
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.skill_dao import skill_dao
-from app.dao.user_dao import user_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
 from app.records.user import UserRecord
 from app.services.focus_service import is_focus_file_path
@@ -529,7 +528,7 @@ async def download_file(
 
     Auth via Bearer header OR `token` query parameter (for <img> tags).
     """
-    from app.core.security import decode_access_token
+    from app.core.security import load_user_from_access_token
 
     # Resolve JWT token from either Bearer header or query param
     jwt_token = None
@@ -541,14 +540,11 @@ async def download_file(
     if not jwt_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    payload = decode_access_token(jwt_token)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    user = await user_dao.get(uuid.UUID(user_id))
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    user = await load_user_from_access_token(
+        jwt_token,
+        require_active=True,
+        enforce_password_change=True,
+    )
 
     await check_agent_access(user, agent_id)
     storage = get_storage_backend()

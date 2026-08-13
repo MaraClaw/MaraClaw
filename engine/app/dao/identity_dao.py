@@ -17,6 +17,7 @@ _IDENTITY_COLUMNS = (
     "is_active",
     "is_platform_admin",
     "email_verified",
+    "must_change_password",
     "created_at",
     "updated_at",
 )
@@ -82,6 +83,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         password_hash: str | None = None,
         is_platform_admin: bool = False,
         email_verified: bool = False,
+        must_change_password: bool = False,
     ) -> IdentityRecord:
         """Create and return a new Identity row."""
         normalized_phone = re.sub(r"[\s\-\+]", "", phone) if phone else None
@@ -93,6 +95,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 "password_hash": password_hash,
                 "is_platform_admin": is_platform_admin,
                 "email_verified": email_verified,
+                "must_change_password": must_change_password,
                 "is_active": True,
             }
         )

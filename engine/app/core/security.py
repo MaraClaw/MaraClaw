@@ -147,31 +147,29 @@ def decode_access_token(token: str) -> AccessTokenPayload:
         ) from None
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+PASSWORD_CHANGE_REQUIRED_DETAIL: dict[str, object] = {
+    "must_change_password": True,
+    "message": "Password change required before continuing.",
+}
+
+
+def raise_if_password_change_required(user: UserRecord) -> None:
+    """Raise 403 when the identity still requires a password change after first login."""
+    if getattr(user, "must_change_password", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=dict(PASSWORD_CHANGE_REQUIRED_DETAIL),
+        )
+
+
+async def load_user_from_access_token(
+    token: str,
+    *,
+    require_active: bool = True,
+    enforce_password_change: bool = True,
 ) -> UserRecord:
-    """Dependency to get the current authenticated and active user."""
-    payload = decode_access_token(credentials.credentials)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    try:
-        uid = uuid.UUID(str(user_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
-
-    user = await user_dao.get_with_identity(uid)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-    return user
-
-
-async def get_authenticated_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> UserRecord:
-    """Dependency to get the current authenticated user (even if not active yet)."""
-    payload = decode_access_token(credentials.credentials)
+    """Resolve a JWT to a user with identity loaded (shared by REST deps, WS, file download)."""
+    payload = decode_access_token(token)
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -183,8 +181,38 @@ async def get_authenticated_user(
 
     user = await user_dao.get_with_identity(uid)
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    if require_active and not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    if enforce_password_change:
+        raise_if_password_change_required(user)
     return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> UserRecord:
+    """Dependency to get the current authenticated and active user."""
+    return await load_user_from_access_token(
+        credentials.credentials,
+        require_active=True,
+        enforce_password_change=True,
+    )
+
+
+async def get_authenticated_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> UserRecord:
+    """Dependency to get the current authenticated user (even if not active yet).
+
+    Unlike ``get_current_user``, this allows inactive users and users who still
+    must change their password (used by /auth/me and password-change routes only).
+    """
+    return await load_user_from_access_token(
+        credentials.credentials,
+        require_active=False,
+        enforce_password_change=False,
+    )
 
 
 async def get_current_admin(current_user: UserRecord = Depends(get_current_user)) -> UserRecord:
