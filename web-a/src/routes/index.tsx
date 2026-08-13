@@ -1,9 +1,12 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AdminShell } from '@/components/layout/admin-shell'
+import { AccountPage } from '@/pages/account'
+import { ForgotPasswordPage } from '@/pages/forgot-password'
 import { LoginPage } from '@/pages/login'
 import { OverviewPage } from '@/pages/overview'
 import { PlaceholderPage } from '@/pages/placeholder'
+import { ResetPasswordPage } from '@/pages/reset-password'
 import { ProtectedRoute } from '@/routes/protected'
 
 export function AppRouter() {
@@ -11,10 +14,13 @@ export function AppRouter() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route element={<AdminShell />}>
             <Route index element={<OverviewPage />} />
+            <Route path="account" element={<AccountPage />} />
             <Route
               path="companies"
               element={

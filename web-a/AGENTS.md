@@ -12,6 +12,8 @@ Authenticated operator UI for **platform_admin** and **org_admin**. Stack matche
 
 Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`, login at `/login` (`POST /api/auth/login`), bootstrap via `GET /api/auth/me`. Non-admin roles are rejected client-side after successful credential check.
 
+Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password`.
+
 Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
 
 ## STRUCTURE
@@ -45,6 +47,8 @@ web-a/
 | Task | Location |
 |------|----------|
 | Login UI | `src/pages/login.tsx` |
+| Forgot / reset password | `src/pages/forgot-password.tsx`, `reset-password.tsx` |
+| Change password | `src/pages/account.tsx` |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |

@@ -67,6 +67,10 @@ web-a/
 ## Auth
 
 - Login page: `/login` → `POST /api/auth/login`
+- Forgot password: `/forgot-password` → `POST /api/auth/forgot-password` (requires engine SMTP)
+- Reset password: `/reset-password?token=…` → `POST /api/auth/reset-password`  
+  Engine email links use `{public_base_url}/reset-password?token=…` — point that base URL at this admin app when operators should land here.
+- Change password (signed in): `/account` → `PUT /api/auth/me/password`
 - Session: Bearer JWT in `localStorage` (`maraclaw-admin-token`), restored via `GET /api/auth/me`
 - Allowed roles: `platform_admin`, `org_admin` (and `identity.is_platform_admin`)
 - Multi-tenant accounts get an organization picker after credentials

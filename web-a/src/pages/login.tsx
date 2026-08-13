@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
@@ -501,7 +501,15 @@ export function LoginPage() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor={passwordId}>Password</Label>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor={passwordId}>Password</Label>
+                        <Link
+                          to="/forgot-password"
+                          className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                        >
+                          Forgot password?
+                        </Link>
+                      </div>
                       <div className="relative">
                         <Lock
                           className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"

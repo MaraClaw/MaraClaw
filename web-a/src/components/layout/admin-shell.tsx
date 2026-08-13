@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import {
   Building2,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -32,6 +33,7 @@ const navItems: {
   { to: '/users', label: 'Users', icon: Users },
   { to: '/tools', label: 'Tools', icon: Wrench },
   { to: '/settings', label: 'Settings', icon: Settings2 },
+  { to: '/account', label: 'Account', icon: KeyRound },
 ]
 
 function roleLabel(role: string | undefined): string {
