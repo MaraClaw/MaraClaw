@@ -60,12 +60,12 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                f"{', '.join(rel_names) if rel_names else 'none — ask your administrator to set up relationships'}"
+                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target_agent.is_expired or (target_agent.expires_at and datetime.now(UTC) >= target_agent.expires_at):
             return (
-                f"⚠️ {target_agent.name} is currently unavailable — their service period has ended. "
+                f"⚠️ {target_agent.name} is currently unavailable - their service period has ended. "
                 f"Please contact the platform administrator."
             )
 

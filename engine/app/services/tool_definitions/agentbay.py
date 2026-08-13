@@ -6,7 +6,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_navigate",
         "display_name": "AgentBay: Browser Navigate",
-        "description": "[ENV: Browser] Navigate to a URL in the AgentBay HEADLESS BROWSER environment. IMPORTANT: This browser runs in an ISOLATED environment — it does NOT share filesystem, processes, or downloads with the Cloud Desktop (computer_* tools) or Code Sandbox (code_execute/command_exec). Files downloaded here are NOT accessible from other environments. Tip: after navigating, use browser_observe to identify interactive elements, then use browser_type/browser_click to interact.",
+        "description": "[ENV: Browser] Navigate to a URL in the AgentBay HEADLESS BROWSER environment. IMPORTANT: This browser runs in an ISOLATED environment - it does NOT share filesystem, processes, or downloads with the Cloud Desktop (computer_* tools) or Code Sandbox (code_execute/command_exec). Files downloaded here are NOT accessible from other environments. Tip: after navigating, use browser_observe to identify interactive elements, then use browser_type/browser_click to interact.",
         "category": "agentbay",
         "icon": "🌐",
         "is_default": False,
@@ -45,7 +45,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_screenshot",
         "display_name": "AgentBay: Browser Screenshot",
-        "description": "[ENV: Browser] Take a screenshot of the current page in the headless browser. This browser is ISOLATED from the Cloud Desktop and Code Sandbox. Use this after clicking, typing, or submitting a form to verify the result — it preserves the current page state. Never call browser_navigate just to take a screenshot.",
+        "description": "[ENV: Browser] Take a screenshot of the current page in the headless browser. This browser is ISOLATED from the Cloud Desktop and Code Sandbox. Use this after clicking, typing, or submitting a form to verify the result - it preserves the current page state. Never call browser_navigate just to take a screenshot.",
         "category": "agentbay",
         "icon": "📸",
         "is_default": False,
@@ -111,7 +111,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_code_execute",
         "display_name": "AgentBay: Code Execute",
-        "description": "[ENV: Code Sandbox] Execute code (Python, Bash, Node.js) in the AgentBay Code Sandbox. IMPORTANT: This sandbox is an ISOLATED environment — it does NOT share filesystem, processes, or network with the Headless Browser (browser_* tools) or Cloud Desktop (computer_* tools). Files created here are NOT accessible from other environments.",
+        "description": "[ENV: Code Sandbox] Execute code (Python, Bash, Node.js) in the AgentBay Code Sandbox. IMPORTANT: This sandbox is an ISOLATED environment - it does NOT share filesystem, processes, or network with the Headless Browser (browser_* tools) or Cloud Desktop (computer_* tools). Files created here are NOT accessible from other environments.",
         "category": "agentbay",
         "icon": "💻",
         "is_default": False,
@@ -310,7 +310,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_screenshot",
         "display_name": "AgentBay: Desktop Screenshot",
-        "description": "[ENV: Cloud Desktop] Take a screenshot of the full Cloud Desktop (Windows/Linux). The analysis image includes a coordinate grid and the result includes the pixel coordinate system for mouse tools. For tiny controls such as close buttons, menus, checkboxes, or small icons, call this again with focus_x/focus_y/focus_width/focus_height around the target area before clicking; the focused crop is enlarged for vision and its grid labels remain absolute desktop coordinates. IMPORTANT: This desktop is an ISOLATED environment — it does NOT share filesystem, processes, or browser sessions with the Headless Browser (browser_* tools) or Code Sandbox (code_execute/command_exec). To browse the web on this desktop, first use agentbay_computer_get_installed_apps, then start a browser with the returned start_cmd. Essential for understanding the current desktop state before performing GUI operations.",
+        "description": "[ENV: Cloud Desktop] Take a screenshot of the full Cloud Desktop (Windows/Linux). The analysis image includes a coordinate grid and the result includes the pixel coordinate system for mouse tools. For tiny controls such as close buttons, menus, checkboxes, or small icons, call this again with focus_x/focus_y/focus_width/focus_height around the target area before clicking; the focused crop is enlarged for vision and its grid labels remain absolute desktop coordinates. IMPORTANT: This desktop is an ISOLATED environment - it does NOT share filesystem, processes, or browser sessions with the Headless Browser (browser_* tools) or Code Sandbox (code_execute/command_exec). To browse the web on this desktop, first use agentbay_computer_get_installed_apps, then start a browser with the returned start_cmd. Essential for understanding the current desktop state before performing GUI operations.",
         "category": "agentbay",
         "icon": "📸",
         "is_default": False,

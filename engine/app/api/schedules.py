@@ -1,4 +1,4 @@
-"""Schedule API — CRUD for agent cron jobs."""
+"""Schedule API - CRUD for agent cron jobs."""
 
 import uuid
 from datetime import UTC, datetime

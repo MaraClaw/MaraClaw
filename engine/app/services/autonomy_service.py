@@ -1,9 +1,9 @@
 """Autonomy boundary enforcement service.
 
 Implements the three-level autonomy system:
-  L1 — Auto-execute, notify creator
-  L2 — Notify creator, auto-execute
-  L3 — Require explicit approval before execution
+  L1 - Auto-execute, notify creator
+  L2 - Notify creator, auto-execute
+  L3 - Require explicit approval before execution
 """
 
 from __future__ import annotations
@@ -153,7 +153,7 @@ class AutonomyService:
                 None,
                 user_id=agent.creator_id,
                 type="approval_resolved",
-                title=f"[{agent.name}] {approval.action_type} — {status_label}",
+                title=f"[{agent.name}] {approval.action_type} - {status_label}",
                 body=body_text,
                 link=f"/agents/{agent.id}#approvals",
                 ref_id=approval.id,
@@ -168,7 +168,7 @@ class AutonomyService:
                             None,
                             user_id=requester_id,
                             type="approval_resolved",
-                            title=f"[{agent.name}] {approval.action_type} — {status_label}",
+                            title=f"[{agent.name}] {approval.action_type} - {status_label}",
                             body=body_text,
                             link=f"/agents/{agent.id}#activityLog",
                             ref_id=approval.id,

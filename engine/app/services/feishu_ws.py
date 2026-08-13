@@ -271,7 +271,7 @@ class FeishuWSManager:
             logger.exception(f"[Feishu WS] Failed to create event handler for {agent_id}: {e}")
             return
 
-        # Instantiate Client — SDK manages connect + receive + ping internally.
+        # Instantiate Client - SDK manages connect + receive + ping internally.
         # We set auto_reconnect=True so the SDK handles reconnections.
         client = ws.Client(
             app_id,

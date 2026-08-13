@@ -47,7 +47,7 @@ def _schedule_background(coroutine: Awaitable[object]) -> None:
 
 
 # Default LLM timeout for Feishu channel (fallback when model has no request_timeout set).
-# The per-model request_timeout field takes precedence — see _get_llm_timeout().
+# The per-model request_timeout field takes precedence - see _get_llm_timeout().
 _LLM_TIMEOUT_SECONDS_DEFAULT = 180.0
 
 # Number of tool status lines to keep visible in the Feishu card.
@@ -323,7 +323,7 @@ async def _save_feishu_tool_call(
 @router.get("/auth/feishu/callback")
 @router.post("/auth/feishu/callback", response_model=TokenResponse)
 async def feishu_oauth_callback(code: str, state: str | None = None):
-    """Handle Feishu OAuth callback — exchange code for user session."""
+    """Handle Feishu OAuth callback - exchange code for user session."""
     from app.config import get_settings
     from app.core.security import create_access_token
     from app.services.auth_provider import FeishuAuthProvider
@@ -519,7 +519,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
         f"[Feishu] Event processing for {agent_id}: event_type={body.get('header', {}).get('event_type', 'N/A')}"
     )
 
-    # Deduplicate — Feishu retries on slow responses
+    # Deduplicate - Feishu retries on slow responses
     # Only mark as processed AFTER successful handling so retries work on crash
     event_id = body.get("header", {}).get("event_id", "")
     if event_id in _processed_events:
@@ -1398,7 +1398,7 @@ async def _handle_feishu_file(
         raise
     platform_user_id = platform_user.id
 
-    # Conv ID — prefer user_id for session continuity
+    # Conv ID - prefer user_id for session continuity
     if chat_type == "group" and chat_id:
         conv_id = f"feishu_group_{chat_id}"
     else:
@@ -1420,7 +1420,7 @@ async def _handle_feishu_file(
     )
     session_conv_id = str(_sess.id)
 
-    # Store user message — include base64 marker for images so LLM can see them
+    # Store user message - include base64 marker for images so LLM can see them
     if msg_type == "image":
         import base64 as _b64_img
 
@@ -1548,7 +1548,7 @@ async def _handle_feishu_file(
         if _patch_msg_id:
             _img_heartbeat_task = asyncio.create_task(_img_heartbeat())
 
-        # Call LLM with image marker — vision models will parse it
+        # Call LLM with image marker - vision models will parse it
         try:
             reply_text = await _call_llm_with_config(
                 _agent_model_img,
@@ -1733,7 +1733,7 @@ async def _call_llm_with_config(
 ) -> str:
     """Call LLM with pre-loaded agent/model objects. No DB session needed.
 
-    This is the hot path — all DB queries should be done before calling this.
+    This is the hot path - all DB queries should be done before calling this.
     """
     from app.services.llm import call_llm
 
@@ -1743,7 +1743,7 @@ async def _call_llm_with_config(
     if not model:
         return f"⚠️ {agent.name} has no LLM model configured. Set one in the admin console."
 
-    # Build conversation messages (without system prompt — call_llm adds it)
+    # Build conversation messages (without system prompt - call_llm adds it)
     messages: list[OpenAIMessage] = []
     ctx_size = agent.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
     if history:

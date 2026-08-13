@@ -1,4 +1,4 @@
-"""MaraClaw Backend — FastAPI Application Entry Point."""
+"""MaraClaw Backend - FastAPI Application Entry Point."""
 
 import shutil
 import subprocess
@@ -61,7 +61,7 @@ def _log_bwrap_startup_status() -> None:
 
         # Non-fatal probe: userns may be unavailable; --unshare-user-try should still succeed.
         try:
-            probe = subprocess.run(  # noqa: S603 — fixed argv; path from shutil.which
+            probe = subprocess.run(  # noqa: S603 - fixed argv; path from shutil.which
                 [
                     bwrap_path,
                     "--die-with-parent",
@@ -116,22 +116,22 @@ async def _start_ss_local() -> None:
     import tempfile
 
     if not shutil.which("ss-local"):
-        logger.info("[Proxy] ss-local not found — Discord proxy disabled")
+        logger.info("[Proxy] ss-local not found - Discord proxy disabled")
         return
     # Load proxy nodes from config file (gitignored, mounted as Docker volume)
     cfg_file = os.environ.get("SS_CONFIG_FILE", "/data/ss-nodes.json")
     if await async_isfile(cfg_file):
-        # Guard against empty or malformed config file — both produce a clear
+        # Guard against empty or malformed config file - both produce a clear
         # warning and a clean exit rather than an unhandled JSONDecodeError.
         try:
             async with aiofiles.open(cfg_file, encoding="utf-8") as config_file:
                 raw = (await config_file.read()).strip()
             if not raw:
-                logger.warning(f"[Proxy] {cfg_file} exists but is empty — skipping proxy")
+                logger.warning(f"[Proxy] {cfg_file} exists but is empty - skipping proxy")
                 return
             nodes = json.loads(raw)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning(f"[Proxy] Failed to parse {cfg_file}: {exc} — skipping proxy")
+            logger.warning(f"[Proxy] Failed to parse {cfg_file}: {exc} - skipping proxy")
             return
         logger.info(f"[Proxy] Loaded {len(nodes)} node(s) from {cfg_file}")
     elif os.environ.get("SS_SERVER") and os.environ.get("SS_PASSWORD"):
@@ -145,7 +145,7 @@ async def _start_ss_local() -> None:
             }
         ]
     else:
-        logger.info(f"[Proxy] {cfg_file} not found and SS_SERVER not set — skipping proxy")
+        logger.info(f"[Proxy] {cfg_file} not found and SS_SERVER not set - skipping proxy")
         return
     for node in nodes:
         cfg = {
@@ -176,7 +176,7 @@ async def _start_ss_local() -> None:
             logger.warning(f"[Proxy] {node['label']} failed: {err}")
         except Exception as e:
             logger.error(f"[Proxy] {node['label']} error: {e}")
-    logger.warning("[Proxy] All SS nodes failed — Discord API calls will run without proxy")
+    logger.warning("[Proxy] All SS nodes failed - Discord API calls will run without proxy")
 
 
 @asynccontextmanager
@@ -452,7 +452,7 @@ from app.api.wechat import router as wechat_router
 from app.api.wecom import router as wecom_router
 
 # One connection per short CRUD request. Never attach this to websocket,
-# connector inbound, gateway, or AgentBay control — those call the LLM or
+# connector inbound, gateway, or AgentBay control - those call the LLM or
 # other long I/O and must not pin a pool slot.
 _CRUD_DB = [Depends(bind_crud_connection)]
 
@@ -500,7 +500,7 @@ app.include_router(pages_public_router)  # Public endpoint for /p/{short_id}, no
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agentbay_control_router, prefix=settings.API_PREFIX)
 app.include_router(gogcli_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(okr_router, dependencies=_CRUD_DB)  # OKR — self-prefixed at /api/okr
+app.include_router(okr_router, dependencies=_CRUD_DB)  # OKR - self-prefixed at /api/okr
 app.include_router(onboarding_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 
 

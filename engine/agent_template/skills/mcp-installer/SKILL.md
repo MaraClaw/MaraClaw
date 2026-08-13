@@ -7,13 +7,13 @@ Use this skill when a user wants to add a new tool or integration (e.g., GitHub,
 
 ## Step-by-Step Protocol
 
-### Step 1 — Search first
+### Step 1 - Search first
 ```
 discover_resources(query="<what the user wants>", max_results=5)
 ```
 Show the results and let the user pick. Note the `ID` field (e.g. `github`).
 
-### Step 2 — Determine import method
+### Step 2 - Determine import method
 
 **Method A: Smithery Import** (tool found on Smithery with remote hosting support)
 - Usually uses an already-configured Smithery API Key (company/admin key or an existing agent key)

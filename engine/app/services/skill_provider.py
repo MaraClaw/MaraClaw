@@ -266,7 +266,7 @@ async def fetch_github_directory(
                         400,
                         f"This directory contains {directory_count} subdirectories but no SKILL.md. Please provide the URL to a specific skill directory.",
                     )
-                raise HTTPException(400, "No SKILL.md found at the root of this directory — not a valid skill package.")
+                raise HTTPException(400, "No SKILL.md found at the root of this directory - not a valid skill package.")
         for item in parsed_items:
             relative_path = f"{relative_prefix}{item['name']}" if relative_prefix else item["name"]
             if item["type"] == "dir":

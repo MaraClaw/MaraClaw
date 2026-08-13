@@ -77,7 +77,7 @@ def _statement_bodies(sql: str) -> list[str]:
 
 
 async def _apply_sql_script(path: Path) -> None:
-    sql = path.read_text(encoding="utf-8")  # noqa: ASYNC240 — bootstrap is a one-shot CLI, not a request path
+    sql = path.read_text(encoding="utf-8")  # noqa: ASYNC240 - bootstrap is a one-shot CLI, not a request path
     # Strip transaction wrappers; connection_ctx already commits.
     async with connection_ctx() as conn:
         for body in _statement_bodies(sql):

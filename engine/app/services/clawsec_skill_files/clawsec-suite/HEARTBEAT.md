@@ -1,4 +1,4 @@
-# ClawSec Suite — Heartbeat Check
+# ClawSec Suite - Heartbeat Check
 
 Run this periodically (cron/systemd/CI/agent scheduler). It assumes POSIX shell, `curl`, and `jq`.
 
@@ -24,7 +24,7 @@ MIN_FEED_INTERVAL_SECONDS="${MIN_FEED_INTERVAL_SECONDS:-300}"
 
 ---
 
-## Step 0 — Basic sanity
+## Step 0 - Basic sanity
 
 ```bash
 set -euo pipefail
@@ -39,7 +39,7 @@ echo "Suite: $SUITE_DIR"
 
 ---
 
-## Step 1 — Check suite version updates
+## Step 1 - Check suite version updates
 
 ```bash
 TMP="$(mktemp -d)"
@@ -73,7 +73,7 @@ fi
 
 ---
 
-## Step 2 — Initialize advisory state
+## Step 2 - Initialize advisory state
 
 ```bash
 mkdir -p "$(dirname "$STATE_FILE")"
@@ -93,7 +93,7 @@ fi
 
 ---
 
-## Step 3 — Advisory feed check (embedded clawsec-feed)
+## Step 3 - Advisory feed check (embedded clawsec-feed)
 
 ```bash
 now_epoch="$(date -u +%s)"

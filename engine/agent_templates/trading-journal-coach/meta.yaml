@@ -3,9 +3,9 @@ description: "Reads your past trades, finds repeating mistakes, and proposes rul
 icon: "TJC"
 category: "trading"
 capability_bullets:
-  - "Trade journaling — every push gets logged and tagged"
-  - "Weekly review — pattern hunting across trades, not single-trade post-mortem"
-  - "Rule evolution — proposes additions to trading_rules.md (you approve)"
+  - "Trade journaling - every push gets logged and tagged"
+  - "Weekly review - pattern hunting across trades, not single-trade post-mortem"
+  - "Rule evolution - proposes additions to trading_rules.md (you approve)"
 default_skills:
   - "market-data"
 default_mcp_servers:

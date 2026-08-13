@@ -186,7 +186,7 @@ def _render_template_greeting(
     role_line = f", your {agent.role_description}" if agent.role_description else ""
     if capability_bullets:
         bullets = "; ".join(b.strip() for b in capability_bullets if b and b.strip())
-        bullets_line = f" — ideas to lean on: {bullets}" if bullets else ""
+        bullets_line = f" - ideas to lean on: {bullets}" if bullets else ""
     else:
         bullets_line = ""
     return _TEMPLATE_GREETING_PROMPT.format(

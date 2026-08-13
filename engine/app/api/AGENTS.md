@@ -11,9 +11,9 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Dependencies
 
-- Users: `current_user: UserRecord = Depends(get_current_user)` — not `User`.
+- Users: `current_user: UserRecord = Depends(get_current_user)` - not `User`.
 - Admin: `get_current_admin` / `require_role(...)`.
-- Agents: `await check_agent_access(current_user, agent_id)` — leftover `db` args are ignored.
+- Agents: `await check_agent_access(current_user, agent_id)` - leftover `db` args are ignored.
 - Persistence: DAOs. Short CRUD routers bind `bind_crud_connection` in `app.main` (one checkout). Do not attach that dependency to websocket / connector inbound / gateway. Extra `async with connection_ctx():` still joins.
 - Many handlers still take unused `db=None` (legacy shim). Keep the arg; do not revive a session.
 - `websocket.py` authenticates from query token. `gateway.py` uses agent API keys.

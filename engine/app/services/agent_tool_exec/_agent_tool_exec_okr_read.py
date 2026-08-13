@@ -99,7 +99,7 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
                 return agent_names.get(obj.owner_id) or f"agent:{obj.owner_id}"
             return f"{obj.owner_type}:{obj.owner_id}"
 
-        lines = [f"# OKR Board — {ps} to {pe}\n"]
+        lines = [f"# OKR Board - {ps} to {pe}\n"]
 
         company_objs = [objective for objective in objectives if objective.owner_type == "company"]
         member_objs = [objective for objective in objectives if objective.owner_type != "company"]
@@ -186,7 +186,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
             krs_by_obj.setdefault(str(kr.objective_id), []).append(kr)
 
         lines = [
-            f"# My OKRs — {ps} to {pe}\n",
+            f"# My OKRs - {ps} to {pe}\n",
             "If you need to revise an existing OKR, reuse the IDs below:",
             "- change Objective title/description/status with update_objective(objective_id=...)",
             "- change KR title/target/unit/focus/status with update_kr_content(kr_id=...)",

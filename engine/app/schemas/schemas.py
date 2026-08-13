@@ -334,7 +334,7 @@ class AgentUpdate(BaseModel):
     heartbeat_interval_minutes: int | None = None
     heartbeat_active_hours: str | None = None
     timezone: str | None = None
-    expires_at: datetime | None = None  # Admin only — extend agent expiry
+    expires_at: datetime | None = None  # Admin only - extend agent expiry
 
 
 class AgentStatusOut(BaseModel):

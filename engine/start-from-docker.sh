@@ -4,10 +4,10 @@
 # .env handling:
 #   This script sources `.env` (if present) into its own shell BEFORE applying
 #   defaults, so `.env` can set IMAGE_NAME, PORT, APT_MIRROR, MARACLAW_PIP_*,
-#   DETACH, PULL, etc. — same vars listed below as "Environment overrides".
+#   DETACH, PULL, etc. - same vars listed below as "Environment overrides".
 #   Each variable defined in `.env` is then forwarded to the container via
 #   `-e KEY` (docker reads the value from the host env, so JSON-quoted values
-#   like CORS_ORIGINS survive correctly — unlike `--env-file`, which copies
+#   like CORS_ORIGINS survive correctly - unlike `--env-file`, which copies
 #   lines literally including the wrapping quotes).
 #
 # Usage:

@@ -40,7 +40,7 @@ No `alembic/`, no `app/models/`.
 |---|---|---|
 | Startup / routers | `app/main.py` | `lifespan`, `PROCESS_ROLE`, mounts, `/api/health` |
 | Settings | `app/config.py`, `.env.example` | Case-sensitive; sandbox proxy is `SANDBOX_*_PROXY` only |
-| Logging | `app/core/logging/` | `from app.core.logging import logger` — not loguru |
+| Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
 | DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs. `app/database.py` raises |
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
@@ -48,7 +48,7 @@ No `alembic/`, no `app/models/`.
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py` | Lifespan `start_all` after `init_pool` |
-| Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog — not interchangeable |
+| Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
 | OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node/gogcli image; see `docker/openclaw/AGENTS.md` |
 
@@ -63,7 +63,7 @@ No `alembic/`, no `app/models/`.
 | `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
 | `connection_ctx` | cm | `app/db/session.py:29` | DAOs | Commit on success; join if nested |
 | `BaseDAO` | class | `app/dao/base.py` | dao | CRUD + record dataclass defaults |
-| `check_agent_access` | function | `app/core/permissions.py:280` | API | `(user, agent_id)` — leftover `db` ignored |
+| `check_agent_access` | function | `app/core/permissions.py:280` | API | `(user, agent_id)` - leftover `db` ignored |
 | `LoggingService` | class | `app/core/logging/service.py` | broad | Queued process logger |
 | `TOOL_HANDLERS` | registry | `app/services/agent_tool_exec/registry.py` | tools | `@register` dispatch |
 | `get_sandbox_backend` | function | `app/services/sandbox/registry.py` | tools | Backend factory |
@@ -76,7 +76,7 @@ No `alembic/`, no `app/models/`.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
 - Log with `from app.core.logging import logger`. Freeze: `scripts/check_no_direct_loguru.py` (exception: `skill_creator_files/`).
 - Pydantic v2: `model_config`, `Field(default_factory=...)`.
-- Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** — every process still mounts all routers.
+- Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** - every process still mounts all routers.
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -93,7 +93,7 @@ No `alembic/`, no `app/models/`.
 ## UNIQUE STYLES
 
 - Mixed services: flat legacy files + `storage_runtime` / `sandbox` / `trigger_runtime` / `realtime_runtime` / `llm` / `document_conversion`.
-- Some routers self-prefix `/api/...` and are included **without** `API_PREFIX` — double-prefix is a real bug class.
+- Some routers self-prefix `/api/...` and are included **without** `API_PREFIX` - double-prefix is a real bug class.
 - Tests: no `conftest.py`; local fakes; most “API” tests call handlers directly. CI has no Postgres.
 - `agent_template/` ≠ `agent_templates/`.
 
@@ -122,6 +122,6 @@ uv run python -m app.scripts.bootstrap_db
 - Seed failures in lifespan are warnings. Health is a pool ping (503 if down).
 - Image may setuid `bwrap` (`BWRAP_SETUID=1`). Local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; the live pool is psycopg3. Do not add new asyncpg callers.
-- `app/services/agent_runtime/` is leftover `__pycache__` only — not a live package. Same for deleted API/service `.pyc` without matching `.py`.
+- `app/services/agent_runtime/` is leftover `__pycache__` only - not a live package. Same for deleted API/service `.pyc` without matching `.py`.
 - OpenClaw classifier tests expect **host** Node `v26.5.0`; CI has no Node pin. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not current policy.
 - Depth 5–7 under `clawsec_skill_files/` is AGPL payload. Do not add `AGENTS.md` there.

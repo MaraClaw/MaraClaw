@@ -175,7 +175,7 @@ async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monke
     result = await tasks_tool._manage_tasks(agent_id, user_id, tmp_path, {"action": "create", "title": "Ship"})
 
     # Then
-    assert result == "✅ Task created: Ship — auto-execution started"
+    assert result == "✅ Task created: Ship - auto-execution started"
     create.assert_awaited_once()
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in == {
@@ -220,7 +220,7 @@ async def test_manage_tasks_creates_supervision_with_defaults_without_scheduling
     )
 
     # Then
-    assert result == "✅ Supervision task created: 'Check in' — will remind someone on schedule (not set)"
+    assert result == "✅ Supervision task created: 'Check in' - will remind someone on schedule (not set)"
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in["supervision_channel"] == "feishu"
     assert obj_in["type"] == "supervision"

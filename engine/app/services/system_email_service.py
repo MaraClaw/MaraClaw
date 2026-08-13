@@ -56,7 +56,7 @@ class BroadcastEmailRecipient:
 async def resolve_email_config_async(db=None, *, include_disabled: bool = False) -> SystemEmailConfig | None:
     """Resolve email configuration from the 'system_email_platform' system setting.
 
-    ``db`` is accepted for call-site compatibility but ignored — the lookup
+    ``db`` is accepted for call-site compatibility but ignored - the lookup
     goes through ``system_setting_dao`` which manages its own session.
     """
     from app.dao import system_setting_dao

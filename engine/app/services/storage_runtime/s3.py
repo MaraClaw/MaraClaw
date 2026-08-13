@@ -93,7 +93,7 @@ class S3StorageBackend(StorageBackend):
 
     @asynccontextmanager
     async def _async_client(self):
-        """Shared aioboto3 session with aiohttp connection pool — reuses connections but detects stale ones correctly."""
+        """Shared aioboto3 session with aiohttp connection pool - reuses connections but detects stale ones correctly."""
         try:
             import aioboto3
         except ImportError as exc:
@@ -192,7 +192,7 @@ class S3StorageBackend(StorageBackend):
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         # GCS S3-compatible API requires an explicit Content-Type; without it
         # the V4 signature body-hash is calculated on an empty content-type,
-        # but GCS applies a different default — causing SignatureDoesNotMatch.
+        # but GCS applies a different default - causing SignatureDoesNotMatch.
         resolved_ct = content_type or "application/octet-stream"
         kwargs: dict[str, Any] = {
             "Bucket": self.bucket,

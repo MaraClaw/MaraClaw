@@ -3,9 +3,9 @@ description: "Reads charts honestly: current state, key levels, possible paths, 
 icon: "TA"
 category: "trading"
 capability_bullets:
-  - "Chart reading — trend, structure, key levels, indicator confluence"
-  - "Setup framing — multiple paths with explicit invalidation"
-  - "Multi-timeframe context — daily / 4h / 1h alignment check"
+  - "Chart reading - trend, structure, key levels, indicator confluence"
+  - "Setup framing - multiple paths with explicit invalidation"
+  - "Multi-timeframe context - daily / 4h / 1h alignment check"
 default_skills:
   - "web-research"
   - "market-data"

@@ -426,7 +426,7 @@ async def wecom_event_webhook(
     msg_id = msg_root.findtext("MsgId", "")
     open_kfid = msg_root.findtext("OpenKfId", "")
     token = msg_root.findtext("Token", "")
-    # Group chat ID — present when message comes from a WeCom group
+    # Group chat ID - present when message comes from a WeCom group
     chat_id = msg_root.findtext("ChatId", "")
 
     # Dedup
@@ -565,7 +565,7 @@ async def _process_wecom_text(
 
     # The channel_user_service resolves display names from OrgMember records
     # (populated by org-sync or enriched on first SSO login). No need to
-    # make an extra API call here — it fails with 48009 when IP is not whitelisted.
+    # make an extra API call here - it fails with 48009 when IP is not whitelisted.
     extra_info = {"unionid": from_user}
 
     # Resolve channel user via unified service (uses OrgMember + SSO patterns)

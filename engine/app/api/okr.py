@@ -1,4 +1,4 @@
-"""OKR REST API — objectives, key results, settings, reports and periods.
+"""OKR REST API - objectives, key results, settings, reports and periods.
 
 All endpoints are tenant-scoped: data is filtered by the requesting user's
 tenant_id so cross-tenant leakage is impossible.
@@ -99,7 +99,7 @@ async def _sync_okr_agent_relationships(tenant_id: uuid.UUID, okr_agent_id: uuid
                 "agent_id": okr_agent_id,
                 "member_id": member_id,
                 "relation": "team_member",
-                "description": "OKR tracking — auto-linked via Sync Relationships",
+                "description": "OKR tracking - auto-linked via Sync Relationships",
             }
         )
 
@@ -526,7 +526,7 @@ async def update_okr_settings(body: OKRSettingsUpdate, user=Depends(get_current_
     if body.enabled and not settings.okr_agent_id:
         from app.services.agent_seeder import seed_okr_agent_for_tenant
 
-        logger.info(f"[OKR] OKR enabled for tenant {user.tenant_id} — auto-seeding OKR Agent")
+        logger.info(f"[OKR] OKR enabled for tenant {user.tenant_id} - auto-seeding OKR Agent")
         await seed_okr_agent_for_tenant(user.tenant_id, user.id)
         refreshed = await _get_or_create_settings(user.tenant_id)
         await _sync_okr_report_triggers(refreshed)
@@ -556,7 +556,7 @@ async def sync_okr_relationships(user=Depends(get_current_user)):
     """Manually re-sync the OKR Agent's relationship network.
 
     Connects the OKR Agent to all active OrgMembers (org-structure-synced humans)
-    and all company-visible agents in this tenant. Idempotent — safe to call
+    and all company-visible agents in this tenant. Idempotent - safe to call
     multiple times; existing relationships are replaced.
 
     Org admins and platform admins only.
@@ -746,7 +746,7 @@ async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)
                         resolved_owner_id = candidate
                         logger.info(
                             f"[create_objective] Channel-only OrgMember {candidate} "
-                            f"has no user_id — storing OrgMember.id as owner_id"
+                            f"has no user_id - storing OrgMember.id as owner_id"
                         )
                 else:
                     raise HTTPException(
@@ -1135,7 +1135,7 @@ async def members_without_okr(user=Depends(get_current_user)):
     """Return tracked members (those in OKR Agent's relationship list) who lack
     OKRs in the current period.  Also returns:
     - okr_agent_id        : UUID of the OKR Agent for the chat-link button
-    - company_okr_exists  : bool — whether a company-level objective exists
+    - company_okr_exists  : bool - whether a company-level objective exists
     - tracked_user_ids    : UUIDs of all tracked platform users (for UI filtering)
     - tracked_agent_ids   : UUIDs of all tracked agents (for UI filtering)
     """
@@ -1432,7 +1432,7 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
         elif platform_uid:
             channel_hint = 'send_platform_message(username="<their_username>", message=...)'
         else:
-            channel_hint = "No channel available — note this in your summary"
+            channel_hint = "No channel available - note this in your summary"
 
         if msgs:
             history_lines = []
@@ -1442,7 +1442,7 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
                 history_lines.append(f"  [{ts}] {speaker}: {content[:120]}")
             history_str = "\n".join(history_lines)
         else:
-            history_str = "  (No previous conversation — treat this as first contact)"
+            history_str = "  (No previous conversation - treat this as first contact)"
 
         username_hint = ""
         if platform_uid:
@@ -1515,7 +1515,7 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
     # human: 2 rounds (compose + send); agent: 6 rounds (send + reply + objective + 3 KRs)
     safe_max_rounds = n_humans * 2 + n_agents * 6 + 3
 
-    task_prompt = f"""[ADMIN TRIGGER — OKR Member Outreach — ONE-SHOT TASK]
+    task_prompt = f"""[ADMIN TRIGGER - OKR Member Outreach - ONE-SHOT TASK]
 
 Current OKR period: {period_label}
 Admin who triggered this: {admin_username}
@@ -1528,20 +1528,20 @@ Contact the {len(members_to_contact)} member(s) below who have NOT set their OKR
 • For [Agent] members: collect their OKR and record it immediately (see STEP 1-4 per member).
 • For human members: send a warm reminder that includes the company OKR context above.
 
-━━━ TOOL RULES (MANDATORY — DO NOT DEVIATE) ━━━
+━━━ TOOL RULES (MANDATORY - DO NOT DEVIATE) ━━━
 • For members tagged [Agent]:
   → Follow the STEP 1-4 sequence in their block exactly.
-  → Use ONLY send_message_to_agent — never channel tools for agents.
+  → Use ONLY send_message_to_agent - never channel tools for agents.
 • For human members:
   → If Platform account shown: send_platform_message(username="<display_name>", message="...")
   → If Feishu/DingTalk channel: send_channel_message(member_name="<name>", message="...")
   → If neither: skip and note in summary.
-  → Humans are fire-and-forget — do NOT wait for their reply.
+  → Humans are fire-and-forget - do NOT wait for their reply.
 
 ━━━ STEP-BY-STEP ━━━
 1. Process each member in order, following per-member instructions.
 2. If a send or create fails: log the failure and continue.
-3. STOP completely after processing all members — do not respond further.
+3. STOP completely after processing all members - do not respond further.
 
 ━━━ MEMBERS TO CONTACT ({len(members_to_contact)} total) ━━━
 

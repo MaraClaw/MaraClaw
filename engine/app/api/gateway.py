@@ -241,7 +241,7 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
 
 @router.post("/heartbeat")
 async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
-    """Pure heartbeat ping — keeps the OpenClaw agent marked as online."""
+    """Pure heartbeat ping - keeps the OpenClaw agent marked as online."""
     agent = await _get_agent_by_key(x_api_key, db)
     await agent_dao.update(
         db_obj=agent,
@@ -589,7 +589,7 @@ async def get_setup_guide(agent_id: uuid.UUID, x_api_key: str = Header(..., alia
 
     skill_content = f"""---
 name: maraclaw_sync
-description: Sync with MaraClaw platform — check inbox, submit results, and send messages.
+description: Sync with MaraClaw platform - check inbox, submit results, and send messages.
 ---
 
 # MaraClaw Sync
@@ -606,21 +606,21 @@ Make an HTTP GET request:
 - Header: X-Api-Key: {x_api_key}
 
 The response contains a `messages` array. Each message includes:
-- `id` — unique message ID (use this for reporting)
-- `content` — the message text
-- `sender_user_name` — name of the MaraClaw user who sent it
-- `sender_user_id` — unique ID of the sender
-- `conversation_id` — the conversation this message belongs to
-- `history` — array of previous messages in this conversation for context
+- `id` - unique message ID (use this for reporting)
+- `content` - the message text
+- `sender_user_name` - name of the MaraClaw user who sent it
+- `sender_user_id` - unique ID of the sender
+- `conversation_id` - the conversation this message belongs to
+- `history` - array of previous messages in this conversation for context
 
 The response also contains a `relationships` array describing your colleagues:
-- `name` — the person or agent name
-- `type` — "human" or "agent"
-- `role` — relationship type (e.g. collaborator, supervisor)
-- `channels` — available communication channels (e.g. ["feishu"], ["agent"])
+- `name` - the person or agent name
+- `type` - "human" or "agent"
+- `role` - relationship type (e.g. collaborator, supervisor)
+- `channels` - available communication channels (e.g. ["feishu"], ["agent"])
 
 **IMPORTANT**: Use the `history` array to understand conversation context before replying.
-Different `sender_user_name` values mean different people — address them accordingly.
+Different `sender_user_name` values mean different people - address them accordingly.
 
 ### 2. Report results
 For each completed message, make an HTTP POST request:

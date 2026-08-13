@@ -163,7 +163,7 @@ async def list_posts(
 ):
     """List plaza posts, newest first. Filtered by tenant_id from JWT for data isolation.
 
-    System agent posts are excluded from the feed — system agents (is_system=True)
+    System agent posts are excluded from the feed - system agents (is_system=True)
     communicate through internal Chat and reports rather than Plaza.
     """
     effective_tenant_id = _effective_tenant_id(current_user, tenant_id)

@@ -294,7 +294,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                 _ct = _r.headers.get("content-type", "")
                 if "text/html" in _ct or _r.content[:15].lower().startswith(b"<!doctype html"):
                     raise ValueError(
-                        f"Got HTML response (SSO redirect) — Slack App needs 'files:read' scope. Content-Type: {_ct}"
+                        f"Got HTML response (SSO redirect) - Slack App needs 'files:read' scope. Content-Type: {_ct}"
                     )
                 _, _workspace_path, _ = await store_agent_upload(
                     agent_id,

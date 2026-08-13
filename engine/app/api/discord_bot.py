@@ -232,7 +232,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
     body = json.loads(body_bytes)
     interaction_type = body.get("type", 0)
 
-    # Type 1: PING — Discord URL verification
+    # Type 1: PING - Discord URL verification
     if interaction_type == 1:
         return {"type": 1}
 

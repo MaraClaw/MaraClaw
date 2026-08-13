@@ -219,6 +219,6 @@ def test_gog_gmail_and_drive_skills_document_v0350_commands() -> None:
     gmail_text = (root / "gog-gmail" / "SKILL.md").read_text(encoding="utf-8")
     drive_text = (root / "gog-drive" / "SKILL.md").read_text(encoding="utf-8")
 
-    # Then — commands added in the gogcli 0.34.x/0.35.0 skill surface
+    # Then - commands added in the gogcli 0.34.x/0.35.0 skill surface
     assert "| `import` | Import an RFC822/EML message into Gmail |" in gmail_text
     assert "| `sync` | Reconcile local files with Drive |" in drive_text

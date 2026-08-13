@@ -1,4 +1,4 @@
-"""Notification API — list, count, mark-read, and broadcast."""
+"""Notification API - list, count, mark-read, and broadcast."""
 
 import uuid
 

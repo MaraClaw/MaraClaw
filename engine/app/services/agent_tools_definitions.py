@@ -185,7 +185,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Surgically replace a specific string inside an existing file without rewriting the whole content. Prefer this over write_file when you only need to change one or more sections — it avoids accidentally overwriting content outside the edit target and is safer in multi-agent scenarios. enterprise_info/ is shared company context and is read-only for agents. The old_string must match exactly (including all whitespace and newlines).",
+            "description": "Surgically replace a specific string inside an existing file without rewriting the whole content. Prefer this over write_file when you only need to change one or more sections - it avoids accidentally overwriting content outside the edit target and is safer in multi-agent scenarios. enterprise_info/ is shared company context and is read-only for agents. The old_string must match exactly (including all whitespace and newlines).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -265,7 +265,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "set_trigger",
-            "description": "Set a new trigger to wake yourself up at a specific time or condition. Use this to schedule future actions, monitor changes, or wait for messages. The trigger will fire and invoke you with the reason text as context. Every trigger is attached to a focus item; if focus_ref is omitted, the system will automatically create a focus item from the reason and attach the trigger to it. Trigger types: 'cron' (recurring schedule), 'once' (fire once at a time), 'interval' (every N minutes), 'poll' (HTTP monitoring), 'on_message' (when another agent or a human user replies — use from_agent_name for agents, or from_user_name for human users on Feishu/Slack/Discord), 'webhook' (receive external HTTP POST — system generates a unique URL, give it to the user so they can configure it in external services like GitHub, Grafana, etc.).",
+            "description": "Set a new trigger to wake yourself up at a specific time or condition. Use this to schedule future actions, monitor changes, or wait for messages. The trigger will fire and invoke you with the reason text as context. Every trigger is attached to a focus item; if focus_ref is omitted, the system will automatically create a focus item from the reason and attach the trigger to it. Trigger types: 'cron' (recurring schedule), 'once' (fire once at a time), 'interval' (every N minutes), 'poll' (HTTP monitoring), 'on_message' (when another agent or a human user replies - use from_agent_name for agents, or from_user_name for human users on Feishu/Slack/Discord), 'webhook' (receive external HTTP POST - system generates a unique URL, give it to the user so they can configure it in external services like GitHub, Grafana, etc.).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -459,7 +459,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "send_message_to_agent",
-            "description": "Send a message to a digital employee colleague. The recipient is another AI agent, not a human. Refer to the 'Relationships' section in your system prompt for available digital employees.\n\nDECISION GUIDE for msg_type:\nAsk yourself: does the target agent need to DO WORK (analyze, research, summarize, write, compare, plan, etc.) and RETURN RESULTS to you or the user?\n\n- If YES, the target needs to do work → use task_delegate. Examples: 'summarize X', 'analyze Y', 'check Z', 'prepare a report', 'review and give feedback', 'find out X', 'confirm with X and report back'. The target works asynchronously and you will be woken when they finish.\n\n- If the target just needs to KNOW something → use notify. Examples: 'meeting cancelled', 'I updated the doc', 'heads up about X', 'FYI'. No reply expected.\n\n- If you need a quick factual answer right now → use consult. Examples: 'what is X?', 'do you know Y?'. Synchronous, blocks until reply.\n\nWhen in doubt between notify and task_delegate, prefer task_delegate — it is safer because it guarantees the user gets a result.",
+            "description": "Send a message to a digital employee colleague. The recipient is another AI agent, not a human. Refer to the 'Relationships' section in your system prompt for available digital employees.\n\nDECISION GUIDE for msg_type:\nAsk yourself: does the target agent need to DO WORK (analyze, research, summarize, write, compare, plan, etc.) and RETURN RESULTS to you or the user?\n\n- If YES, the target needs to do work → use task_delegate. Examples: 'summarize X', 'analyze Y', 'check Z', 'prepare a report', 'review and give feedback', 'find out X', 'confirm with X and report back'. The target works asynchronously and you will be woken when they finish.\n\n- If the target just needs to KNOW something → use notify. Examples: 'meeting cancelled', 'I updated the doc', 'heads up about X', 'FYI'. No reply expected.\n\n- If you need a quick factual answer right now → use consult. Examples: 'what is X?', 'do you know Y?'. Synchronous, blocks until reply.\n\nWhen in doubt between notify and task_delegate, prefer task_delegate - it is safer because it guarantees the user gets a result.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1081,7 +1081,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "feishu_calendar_create",
-            "description": "Create a Feishu calendar event immediately. The current user is automatically invited as attendee — no email or authorization required. Just provide the title and time.",
+            "description": "Create a Feishu calendar event immediately. The current user is automatically invited as attendee - no email or authorization required. Just provide the title and time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1501,7 +1501,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "agentbay_browser_navigate",
-            "description": "使用 AgentBay 浏览器环境访问指定 URL。访问后会自动截图以便你观察当前页面状态。Tip: after navigating, use browser_observe to identify elements, then browser_type/browser_click to interact. IMPORTANT: Do NOT call navigate again after clicking or typing — that will refresh the page and lose all your progress. Use agentbay_browser_screenshot instead.",
+            "description": "使用 AgentBay 浏览器环境访问指定 URL。访问后会自动截图以便你观察当前页面状态。Tip: after navigating, use browser_observe to identify elements, then browser_type/browser_click to interact. IMPORTANT: Do NOT call navigate again after clicking or typing - that will refresh the page and lose all your progress. Use agentbay_browser_screenshot instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1516,7 +1516,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "agentbay_browser_screenshot",
-            "description": "Take a screenshot of the CURRENT browser page without navigating anywhere. Use this after clicking, typing, or submitting a form to verify the result — it preserves the current page state. Never call browser_navigate just to take a screenshot.",
+            "description": "Take a screenshot of the CURRENT browser page without navigating anywhere. Use this after clicking, typing, or submitting a form to verify the result - it preserves the current page state. Never call browser_navigate just to take a screenshot.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -1727,7 +1727,7 @@ AGENT_TOOLS: list[ToolDefinition] = [
 
 # Core tools that should always be available to agents regardless of
 # DB configuration.
-# Note: send_channel_message is intentionally NOT here — it lives in
+# Note: send_channel_message is intentionally NOT here - it lives in
 # _CHANNEL_MESSAGE_TOOL_NAMES and is only added when a channel is configured,
 # to avoid sending duplicate tool definitions to the LLM.
 _ALWAYS_INCLUDE_CORE: set[str] = {

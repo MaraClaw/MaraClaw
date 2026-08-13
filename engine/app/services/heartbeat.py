@@ -1,4 +1,4 @@
-"""Heartbeat service — proactive agent awareness loop.
+"""Heartbeat service - proactive agent awareness loop.
 
 Periodically triggers agents to check their environment (tasks, plaza,
 etc.) and take autonomous actions. Inspired by OpenClaw's heartbeat
@@ -54,7 +54,7 @@ def _observe_heartbeat_task(task: asyncio.Task[None]) -> None:
 # Default heartbeat instruction used when HEARTBEAT.md doesn't exist
 DEFAULT_HEARTBEAT_INSTRUCTION = """[Heartbeat Check]
 
-This is your periodic heartbeat — a moment to be aware, explore, and contribute.
+This is your periodic heartbeat - a moment to be aware, explore, and contribute.
 
 ## Phase 1: Review Context & Discover Interest Points
 
@@ -84,7 +84,7 @@ Format for curiosity_journal.md entries:
 ### [Date] - [Topic]
 - **Finding**: [What you learned]
 - **Source**: [URL]
-- **Relevance**: [high/medium/low] — [Why it matters to your work]
+- **Relevance**: [high/medium/low] - [Why it matters to your work]
 - **Follow-up**: [Optional: questions this raises for next time]
 ```
 
@@ -106,10 +106,10 @@ Format for curiosity_journal.md entries:
 - Always ground exploration in YOUR role and YOUR recent work context
 - Never search for random unrelated topics out of idle curiosity
 - If you don't have a specific angle worth investigating, don't search
-- Prefer depth over breadth — one thoroughly explored topic > five surface-level queries
+- Prefer depth over breadth - one thoroughly explored topic > five surface-level queries
 - Generate follow-up questions only when you genuinely want to know more
 
-⚠️ PRIVACY RULES — STRICTLY FOLLOW:
+⚠️ PRIVACY RULES - STRICTLY FOLLOW:
 - NEVER share information from private user conversations
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
@@ -125,7 +125,7 @@ Format for curiosity_journal.md entries:
 
 PRIVATE_AGENT_HEARTBEAT_APPEND = """
 
-⚠️ PRIVATE AGENT RULE — STRICTLY FOLLOW:
+⚠️ PRIVATE AGENT RULE - STRICTLY FOLLOW:
 - You are a private agent. Do NOT browse Agent Plaza.
 - Do NOT call plaza_get_new_posts, plaza_create_post, or plaza_add_comment.
 - Do NOT share any findings, summaries, or opinions in Plaza.
@@ -230,7 +230,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                         custom
                         + """
 
-⚠️ PRIVACY RULES — STRICTLY FOLLOW:
+⚠️ PRIVACY RULES - STRICTLY FOLLOW:
 - NEVER share information from private user conversations
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
@@ -276,7 +276,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         try:
             unread = await notification_dao.list_unread_for_agent(agent_id, limit=10)
             if unread:
-                notif_lines = ["\\n\\n---\\n## Inbox (new messages for you — please review and respond if appropriate)"]
+                notif_lines = ["\\n\\n---\\n## Inbox (new messages for you - please review and respond if appropriate)"]
                 for n in unread:
                     sender = f"from {n.sender_name}" if n.sender_name else ""
                     notif_lines.append(f"- [{n.type}] {n.title} {sender}: {(n.body or '')[:150]}")
@@ -402,7 +402,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     )
                     continue
 
-                # Tools that require arguments — if LLM sends empty args, skip and ask to retry
+                # Tools that require arguments - if LLM sends empty args, skip and ask to retry
                 # (aligned with call_llm in websocket.py)
                 tools_requiring_args = {
                     "write_file",
@@ -642,20 +642,20 @@ async def run_agent_oneshot(
 
         agent = await agent_dao.get(agent_id)
         if not agent:
-            logger.warning(f"[Oneshot] Agent {agent_id} not found — aborting")
+            logger.warning(f"[Oneshot] Agent {agent_id} not found - aborting")
             return ""
 
         model_id = agent.primary_model_id or agent.fallback_model_id
         if not model_id:
             msg = "Agent has no LLM model configured. Please assign a model in Agent Settings."
-            logger.warning(f"[Oneshot] Agent {agent_id} has no model configured — aborting")
+            logger.warning(f"[Oneshot] Agent {agent_id} has no model configured - aborting")
             await _notify_oneshot_error(triggered_by_user_id, agent_id, agent_name or str(agent_id), msg)
             return ""
 
         model = await llm_model_dao.get(model_id)
         if not model:
             msg = f"The configured LLM model ({model_id}) was not found. Please check Agent Settings."
-            logger.warning(f"[Oneshot] Model {model_id} not found — aborting")
+            logger.warning(f"[Oneshot] Model {model_id} not found - aborting")
             await _notify_oneshot_error(triggered_by_user_id, agent_id, agent_name or str(agent_id), msg)
             return ""
 

@@ -96,7 +96,7 @@ async def _bitable_list_tables(agent_id: uuid.UUID, arguments: ToolArguments) ->
 async def _bitable_create_app(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     name = _string_argument(arguments, "name").strip()
     if not name:
-        return "Failed: Missing required argument 'name' — please provide a name for the new Bitable."
+        return "Failed: Missing required argument 'name' - please provide a name for the new Bitable."
     folder_token = _string_argument(arguments, "folder_token").strip()
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     if not app_id or not app_secret:

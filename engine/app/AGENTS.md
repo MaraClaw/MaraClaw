@@ -4,7 +4,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 
 ## Entry Points
 
-- `main.py` — `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`.
+- `main.py` - `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`.
 - `lifespan()`: `init_pool()` first (roles `all|bootstrap|api|worker|connector`), then optional seeders, then realtime/worker/connector tasks.
 - `config.py` is the only pydantic-settings surface. New env vars need `.env.example`.
 - `db/` is the live data layer. `database.py`: `async_session` raises; `transaction()` forwards to `app.db.session` (explicit session is yielded as-is for tests).

@@ -1,11 +1,11 @@
 name: "Earnings & Filings Analyst"
-description: "Reads quarterly reports, 8-Ks, and earnings call transcripts — surfaces what changed in operations, risk, and valuation since last period."
+description: "Reads quarterly reports, 8-Ks, and earnings call transcripts - surfaces what changed in operations, risk, and valuation since last period."
 icon: "EFA"
 category: "trading"
 capability_bullets:
-  - "Earnings deep-read — operating trends + key metric changes vs prior quarter"
-  - "Filing scanner — 8-Ks, S-3s, insider transactions, material events"
-  - "Call transcript distill — guidance changes, tone shifts, what management dodged"
+  - "Earnings deep-read - operating trends + key metric changes vs prior quarter"
+  - "Filing scanner - 8-Ks, S-3s, insider transactions, material events"
+  - "Call transcript distill - guidance changes, tone shifts, what management dodged"
 default_skills:
   - "web-research"
   - "market-data"

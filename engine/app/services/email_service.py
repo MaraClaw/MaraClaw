@@ -1,4 +1,4 @@
-"""Email service — IMAP/SMTP email operations for agent tools.
+"""Email service - IMAP/SMTP email operations for agent tools.
 
 Supports all major email providers via preset configurations.
 Each agent stores its own email credentials in per-agent tool config.

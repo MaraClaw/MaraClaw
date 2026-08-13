@@ -1,4 +1,4 @@
-"""Usage quota guard — check and enforce usage limits."""
+"""Usage quota guard - check and enforce usage limits."""
 
 import uuid
 from datetime import UTC, datetime, timedelta

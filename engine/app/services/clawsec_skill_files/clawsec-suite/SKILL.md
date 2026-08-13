@@ -327,7 +327,7 @@ The advisory guardian resolves the suppression config using the same priority or
     {
       "checkId": "CVE-2026-25593",
       "skill": "clawsec-suite",
-      "reason": "First-party security tooling — reviewed by security team",
+      "reason": "First-party security tooling - reviewed by security team",
       "suppressedAt": "2026-02-15"
     },
     {
@@ -373,13 +373,13 @@ The advisory and audit pipelines share the same config file. Use the `enabledFor
     {
       "checkId": "skills.code_safety",
       "skill": "clawsec-suite",
-      "reason": "First-party tooling — audit finding accepted",
+      "reason": "First-party tooling - audit finding accepted",
       "suppressedAt": "2026-02-15"
     },
     {
       "checkId": "CVE-2026-25593",
       "skill": "clawsec-suite",
-      "reason": "First-party tooling — advisory reviewed",
+      "reason": "First-party tooling - advisory reviewed",
       "suppressedAt": "2026-02-15"
     }
   ]

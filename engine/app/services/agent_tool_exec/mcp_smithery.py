@@ -208,7 +208,7 @@ async def _smithery_auto_recover(
             except Exception:
                 _ = None
 
-        # Connection re-created without OAuth — should work now
+        # Connection re-created without OAuth - should work now
         return None  # Signal caller to retry (but we don't retry here to avoid loops)
 
     except Exception as e:

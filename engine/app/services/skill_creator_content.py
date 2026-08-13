@@ -149,7 +149,7 @@ When each run completes, save timing data (tokens, duration) to `timing.json`.
 
 ### Step 4: Grade, aggregate, and launch the viewer
 Once all runs are done:
-1. Grade each run against assertions — see `agents/grader.md`
+1. Grade each run against assertions - see `agents/grader.md`
 2. Aggregate results: `python -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>`
 3. Launch the viewer: `python eval-viewer/generate_review.py <workspace>/iteration-N --skill-name "my-skill" --benchmark <workspace>/iteration-N/benchmark.json`
 4. Present results to the user for review
@@ -186,20 +186,20 @@ Optimize the description for better triggering accuracy. Use `scripts/run_loop.p
 
 ## Reference files
 
-- `agents/grader.md` — How to evaluate assertions against outputs
-- `agents/comparator.md` — How to do blind A/B comparison between two outputs
-- `agents/analyzer.md` — How to analyze why one version beat another
-- `references/schemas.md` — JSON structures for evals.json, grading.json, etc.
-- `assets/eval_review.html` — HTML template for eval review
-- `eval-viewer/generate_review.py` — Script to generate the review viewer
-- `scripts/aggregate_benchmark.py` — Aggregate benchmark results
-- `scripts/generate_report.py` — Generate optimization report
-- `scripts/improve_description.py` — Improve skill description
-- `scripts/package_skill.py` — Package skill for distribution
-- `scripts/quick_validate.py` — Quick validation
-- `scripts/run_eval.py` — Run triggering evaluation
-- `scripts/run_loop.py` — Run optimization loop
-- `scripts/utils.py` — Shared utilities
+- `agents/grader.md` - How to evaluate assertions against outputs
+- `agents/comparator.md` - How to do blind A/B comparison between two outputs
+- `agents/analyzer.md` - How to analyze why one version beat another
+- `references/schemas.md` - JSON structures for evals.json, grading.json, etc.
+- `assets/eval_review.html` - HTML template for eval review
+- `eval-viewer/generate_review.py` - Script to generate the review viewer
+- `scripts/aggregate_benchmark.py` - Aggregate benchmark results
+- `scripts/generate_report.py` - Generate optimization report
+- `scripts/improve_description.py` - Improve skill description
+- `scripts/package_skill.py` - Package skill for distribution
+- `scripts/quick_validate.py` - Quick validation
+- `scripts/run_eval.py` - Run triggering evaluation
+- `scripts/run_loop.py` - Run optimization loop
+- `scripts/utils.py` - Shared utilities
 """
 
 

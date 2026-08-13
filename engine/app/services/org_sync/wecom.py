@@ -38,7 +38,7 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
     ):
         super().__init__(provider, config, tenant_id)
         # corp_id: the enterprise's WeCom corp ID
-        # secret: the 通讯录同步 (contact-sync) secret — used for department/simplelist and user/list_id
+        # secret: the 通讯录同步 (contact-sync) secret - used for department/simplelist and user/list_id
         self.corp_id = self._config_string("corp_id", "app_id", "corpid")
         self.secret = self._config_string("secret", "app_secret", "corpsecret")
         self._access_token: str | None = None
@@ -171,7 +171,7 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                     user_stubs.append(
                         ExternalUser(
                             external_id=uid,
-                            name=uid,  # placeholder — enriched on first SSO login
+                            name=uid,  # placeholder - enriched on first SSO login
                             open_id=entry.get("open_userid", ""),
                             department_external_id=department_external_id,
                             department_ids=[department_external_id],

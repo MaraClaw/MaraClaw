@@ -1,4 +1,4 @@
-"""Agent lifecycle manager — Docker container management for OpenClaw Gateway instances."""
+"""Agent lifecycle manager - Docker container management for OpenClaw Gateway instances."""
 
 import json
 import shutil
@@ -40,7 +40,7 @@ class AgentManager:
         try:
             self.docker_client = DockerClient()
         except ClientNotFoundError, DockerException:
-            logger.warning("Docker not available — agent containers will not be managed")
+            logger.warning("Docker not available - agent containers will not be managed")
             self.docker_client = None
 
     def _agent_dir(self, agent_id: uuid.UUID) -> Path:
@@ -184,7 +184,7 @@ class AgentManager:
                 mem_key, "# Memory\n\n_Record important information and knowledge here._\n", encoding="utf-8"
             )
 
-        # Ensure reflections.md exists — copy from central template
+        # Ensure reflections.md exists - copy from central template
         refl_key = f"{agent_prefix}/memory/reflections.md"
         if not await storage.exists(refl_key):
             refl_template = Path(__file__).parent.parent / "templates" / "reflections.md"
@@ -193,7 +193,7 @@ class AgentManager:
             )
             await storage.write_text(refl_key, refl_content, encoding="utf-8")
 
-        # Ensure HEARTBEAT.md exists — copy from central template
+        # Ensure HEARTBEAT.md exists - copy from central template
         hb_key = f"{agent_prefix}/HEARTBEAT.md"
         if not await storage.exists(hb_key):
             hb_template = Path(__file__).parent.parent / "templates" / "HEARTBEAT.md"

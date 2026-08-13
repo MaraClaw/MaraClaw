@@ -30,5 +30,5 @@ USER: node
 
 - Do not put `GOG_KEYRING_PASSWORD` in Docker env/args; file path only.
 - Do not run the TencentDB classifier/patch from runtime bootstrap.
-- Do not add `AGENTS.md` under `clawsec_skill_files/<skill>/` — those trees are AGPL payloads seeded into workspaces.
+- Do not add `AGENTS.md` under `clawsec_skill_files/<skill>/` - those trees are AGPL payloads seeded into workspaces.
 - Tests: `tests/test_openclaw_*.py`. Docs: `docs/gogcli-*.md`.

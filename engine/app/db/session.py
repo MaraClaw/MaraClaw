@@ -63,7 +63,7 @@ async def bind_crud_connection() -> AsyncIterator[None]:
 
     Attach via ``dependencies=[Depends(bind_crud_connection)]`` on routers that
     only do database work. Do **not** use on websocket, connector inbound,
-    gateway, or any handler that calls the LLM — that would pin a pool slot
+    gateway, or any handler that calls the LLM - that would pin a pool slot
     across model I/O.
 
     When the process pool is unset (unit tests without ``init_pool``), this is

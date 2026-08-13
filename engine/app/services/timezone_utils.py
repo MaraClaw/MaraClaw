@@ -53,7 +53,7 @@ async def get_agent_timezone(agent_id: uuid.UUID) -> str:
 
 
 def get_agent_timezone_sync(agent, tenant=None) -> str:
-    """Synchronous version — when agent and tenant objects are already loaded.
+    """Synchronous version - when agent and tenant objects are already loaded.
 
     Priority: agent.timezone → tenant.timezone → 'UTC'
     """

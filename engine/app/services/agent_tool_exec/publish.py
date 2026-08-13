@@ -88,7 +88,7 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
         url = f"/p/{short_id}"
         url_note = (
             "\n\n> Note: PUBLIC_BASE_URL is not configured on this server. "
-            "The link above is a relative path — prepend your server's domain "
+            "The link above is a relative path - prepend your server's domain "
             "to get the full URL. Set PUBLIC_BASE_URL in your .env to have "
             "the agent generate complete links automatically."
         )

@@ -66,7 +66,7 @@ class CheckEmailRequest(BaseModel):
 
 @router.post("/check-email-exists")
 async def check_email_exists(data: CheckEmailRequest):
-    """Public endpoint — check if an email address is already registered on this platform."""
+    """Public endpoint - check if an email address is already registered on this platform."""
     exists = await identity_dao.get_by_email(data.email.strip().lower()) is not None
     return {"exists": exists}
 

@@ -1,4 +1,4 @@
-"""Supervision reminder service — periodically sends reminders for supervision tasks.
+"""Supervision reminder service - periodically sends reminders for supervision tasks.
 
 Checks all supervision-type tasks that are not done and sends Feishu reminders
 to the target person based on the configured schedule preset.
@@ -36,7 +36,7 @@ class ReminderSchedule(TypedDict):
 
 
 def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
-    """Parse remind_schedule — supports JSON format or legacy simple presets."""
+    """Parse remind_schedule - supports JSON format or legacy simple presets."""
     import json
 
     if not remind_schedule:

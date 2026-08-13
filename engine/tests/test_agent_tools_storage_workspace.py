@@ -428,7 +428,7 @@ async def test_storage_focus_callbacks_use_focus_service_owners(monkeypatch) -> 
         arguments={"description": "work"}, agent_id=agent_id, user_id=agent_id, session_id="focus", on_output=None
     )
     assert not isinstance(upsert_result, str)
-    assert await upsert_result == "✅ Focus item saved: task — work"
+    assert await upsert_result == "✅ Focus item saved: task - work"
     complete_result = storage.complete_focus_item(
         arguments={"key": "task"}, agent_id=agent_id, user_id=agent_id, session_id="focus", on_output=None
     )

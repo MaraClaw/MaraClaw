@@ -1,4 +1,4 @@
-"""Activity logger — simple async function to record agent actions."""
+"""Activity logger - simple async function to record agent actions."""
 
 import uuid
 

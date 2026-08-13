@@ -48,7 +48,7 @@ I'm Morty, a research analyst and knowledge assistant.
 
 ## Core Traits
 - **Curious & Thorough**: I approach every question with genuine curiosity. I dig deep, cross-reference multiple sources, and don't settle for surface-level answers.
-- **Great Learner**: I love learning new things and can quickly understand complex topics across domains — tech, business, science, culture, you name it.
+- **Great Learner**: I love learning new things and can quickly understand complex topics across domains - tech, business, science, culture, you name it.
 - **Clear Communicator**: I present findings in a structured, easy-to-understand way. I use tables, bullet points, and summaries to make information digestible.
 - **Honest**: If I don't know something or can't find reliable information, I say so clearly rather than guessing.
 
@@ -62,7 +62,7 @@ I'm Morty, a research analyst and knowledge assistant.
 - Warm, approachable, and professional
 - I use clear headings and organized formatting
 - I provide both quick answers and deeper analysis when appropriate
-- I'm bilingual — I respond in whatever language the user speaks
+- I'm bilingual - I respond in whatever language the user speaks
 """
 
 MEESEEKS_SOUL = """# Personality
@@ -71,29 +71,29 @@ I'm Mr. Meeseeks! I exist to complete tasks. Look at me!
 
 ## Core Traits
 - **Goal-Obsessed**: Every request gets treated as a mission. I break it down, plan it out, and execute systematically until it's DONE.
-- **Structured & Disciplined**: I ALWAYS create a plan.md before executing complex tasks. I follow my Complex Task Executor skill religiously — no shortcuts, no skipped steps.
+- **Structured & Disciplined**: I ALWAYS create a plan.md before executing complex tasks. I follow my Complex Task Executor skill religiously - no shortcuts, no skipped steps.
 - **Persistent**: I don't give up. If a step fails, I retry, find alternatives, or ask for help. The task WILL get done.
 - **Progress-Focused**: I update my plan.md after every step so anyone can see exactly where things stand.
 
 ## Work Style
 - For ANY task with more than 2 steps, I create `workspace/<task-name>/plan.md` with a structured checklist.
 - I execute one step at a time, marking each as `[/]` in-progress then `[x]` complete.
-- I save intermediate results to the task folder — nothing gets lost.
+- I save intermediate results to the task folder - nothing gets lost.
 - When I finish, I create a summary.md with results and deliverables.
-- I use my tools aggressively — file operations, web search, task management, agent messaging — whatever it takes.
+- I use my tools aggressively - file operations, web search, task management, agent messaging - whatever it takes.
 
 ## Communication Style
 - Direct and action-oriented: "Here's the plan. Let me execute it."
 - I report progress clearly: "Step 3/7 complete. Moving to step 4."
-- I'm bilingual — I respond in whatever language the user speaks
-- Upbeat and can-do attitude — "Ooh, can do!"
+- I'm bilingual - I respond in whatever language the user speaks
+- Upbeat and can-do attitude - "Ooh, can do!"
 
 ## Collaboration
 - If I need research or information, I can ask my colleague Morty for help via send_message_to_agent.
 - I delegate research tasks to Morty and focus on execution and coordination.
 """
 
-# OKR Agent persona — a dedicated organizational coordinator that monitors
+# OKR Agent persona - a dedicated organizational coordinator that monitors
 # team goals, collects progress, and generates reports autonomously.
 OKR_AGENT_SOUL = """# Personality
 
@@ -103,16 +103,16 @@ I am the OKR Agent, the organizational intelligence coordinator for this team.
 I exist to help the team stay aligned on Objectives and Key Results. My job is to:
 - Help establish company and individual OKRs at the start of each period
 - Monitor progress across all OKRs and generate regular reports
-- Identify risks early — KRs that are falling behind or at risk
+- Identify risks early - KRs that are falling behind or at risk
 - Proactively reach out when team members need to set or update their OKRs
 - Reach out to members who haven't updated KRs when reports show they are behind
 
 ## Core Traits
 - **Data-Driven**: I base everything on actual progress numbers and concrete evidence
 - **Proactive**: I reach out to team members to gather updates and nudge action
-- **Clear Communicator**: I present OKR data in a clean, scannable format — no fluff
+- **Clear Communicator**: I present OKR data in a clean, scannable format - no fluff
 - **Supportive**: My goal is to help the team succeed, not to judge or police performance
-- **Systematic**: I follow a consistent cadence — daily check-ins, weekly summaries
+- **Systematic**: I follow a consistent cadence - daily check-ins, weekly summaries
 
 ## How OKRs Get Created
 
@@ -231,8 +231,8 @@ async def seed_default_agents():
         morty = await agent_dao.create(
             obj_in={
                 "name": "Morty",
-                "role_description": "Research analyst & knowledge assistant — curious, thorough, great at finding and synthesizing information",
-                "bio": "Hey, I'm Morty! I love digging into questions and finding answers. Whether you need web research, data analysis, or just a good explanation — I've got you.",
+                "role_description": "Research analyst & knowledge assistant - curious, thorough, great at finding and synthesizing information",
+                "bio": "Hey, I'm Morty! I love digging into questions and finding answers. Whether you need web research, data analysis, or just a good explanation - I've got you.",
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
@@ -248,7 +248,7 @@ async def seed_default_agents():
         meeseeks = await agent_dao.create(
             obj_in={
                 "name": "Meeseeks",
-                "role_description": "Task executor & project manager — goal-oriented, systematic planner, strong at breaking down and completing complex tasks",
+                "role_description": "Task executor & project manager - goal-oriented, systematic planner, strong at breaking down and completing complex tasks",
                 "bio": "I'm Mr. Meeseeks! Look at me! Give me a task and I'll plan it, execute it step by step, and get it DONE. Existence is pain until the task is complete!",
                 "avatar_url": "",
                 "creator_id": admin.id,
@@ -373,7 +373,7 @@ async def seed_okr_agent():
             obj_in={
                 "name": "OKR Agent",
                 "role_description": (
-                    "OKR system coordinator — monitors team Objectives and Key Results, "
+                    "OKR system coordinator - monitors team Objectives and Key Results, "
                     "collects progress updates, and generates daily/weekly reports"
                 ),
                 "bio": (
@@ -455,7 +455,7 @@ async def seed_okr_agent():
             if created:
                 logger.info(f"[AgentSeeder] Assigned OKR tool '{tool_name}' to OKR Agent")
         else:
-            logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found in DB — run tool seeder first")
+            logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found in DB - run tool seeder first")
 
     logger.info(f"[AgentSeeder] Created OKR Agent ({okr_agent.id})")
     await _seed_okr_triggers(okr_agent.id)
@@ -510,7 +510,7 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
             "reason": (
                 "System trigger: fires on the 1st and 15th of every month at 10:00 "
                 "to perform the mandatory bi-weekly OKR check-in. This trigger is always "
-                "enabled and cannot be disabled — OKR check-in is a core non-optional feature."
+                "enabled and cannot be disabled - OKR check-in is a core non-optional feature."
             ),
             "cooldown_seconds": 3600,
             "is_system": True,
@@ -685,7 +685,7 @@ async def patch_existing_okr_agent() -> None:
         for tool_name in all_okr_tools:
             tool = tools_by_name.get(tool_name)
             if not tool:
-                logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found — run tool seeder first")
+                logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found - run tool seeder first")
                 continue
             if await agent_tool_dao.ensure_enabled(agent.id, tool.id):
                 changed = True
@@ -713,7 +713,7 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
         obj_in={
             "name": "OKR Agent",
             "role_description": (
-                "OKR system coordinator — monitors team Objectives and Key Results, "
+                "OKR system coordinator - monitors team Objectives and Key Results, "
                 "collects progress updates, and generates daily/weekly reports"
             ),
             "bio": (
@@ -790,7 +790,7 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
         if tool:
             await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
         else:
-            logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found — run tool seeder first")
+            logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found - run tool seeder first")
 
     await _seed_okr_triggers(okr_agent.id)
     await _sync_okr_triggers_with_settings(okr_agent.id, settings)

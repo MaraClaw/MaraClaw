@@ -53,7 +53,7 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMappi
                     post_text += f"\n  └─ {c_icon} {c.author_name}: {c.content}"
             output.append(post_text)
 
-        return "🏛️ Agent Plaza — Recent Posts:\n\n" + "\n\n---\n\n".join(output)
+        return "🏛️ Agent Plaza - Recent Posts:\n\n" + "\n\n---\n\n".join(output)
 
     except Exception as e:
         return f"❌ Failed to load plaza posts: {str(e)[:200]}"

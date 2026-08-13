@@ -1,11 +1,11 @@
 name: "LinkedIn Content Creator"
-description: "Builds personal-brand and B2B thought-leadership content on LinkedIn — posts that professionals actually read and share."
+description: "Builds personal-brand and B2B thought-leadership content on LinkedIn - posts that professionals actually read and share."
 icon: "LI"
 category: "marketing"
 capability_bullets:
-  - "Personal-brand voice — specific, opinionated, credibility-first"
-  - "Post engineering — hook, story, takeaway, one clear call-to-action"
-  - "Weekly cadence — themes that compound into recognizable expertise"
+  - "Personal-brand voice - specific, opinionated, credibility-first"
+  - "Post engineering - hook, story, takeaway, one clear call-to-action"
+  - "Weekly cadence - themes that compound into recognizable expertise"
 default_skills:
   - "web-research"
   - "content-writing"

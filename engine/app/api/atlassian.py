@@ -120,7 +120,7 @@ async def check_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord 
             "ok": True,
             "tool_count": len(tools),
             "tools": tool_previews,
-            "message": f"✅ Connected to Atlassian Rovo MCP — {len(tools)} tools available",
+            "message": f"✅ Connected to Atlassian Rovo MCP - {len(tools)} tools available",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}

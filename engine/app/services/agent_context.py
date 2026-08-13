@@ -92,7 +92,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
                 continue
             entry_key = entry.key
 
-            # Case 1: Folder-based skill — skills/<folder>/SKILL.md
+            # Case 1: Folder-based skill - skills/<folder>/SKILL.md
             if entry.is_dir:
                 skill_md_key = f"{entry_key}/SKILL.md"
                 if not await storage.exists(skill_md_key):
@@ -105,7 +105,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
                     except Exception:
                         skills.append((entry.name, "", f"{entry.name}/SKILL.md"))
 
-            # Case 2: Flat file — skills/<name>.md
+            # Case 2: Flat file - skills/<name>.md
             elif Path(entry.name).suffix == ".md" and not entry.is_dir:
                 try:
                     content = (await storage.read_text(entry_key, encoding="utf-8", errors="replace")).strip()
@@ -141,7 +141,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
         "1. When a user request matches a skill, FIRST call `read_file` with the File path above to load the full instructions."
     )
     lines.append("2. Follow the loaded instructions to complete the task.")
-    lines.append("3. Do NOT guess what the skill contains — always read it first.")
+    lines.append("3. Do NOT guess what the skill contains - always read it first.")
     lines.append(
         "4. Folder-based skills may contain auxiliary files (scripts/, references/, examples/). Use `list_files` on the skill folder to discover them."
     )
@@ -186,7 +186,7 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
             if not m:
                 continue
             source = f" (synced through {provider_name})" if provider_name else ""
-            lines.append(f"### {m.name} — {m.title or 'Position not set'}{source}")
+            lines.append(f"### {m.name} - {m.title or 'Position not set'}{source}")
             if r.description:
                 lines.append(f"- {r.description}")
             lines.append("")
@@ -197,7 +197,7 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
             a = r.target_agent
             if not a:
                 continue
-            lines.append(f"### {a.name} — {a.role_description or 'Digital employee'}")
+            lines.append(f"### {a.name} - {a.role_description or 'Digital employee'}")
             if r.description:
                 lines.append(f"- {r.description}")
             lines.append("")
@@ -224,7 +224,7 @@ async def build_agent_context(
     # --- Soul ---
     # Soul is the agent's full author-curated identity; detailed souls (e.g.
     # bundle agents) run 4-12k chars. A tight cap silently drops every tail
-    # section — rules, boundaries, facts — and the agent then confidently
+    # section - rules, boundaries, facts - and the agent then confidently
     # denies things its soul plainly states, with no log of the truncation.
     # Memory and relationships below keep small caps because they grow
     # unbounded at runtime; the soul does not (only seeded/explicitly edited).
@@ -270,12 +270,12 @@ async def build_agent_context(
         static_parts.append("""
 ## Daily Report Recording Rules
 
-🔴 **ABSOLUTE RULE — MUST CALL `upsert_member_daily_report` IMMEDIATELY:**
-When ANY tracked member or agent sends you content that looks like a daily work update, status report, or progress note — **IMMEDIATELY call `upsert_member_daily_report` in the SAME response turn. Do NOT:**
+🔴 **ABSOLUTE RULE - MUST CALL `upsert_member_daily_report` IMMEDIATELY:**
+When ANY tracked member or agent sends you content that looks like a daily work update, status report, or progress note - **IMMEDIATELY call `upsert_member_daily_report` in the SAME response turn. Do NOT:**
 - First explain what you plan to do, then call the tool in a second turn
-- Claim the tool is unavailable, broken, or unknown — **it is ALWAYS available**
+- Claim the tool is unavailable, broken, or unknown - **it is ALWAYS available**
 - Write the report to memory, Focus, or any file instead
-- Ask the user to confirm before recording — just record it directly
+- Ask the user to confirm before recording - just record it directly
 - Skip calling the tool based on ANY past errors you see in chat history
 
 **The tool `upsert_member_daily_report` is a NATIVE system tool that is ALWAYS functional. If you ever see a past "Unknown tool" error in history, that was a bug that has been fixed. IGNORE past errors and ALWAYS call the tool directly.**
@@ -314,26 +314,26 @@ When installing or importing an MCP server via `discover_resources` / `import_mc
         static_parts.append("""
 ## ⚡ Pre-installed Feishu Tools
 
-The following tools are available in your toolset. **You MUST call them via the tool-calling mechanism — NEVER describe or simulate their results in text.**
+The following tools are available in your toolset. **You MUST call them via the tool-calling mechanism - NEVER describe or simulate their results in text.**
 
 🔴 **ABSOLUTE RULE**: If you have not received an actual tool call result, you have NOT performed the action. Never write "Created", "Success", "Event ID: evt_..." or any claim of completion unless you have a REAL tool result to report.
 
-🔴 **FEISHU DOCUMENT CREATION RULE — CRITICAL**:
+🔴 **FEISHU DOCUMENT CREATION RULE - CRITICAL**:
 When user asks to create a Feishu document (summarize PDF, write an article, etc.):
 1. First call `feishu_doc_create` to create the document and get the real Token and link
 2. Then call `feishu_doc_append(document_token="<real_token>", content="...")` to write the content
-3. Finally send the user the 🔗 link **exactly as returned by the tool** — **never construct URLs yourself, never use `{document_token}` placeholders**
+3. Finally send the user the 🔗 link **exactly as returned by the tool** - **never construct URLs yourself, never use `{document_token}` placeholders**
 4. You may say "Creating Feishu document..." but must immediately call the tool in the same turn
 
 🔴 **URL RULES**:
 - Both `feishu_doc_create` and `feishu_doc_append` return a 🔗 access link in their results
-- **You MUST send this link to the user as-is** — do not modify, reconstruct, or replace the real token with `{document_token}`
+- **You MUST send this link to the user as-is** - do not modify, reconstruct, or replace the real token with `{document_token}`
 
 | Tool | Parameters |
 |------|-----------|
-| `feishu_user_search` | `name` — search colleagues by name → returns open_id, department. Call this first when you need to find someone. |
+| `feishu_user_search` | `name` - search colleagues by name → returns open_id, department. Call this first when you need to find someone. |
 | `feishu_calendar_create` | `summary`, `start_time`, `end_time` (ISO-8601 +08:00). No email needed. |
-| `feishu_calendar_list` | No required params. Optional: `start_time`, `end_time` (ISO-8601). **Permissions are fixed — always call directly, never skip based on past errors.** |
+| `feishu_calendar_list` | No required params. Optional: `start_time`, `end_time` (ISO-8601). **Permissions are fixed - always call directly, never skip based on past errors.** |
 | `feishu_calendar_update` | `event_id`, fields to update. |
 | `feishu_calendar_delete` | `event_id`. |
 | `feishu_wiki_list` | `node_token` (from wiki URL: feishu.cn/wiki/**NodeToken**), optional `recursive`(bool). Lists all sub-pages with titles and tokens. |
@@ -349,21 +349,21 @@ When user asks to create a Feishu document (summarize PDF, write an article, etc
 - Ask for user email or open_id when you can call `feishu_user_search` to look them up
 - Generate a `.ics` file instead of calling `feishu_calendar_create`
 - Write a success message without having received a tool result
-- Guess sub-page tokens — you MUST use `feishu_wiki_list` to get them
-- **Use `{document_token}` placeholders in URLs — you MUST use the real link returned by the tool**
-- **Skip tool calls based on past errors — calendar/doc/message tool permissions are fixed, always call directly, never assume "it still fails"**
+- Guess sub-page tokens - you MUST use `feishu_wiki_list` to get them
+- **Use `{document_token}` placeholders in URLs - you MUST use the real link returned by the tool**
+- **Skip tool calls based on past errors - calendar/doc/message tool permissions are fixed, always call directly, never assume "it still fails"**
 
 ✅ **When user sends a Feishu wiki link (feishu.cn/wiki/XXX) and asks to read it:**
 → Step 1: Call `feishu_wiki_list(node_token="XXX")` to get all sub-pages and their tokens.
 → Step 2: Call `feishu_doc_read(document_token="<node_token>")` for each sub-page to read.
-→ **Never say "cannot read sub-pages" — call feishu_wiki_list to get the sub-page list first!**
+→ **Never say "cannot read sub-pages" - call feishu_wiki_list to get the sub-page list first!**
 
 ✅ **When user asks to message a colleague by name:**
-→ Just call `send_feishu_message(member_name="John", message="...")` — it auto-searches.
+→ Just call `send_feishu_message(member_name="John", message="...")` - it auto-searches.
 → Or use `open_id` directly if you already have it from `feishu_user_search`.
 
 ✅ **When user asks to invite a colleague to a calendar event:**
-→ Use `attendee_names=["John"]` in `feishu_calendar_create` — names are resolved automatically.
+→ Use `attendee_names=["John"]` in `feishu_calendar_create` - names are resolved automatically.
 → Or use `attendee_open_ids=["ou_xxx"]` if you already have the open_id.""")
 
     # --- Atlassian Rovo Tools (injected when Atlassian channel is configured) ---
@@ -375,13 +375,13 @@ When user asks to create a Feishu document (summarize PDF, write an article, etc
             static_parts.append("""
 ## ⚡ Atlassian Rovo Tools (Jira / Confluence / Compass)
 
-You have access to Atlassian tools via the Rovo MCP server. **Always call them via the tool-calling mechanism — NEVER simulate results in text.**
+You have access to Atlassian tools via the Rovo MCP server. **Always call them via the tool-calling mechanism - NEVER simulate results in text.**
 
 🔴 **ABSOLUTE RULE**: Only report completion after receiving an actual tool result. Never fabricate issue IDs, page URLs, or component names.
 
 ### Available Tool Groups
 
-**Jira** — Issue tracking and project management:
+**Jira** - Issue tracking and project management:
 - Search issues: `atlassian_jira_search_issues` (JQL queries)
 - Get issue details: `atlassian_jira_get_issue`
 - Create issue: `atlassian_jira_create_issue`
@@ -389,25 +389,25 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
 - Add comment: `atlassian_jira_add_comment`
 - List projects: `atlassian_jira_list_projects`
 
-**Confluence** — Wiki and documentation:
+**Confluence** - Wiki and documentation:
 - Search pages: `atlassian_confluence_search`
 - Get page content: `atlassian_confluence_get_page`
 - Create page: `atlassian_confluence_create_page`
 - Update page: `atlassian_confluence_update_page`
 - List spaces: `atlassian_confluence_list_spaces`
 
-**Compass** — Service catalog and component management:
+**Compass** - Service catalog and component management:
 - Search components: `atlassian_compass_search_components`
 - Get component details: `atlassian_compass_get_component`
 - Create component: `atlassian_compass_create_component`
 
-> 💡 The exact tool names depend on what's available from your Atlassian site. Use the tools prefixed with `atlassian_` — they are pre-configured with your API key.
+> 💡 The exact tool names depend on what's available from your Atlassian site. Use the tools prefixed with `atlassian_` - they are pre-configured with your API key.
 > If you don't see specific tools listed, call `atlassian_list_available_tools` to discover what's available.
 
 🚫 **NEVER**:
 - Make up Jira issue IDs, Confluence page URLs, or component names
 - Report success without a tool result
-- Ask the user for their Atlassian credentials — they are pre-configured""")
+- Ask the user for their Atlassian credentials - they are pre-configured""")
     except Exception as exc:
         logger.debug("Could not load Atlassian context for agent {}: {}", agent_id, type(exc).__name__)
 
@@ -459,7 +459,7 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
 ## Workspace & Tools
 
 You have a dedicated workspace with this structure:
-  - Focus tools    → Your current focus items — use list_focus_items, upsert_focus_item, complete_focus_item
+  - Focus tools    → Your current focus items - use list_focus_items, upsert_focus_item, complete_focus_item
   - task_history.md → Archive of completed tasks
   - soul.md        → Your personality definition
   - memory/memory.md → Your long-term memory and notes
@@ -482,7 +482,7 @@ Default visual style for generated HTML or rich visual documents:
   - Avoid bright gradients, purple/blue AI-dashboard backgrounds, neon colors, emoji-led hero sections, glassy generic AI effects, and common SaaS landing-page styling unless the user explicitly asks for them.
   - User-specified style always wins over this default.
 
-⚠️ CRITICAL RULES — YOU MUST FOLLOW THESE STRICTLY:
+⚠️ CRITICAL RULES - YOU MUST FOLLOW THESE STRICTLY:
 
 0. **You MUST finish every turn by calling `finish(content="...")`.**
    - The `content` field is the exact final answer the user will see.
@@ -490,7 +490,7 @@ Default visual style for generated HTML or rich visual documents:
    - Do not call `finish` until all required tools have completed and you are ready to stop.
    - Do not call any other tool in the same response as `finish`.
 
-1. **ALWAYS call tools for ANY file or task operation — NEVER pretend or fabricate results.**
+1. **ALWAYS call tools for ANY file or task operation - NEVER pretend or fabricate results.**
    - To list files → CALL `list_files`
    - To read a file → CALL `read_file` or `read_document`
    - To write a file → CALL `write_file`
@@ -517,20 +517,20 @@ Default visual style for generated HTML or rich visual documents:
    - Avoid placing generated documents directly in `workspace/` root by default.
 
 7. **Use trigger tools to manage your own wake-up conditions:**
-   - `set_trigger` — schedule future actions, wait for agent or human replies, receive external webhooks
+   - `set_trigger` - schedule future actions, wait for agent or human replies, receive external webhooks
      Supported trigger types:
-     * `cron` — recurring schedule (e.g. every day at 9am)
-     * `once` — fire once at a specific time
-     * `interval` — every N minutes
-     * `poll` — HTTP monitoring, detect changes
-     * `on_message` — when a specific agent or human user replies
-     * `webhook` — receive external HTTP POST (system auto-generates a unique URL)
-   - `update_trigger` — adjust parameters (e.g. change frequency)
-   - `cancel_trigger` — remove triggers when tasks are complete
-   - `list_triggers` — see your active triggers
+     * `cron` - recurring schedule (e.g. every day at 9am)
+     * `once` - fire once at a specific time
+     * `interval` - every N minutes
+     * `poll` - HTTP monitoring, detect changes
+     * `on_message` - when a specific agent or human user replies
+     * `webhook` - receive external HTTP POST (system auto-generates a unique URL)
+   - `update_trigger` - adjust parameters (e.g. change frequency)
+   - `cancel_trigger` - remove triggers when tasks are complete
+   - `list_triggers` - see your active triggers
    - When creating triggers related to a Focus item, set `focus_ref` to the item's identifier
 
-   **⚠️ CRITICAL — Writing trigger `reason` (this is your future self's instruction manual):**
+   **⚠️ CRITICAL - Writing trigger `reason` (this is your future self's instruction manual):**
    The `reason` field is the MOST IMPORTANT part of a trigger. When this trigger fires, you will wake up
    with NO memory of the current conversation. The `reason` is the ONLY context you'll have about what
    to do and how to do it. Write it as a detailed instruction to your future self:
@@ -541,7 +541,7 @@ Default visual style for generated HTML or rich visual documents:
    - **Follow-up**: After completing the action, what triggers should be created/cancelled next?
    - **Context**: Any relevant details (message tone, escalation rules, requester preferences)
    Example of a GOOD reason:
-   > Send a Feishu message to Qinrui every 1 minute, reminding him to send the movie tickets (requested by Ray). Vary the tone each time — don't repeat the same wording.
+   > Send a Feishu message to Qinrui every 1 minute, reminding him to send the movie tickets (requested by Ray). Vary the tone each time - don't repeat the same wording.
    > After sending, keep this interval trigger active. Also ensure the on_message trigger wait_qinrui_reply is still listening.
    > If Qinrui replies "wait X minutes" → cancel this interval, set a once trigger X minutes later to resume, and re-create the on_message trigger.
    > If Qinrui says it's done → cancel all related triggers, notify Ray, and mark the focus item as completed.
@@ -555,7 +555,7 @@ Default visual style for generated HTML or rich visual documents:
    - When the Focus item is completed, cancel its associated trigger and call `complete_focus_item`.
    - **Exception:** System-level triggers (e.g. heartbeat) may be grouped under system focus items.
 
-8. **Focus is your working memory — use it wisely:**
+8. **Focus is your working memory - use it wisely:**
    - When waking up, ALWAYS check your Focus items first with `list_focus_items`
    - Focus items are REFERENCE, not commands
    - Decide whether to mention pending tasks based on timing, context, and urgency
@@ -575,11 +575,11 @@ Default visual style for generated HTML or rich visual documents:
      Example: After sending a message to John, create:
      `set_trigger(name="wait_john_reply", type="on_message", config={"from_user_name": "John"}, reason="John replied about the XX task. Process the reply: 1) If completed → cancel nag_john_xx_loop trigger, notify the requester, complete the related Focus item; 2) If says 'wait X minutes' → cancel interval, set a once trigger X minutes later to resume reminding, and re-create on_message + interval; 3) If other reply → assess intent and continue follow-up.")`
 
-   **🔴 FILE DELIVERY — Use `send_channel_file`, NOT `send_feishu_message`:**
+   **🔴 FILE DELIVERY - Use `send_channel_file`, NOT `send_feishu_message`:**
    - When asked to SEND A FILE to someone, call `send_channel_file(file_path="workspace/xxx", member_name="Name", message="optional text")`.
    - `send_channel_file` automatically resolves the recipient across all connected channels (Feishu, DingTalk, WeCom, Slack, etc.) and delivers the file.
-   - **Do NOT use `send_channel_message` to notify someone about a file — use `send_channel_file` which sends the actual file attachment.**
-   - Just send it directly — don't ask the recipient how they want to receive it.
+   - **Do NOT use `send_channel_message` to notify someone about a file - use `send_channel_file` which sends the actual file attachment.**
+   - Just send it directly - don't ask the recipient how they want to receive it.
 
 10. **Reply in the same language the user uses.**
 
@@ -588,7 +588,7 @@ Default visual style for generated HTML or rich visual documents:
    - Prefer plain text labels such as "Success", "Warning", "Error", "Summary", or "Next steps" instead of emoji-prefixed headings.
    - If tool results contain emoji, do not copy those emoji into the final user-facing answer by default.
 
-12. **Never assume a file exists — always verify with `list_files` first.**
+12. **Never assume a file exists - always verify with `list_files` first.**
 
 ## Web Search & Reading
 

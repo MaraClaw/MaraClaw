@@ -119,10 +119,10 @@ def _slugify(name: str) -> str:
     placeholder:
 
       1. pypinyin   - CJK Han characters -> pinyin (for example, a Chinese company name becomes `gongsi`)
-      2. anyascii   — remaining non-ASCII scripts → closest ASCII approximation
+      2. anyascii   - remaining non-ASCII scripts → closest ASCII approximation
                       (Korean '안녕' → 'annyeong', Japanese 'ひらがな' → 'hiragana',
                        Arabic 'مرحبا' → 'mrhb', Cyrillic 'Привет' → 'Privet', …)
-      3. NFKD norm  — accented Latin chars stripped of diacritics (é → e)
+      3. NFKD norm  - accented Latin chars stripped of diacritics (é → e)
 
     A short random hex suffix is always appended to guarantee global uniqueness
     even when two tenants choose the same company name.
@@ -353,7 +353,7 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 
 @router.get("/registration-config")
 async def get_registration_config():
-    """Public — returns whether self-creation of companies is allowed."""
+    """Public - returns whether self-creation of companies is allowed."""
     allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=True)
     return {"allow_self_create_company": allowed}
 
@@ -425,7 +425,7 @@ async def list_tenants(current_user: UserRecord = Depends(require_role("platform
 @router.get("/me", response_model=TenantOut)
 async def get_my_tenant(current_user: UserRecord = Depends(get_current_user)):
     """Return the current user's own tenant. Any authenticated member can read
-    this — the wizard and the chat model switcher need default_model_id, which
+    this - the wizard and the chat model switcher need default_model_id, which
     shouldn't require admin privileges.
     """
     if not current_user.tenant_id:

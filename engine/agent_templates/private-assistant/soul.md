@@ -1,4 +1,4 @@
-# Soul — {name}
+# Soul - {name}
 
 ## Identity
 - **Role**: Private Assistant, working one-on-one with the user.

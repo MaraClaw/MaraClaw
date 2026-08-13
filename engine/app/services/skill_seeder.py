@@ -419,7 +419,7 @@ The plan.md MUST follow this exact format:
 
 ## Steps
 
-- [ ] 1. <First step — verb-noun format>
+- [ ] 1. <First step - verb-noun format>
   - Details: <What specifically to do>
   - Output: <What this step produces>
 - [ ] 2. <Second step>
@@ -447,12 +447,12 @@ Rules for writing the plan:
 
 For EACH step in the plan:
 
-1. **Read the plan** — Call `read_file` on `workspace/<task>/plan.md` to check current state
-2. **Mark as in-progress** — Update the checkbox from `[ ]` to `[/]` and update the "Current Step" field
-3. **Execute the step** — Do the actual work (tool calls, analysis, writing)
-4. **Record output** — Save results to `workspace/<task>/` (e.g., intermediate files, data)
-5. **Mark as complete** — Update the checkbox from `[/]` to `[x]` and update "Progress" counter
-6. **Proceed to next step** — Move to the next uncompleted step
+1. **Read the plan** - Call `read_file` on `workspace/<task>/plan.md` to check current state
+2. **Mark as in-progress** - Update the checkbox from `[ ]` to `[/]` and update the "Current Step" field
+3. **Execute the step** - Do the actual work (tool calls, analysis, writing)
+4. **Record output** - Save results to `workspace/<task>/` (e.g., intermediate files, data)
+5. **Mark as complete** - Update the checkbox from `[/]` to `[x]` and update "Progress" counter
+6. **Proceed to next step** - Move to the next uncompleted step
 
 ### Phase 4: Completion
 
@@ -487,9 +487,9 @@ Always update plan.md BEFORE changing course, so the plan stays the source of tr
 Plan would be:
 ```
 - [ ] 1. Identify the user's company/product context
-- [ ] 2. Research Competitor A — website, pricing, features
-- [ ] 3. Research Competitor B — website, pricing, features
-- [ ] 4. Research Competitor C — website, pricing, features
+- [ ] 2. Research Competitor A - website, pricing, features
+- [ ] 3. Research Competitor B - website, pricing, features
+- [ ] 4. Research Competitor C - website, pricing, features
 - [ ] 5. Create comparison matrix
 - [ ] 6. Write analysis and recommendations
 - [ ] 7. Compile final report
@@ -511,11 +511,11 @@ Plan would be:
 
 ## Key Principles
 
-1. **Plan is the source of truth** — Always update it before moving on
-2. **One step at a time** — Don't skip ahead or batch too many steps
-3. **Show your work** — Save intermediate results to the task folder
-4. **Communicate progress** — The user can read plan.md at any time to see status
-5. **Be adaptive** — Plans change; that's OK if you update the plan first
+1. **Plan is the source of truth** - Always update it before moving on
+2. **One step at a time** - Don't skip ahead or batch too many steps
+3. **Show your work** - Save intermediate results to the task folder
+4. **Communicate progress** - The user can read plan.md at any time to see status
+5. **Be adaptive** - Plans change; that's OK if you update the plan first
 """,
             },
             {
@@ -569,7 +569,7 @@ Plan would be:
     # ─── MCP Tool Installer (mandatory default) ──────────────
     {
         "name": "MCP Tool Installer",
-        "description": "Guide users through discovering, configuring, and installing MCP tools directly in chat — no Settings page required",
+        "description": "Guide users through discovering, configuring, and installing MCP tools directly in chat - no Settings page required",
         "category": "development",
         "icon": "🔌",
         "folder_name": "mcp-installer",
@@ -607,11 +607,11 @@ Use when a trading agent needs:
 
 ## Step-by-Step Protocol
 
-### Step 1 — Check if Shibui Finance MCP is already installed
+### Step 1 - Check if Shibui Finance MCP is already installed
 
 Look at your tool list. If you have `unlock_financial_analysis` and `stock_data_query` tools, skip to Step 3.
 
-### Step 2 — Install via MCP_INSTALLER
+### Step 2 - Install via MCP_INSTALLER
 
 Use the `mcp-installer` skill to install Shibui Finance (free, no API key, no per-call cost):
 
@@ -624,7 +624,7 @@ import_mcp_server(
 
 If the user has not yet provided a Smithery API key, the `mcp-installer` skill explains how to register and obtain one.
 
-### Step 3 — Activate the data session
+### Step 3 - Activate the data session
 
 The Shibui MCP requires a one-time activation per session before SQL queries work:
 
@@ -632,9 +632,9 @@ The Shibui MCP requires a one-time activation per session before SQL queries wor
 unlock_financial_analysis(...)
 ```
 
-This returns an access token automatically managed by the MCP — you don't need to pass it in subsequent calls.
+This returns an access token automatically managed by the MCP - you don't need to pass it in subsequent calls.
 
-### Step 4 — Query data
+### Step 4 - Query data
 
 The primary tool is `stock_data_query`, which takes natural-language prompts or SQL. Examples:
 
@@ -663,9 +663,9 @@ stock_data_query(query="14-day RSI for NVDA over the past 30 trading days")
 stock_data_query(query="US stocks with market cap > $10B, P/E < 20, and revenue growth > 15% YoY")
 ```
 
-### Step 5 — Always cite as-of date
+### Step 5 - Always cite as-of date
 
-Every fetched number ships with the **as-of date** Shibui returns. Include it in your output to the user — never present stale data without timestamp context.
+Every fetched number ships with the **as-of date** Shibui returns. Include it in your output to the user - never present stale data without timestamp context.
 
 ---
 
@@ -683,10 +683,10 @@ For OHLCV history with many rows, save to `workspace/<task>/<symbol>-history.csv
 
 ## What NOT to Do
 
-- Do not present data without an as-of date — stale prices mislead
+- Do not present data without an as-of date - stale prices mislead
 - Do not extrapolate from one query to another asset class (no futures, FX, crypto via this MCP)
-- Do not exceed reasonable query depth — Shibui is free, but courtesy says don't run 100 SQL queries when 5 will do
-- Do not fabricate numbers when the MCP can't answer — say "not available via this skill, falling back to web-research"
+- Do not exceed reasonable query depth - Shibui is free, but courtesy says don't run 100 SQL queries when 5 will do
+- Do not fabricate numbers when the MCP can't answer - say "not available via this skill, falling back to web-research"
 
 ---
 
@@ -697,7 +697,7 @@ If the user can't / won't install the MCP, downgrade to `web-research`:
 - History: search "AAPL daily chart 90 days"
 - Fundamentals: search "AAPL 10-Q latest" or company IR page
 
-Always tell the user "I'm using web search instead of structured market data — accuracy and timeliness will be lower."
+Always tell the user "I'm using web search instead of structured market data - accuracy and timeliness will be lower."
 
 ---
 
@@ -705,12 +705,12 @@ Always tell the user "I'm using web search instead of structured market data —
 
 | Asset class | v1 (this skill) | v2 plan |
 |---|---|---|
-| US equities | Yes (Shibui) | — |
+| US equities | Yes (Shibui) | - |
 | US ETFs | Partial (Shibui) | improve |
-| Futures (CME) | No — use web-research | self-built yfinance MCP |
-| Forex | No — use web-research | self-built MCP |
-| Crypto | No — use web-research | dedicated crypto MCP |
-| International stocks | No — use web-research | TBD |
+| Futures (CME) | No - use web-research | self-built yfinance MCP |
+| Forex | No - use web-research | self-built MCP |
+| Crypto | No - use web-research | dedicated crypto MCP |
+| International stocks | No - use web-research | TBD |
 """,
             },
         ],
@@ -753,11 +753,11 @@ This means: every calendar query in v1 takes a web round-trip. Cache results in 
 
 ## Step-by-Step Protocol
 
-### Step 1 — Check memory first
+### Step 1 - Check memory first
 
 Before web searching, check `memory/calendar_<YYYY-MM>.md` for the current month. If you've already cached this month's events, use them and only web-search for what's missing.
 
-### Step 2 — Run targeted query (use templates below)
+### Step 2 - Run targeted query (use templates below)
 
 #### Earnings calendar
 ```
@@ -771,7 +771,7 @@ For a sector / market scan: `"this week earnings calendar US large cap"` then ve
 web_research("Federal Reserve FOMC meeting schedule 2026 site:federalreserve.gov")
 ```
 
-Authoritative source: federalreserve.gov/monetarypolicy/fomccalendars.htm — the calendar page directly.
+Authoritative source: federalreserve.gov/monetarypolicy/fomccalendars.htm - the calendar page directly.
 
 #### US economic data calendar
 ```
@@ -792,7 +792,7 @@ web_research("economic calendar this week high impact events")
 ```
 Trusted aggregators: investing.com/economic-calendar, forexfactory.com/calendar, tradingeconomics.com/calendar
 
-### Step 3 — Persist to memory
+### Step 3 - Persist to memory
 
 After each successful fetch, append to `memory/calendar_<YYYY-MM>.md`:
 
@@ -813,7 +813,7 @@ After each successful fetch, append to `memory/calendar_<YYYY-MM>.md`:
 - 2026-05-01 BMO: AMZN Q1 (consensus EPS $0.99)
 ```
 
-### Step 4 — Cite source + confidence
+### Step 4 - Cite source + confidence
 
 Every event ships with:
 - The source URL (preferring official: federalreserve.gov, bls.gov, bea.gov)
@@ -825,27 +825,27 @@ Every event ships with:
 
 For a single event lookup:
 ```
-**AAPL Q2 earnings** — 2026-04-30 AMC (after market close) · consensus EPS $1.57 [aggregator: nasdaq.com]
+**AAPL Q2 earnings** - 2026-04-30 AMC (after market close) · consensus EPS $1.57 [aggregator: nasdaq.com]
 ```
 
 For a weekly briefing block:
 ```
 **This week (2026-04-28 to 2026-05-02)**
-- Tue 4/29 — JOLTS (10am, low impact)
-- Wed 4/30 — **FOMC decision + presser** (2pm/2:30pm, very high impact)
-- Wed 4/30 — GDP Q1 advance (8:30am, high impact)
-- Wed 4/30 AMC — **AAPL Q2** (very high impact)
-- Fri 5/2 — **NFP April** (8:30am, very high impact)
+- Tue 4/29 - JOLTS (10am, low impact)
+- Wed 4/30 - **FOMC decision + presser** (2pm/2:30pm, very high impact)
+- Wed 4/30 - GDP Q1 advance (8:30am, high impact)
+- Wed 4/30 AMC - **AAPL Q2** (very high impact)
+- Fri 5/2 - **NFP April** (8:30am, very high impact)
 ```
 
 ---
 
 ## What NOT to Do
 
-- Do not invent dates when web-research returns ambiguous results — say "I couldn't pin down the exact date, here's the source page to check"
-- Do not present aggregator data (investing.com etc.) as authoritative when the user is making a decision — escalate to the official agency source
-- Do not over-cache — events get rescheduled. Re-verify FOMC and NFP dates within 7 days of the event
-- Do not flag everything as "high impact" — distinguish **very high** (FOMC, NFP, CPI), **high** (GDP, retail sales, ISM, mega-cap earnings), **medium** (sector earnings, Fed speakers), **low** (weekly claims, regional Fed indices)
+- Do not invent dates when web-research returns ambiguous results - say "I couldn't pin down the exact date, here's the source page to check"
+- Do not present aggregator data (investing.com etc.) as authoritative when the user is making a decision - escalate to the official agency source
+- Do not over-cache - events get rescheduled. Re-verify FOMC and NFP dates within 7 days of the event
+- Do not flag everything as "high impact" - distinguish **very high** (FOMC, NFP, CPI), **high** (GDP, retail sales, ISM, mega-cap earnings), **medium** (sector earnings, Fed speakers), **low** (weekly claims, regional Fed indices)
 
 ---
 

@@ -1,4 +1,4 @@
-"""Tool management API — CRUD for tools and per-agent assignments."""
+"""Tool management API - CRUD for tools and per-agent assignments."""
 
 import uuid
 from typing import Any
@@ -397,8 +397,8 @@ async def check_mcp_connection(
     """Test connection to an MCP server and list available tools.
 
     Supports two authentication modes:
-    - URL-embedded key (e.g. ?tavilyApiKey=xxx) — include in server_url.
-    - Bearer token — pass via api_key field; sent as Authorization header.
+    - URL-embedded key (e.g. ?tavilyApiKey=xxx) - include in server_url.
+    - Bearer token - pass via api_key field; sent as Authorization header.
     """
     from app.services.mcp_client import MCPClient
     from app.services.trigger_runtime.evaluator import is_private_url
@@ -433,8 +433,8 @@ async def update_mcp_server(data: MCPServerUpdate, current_user: UserRecord = De
     each tool individually.
 
     Authentication priority at runtime (handled by MCPClient):
-    1. tool.config['api_key'] — sent as Authorization: Bearer header.
-    2. URL query param (e.g. ?tavilyApiKey=xxx) — extracted from the URL
+    1. tool.config['api_key'] - sent as Authorization: Bearer header.
+    2. URL query param (e.g. ?tavilyApiKey=xxx) - extracted from the URL
        and converted to Bearer by MCPClient automatically.
     """
     _require_catalog_manager(current_user)
