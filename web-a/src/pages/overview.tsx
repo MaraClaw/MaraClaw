@@ -1,0 +1,79 @@
+import { motion } from 'framer-motion'
+import { Building2, LineChart, Settings2, Users } from 'lucide-react'
+
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+
+const placeholders = [
+  {
+    title: 'Companies',
+    description: 'Platform company list, create, enable/disable — /api/admin/companies',
+    icon: Building2,
+  },
+  {
+    title: 'Users & roles',
+    description: 'Tenant membership, quotas, org_admin / platform_admin roles',
+    icon: Users,
+  },
+  {
+    title: 'Metrics',
+    description: 'Timeseries, leaderboards, retention — /api/admin/metrics/*',
+    icon: LineChart,
+  },
+  {
+    title: 'Enterprise settings',
+    description: 'LLM pool, SSO/IdP, invitations, tools & skills catalogs',
+    icon: Settings2,
+  },
+] as const
+
+export function OverviewPage() {
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+        className="flex flex-col gap-3"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">Scaffold</Badge>
+          <Badge variant="outline">React 19 · Vite · Tailwind v4</Badge>
+        </div>
+        <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
+          MaraClaw Admin
+        </h1>
+        <p className="max-w-2xl text-muted-foreground">
+          You are signed in to the operator console. Feature screens are placeholders; wire them to
+          engine admin APIs next (see{' '}
+          <code className="rounded-md bg-muted px-1.5 py-0.5 text-xs">engine/docs/admin-apis.md</code>
+          ).
+        </p>
+      </motion.div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {placeholders.map((item, i) => (
+          <motion.div
+            key={item.title}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 * i, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <Card className="h-full">
+              <CardHeader>
+                <div className="mb-1 flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <item.icon className="size-4" aria-hidden />
+                </div>
+                <CardTitle>{item.title}</CardTitle>
+                <CardDescription>{item.description}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground">Coming in following tasks</p>
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  )
+}

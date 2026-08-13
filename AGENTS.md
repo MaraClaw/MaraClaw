@@ -13,7 +13,7 @@ This file is the **repo-level map**. Package-level detail lives in nested `AGENT
 |-----------|------|----------|---------------|--------|
 | **`engine/`** | Backend services & platform API | Server, workers, connectors | FastAPI, psycopg3, Redis, Python ≥3.14 | Mature |
 | **`web-l/`** | Marketing **landing** site | Anonymous / prospects | React 19, Vite, Tailwind v4, Framer Motion, shadcn/ui | Implemented |
-| **`web-a/`** | Web UI for **admins** | Tenant/platform operators | TBD (placeholder README only) | Scaffold |
+| **`web-a/`** | Web UI for **admins** | Tenant/platform operators | React 19, Vite, Tailwind v4, Radix, TanStack Query/Table, RHF+Zod, Recharts | Bootstrapped shell |
 | **`web-e/`** | Web UI for **end users** | People who chat with / manage their agents | TBD (placeholder README only) | Scaffold |
 
 **Rule of thumb:** one concern → one package. Do not put admin screens in `web-e`, end-user chat in `web-a`, marketing sections in either app UI, or HTML marketing pages in `engine`.
@@ -151,11 +151,19 @@ cd web-l && npm install && npm run dev
 
 ### `web-a/` - admin UI
 
-**Owns (when implemented):** Operator console for organizations/tenants - user/role management, agent fleet admin, tool/skill policy, connector configuration, audit/activity, enterprise settings, platform-admin surfaces.
+**Owns:** Operator console for organizations/tenants - user/role management, agent fleet admin, tool/skill policy, connector configuration, audit/activity, enterprise settings, platform-admin surfaces.
 
-**Today:** Placeholder (`README.md` only). Scaffolding a new SPA here is correct; **do not** dump admin UI into `web-l` or `web-e`.
+**Today:** Bootstrapped SPA (`web-a/`) — React/Vite/Tailwind shell with sidebar nav placeholders. Feature screens and engine clients are WIP. Package guide: `web-a/AGENTS.md`. Admin API inventory: `engine/docs/admin-apis.md`.
+
+**Do not** dump admin UI into `web-l` or `web-e`.
 
 **Expected relationship:** Talks only to `engine` HTTP/WS APIs with admin-scoped auth. Prefer shared design tokens/patterns with `web-e` when both exist, but keep packages deployable separately.
+
+**Run:**
+
+```bash
+cd web-a && npm install && npm run dev
+```
 
 ### `web-e/` - end-user UI
 
