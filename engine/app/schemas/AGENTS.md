@@ -18,3 +18,9 @@ Pydantic request/response models live here. This repo currently has a large shar
 
 - Keep `Create`, `Update`, and `Out`/`Response` suffixes aligned with nearby models.
 - Make tenant/admin-sensitive response names explicit when the same domain has user and admin views.
+
+## Auth / admin contract notes
+
+- `TokenResponse`, `UserOut`, and `IdentityOut` expose `must_change_password` for first-login force-change UX (web-a and other clients).
+- Do not put `password_hash` or env bootstrap secrets on any Out model.
+- Company create request/response for platform admin lives on `app/api/admin.py` models (`admin_email` / `admin_password` in, `org_admin_email` + `must_change_password` out) — keep `docs/admin-apis.md` aligned when those change.

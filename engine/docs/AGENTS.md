@@ -6,7 +6,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 
 | Topic | Location | Notes |
 |---|---|---|
-| Admin APIs (platform + tenant) | `admin-apis.md` | Full inventory of `platform_admin` / `org_admin` HTTP APIs, specs, and role matrix for `web-a` |
+| Admin APIs (platform + tenant) | `admin-apis.md` | Full inventory of `platform_admin` / `org_admin` HTTP APIs, genesis bootstrap, `must_change_password`, role matrix for `web-a` |
 | AgentBay | `agentbay.md` | Env vars, API-key lookup order, diagnostics endpoint and CLI |
 | gogcli keyring | `gogcli-keyring-password.md` | Password file path, permissions, rotation and security notes |
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
@@ -16,7 +16,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 
 ## Update Triggers
 
-- Admin API docs should track `app/api/admin.py`, `tenants.py`, `enterprise.py`, `users.py`, `organization.py`, `tools.py`, `skills.py`, and admin gates in `app/core/security.py` when roles or routes change.
+- Admin API docs should track `app/api/admin.py`, `tenants.py`, `enterprise.py`, `users.py`, `organization.py`, `tools.py`, `skills.py`, `auth.py` (login/password force-change), `app/services/platform_admin_seeder.py`, and admin gates in `app/core/security.py` when roles, genesis bootstrap, or routes change.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
 - gogcli credential docs should track `app/services/gogcli_runtime.py`, `Dockerfile.openclaw`, and `docker/openclaw/` scripts.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.

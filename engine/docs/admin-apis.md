@@ -24,7 +24,16 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 | Exact roles | `require_role("…")` | Exact match; identity platform flag counts if `platform_admin` is listed |
 | Hierarchy | `ROLE_HIERARCHY` | `member` < `agent_admin` < `org_admin` < `platform_admin` |
 
-First registered user becomes `platform_admin`. Other admins are assigned via role APIs or invite flows.
+### Genesis admin bootstrap
+
+| Account | How created | First-login rule |
+|---------|-------------|------------------|
+| **Platform admin** | Env vars `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (seeded at bootstrap; fail-closed if missing on empty DB) | Must change password after first successful login (`identity.must_change_password`) |
+| **Genesis org admin** | Platform admin only: `POST /api/admin/companies` with `admin_email` + `admin_password` | Must change password after first successful login |
+
+Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Platform admin membership is **null-tenant** so disabling a company cannot lock out the operator.
+
+While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant self-create/join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Company self-create defaults **off** (`allow_self_create_company=false`).
 
 Base path for most routes: **`/api`**.
 
@@ -42,7 +51,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
 | `GET` | `/api/admin/companies` | — | `CompanyStats[]`: `id`, `name`, `slug`, `is_active`, `sso_enabled`, `sso_domain`, `created_at`, `user_count`, `agent_count`, `agent_running_count`, `total_tokens`, `cache_read_tokens_total`, `org_admin_email` |
-| `POST` | `/api/admin/companies` | `{ name: string(1–200) }` | **201** `{ company: CompanyStats, admin_invitation_code: string }` — creates tenant + 1-use invite |
+| `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin (initial password must be changed on first login) |
 | `PUT` | `/api/admin/companies/{company_id}/toggle` | — | `{ ok, is_active }` — disables company and pauses running agents when turning off |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
 | `GET` | `/api/admin/metrics/leaderboards` | — | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |

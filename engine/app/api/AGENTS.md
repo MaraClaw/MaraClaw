@@ -12,12 +12,20 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 ## Dependencies
 
 - Users: `current_user: UserRecord = Depends(get_current_user)` - not `User`.
-- Admin: `get_current_admin` / `require_role(...)`.
+- Admin: `get_current_admin` / `require_role(...)` (both inherit `must_change_password` gate from `get_current_user`).
 - Agents: `await check_agent_access(current_user, agent_id)` - leftover `db` args are ignored.
 - Persistence: DAOs. Short CRUD routers bind `bind_crud_connection` in `app.main` (one checkout). Do not attach that dependency to websocket / connector inbound / gateway. Extra `async with connection_ctx():` still joins.
 - Many handlers still take unused `db=None` (legacy shim). Keep the arg; do not revive a session.
-- `websocket.py` authenticates from query token. `gateway.py` uses agent API keys.
+- `websocket.py` and `files.py` download authenticate via `load_user_from_access_token` (identity + force-change). `gateway.py` uses agent API keys.
 - `gogcli.py` is mounted (`/api/agents/{id}/gogcli`); users are `UserRecord`.
+
+## Auth / admin genesis
+
+- `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation).
+- `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
+- `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True`. Attach `user.identity` before `bind_org_member`. Unique email race → 409.
+- `tenants.py`: self-create / join call `raise_if_password_change_required`. Company self-create defaults **off** (`allow_self_create_company` default false).
+- Inventory for clients: `docs/admin-apis.md`.
 
 ## Catalog / secrets
 
@@ -26,5 +34,5 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Hotspots
 
-- Large: `feishu.py`, `okr.py`, `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`.
+- Large: `feishu.py`, `okr.py`, `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`.
 - Split new domain logic out of those files. Do not expose secrets in response models.
