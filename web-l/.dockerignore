@@ -1,0 +1,43 @@
+# Dependencies & build output
+node_modules
+dist
+dist-ssr
+*.local
+
+# Git / IDE / OS
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+.DS_Store
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Logs & coverage
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage
+.nyc_output
+
+# Docs & local-only
+README.md
+**/*.md
+!public/**
+
+# Env / secrets (never bake into the image)
+.env
+.env.*
+!.env.example
+
+# Docker context noise
+Dockerfile*
+docker-compose*.yml
+.dockerignore

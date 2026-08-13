@@ -25,6 +25,17 @@ npm run build
 npm run preview
 ```
 
+## Docker (production)
+
+Multi-stage image: **Node.js 26** builds the Vite SPA; **nginx (unprivileged)** serves `dist` on port **8080**.
+
+```bash
+docker build -t maraclaw-web-l .
+docker run --rm -p 8080:8080 maraclaw-web-l
+# open http://localhost:8080
+# health: http://localhost:8080/healthz
+```
+
 ## Structure
 
 ```
