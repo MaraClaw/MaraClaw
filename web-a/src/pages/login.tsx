@@ -265,7 +265,7 @@ export function LoginPage() {
       <div className="relative z-10 flex min-h-svh flex-col">
         <header className="flex items-center justify-between px-5 py-4 md:px-8">
           <div className="flex items-center gap-2.5">
-            <MaraClawLogo className="size-9" />
+            <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
               <p className="text-xs text-muted-foreground">Admin console</p>
@@ -372,7 +372,7 @@ export function LoginPage() {
               <div className="rounded-[1.75rem] border border-border/80 bg-card/90 p-6 shadow-elevated backdrop-blur-xl sm:p-8">
                 <div className="mb-6 space-y-2">
                   <div className="mb-4 flex items-center gap-2 lg:hidden">
-                    <MaraClawLogo className="size-10" />
+                    <MaraClawLogo className="size-[3.75rem]" />
                     <Badge variant="outline">Admin</Badge>
                   </div>
                   <h2

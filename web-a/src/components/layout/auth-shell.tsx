@@ -37,7 +37,7 @@ export function AuthShell({ title, description, children, footer, className }: A
       <div className="relative z-10 flex min-h-svh flex-col">
         <header className="flex items-center justify-between px-5 py-4 md:px-8">
           <div className="flex items-center gap-2.5">
-            <MaraClawLogo className="size-9" />
+            <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
               <p className="text-xs text-muted-foreground">Admin console</p>
