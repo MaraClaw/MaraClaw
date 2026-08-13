@@ -1,0 +1,282 @@
+"""Discord Gateway (WebSocket) Manager.
+
+Maintains long-lived Gateway connections for agents configured with
+connection_mode='gateway'.  When a user @mentions the bot or sends it a
+DM, the message is forwarded to the agent's LLM pipeline — exactly like
+the Feishu WebSocket manager.
+
+Requires:  pip install discord.py>=2.3.0
+"""
+
+import asyncio
+import uuid
+from datetime import UTC, datetime
+
+from app.core.logging import logger
+from app.dao.agent_dao import agent_dao
+from app.dao.channel_config_dao import channel_config_dao
+from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.user_dao import user_dao
+
+try:
+    import discord
+
+    _HAS_DISCORD = True
+except ImportError:
+    discord = None  # type: ignore
+    _HAS_DISCORD = False
+
+if not _HAS_DISCORD:
+    logger.warning(
+        "[Discord GW] discord.py package not installed. "
+        "Discord Gateway features will be disabled. "
+        "Install with: pip install discord.py"
+    )
+
+DISCORD_MSG_LIMIT = 2000  # Discord message character limit
+DEFAULT_CONTEXT_WINDOW_SIZE = 100
+
+
+class DiscordGatewayManager:
+    """Manages Discord Gateway bot clients for all agents."""
+
+    def __init__(self):
+        self._clients: dict[uuid.UUID, discord.Client] = {}
+        self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+
+    async def start_client(
+        self,
+        agent_id: uuid.UUID,
+        bot_token: str,
+        *,
+        stop_existing: bool = True,
+    ):
+        """Start a Discord Gateway client for the given agent."""
+        if not _HAS_DISCORD:
+            logger.warning("[Discord GW] discord.py not installed, cannot start client")
+            return
+        if not bot_token:
+            logger.warning(f"[Discord GW] Missing bot_token for {agent_id}, skipping")
+            return
+
+        logger.info(f"[Discord GW] Starting Gateway client for agent {agent_id}")
+
+        # Stop existing client if any
+        if stop_existing and agent_id in self._tasks:
+            await self.stop_client(agent_id)
+
+        intents = discord.Intents.default()
+        intents.message_content = True  # Required to read message text
+
+        client = discord.Client(intents=intents)
+        self._clients[agent_id] = client
+
+        @client.event
+        async def on_ready():
+            user = client.user
+            if user is None:
+                return
+            logger.info(
+                f"[Discord GW] Bot connected for agent {agent_id}: {user.name}#{user.discriminator} ({user.id})"
+            )
+
+        @client.event
+        async def on_message(message: discord.Message):
+            # Ignore own messages
+            if message.author == client.user:
+                return
+
+            # Respond to DMs or @mentions
+            is_dm = message.guild is None
+            is_mention = client.user in message.mentions if message.mentions else False
+
+            if not is_dm and not is_mention:
+                return
+
+            # Strip the @mention from the message text
+            user_text = message.content
+            if is_mention and client.user:
+                user_text = user_text.replace(f"<@{client.user.id}>", "").strip()
+                user_text = user_text.replace(f"<@!{client.user.id}>", "").strip()
+
+            if not user_text:
+                return
+
+            logger.info(f"[Discord GW] Message for agent {agent_id} from {message.author.name}: {user_text[:80]}")
+
+            # Show typing indicator while processing
+            async with message.channel.typing():
+                reply = await self._handle_message(agent_id, message, user_text)
+
+            # Send reply, chunked if needed
+            if reply:
+                chunks = [reply[i : i + DISCORD_MSG_LIMIT] for i in range(0, len(reply), DISCORD_MSG_LIMIT)]
+                for chunk in chunks:
+                    await message.reply(chunk, mention_author=False)
+
+        # Run the bot in a background task
+        async def _run_bot():
+            try:
+                # discord.py supports proxy via the `proxy` kwarg on Client.start
+                await client.start(bot_token, reconnect=True)
+            except asyncio.CancelledError:
+                logger.info(f"[Discord GW] Bot task cancelled for agent {agent_id}")
+            except discord.LoginFailure:
+                logger.error(f"[Discord GW] Invalid bot token for agent {agent_id}")
+            except Exception as e:
+                logger.exception(f"[Discord GW] Bot error for agent {agent_id}: {e}")
+            finally:
+                if not client.is_closed():
+                    await client.close()
+                self._clients.pop(agent_id, None)
+
+        task = asyncio.create_task(_run_bot(), name=f"discord-gw-{str(agent_id)[:8]}")
+        self._tasks[agent_id] = task
+        logger.info(f"[Discord GW] Gateway task scheduled for agent {agent_id}")
+
+    async def _handle_message(
+        self,
+        agent_id: uuid.UUID,
+        message: discord.Message,
+        user_text: str,
+    ) -> str | None:
+        """Process an incoming Discord message through the agent LLM."""
+        try:
+            from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+            from app.services.channel_session import find_or_create_channel_session
+            from app.services.channel_user_service import channel_user_service
+            from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
+
+            sender_id = str(message.author.id)
+            channel_id = str(message.channel.id)
+            conv_id = f"discord_dm_{sender_id}" if message.guild is None else f"discord_{channel_id}_{sender_id}"
+
+            agent_obj = await agent_dao.get(agent_id)
+            if not agent_obj:
+                return "Agent not found."
+            ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+
+            _discord_display_name = message.author.display_name or message.author.name
+            _display = _discord_display_name or f"Discord User {sender_id[:8]}"
+            _extra_info = {"name": _display}
+
+            _platform_user = await channel_user_service.resolve_channel_user(
+                db=None,
+                agent=agent_obj,
+                channel_type="discord",
+                external_user_id=sender_id,
+                extra_info=_extra_info,
+            )
+
+            if (
+                _discord_display_name
+                and _platform_user.display_name
+                and _platform_user.display_name.startswith("Discord User ")
+                and _platform_user.display_name != _discord_display_name
+            ):
+                _platform_user = (
+                    await user_dao.update(db_obj=_platform_user, obj_in={"display_name": _discord_display_name})
+                    or _platform_user
+                )
+            platform_user_id = _platform_user.id
+
+            sess = await find_or_create_channel_session(
+                db=None,
+                agent_id=agent_id,
+                user_id=platform_user_id,
+                external_conv_id=conv_id,
+                source_channel="discord",
+                first_message_title=user_text,
+            )
+            session_conv_id = str(sess.id)
+
+            history_msgs = await chat_message_dao.list_recent(
+                agent_id=agent_id,
+                conversation_id=session_conv_id,
+                limit=ctx_size,
+            )
+            history = _conv(history_msgs)
+
+            await chat_message_dao.insert_message(
+                agent_id=agent_id,
+                user_id=platform_user_id,
+                role="user",
+                content=user_text,
+                conversation_id=session_conv_id,
+            )
+            await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+
+            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+
+            reply_text = await _call_llm_with_config(
+                _agent_model,
+                _llm_model,
+                _fallback_model,
+                agent_id,
+                user_text,
+                history=history,
+                user_id=platform_user_id,
+                session_id=session_conv_id,
+            )
+            logger.info(f"[Discord GW] LLM reply for {agent_id}: {reply_text[:80]}")
+
+            await chat_message_dao.insert_message(
+                agent_id=agent_id,
+                user_id=platform_user_id,
+                role="assistant",
+                content=reply_text,
+                conversation_id=session_conv_id,
+            )
+            try:
+                fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
+                if fresh:
+                    await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+            except ValueError, TypeError:
+                pass
+
+            return reply_text
+
+        except Exception as e:
+            logger.exception(f"[Discord GW] Error handling message for {agent_id}: {e}")
+            return f"An error occurred while processing your message: {str(e)[:100]}"
+
+    async def stop_client(self, agent_id: uuid.UUID):
+        """Stop a running Discord Gateway client."""
+        if agent_id in self._tasks:
+            task = self._tasks.pop(agent_id)
+            if not task.done():
+                task.cancel()
+                logger.info(f"[Discord GW] Cancelled task for agent {agent_id}")
+        if agent_id in self._clients:
+            client = self._clients.pop(agent_id)
+            try:
+                if not client.is_closed():
+                    await client.close()
+            except Exception as e:
+                logger.error(f"[Discord GW] Error closing client for {agent_id}: {e}")
+
+    async def start_all(self):
+        """Start Gateway clients for all configured Discord agents."""
+        if not _HAS_DISCORD:
+            logger.info("[Discord GW] discord.py not installed, skipping Discord Gateway init")
+            return
+        logger.info("[Discord GW] Initializing all active Discord Gateway channels...")
+        configs = await channel_config_dao.list_configured("discord")
+
+        for config in configs:
+            extra = config.extra_config or {}
+            mode = extra.get("connection_mode", "webhook")
+            if mode == "gateway":
+                bot_token = config.app_secret
+                if bot_token:
+                    await self.start_client(config.agent_id, bot_token, stop_existing=False)
+                else:
+                    logger.warning(f"[Discord GW] Skipping agent {config.agent_id}: missing bot_token")
+
+    def status(self) -> dict[str, bool]:
+        """Return status of all active Gateway tasks."""
+        return {str(aid): not self._tasks[aid].done() for aid in self._tasks}
+
+
+discord_gateway_manager = DiscordGatewayManager()
+""" is the module-level singleton, imported by main.py and discord_bot.py."""

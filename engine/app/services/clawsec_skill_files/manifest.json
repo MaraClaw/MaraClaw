@@ -1,0 +1,24 @@
+{
+  "upstream": "https://github.com/prompt-security/clawsec",
+  "commit": "c3086b22252b7ec319789a69c34cba76afc1dec6",
+  "license": "AGPL-3.0-only",
+  "skills": [
+    "clawsec-clawhub-checker",
+    "clawsec-scanner",
+    "clawsec-suite",
+    "clawtributor",
+    "openclaw-audit-watchdog",
+    "soul-guardian"
+  ],
+  "default_skills": [
+    "clawsec-suite",
+    "soul-guardian",
+    "openclaw-audit-watchdog",
+    "clawsec-scanner",
+    "clawsec-clawhub-checker"
+  ],
+  "catalog_only_skills": [
+    "clawtributor"
+  ],
+  "notes": "OpenClaw protection subset vendored from Prompt Security ClawSec. Excludes NanoClaw/Hermes/Picoclaw packages, claw-release author tooling, and traffic-guardian specification-only packages."
+}

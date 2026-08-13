@@ -1,0 +1,186 @@
+[project]
+name = "maraclaw-r2"
+version = "2.1.1"
+description = "Backend workspace for the MaraClaw enterprise digital employee platform."
+requires-python = ">=3.14.5"
+dependencies = [
+    "alibabacloud-credentials>=1.0.10",
+    "fastapi[standard]>=0.141.1",
+    "uvicorn[standard]>=0.52.1",
+    "asyncpg>=0.31.0",
+    "redis[hiredis]>=8.1.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "python-jose[cryptography]>=3.5.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.32",
+    "httpx[http2,socks]>=0.28.1",
+    "python-on-whales>=0.81.0",
+    "websockets>=15.0.0",
+    "aiofiles>=24.1.0,<25.0.0",
+    "croniter>=6.2.4",
+    "pyyaml>=6.0.3",
+    "trafilatura>=2.2.0",
+    "lxml>=6.1.1",
+    "lxml-html-clean>=0.4.5",
+    "PyNaCl>=1.6.2",
+    "pdfplumber>=0.11.10",
+    "PyMuPDF>=1.28.0",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "lark-oapi>=1.7.1",
+    "dingtalk-stream>=0.24.3",
+    "wecom-aibot-sdk-python>=0.1.7",
+    "pycryptodome>=3.23.0",
+    "loguru>=0.7.3",
+    "discord.py>=2.7.1",
+    "wuying-agentbay-sdk>=0.22.3",
+    "pypinyin>=0.55.0",
+    "anyascii>=0.3.3",
+    "Pillow>=12.3.0",
+    "weasyprint>=69.0",
+    "markdown>=3.10.3",
+    "beautifulsoup4>=4.15.0",
+    "boto3",
+    "aioboto3>=15.5.0",
+    "uvloop>=0.22.1",
+    "httptools>=0.8.0",
+    "starlette>=1.3.1",
+    "jinja2>=3.1.6",
+    "h2>=4.4.0",
+    "hpack>=4.2.0",
+    "hyperframe>=6.1.0",
+    "alibabacloud-credentials-api>=1.0.1",
+    "alibabacloud-gateway-spi>=0.0.4",
+    "psycopg[binary]>=3.3.4",
+    "psycopg-pool>=3.3.0",
+]
+
+[project.optional-dependencies]
+teams = [
+    "azure-identity>=1.25.3",
+]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "httpx>=0.28.1",
+    "ruff>=0.16.1",
+    "ty>=0.0.65",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+src = ["app", "tests"]
+force-exclude = true
+extend-exclude = [
+    ".venv",
+    "venv",
+    ".ruff_cache",
+    ".pytest_cache",
+    "build",
+    "dist",
+    "*.egg-info",
+    "agent_template",
+    "agent_templates",
+    "app/services/skill_creator_files",
+    "app/services/clawsec_skill_files",
+    "app/services/gogcli_skill_files",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "ASYNC",
+    "C4",
+    "DTZ",
+    "FAST",
+    "LOG",
+    "N",
+    "PERF",
+    "PIE",
+    "PT",
+    "RET",
+    "RUF",
+    "S",
+    "SIM",
+    "T20",
+]
+ignore = [
+    "E501",   # line length handled by the formatter
+    "ISC001", # conflicts with the Ruff formatter
+]
+fixable = ["ALL"]
+allowed-confusables = ["！", "（", "）", "，", "：", "；", "？"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
+"app/scripts/**/*.py" = ["T201"]
+"scripts/**/*.py" = ["T201"]
+# DAO SQL builders use class-constant table/column names, not user input.
+"app/dao/**/*.py" = ["S608"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"app/api/**/*.py" = ["B008", "FAST002"]
+"app/core/security.py" = ["B008"]
+"app/main.py" = ["E402"]
+"check_agentbay_config.py" = ["T201"]
+"remove_old_tool.py" = ["T201"]
+"seed.py" = ["T201"]
+"test_sandbox_config.py" = ["T201"]
+"update_schema.py" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ty.environment]
+root = ["."]
+
+[tool.ty.rules]
+all = "warn"
+
+[tool.ty.terminal]
+error-on-warning = false
+
+[tool.ty.src]
+include = [
+    "app",
+    "tests",
+    "check_agentbay_config.py",
+    "remove_old_tool.py",
+    "seed.py",
+    "update_schema.py",
+]
+exclude = [
+    ".venv/**",
+    "venv/**",
+    "*.egg-info/**",
+    "agent_template/**",
+    "agent_templates/**",
+    "app/services/skill_creator_files/**",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=82.0.1", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

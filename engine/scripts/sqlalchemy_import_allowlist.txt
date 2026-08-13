@@ -1,0 +1,1 @@
+# Phase-4 hard cutover: no SQLAlchemy imports under app/. Residual ORM models live in orm_models/.

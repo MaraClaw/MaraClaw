@@ -1,0 +1,12 @@
+ClawSec skill packages
+======================
+
+These files under app/services/clawsec_skill_files/ are vendored from:
+  https://github.com/prompt-security/clawsec
+
+Copyright Prompt Security / SentinelOne contributors.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See LICENSE.AGPL-3.0 in this directory.
+
+Upstream commit is recorded in .upstream-commit and manifest.json.
+Do not rewrite skill payloads for backend style cleanup.

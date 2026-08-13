@@ -1,0 +1,649 @@
+"""Gateway API for OpenClaw agent communication.
+
+OpenClaw agents authenticate via X-Api-Key header and use these endpoints
+to poll for messages, report results, send messages, and send heartbeat pings.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Header, HTTPException
+
+from app.core.logging import logger
+from app.core.permissions import evaluate_agent_relationship_status, evaluate_human_relationship_status
+from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
+from app.dao.agent_dao import agent_dao
+from app.dao.agent_relationship_dao import agent_relationship_dao
+from app.dao.channel_config_dao import channel_config_dao
+from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.llm_dao import llm_model_dao
+from app.dao.participant_dao import participant_dao
+from app.dao.user_dao import user_dao
+from app.records.agent import AgentRecord
+from app.schemas.schemas import (
+    GatewayHistoryItem,
+    GatewayMessageOut,
+    GatewayPollResponse,
+    GatewayRelationshipItem,
+    GatewayReportRequest,
+    GatewaySendMessageRequest,
+)
+
+router = APIRouter(prefix="/gateway", tags=["gateway"])
+
+
+async def _get_agent_by_key(api_key: str, db=None) -> AgentRecord:
+    """Authenticate an OpenClaw agent by its API key."""
+    agent = await agent_dao.get_openclaw_by_api_key(api_key)
+    if not agent:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return agent
+
+
+# ─── Poll for messages ──────────────────────────────────
+
+
+@router.get("/poll", response_model=GatewayPollResponse)
+async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+    """OpenClaw agent polls for pending messages.
+
+    Returns all pending messages and marks them as delivered.
+    Also updates openclaw_last_seen for online status tracking.
+    """
+    logger.info(f"[Gateway] poll called, key_prefix={x_api_key[:8]}...")
+    agent = await _get_agent_by_key(x_api_key, db)
+
+    # Update last seen
+    agent = (
+        await agent_dao.update(
+            db_obj=agent,
+            obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+        )
+        or agent
+    )
+
+    # Fetch pending messages
+    messages = await gateway_message_dao.list_pending(agent.id)
+
+    # Mark as delivered
+    now = datetime.now(UTC)
+    out = []
+    for msg in messages:
+        await gateway_message_dao.update(
+            db_obj=msg,
+            obj_in={"status": "delivered", "delivered_at": now},
+        )
+
+        # Resolve sender names
+        sender_agent_name = None
+        sender_user_name = None
+        if msg.sender_agent_id:
+            sender_agent = await agent_dao.get(msg.sender_agent_id)
+            sender_agent_name = sender_agent.name if sender_agent else None
+        if msg.sender_user_id:
+            sender_user_name = await user_dao.display_name_for_id(msg.sender_user_id)
+
+        # Fetch conversation history (last 10 messages) for context
+        history = []
+        if msg.conversation_id:
+            hist_msgs = await chat_message_dao.list_for_session(
+                conversation_id=msg.conversation_id,
+                limit=10,
+            )
+            for h in hist_msgs:
+                # Resolve sender name for each history message
+                h_sender = None
+                if h.role == "user" and h.user_id:
+                    h_sender = await user_dao.display_name_for_id(h.user_id)
+                elif h.role == "assistant":
+                    h_sender = agent.name
+                history.append(
+                    GatewayHistoryItem(
+                        role=h.role,
+                        content=h.content or "",
+                        sender_name=h_sender,
+                        created_at=h.created_at,
+                    )
+                )
+
+        out.append(
+            GatewayMessageOut(
+                id=msg.id,
+                conversation_id=msg.conversation_id,
+                sender_agent_name=sender_agent_name,
+                sender_user_name=sender_user_name,
+                sender_user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
+                content=msg.content,
+                created_at=msg.created_at,
+                history=history,
+            )
+        )
+
+    rel_items = []
+
+    # Human relationships (with available channels)
+    for r in await agent_relationship_dao.list_for_agent_with_members(agent.id):
+        status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+        if r.member and status_info["access_status"] == "active":
+            channels = []
+            if getattr(r.member, "external_id", None) or getattr(r.member, "open_id", None):
+                channels.append("feishu")
+            if getattr(r.member, "email", None):
+                channels.append("email")
+            rel_items.append(
+                GatewayRelationshipItem(
+                    name=r.member.name,
+                    type="human",
+                    role=r.relation,
+                    description=r.description or None,
+                    channels=channels,
+                )
+            )
+
+    # Agent-to-agent relationships
+    for r in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
+        status_info = await evaluate_agent_relationship_status(None, r)
+        if r.target_agent and status_info["access_status"] == "active":
+            rel_items.append(
+                GatewayRelationshipItem(
+                    name=r.target_agent.name,
+                    type="agent",
+                    role=r.relation,
+                    description=r.description or None,
+                    channels=["agent"],
+                )
+            )
+
+    return GatewayPollResponse(messages=out, relationships=rel_items)
+
+
+# ─── Report results ─────────────────────────────────────
+
+
+@router.post("/report")
+async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db=None):
+    """OpenClaw agent reports the result of a processed message."""
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
+    logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
+    agent = await _get_agent_by_key(x_api_key, db)
+
+    msg = await gateway_message_dao.get_for_agent(body.message_id, agent.id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    await gateway_message_dao.update(
+        db_obj=msg,
+        obj_in={
+            "status": "completed",
+            "result": body.result,
+            "completed_at": datetime.now(UTC),
+        },
+    )
+
+    # Update last seen
+    await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
+
+    # Save result as assistant chat message and push via WebSocket
+    # (works for both user-originated and agent-to-agent messages)
+    if body.result and msg.conversation_id:
+        participant = await participant_dao.get_by_type_ref("agent", agent.id)
+
+        await chat_message_dao.insert_message(
+            agent_id=agent.id,
+            user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
+            role="assistant",
+            content=body.result,
+            conversation_id=msg.conversation_id,
+            participant_id=participant.id if participant else None,
+        )
+
+    # Push to WebSocket if user is connected
+    if body.result and msg.conversation_id and msg.sender_user_id:
+        try:
+            from app.api.websocket import manager
+
+            await manager.send_message(
+                str(agent.id),
+                {
+                    "type": "done",
+                    "role": "assistant",
+                    "content": body.result,
+                },
+            )
+        except Exception as error:
+            logger.debug(f"[Gateway] Skipped done notification for disconnected user: {error}")
+
+    # If the original message was from another agent (OpenClaw-to-OpenClaw),
+    # write the reply back as a gateway_message for the sender agent to poll
+    if body.result and msg.sender_agent_id:
+        conv_id = msg.conversation_id or f"gw_agent_{msg.sender_agent_id}_{agent.id}"
+        await gateway_message_dao.create(
+            obj_in={
+                "agent_id": msg.sender_agent_id,
+                "sender_agent_id": agent.id,
+                "content": body.result,
+                "status": "pending",
+                "conversation_id": conv_id,
+            }
+        )
+        logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
+
+    return {"status": "ok"}
+
+
+# ─── Heartbeat ──────────────────────────────────────────
+
+
+@router.post("/heartbeat")
+async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+    """Pure heartbeat ping — keeps the OpenClaw agent marked as online."""
+    agent = await _get_agent_by_key(x_api_key, db)
+    await agent_dao.update(
+        db_obj=agent,
+        obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+    )
+    return {"status": "ok", "agent_id": str(agent.id)}
+
+
+# ─── Send message ───────────────────────────────────────
+
+# Track background tasks to prevent garbage collection
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _send_to_agent_background(
+    source_agent_id: str,
+    source_agent_name: str,
+    target_agent_id: str,
+    target_agent_name: str,
+    target_primary_model_id: str,
+    target_role_description: str,
+    target_creator_id: str,
+    content: str,
+):
+    """Background task: invoke target agent LLM and write reply to gateway_messages.
+
+    Accepts plain values (not ORM objects) to avoid stale session references
+    since this runs after the request's DB session has closed.
+    """
+    logger.info(f"[Gateway] _send_to_agent_background started: {source_agent_name} -> {target_agent_name}")
+    try:
+        from app.services.llm import call_llm
+
+        # Load target agent's LLM model
+        if not target_primary_model_id:
+            logger.warning(f"Target agent {target_agent_name} has no LLM model")
+            return
+        model = await llm_model_dao.get(uuid.UUID(target_primary_model_id))
+        if not model:
+            return
+        # Skip if model is disabled by admin
+        if not model.enabled:
+            logger.warning(f"Target agent {target_agent_name}'s model {model.model} is disabled, skipping")
+            return
+
+        # Create or find a ChatSession for this agent pair
+        # Use deterministic UUID so the same pair always gets the same session
+        _ns = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+        # Sort IDs so session is the same regardless of who initiates
+        session_agent_id = min(source_agent_id, target_agent_id, key=str)
+        session_peer_id = max(source_agent_id, target_agent_id, key=str)
+        session_uuid = uuid.uuid5(_ns, f"{session_agent_id}_{session_peer_id}")
+        conv_id = str(session_uuid)
+        session_agent_uuid = uuid.UUID(session_agent_id)
+        session_peer_uuid = uuid.UUID(session_peer_id)
+        target_creator_uuid = uuid.UUID(target_creator_id) if target_creator_id else session_agent_uuid
+
+        # Find or create the ChatSession
+        session = await chat_session_dao.get(session_uuid)
+        if not session:
+            session = await chat_session_dao.create(
+                obj_in={
+                    "id": session_uuid,
+                    "agent_id": session_agent_uuid,
+                    "user_id": target_creator_uuid,
+                    "title": f"{source_agent_name} ↔ {target_agent_name}",
+                    "source_channel": "agent",
+                    "peer_agent_id": session_peer_uuid,
+                    "created_at": datetime.now(UTC),
+                }
+            )
+
+            # Migrate any existing messages from old gw_agent_ format
+            old_conv_id = f"gw_agent_{source_agent_id}_{target_agent_id}"
+            await chat_message_dao.reassign_conversation_id(
+                old_conversation_id=old_conv_id,
+                new_conversation_id=conv_id,
+            )
+
+        await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
+
+        # Agent-to-agent communication context (injected as prefix to user message
+        # since call_llm builds the full system prompt internally)
+        agent_comm_alert = (
+            "--- Agent-to-Agent Communication Alert ---\n"
+            f"You are receiving a direct message from another digital employee ({source_agent_name}). "
+            "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
+            "DO NOT use the `send_message_to_agent` tool to reply to this conversation. Just reply naturally in text.\n"
+            "If they are asking you to create or analyze a file, deliver the file using `send_file_to_agent` after writing it."
+        )
+
+        hist_msgs = await chat_message_dao.list_for_session(conversation_id=conv_id, limit=10)
+
+        from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
+
+        messages = _conv(hist_msgs)
+
+        # Add the new message with agent communication context
+        user_msg = f"{agent_comm_alert}\n\n[Message from agent: {source_agent_name}]\n{content}"
+        messages.append({"role": "user", "content": user_msg})
+
+        src_participant = await participant_dao.get_by_type_ref("agent", uuid.UUID(source_agent_id))
+        tgt_participant = await participant_dao.get_by_type_ref("agent", uuid.UUID(target_agent_id))
+
+        # Save user message to conversation
+        await chat_message_dao.insert_message(
+            agent_id=uuid.UUID(target_agent_id),
+            user_id=target_creator_uuid,
+            role="user",
+            content=user_msg,
+            conversation_id=conv_id,
+            participant_id=src_participant.id if src_participant else None,
+        )
+
+        # Call LLM
+        collected = []
+
+        async def on_chunk(text):
+            collected.append(text)
+
+        target_agent_uuid = uuid.UUID(target_agent_id)
+        reply = await call_llm(
+            model=model,
+            messages=messages,
+            agent_name=target_agent_name,
+            role_description=target_role_description,
+            agent_id=target_agent_uuid,
+            user_id=target_creator_id,
+            session_id=conv_id,
+            on_chunk=on_chunk,
+        )
+        final_reply = reply or "".join(collected)
+
+        # Save assistant reply to conversation
+        await chat_message_dao.insert_message(
+            agent_id=uuid.UUID(target_agent_id),
+            user_id=target_creator_uuid,
+            role="assistant",
+            content=final_reply,
+            conversation_id=conv_id,
+            participant_id=tgt_participant.id if tgt_participant else None,
+        )
+
+        # Write reply to gateway_messages for source (OpenClaw) to poll
+        await gateway_message_dao.create(
+            obj_in={
+                "agent_id": uuid.UUID(source_agent_id),
+                "sender_agent_id": uuid.UUID(target_agent_id),
+                "content": final_reply,
+                "status": "pending",
+                "conversation_id": conv_id,
+            }
+        )
+
+        logger.info(f"[Gateway] Agent {target_agent_name} replied to {source_agent_name}")
+
+    except Exception as e:
+        logger.error(f"[Gateway] send_to_agent_background failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
+@router.post("/send-message")
+async def send_message(body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+    """OpenClaw agent sends a message to a person or another agent.
+
+    Routes automatically based on target type:
+    - Agent target: triggers LLM processing, reply returned via next poll
+    - Human target: sends via available channel (feishu, etc.)
+    """
+    agent = await _get_agent_by_key(x_api_key, db)
+    await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
+
+    target_name = body.target.strip()
+    content = body.content.strip()
+    channel_hint = (body.channel or "").strip().lower()
+
+    # 1. Try to find target as another Agent, limited to active relationships.
+    target_agent = None
+    for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
+        candidate = rel.target_agent
+        if not candidate:
+            continue
+        status_info = await evaluate_agent_relationship_status(None, rel)
+        if status_info["access_status"] != "active":
+            continue
+        if candidate.name.lower() == target_name.lower() or target_name.lower() in candidate.name.lower():
+            target_agent = candidate
+            break
+
+    logger.info(
+        f"[Gateway] send_message: target='{target_name}', found_agent={target_agent.name if target_agent else None}, agent_type={getattr(target_agent, 'agent_type', None) if target_agent else None}, channel_hint='{channel_hint}'"
+    )
+
+    if target_agent and (not channel_hint or channel_hint == "agent"):
+        conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
+
+        if getattr(target_agent, "agent_type", None) == "openclaw":
+            # OpenClaw-to-OpenClaw: write to gateway_messages directly
+            await gateway_message_dao.create(
+                obj_in={
+                    "agent_id": target_agent.id,
+                    "sender_agent_id": agent.id,
+                    "content": content,
+                    "status": "pending",
+                    "conversation_id": conv_id,
+                }
+            )
+            return {
+                "status": "accepted",
+                "target": target_agent.name,
+                "type": "openclaw_agent",
+                "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
+            }
+        # Native agent: async LLM processing
+        # Extract plain values before background task to avoid stale references
+        _src_id = str(agent.id)
+        _src_name = agent.name
+        _tgt_id = str(target_agent.id)
+        _tgt_name = target_agent.name
+        _tgt_model = str(target_agent.primary_model_id) if target_agent.primary_model_id else ""
+        _tgt_role = target_agent.role_description or ""
+        _tgt_creator = str(target_agent.creator_id) if target_agent.creator_id else ""
+        task = asyncio.create_task(
+            _send_to_agent_background(
+                _src_id,
+                _src_name,
+                _tgt_id,
+                _tgt_name,
+                _tgt_model,
+                _tgt_role,
+                _tgt_creator,
+                content,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return {
+            "status": "accepted",
+            "target": target_agent.name,
+            "type": "agent",
+            "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
+        }
+
+    # 2. Try to find target as a human (via relationships)
+    rels = await agent_relationship_dao.list_for_agent_with_members(agent.id)
+
+    target_member = None
+    for r in rels:
+        status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+        if r.member and status_info["access_status"] == "active" and r.member.name == target_name:
+            target_member = r.member
+            break
+    # Fuzzy match if exact match fails
+    if not target_member:
+        for r in rels:
+            status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+            if r.member and status_info["access_status"] == "active" and target_name.lower() in r.member.name.lower():
+                target_member = r.member
+                break
+
+    if not target_member:
+        raise HTTPException(status_code=404, detail=f"Target '{target_name}' not found. Check your relationships list.")
+
+    # Send via feishu if available
+    if (target_member.external_id or target_member.open_id) and (not channel_hint or channel_hint == "feishu"):
+        import json as _json
+
+        from app.services.feishu_service import feishu_service
+
+        config = await channel_config_dao.get_for_agent(agent_id=agent.id, channel_type="feishu")
+        if not config and agent.tenant_id:
+            # Try to find any feishu config in the org
+            config = await channel_config_dao.get_for_tenant_channel(
+                tenant_id=agent.tenant_id,
+                channel_type="feishu",
+            )
+
+        if not config:
+            raise HTTPException(status_code=400, detail="No Feishu channel configured")
+
+        # Extract config values before Feishu HTTP calls
+        _cfg_app_id = config.app_id
+        _cfg_app_secret = config.app_secret
+        if (
+            not isinstance(_cfg_app_id, str)
+            or not _cfg_app_id
+            or not isinstance(_cfg_app_secret, str)
+            or not _cfg_app_secret
+        ):
+            raise HTTPException(status_code=400, detail="No Feishu channel configured")
+
+        # Prefer user_id (tenant-stable, works across apps), fallback to open_id
+        resp = None
+        if target_member.external_id:
+            resp = await feishu_service.send_message(
+                _cfg_app_id,
+                _cfg_app_secret,
+                receive_id=target_member.external_id,
+                msg_type="text",
+                content=_json.dumps({"text": content}, ensure_ascii=False),
+                receive_id_type="user_id",
+            )
+        if (resp is None or resp.get("code") != 0) and target_member.open_id:
+            resp = await feishu_service.send_message(
+                _cfg_app_id,
+                _cfg_app_secret,
+                receive_id=target_member.open_id,
+                msg_type="text",
+                content=_json.dumps({"text": content}, ensure_ascii=False),
+                receive_id_type="open_id",
+            )
+
+        if resp and resp.get("code") == 0:
+            return {
+                "status": "sent",
+                "target": target_member.name,
+                "type": "human",
+                "channel": "feishu",
+            }
+        raise HTTPException(
+            status_code=502,
+            detail=f"Feishu send failed: {resp.get('msg') if resp else 'no ID available'} (code {resp.get('code') if resp else 'N/A'})",
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.external_id else 'no'}, feishu_open_id={'yes' if target_member.open_id else 'no'}",
+    )
+
+
+# ─── Setup guide ────────────────────────────────────────
+
+
+@router.get("/setup-guide/{agent_id}")
+async def get_setup_guide(agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+    """Return the pre-filled Skill file and Heartbeat instruction for this agent."""
+    agent = await _get_agent_by_key(x_api_key, db)
+    if agent.id != agent_id:
+        raise HTTPException(status_code=403, detail="Key does not match this agent")
+
+    # Note: we use the raw key from the header since the agent already authenticated
+    base_url = "https://try.maraclaw.ai"
+
+    skill_content = f"""---
+name: maraclaw_sync
+description: Sync with MaraClaw platform — check inbox, submit results, and send messages.
+---
+
+# MaraClaw Sync
+
+## When to use
+Check for new messages from the MaraClaw platform during every heartbeat cycle.
+You can also proactively send messages to people and agents in your relationships.
+
+## Instructions
+
+### 1. Check inbox
+Make an HTTP GET request:
+- URL: {base_url}/api/gateway/poll
+- Header: X-Api-Key: {x_api_key}
+
+The response contains a `messages` array. Each message includes:
+- `id` — unique message ID (use this for reporting)
+- `content` — the message text
+- `sender_user_name` — name of the MaraClaw user who sent it
+- `sender_user_id` — unique ID of the sender
+- `conversation_id` — the conversation this message belongs to
+- `history` — array of previous messages in this conversation for context
+
+The response also contains a `relationships` array describing your colleagues:
+- `name` — the person or agent name
+- `type` — "human" or "agent"
+- `role` — relationship type (e.g. collaborator, supervisor)
+- `channels` — available communication channels (e.g. ["feishu"], ["agent"])
+
+**IMPORTANT**: Use the `history` array to understand conversation context before replying.
+Different `sender_user_name` values mean different people — address them accordingly.
+
+### 2. Report results
+For each completed message, make an HTTP POST request:
+- URL: {base_url}/api/gateway/report
+- Header: X-Api-Key: {x_api_key}
+- Header: Content-Type: application/json
+- Body: {{"message_id": "<id from the message>", "result": "<your response>"}}
+
+### 3. Send a message to someone
+To proactively contact a person or agent, make an HTTP POST request:
+- URL: {base_url}/api/gateway/send-message
+- Header: X-Api-Key: {x_api_key}
+- Header: Content-Type: application/json
+- Body: {{"target": "<name of person or agent>", "content": "<your message>"}}
+
+The system auto-detects the best channel. For agents, the reply appears in your next poll.
+For humans, the message is delivered via their available channel (e.g. Feishu).
+"""
+
+    heartbeat_line = "- Check MaraClaw inbox using the maraclaw_sync skill and process any pending messages"
+
+    return {
+        "skill_filename": "maraclaw_sync.md",
+        "skill_content": skill_content,
+        "heartbeat_addition": heartbeat_line,
+    }

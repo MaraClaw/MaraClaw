@@ -1,0 +1,1247 @@
+"""Authentication API routes."""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
+
+from app.core.json_types import JsonObject
+from app.core.logging import logger
+from app.core.security import (
+    create_access_token,
+    get_authenticated_user,
+    get_current_user,
+    hash_password_async,
+    verify_password_async,
+)
+from app.dao import identity_dao, system_setting_dao, tenant_dao, user_dao
+from app.db.session import connection_ctx
+from app.records.user import UserRecord
+from app.schemas.schemas import (
+    ForgotPasswordRequest,
+    IdentityBindRequest,
+    IdentityOut,
+    IdentityUnbindRequest,
+    MultiTenantResponse,
+    OAuthAuthorizeResponse,
+    OAuthCallbackRequest,
+    RegisterInitRequest,
+    RegisterInitResponse,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
+    SSORegisterRequest,
+    TenantChoice,
+    TenantSwitchRequest,
+    TenantSwitchResponse,
+    TokenResponse,
+    UserLogin,
+    UserOut,
+    UserRegister,
+    UserUpdate,
+    VerifyEmailRequest,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = ""
+    new_password: str = ""
+
+
+class OAuthPendingUserInfo(BaseModel):
+    provider_type: str
+    provider_union_id: str | None = None
+    provider_user_id: str | None = None
+    name: str = ""
+    email: str = ""
+    avatar_url: str = ""
+    mobile: str = ""
+    raw_data: JsonObject
+
+
+class OAuthPendingCache(BaseModel):
+    provider_type: str
+    user_info: OAuthPendingUserInfo
+    token_data: JsonObject
+    allowed_tenant_ids: list[uuid.UUID] = []
+
+
+@router.get("/registration-config")
+async def get_registration_config():
+    """Public endpoint — returns registration requirements (no auth needed)."""
+    enabled = await system_setting_dao.is_invitation_code_enabled()
+    return {"invitation_code_required": enabled}
+
+
+@router.get("/check-duplicate")
+async def check_duplicate(
+    email: str | None = Query(None, description="Email to check"),
+    username: str | None = Query(None, description="Username to check"),
+):
+    """Check if email or username already exists."""
+    result = {"email_exists": False, "username_exists": False, "conflicts": []}
+
+    if email and await identity_dao.get_by_email(email):
+        result["email_exists"] = True
+        result["conflicts"].append({"type": "email", "scope": "global", "message": "Email already registered"})
+
+    if username and await identity_dao.get_by_username(username):
+        result["username_exists"] = True
+        result["conflicts"].append({"type": "username", "scope": "global", "message": "Username already taken"})
+
+    result["has_conflict"] = result["email_exists"] or result["username_exists"]
+    return result
+
+
+async def _send_verification_email_task(
+    user: UserRecord,
+    background_tasks: BackgroundTasks,
+    settings: Any,
+) -> None:
+    """Helper to create verification token and add email task to background tasks."""
+    from app.services.email_verification_service import email_verification_service
+    from app.services.system_email_service import resolve_email_config_async
+
+    email_config = await resolve_email_config_async()
+    if not email_config:
+        logger.debug("No email config found (env or DB), skipping verification email")
+        return
+
+    try:
+        identity = await identity_dao.get(user.identity_id)
+
+        if not identity:
+            logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
+            return
+        if not identity.email:
+            logger.warning(f"No email found for user {user.id}. Cannot send verification.")
+            return
+
+        raw_code, expires_at = await email_verification_service.create_email_verification_token(
+            identity.id, identity.email
+        )
+        expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
+
+        background_tasks.add_task(
+            email_verification_service.send_verification_email,
+            identity.email,
+            user.display_name or identity.username or "User",
+            raw_code,
+            expiry_minutes,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to create verification token for {user.email}: {exc}")
+        logger.warning(f"Failed to send verification email for {user.email}: {exc}")
+
+
+@router.post("/register", response_model=Any, status_code=status.HTTP_201_CREATED)
+async def register(
+    data: UserRegister,
+    background_tasks: BackgroundTasks,
+):
+    """Legacy registration endpoint - kept for backward compatibility.
+
+    For new implementations, use:
+    - /register/init - Step 1: Initialize registration
+    - /register/sso - SSO registration
+    - /verify-email - Step 3: Verify email
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+
+    # Handle SSO registration if provider info provided
+    if data.provider and data.provider_code:
+        return await _handle_sso_register(data)
+
+    # Regular username/password registration - delegate to new flow
+    return await _handle_normal_register(data, background_tasks, settings)
+
+
+@router.post("/register/init", response_model=RegisterInitResponse, status_code=status.HTTP_201_CREATED)
+async def register_init(
+    data: RegisterInitRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Step 1: Initialize registration with account credentials.
+
+    Creates/finds a global Identity and a tenant-scoped User.
+    """
+    from app.config import get_settings
+    from app.services.registration_service import registration_service
+    from app.services.system_email_service import resolve_email_config_async
+
+    settings = get_settings()
+    logger.info(f"[REGISTER_INIT] Starting registration for email={data.email}")
+
+    # 1. Resolve email config outside transaction
+    email_config = await resolve_email_config_async()
+
+    # 2. Compute hash first (without DB connection checked out)
+    password_hash = None
+    if data.password:
+        password_hash = await hash_password_async(data.password)
+
+    # 3. Check if this is the first user (platform admin setup)
+    is_first_user = await identity_dao.is_empty()
+
+    # 4. Check duplicate/existing identity first (outside transaction)
+    identity = await identity_dao.get_by_email(data.email)
+    if identity:
+        # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
+        if identity.email and identity.email != data.email:
+            logger.warning(
+                f"[REGISTER_INIT] Identity email mismatch: submitted={data.email} returned={identity.email} — rejecting"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already taken. Please choose a different username.",
+            )
+
+        # Reject registration if the identity exists but has no password set (SSO/synced users)
+        if identity.password_hash is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered via SSO/sync. Please use password reset to set a password, or log in via SSO.",
+            )
+
+        # Verify password outside transaction
+        if identity.password_hash and not await verify_password_async(data.password, identity.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Email already registered. Incorrect password."
+            )
+
+    async with connection_ctx():
+        identity = await registration_service.find_or_create_identity(
+            email=data.email,
+            username=data.username,
+            password=data.password,
+            is_platform_admin=is_first_user,
+            email_config=email_config,
+            password_hash=password_hash,
+        )
+
+        tenant_uuid = None
+        if is_first_user:
+            tenant = await tenant_dao.get_by_slug("default")
+            if not tenant:
+                tenant = await tenant_dao.create(
+                    obj_in={
+                        "name": "Default",
+                        "slug": "default",
+                        "im_provider": "web_only",
+                    }
+                )
+            tenant_uuid = tenant.id
+
+        if tenant_uuid:
+            user = await user_dao.get_by_identity_and_tenant(identity.id, tenant_uuid)
+        else:
+            user = await user_dao.get_by_identity_and_tenant(identity.id, None)
+
+        if not user:
+            user = await registration_service.create_user_with_identity(
+                identity=identity,
+                display_name=data.display_name or data.username,
+                role="platform_admin" if is_first_user else "member",
+                tenant_id=tenant_uuid,
+            )
+            if is_first_user:
+                await user_dao.update(db_obj=user, obj_in={"is_active": True})
+                user.is_active = True
+            user.identity = identity
+        else:
+            user.identity = identity
+
+    # 5. Generate token outside transaction
+    token = create_access_token(str(user.id), user.role)
+
+    # 6. Send verification email if not verified (outside transaction)
+    if not identity.email_verified:
+        await _send_verification_email_task(user, background_tasks, settings)
+
+    return RegisterInitResponse(
+        user_id=user.id,
+        email=data.email,
+        access_token=token,
+        user=UserOut.model_validate(user),
+        message="Registration initiated. Please verify your email."
+        if not identity.email_verified
+        else "Registration successful.",
+        needs_company_setup=user.tenant_id is None,
+        target_tenant_id=data.target_tenant_id,
+    )
+
+
+@router.post("/register/sso", response_model=TokenResponse)
+async def register_sso(
+    data: SSORegisterRequest,
+):
+    """SSO registration - completely separate from normal registration flow.
+
+    This endpoint handles OAuth-based registration/login via external providers.
+    """
+    from app.services.auth_registry import auth_provider_registry
+    from app.services.registration_service import registration_service
+
+    logger.info(f"[REGISTER_SSO] Starting SSO registration: provider={data.provider}")
+
+    # Move provider lookup outside transaction
+    auth_provider = await auth_provider_registry.get_provider(data.provider)
+    if not auth_provider:
+        raise HTTPException(status_code=400, detail=f"Provider '{data.provider}' not supported")
+
+    user, is_new, error = await registration_service.register_with_sso(data.provider, data.code, auth_provider)
+
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    if user is None:
+        raise HTTPException(status_code=400, detail="SSO registration failed")
+
+    # If no tenant, check for email domain match
+    if not user.tenant_id and user.email:
+        tenant, _ = await registration_service.get_tenant_for_registration(
+            email=user.email, invitation_code=data.invitation_code
+        )
+        if tenant:
+            user = await user_dao.update(db_obj=user, obj_in={"tenant_id": tenant.id})
+
+    token = create_access_token(str(user.id), user.role)
+
+    logger.info(f"[REGISTER_SSO] SSO successful: user_id={user.id}, is_new={is_new}")
+
+    return TokenResponse(
+        access_token=token,
+        user=UserOut.model_validate(user),
+        needs_company_setup=user.tenant_id is None,
+    )
+
+
+async def _handle_normal_register(data: UserRegister, background_tasks: BackgroundTasks, settings):
+    """Legacy normal registration handler."""
+    logger.info(f"[REGISTER_LEGACY] email={data.email}")
+
+    from app.services.registration_service import registration_service
+    from app.services.system_email_service import resolve_email_config_async
+
+    # 1. Compute hash first (without DB connection checked out)
+    password_hash = None
+    if data.password:
+        password_hash = await hash_password_async(data.password)
+
+    # 2. Resolve email config once outside transaction
+    email_config = await resolve_email_config_async()
+
+    # 3. Check if first user outside transaction
+    is_first_user = await user_dao.is_empty()
+
+    # 4. Check if this email is already registered globally outside transaction
+    identity = await identity_dao.get_by_email(data.email)
+    if identity:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Email already registered, please login directly."
+        )
+
+    tenant_uuid = None
+    if is_first_user:
+        tenant = await tenant_dao.get_by_slug("default")
+        if not tenant:
+            tenant = await tenant_dao.create(
+                obj_in={
+                    "name": "Default",
+                    "slug": "default",
+                    "im_provider": "web_only",
+                }
+            )
+        tenant_uuid = tenant.id
+        role = "platform_admin"
+    else:
+        tenant, _ = await registration_service.get_tenant_for_registration(
+            email=data.email, invitation_code=data.invitation_code
+        )
+        if tenant:
+            tenant_uuid = tenant.id
+        role = "member"
+
+    identity = await registration_service.find_or_create_identity(
+        email=data.email,
+        username=data.username,
+        password=data.password,
+        is_platform_admin=is_first_user,
+        email_config=email_config,
+        password_hash=password_hash,
+    )
+
+    # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
+    if identity.email and identity.email != data.email:
+        logger.warning(
+            f"[REGISTER_LEGACY] Identity email mismatch: submitted={data.email} returned={identity.email} — rejecting"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already taken. Please choose a different username.",
+        )
+
+    if is_first_user:
+        identity = await identity_dao.update(
+            db_obj=identity,
+            obj_in={"email_verified": True, "is_active": True},
+        )
+
+    user = await registration_service.create_user_with_identity(
+        identity=identity,
+        display_name=data.display_name or data.username,
+        role=role,
+        tenant_id=tenant_uuid,
+        registration_source="web",
+        email_config=email_config,
+    )
+
+    # 5. Seed default agents for first user outside main registration transaction block
+    if is_first_user:
+        try:
+            from app.services.agent_seeder import seed_default_agents
+
+            await seed_default_agents()
+        except Exception as e:
+            logger.warning(f"Failed to seed default agents: {e}")
+
+    # 6. Send verification email only when the identity still needs it (outside transaction)
+    if not identity.email_verified:
+        await _send_verification_email_task(user, background_tasks, settings)
+
+    # 7. Generate access token and build response payload outside transaction
+    token = create_access_token(str(user.id), user.role)
+    return RegisterInitResponse(
+        user_id=user.id,
+        email=user.email,
+        access_token=token,
+        user=UserOut.model_validate(user),
+        message="Registration successful. Please verify your email."
+        if not identity.email_verified
+        else "Registration successful.",
+        needs_company_setup=user.tenant_id is None,
+    )
+
+
+async def _handle_sso_register(data: UserRegister):
+    """Legacy SSO registration handler - delegates to new SSO endpoint logic."""
+    # Redirect to new SSO flow
+    if not data.provider or not data.provider_code:
+        raise HTTPException(status_code=400, detail="SSO provider and authorization code are required")
+    sso_data = SSORegisterRequest(provider=data.provider, code=data.provider_code, invitation_code=data.invitation_code)
+    return await register_sso(sso_data)
+
+
+@router.post("/login", response_model=Any)
+async def login(data: UserLogin, background_tasks: BackgroundTasks):
+    """Login with email/phone/username and password. Supports multi-tenant selection."""
+    # 1. Query Identity
+    identity = await identity_dao.get_by_login_identifier(data.login_identifier)
+
+    if (
+        not identity
+        or not identity.password_hash
+        or not await verify_password_async(data.password, identity.password_hash)
+    ):
+        logger.warning(
+            f"[LOGIN] Invalid credentials for {data.login_identifier} identity_id={identity.id if identity else 'None'}"
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    # 2. Check Global Activity & Verification
+    if not identity.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been disabled.")
+
+    if not identity.email_verified:
+        from app.config import get_settings
+        from app.services.system_email_service import resolve_email_config_async
+
+        email_config = await resolve_email_config_async()
+
+        if not email_config:
+            # SMTP missing: auto-verify users (DAO commits each write)
+            tx_identity = await identity_dao.get(identity.id)
+            if tx_identity:
+                await identity_dao.update(
+                    db_obj=tx_identity,
+                    obj_in={"email_verified": True, "is_active": True},
+                )
+                identity.email_verified = True
+                identity.is_active = True
+                users = await user_dao.get_by_identity_id(tx_identity.id)
+                for u in users:
+                    await user_dao.update(db_obj=u, obj_in={"is_active": True})
+        else:
+            # Find any user record (just for the task)
+            user = await user_dao.get_representative_user_for_identity(identity.id)
+
+            # Trigger email delivery in background
+            if user:
+                await _send_verification_email_task(user, background_tasks, get_settings())
+
+            # Consistent with identity-first flow: Return 403 Forbidden with verification intent
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "needs_verification": True,
+                    "email": identity.email,
+                    "message": "Please verify your email to continue.",
+                },
+            )
+
+    # 3. Find all User records (tenants)
+    valid_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
+
+    if not valid_users:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No organization associated with this account."
+        )
+
+    # 4. Handle Tenant Selection
+    if not data.tenant_id:
+        # If multiple tenants, return choice
+        if len(valid_users) > 1:
+            tenant_ids = [u.tenant_id for u in valid_users if u.tenant_id]
+            tenants_map = {}
+            if tenant_ids:
+                tenants_result = await tenant_dao.get_by_ids(tenant_ids)
+                tenants_map = {str(t.id): t for t in tenants_result}
+
+            tenant_choices = []
+            for u in valid_users:
+                tenant = tenants_map.get(str(u.tenant_id)) if u.tenant_id else None
+                tenant_choices.append(
+                    TenantChoice(
+                        tenant_id=u.tenant_id,
+                        tenant_name=tenant.name if tenant else "Create or Join Organization",
+                        tenant_slug=tenant.slug if tenant else "",
+                        logo_url=tenant.logo_url if tenant else None,
+                    )
+                )
+
+            return MultiTenantResponse(
+                requires_tenant_selection=True,
+                login_identifier=data.login_identifier,
+                tenants=tenant_choices,
+            )
+
+        # Only one tenant
+        user = valid_users[0]
+    else:
+        # Specific tenant requested (Dedicated Link flow)
+        user = next((u for u in valid_users if u.tenant_id == data.tenant_id), None)
+
+        # Cross-tenant access check
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account does not belong to the selected organization.",
+            )
+
+    if user.tenant_id:
+        tenant = await tenant_dao.get(user.tenant_id)
+        if tenant and not tenant.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your organization has been disabled.",
+            )
+
+    # 6. Generate Token
+    token = create_access_token(str(user.id), user.role)
+    return TokenResponse(
+        access_token=token,
+        user=UserOut.model_validate(user),
+        identity=IdentityOut.model_validate(identity),
+        needs_company_setup=user.tenant_id is None,
+    )
+
+
+@router.get("/email-hint")
+async def get_email_hint(username: str):
+    """Return a hinted email address for a given username."""
+    identity = await identity_dao.get_by_username(username)
+
+    if not identity or not identity.email:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    email = identity.email
+    parts = email.split("@")
+    if len(parts) == 2:
+        name, domain = parts
+
+        # Obfuscate name
+        obs_name = name[0] + "***" if len(name) <= 2 else name[:2] + "***" + name[-1]
+
+        # Obfuscate domain
+        domain_parts = domain.split(".")
+        if len(domain_parts) >= 2:
+            d_name = domain_parts[0]
+            d_ext = ".".join(domain_parts[1:])
+            if len(d_name) <= 2:
+                obs_domain = d_name[0] + "***." + d_ext
+            else:
+                obs_domain = d_name[0] + "***" + d_name[-1] + "." + d_ext
+            hint = f"{obs_name}@{obs_domain}"
+        else:
+            hint = f"{obs_name}@{domain}"
+    else:
+        hint = email[:3] + "***"
+
+    return {"hint": hint}
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Request a password reset link for a global Identity."""
+    from app.services.system_email_service import resolve_email_config_async
+
+    email_config = await resolve_email_config_async()
+
+    if not email_config:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset is currently unavailable (no mail server configured).",
+        )
+
+    generic_response = {
+        "ok": True,
+        "message": "If an account with that email exists, a password reset email has been sent.",
+    }
+
+    # Find Identity by email
+    identity = await identity_dao.get_by_email(data.email)
+
+    if not identity or not identity.is_active or not identity.email:
+        return generic_response
+
+    try:
+        from app.services.password_reset_service import build_password_reset_url, create_password_reset_token
+        from app.services.system_email_service import send_password_reset_email
+
+        raw_token, expires_at = await create_password_reset_token(identity.id)
+
+        reset_url = await build_password_reset_url(raw_token)
+        expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
+        background_tasks.add_task(
+            send_password_reset_email,
+            identity.email,
+            identity.username or "User",
+            reset_url,
+            expiry_minutes,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to process password reset email for {data.email}: {exc}")
+
+    return generic_response
+
+
+@router.post("/reset-password")
+async def reset_password(data: ResetPasswordRequest):
+    """Reset a password using a valid single-use token."""
+    from app.services.password_reset_service import consume_password_reset_token
+
+    # Consume token outside transaction
+    token_data = await consume_password_reset_token(data.token)
+    if not token_data:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    identity_id = token_data["identity_id"]
+
+    # Hash new password outside transaction (CPU intensive)
+    new_hash = await hash_password_async(data.new_password)
+
+    identity = await identity_dao.get(identity_id)
+    if not identity or not identity.is_active:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    await identity_dao.update(db_obj=identity, obj_in={"password_hash": new_hash})
+
+    return {"ok": True}
+
+
+@router.get("/me", response_model=UserOut)
+async def get_me(current_user: UserRecord = Depends(get_authenticated_user)):
+    """Get current user profile."""
+    data = UserOut.model_validate(current_user)
+    data.is_platform_admin = bool(getattr(getattr(current_user, "identity", None), "is_platform_admin", False))
+    return data
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(
+    data: UserUpdate,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Update current user profile."""
+    update_data = data.model_dump(exclude_unset=True)
+
+    user = await user_dao.get_with_identity(current_user.id)
+    if not user or not user.identity:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate username uniqueness if changing
+    if "username" in update_data and update_data["username"] != user.identity.username:
+        existing = await user_dao.get_by_identity_username(update_data["username"])
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already taken")
+
+    # Validate email uniqueness within tenant if changing
+    if "email" in update_data and update_data["email"] != user.identity.email:
+        existing = await user_dao.get_by_email_and_tenant(
+            email=update_data["email"],
+            tenant_id=user.tenant_id,
+            exclude_user_id=user.id,
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+    # Validate mobile uniqueness within tenant if changing
+    if "primary_mobile" in update_data and update_data["primary_mobile"] != user.identity.phone:
+        existing = await user_dao.get_by_phone_and_tenant(
+            phone=update_data["primary_mobile"],
+            tenant_id=user.tenant_id,
+            exclude_user_id=user.id,
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Mobile already registered")
+
+    identity_fields: dict[str, object] = {}
+    user_fields: dict[str, object] = {}
+    for field, value in update_data.items():
+        if field == "username":
+            identity_fields["username"] = value
+        elif field == "email":
+            identity_fields["email"] = value
+        elif field == "primary_mobile":
+            identity_fields["phone"] = value
+        else:
+            user_fields[field] = value
+
+    if identity_fields:
+        user.identity = await identity_dao.update(db_obj=user.identity, obj_in=identity_fields)
+    if user_fields:
+        await user_dao.update(db_obj=user, obj_in=user_fields)
+        # Re-load so identity proxies remain available for response mapping.
+        user = await user_dao.get_with_identity(user.id) or user
+    elif identity_fields:
+        user = await user_dao.get_with_identity(user.id) or user
+
+    # Sync email/phone to OrgMember if changed
+    if "email" in update_data or "primary_mobile" in update_data:
+        from app.services.registration_service import registration_service
+
+        await registration_service.sync_org_member_contact_from_user(
+            user,
+            sync_email="email" in update_data,
+            sync_phone="primary_mobile" in update_data,
+        )
+
+    return UserOut.model_validate(user)
+
+
+@router.get("/my-tenants", response_model=list[TenantChoice])
+async def get_my_tenants(
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Get all tenants associated with the current user's identity."""
+    # 1. Get all user records for this identity
+    users = await user_dao.get_by_identity_id(current_user.identity_id)
+
+    # 2. Extract tenant IDs
+    tenant_ids = [u.tenant_id for u in users if u.tenant_id]
+    if not tenant_ids:
+        return []
+
+    # 3. Get tenant details
+    tenants = await tenant_dao.get_by_ids(tenant_ids)
+
+    return [
+        TenantChoice(
+            tenant_id=t.id,
+            tenant_name=t.name,
+            tenant_slug=t.slug,
+            logo_url=t.logo_url,
+        )
+        for t in tenants
+    ]
+
+
+@router.post("/switch-tenant", response_model=TenantSwitchResponse)
+async def switch_tenant(
+    data: TenantSwitchRequest,
+    request: Request,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Switch to a different tenant and return a new token and redirect URL."""
+    # 1. Verify membership
+    target_user = await user_dao.get_by_identity_and_tenant(current_user.identity_id, data.tenant_id)
+
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this organization."
+        )
+
+    # 2. Get tenant details
+    tenant = await tenant_dao.get(data.tenant_id)
+
+    if not tenant or not tenant.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This organization is currently unavailable.")
+
+    # 3. Generate new token
+    token = create_access_token(str(target_user.id), target_user.role)
+
+    # 4. Determine redirect URL
+    from app.services.platform_service import platform_service
+
+    sso_redirect_enabled = await system_setting_dao.is_sso_custom_domain_redirect_enabled()
+
+    if not sso_redirect_enabled:
+        redirect_url = None
+    else:
+        redirect_url = await platform_service.get_tenant_sso_base_url(
+            tenant, request, sso_redirect_enabled=sso_redirect_enabled
+        )
+
+    # Include token in redirect URL for cross-domain switching if needed
+    if redirect_url:
+        separator = "&" if "?" in redirect_url else "?"
+        redirect_url = f"{redirect_url}{separator}token={token}"
+
+    return TenantSwitchResponse(access_token=token, redirect_url=redirect_url, message="Switching organization...")
+
+
+@router.put("/me/password")
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: UserRecord = Depends(get_authenticated_user),
+):
+    """Change current user's password. Updates the global identity password."""
+    old_password = data.old_password
+    new_password = data.new_password
+
+    if not old_password or not new_password:
+        raise HTTPException(status_code=400, detail="Both old_password and new_password are required")
+
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    # Look up user & identity outside transaction
+    user = await user_dao.get_with_identity(current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    identity = user.identity
+
+    # Verify old password outside transaction (CPU intensive)
+    if (
+        not identity
+        or not identity.password_hash
+        or not await verify_password_async(old_password, identity.password_hash)
+    ):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    # Compute new hash outside transaction (CPU intensive)
+    new_hash = await hash_password_async(new_password)
+
+    tx_identity = await identity_dao.get(identity.id)
+    if not tx_identity:
+        raise HTTPException(status_code=404, detail="Identity not found")
+    await identity_dao.update(db_obj=tx_identity, obj_in={"password_hash": new_hash})
+
+    return {"ok": True}
+
+
+# ─── SSO/OAuth Endpoints ─────────────────────────────────────────────
+
+
+@router.get("/providers")
+async def list_providers(
+    tenant_id: uuid.UUID | None = Query(None, description="Optional tenant ID"),
+):
+    """List all available identity providers."""
+    from app.services.auth_registry import auth_provider_registry
+
+    providers = await auth_provider_registry.list_providers(str(tenant_id) if tenant_id else None)
+    return [
+        {"id": str(p.id), "provider_type": p.provider_type, "name": p.name, "is_active": p.is_active} for p in providers
+    ]
+
+
+# Redis keys for OAuth two-step tenant selection
+_OAUTH_PENDING_PREFIX = "oauth_pending:"
+_OAUTH_PENDING_TTL = 600  # 10 minutes
+
+
+async def _cache_oauth_pending(
+    pending_token: str,
+    provider_type: str,
+    user_info: OAuthPendingUserInfo,
+    token_data: JsonObject,
+    allowed_tenant_ids: list[uuid.UUID] | None = None,
+) -> None:
+    """Store OAuth intermediate data in Redis for the two-step tenant-selection flow."""
+    from app.core.events import get_redis
+
+    r = await get_redis()
+    payload = OAuthPendingCache(
+        provider_type=provider_type,
+        user_info=user_info,
+        token_data=token_data,
+        allowed_tenant_ids=allowed_tenant_ids or [],
+    ).model_dump_json()
+    await r.set(f"{_OAUTH_PENDING_PREFIX}{pending_token}", payload, ex=_OAUTH_PENDING_TTL)
+
+
+async def _get_oauth_pending(pending_token: str) -> OAuthPendingCache | None:
+    """Retrieve (and delete) cached OAuth data from Redis. Returns None if expired/missing."""
+    from app.core.events import get_redis
+
+    r = await get_redis()
+    raw = await r.get(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
+    if not raw:
+        return None
+    # Single-use: delete immediately after retrieval
+    await r.delete(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
+    return OAuthPendingCache.model_validate_json(raw)
+
+
+@router.get("/{provider}/authorize", response_model=OAuthAuthorizeResponse)
+async def authorize(
+    provider: str,
+    redirect_uri: str = Query(..., description="OAuth callback URI"),
+    state: str = Query("", description="CSRF state parameter"),
+):
+    """Start OAuth authorization flow for a provider."""
+    from app.services.auth_registry import auth_provider_registry
+
+    # Get provider
+    auth_provider = await auth_provider_registry.get_provider(provider)
+    if not auth_provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not supported")
+
+    # Generate authorization URL
+    try:
+        auth_url = await auth_provider.get_authorization_url(redirect_uri, state)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Failed to generate authorization URL for {provider}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate authorization URL") from e
+
+    return OAuthAuthorizeResponse(authorization_url=auth_url)
+
+
+@router.post("/{provider}/callback", response_model=Any)
+async def oauth_callback(
+    provider: str,
+    data: OAuthCallbackRequest,
+):
+    """Handle OAuth callback — supports a two-step flow for multi-tenant selection.
+
+    Step 1 (code provided): exchange code with provider, detect multiple tenants,
+    cache user_info in Redis, return MultiTenantResponse with opaque pending_token.
+
+    Step 2 (pending_token + tenant_id provided): retrieve cached user_info from Redis,
+    call find_or_create_user with the chosen tenant_id, return TokenResponse.
+    """
+    import uuid as _uuid
+
+    from app.services.auth_registry import auth_provider_registry
+
+    # ── Step 2: User has selected a tenant ───────────────────────────────────
+    if data.pending_token and data.tenant_id:
+        pending = await _get_oauth_pending(data.pending_token)
+        if not pending:
+            raise HTTPException(
+                status_code=400,
+                detail="OAuth session expired or invalid. Please sign in again.",
+            )
+
+        auth_provider = await auth_provider_registry.get_provider(pending.provider_type)
+        if not auth_provider:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Provider '{pending.provider_type}' not supported",
+            )
+
+        from app.services.auth_provider import ExternalUserInfo
+
+        user_info = ExternalUserInfo(
+            provider_type=pending.user_info.provider_type,
+            provider_union_id=pending.user_info.provider_union_id,
+            provider_user_id=pending.user_info.provider_user_id,
+            name=pending.user_info.name,
+            email=pending.user_info.email,
+            avatar_url=pending.user_info.avatar_url,
+            mobile=pending.user_info.mobile,
+            raw_data=pending.user_info.raw_data,
+        )
+
+        chosen_tenant = data.tenant_id
+        allowed = {str(tid) for tid in pending.allowed_tenant_ids}
+        if allowed and str(chosen_tenant) not in allowed:
+            raise HTTPException(status_code=403, detail="Tenant is not available for this sign-in")
+        user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=chosen_tenant)
+        if not user:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="Account is disabled")
+
+        jwt_token = create_access_token(str(user.id), user.role)
+        return TokenResponse(
+            access_token=jwt_token,
+            user=UserOut.model_validate(user),
+            needs_company_setup=user.tenant_id is None,
+        )
+
+    # ── Step 1: Exchange code, detect multi-tenant ────────────────────────────
+    if not data.code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+
+    auth_provider = await auth_provider_registry.get_provider(provider)
+    if not auth_provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not supported")
+
+    try:
+        # Perform external network requests outside transaction
+        token_data = await auth_provider.exchange_code_for_token(data.code, data.redirect_uri)
+        access_token = token_data.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise HTTPException(status_code=400, detail="Failed to get access token from provider")
+
+        user_info = await auth_provider.get_user_info(access_token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"OAuth callback failed for {provider}: {e}")
+        raise HTTPException(status_code=500, detail="OAuth authentication failed") from e
+
+    tenant_users = []
+    tenants_map = {}
+    tenant_ids: list[uuid.UUID] = []
+
+    user, _ = await auth_provider.find_or_create_user(user_info)
+
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to create user")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+
+    # Multi-tenant membership uses the psycopg DAO layer.
+    if user.identity_id:
+        all_users = await user_dao.get_by_identity_id(user.identity_id)
+        tenant_users = [u for u in all_users if u.tenant_id is not None]
+
+        if len(tenant_users) > 1:
+            tenant_ids = [u.tenant_id for u in tenant_users if u.tenant_id is not None]
+            tenants_result = await tenant_dao.get_by_ids(tenant_ids)
+            tenants_map = {str(t.id): t for t in tenants_result}
+
+    if len(tenant_users) > 1:
+        # Cache the full user_info in Redis so Step 2 can reconstruct it (outside transaction)
+        pending_token = _uuid.uuid4().hex
+        await _cache_oauth_pending(
+            pending_token,
+            provider,
+            OAuthPendingUserInfo(
+                provider_type=user_info.provider_type,
+                provider_union_id=user_info.provider_union_id,
+                provider_user_id=user_info.provider_user_id,
+                name=user_info.name,
+                email=user_info.email,
+                avatar_url=user_info.avatar_url,
+                mobile=user_info.mobile,
+                raw_data=user_info.raw_data,
+            ),
+            token_data,
+            allowed_tenant_ids=[tid for tid in tenant_ids if tid is not None],
+        )
+
+        tenant_choices = [
+            TenantChoice(
+                tenant_id=u.tenant_id,
+                tenant_name=tenants_map[str(u.tenant_id)].name if str(u.tenant_id) in tenants_map else "Unknown",
+                tenant_slug=tenants_map[str(u.tenant_id)].slug if str(u.tenant_id) in tenants_map else "",
+                logo_url=tenants_map[str(u.tenant_id)].logo_url if str(u.tenant_id) in tenants_map else None,
+            )
+            for u in tenant_users
+        ]
+
+        return MultiTenantResponse(
+            requires_tenant_selection=True,
+            login_identifier=user_info.email or "",
+            tenants=tenant_choices,
+            pending_token=pending_token,
+        )
+
+    # Single tenant (or new user with no tenant yet) — issue token directly
+    jwt_token = create_access_token(str(user.id), user.role)
+    return TokenResponse(
+        access_token=jwt_token,
+        user=UserOut.model_validate(user),
+        needs_company_setup=user.tenant_id is None,
+    )
+
+
+@router.post("/{provider}/bind", response_model=UserOut)
+async def bind_identity(
+    provider: str,
+    data: IdentityBindRequest,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Bind an external identity to the current user."""
+    from app.services.auth_registry import auth_provider_registry
+    from app.services.sso_service import sso_service
+
+    # Get provider outside transaction
+    auth_provider = await auth_provider_registry.get_provider(provider)
+    if not auth_provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not supported")
+
+    try:
+        # Exchange code for token (network call) outside transaction
+        token_data = await auth_provider.exchange_code_for_token(data.code)
+        access_token = token_data.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise HTTPException(status_code=400, detail="Failed to get access token from provider")
+
+        # Get user info (network call) outside transaction
+        user_info = await auth_provider.get_user_info(access_token)
+
+        lookup_provider_user_id = user_info.provider_user_id
+        if lookup_provider_user_id is None:
+            raise HTTPException(status_code=400, detail="Provider user identity is missing")
+        existing_user = await sso_service.check_duplicate_identity(
+            provider,
+            lookup_provider_user_id,
+            identity_data=user_info.raw_data,
+        )
+        if existing_user and existing_user.id != current_user.id:
+            raise HTTPException(
+                status_code=409,
+                detail="This identity is already linked to another account",
+            )
+
+        await sso_service.link_identity(
+            str(current_user.id),
+            provider,
+            lookup_provider_user_id,
+            user_info.raw_data,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Identity bind failed for {provider}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to bind identity") from e
+
+    user = await user_dao.get_with_identity(current_user.id)
+    return UserOut.model_validate(user)
+
+
+@router.post("/{provider}/unbind", response_model=UserOut)
+async def unbind_identity(
+    provider: str,
+    data: IdentityUnbindRequest,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Unlink an external identity from the current user."""
+    from app.services.sso_service import sso_service
+
+    success = await sso_service.unlink_identity(str(current_user.id), provider)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"No linked identity found for provider '{provider}'")
+
+    user = await user_dao.get_with_identity(current_user.id)
+    return UserOut.model_validate(user)
+
+
+# ─── Email Verification Endpoints ──────────────────────────────────────
+
+
+@router.post("/verify-email")
+async def verify_email(data: VerifyEmailRequest):
+    """Verify email address using a token from the verification email.
+
+    On success, returns user info and access token to allow immediate login.
+    """
+    from app.services.email_verification_service import email_verification_service
+
+    # Consume verification token outside transaction (Redis operation)
+    token_data = await email_verification_service.consume_email_verification_token(data.token)
+    if not token_data:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+
+    identity_id = token_data.get("identity_id")
+    if not identity_id:
+        raise HTTPException(status_code=400, detail="Token does not contain identity information")
+
+    identity = await identity_dao.get(identity_id)
+    if not identity:
+        raise HTTPException(status_code=400, detail="Identity not found")
+
+    identity = await identity_dao.update(
+        db_obj=identity,
+        obj_in={"email_verified": True, "is_active": True},
+    )
+    users = await user_dao.get_by_identity_id(identity.id)
+    for u in users:
+        await user_dao.update(db_obj=u, obj_in={"is_active": True})
+
+    # Find a representative user (read-only)
+    user = await user_dao.get_representative_user_for_identity(identity.id)
+
+    # 4. Generate token and return full response outside transaction
+    effective_id = str(user.id) if user else str(identity.id)
+    effective_role = user.role if user else "user"
+    token = create_access_token(effective_id, effective_role)
+
+    return TokenResponse(
+        access_token=token,
+        user=UserOut.model_validate(user) if user else None,
+        identity=IdentityOut.model_validate(identity),
+        needs_company_setup=user.tenant_id is None if user else True,
+    )
+
+
+@router.post("/resend-verification")
+async def resend_verification(
+    data: ResendVerificationRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Resend email verification link."""
+    from app.config import get_settings
+    from app.services.system_email_service import resolve_email_config_async
+
+    # Always return success to prevent email enumeration
+    generic_response = {
+        "ok": True,
+        "message": "If an account with that email exists, a verification email has been sent.",
+    }
+    settings = get_settings()
+
+    # Check if email is configured (DB-only, no env fallback) outside transaction (read-only)
+    email_config = await resolve_email_config_async()
+    if not email_config:
+        return generic_response
+
+    # Find Identity by email (read-only)
+    identity = await identity_dao.get_by_email(data.email)
+
+    # Don't reveal if user exists or already verified
+    if not identity or identity.email_verified:
+        return generic_response
+
+    # Pick a representative user context (e.g. latest one)
+    user = await user_dao.get_representative_user_for_identity(identity.id)
+
+    if user:
+        # Queue email task outside transaction
+        await _send_verification_email_task(user, background_tasks, settings)
+
+    return generic_response

@@ -1,0 +1,210 @@
+"""DAO for tenants table (psycopg)."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from app.dao.base import BaseDAO
+from app.records.tenant import TenantRecord
+
+_TENANT_COLUMNS = (
+    "id",
+    "name",
+    "slug",
+    "im_provider",
+    "im_config",
+    "is_active",
+    "created_at",
+    "default_message_limit",
+    "default_message_period",
+    "default_max_agents",
+    "default_agent_ttl_hours",
+    "default_max_llm_calls_per_day",
+    "min_heartbeat_interval_minutes",
+    "timezone",
+    "country_region",
+    "sso_enabled",
+    "sso_domain",
+    "default_max_triggers",
+    "min_poll_interval_floor",
+    "max_webhook_rate_ceiling",
+    "a2a_async_enabled",
+    "default_model_id",
+)
+
+
+class TenantDAO(BaseDAO[TenantRecord]):
+    """DAO for Tenant records."""
+
+    table = "tenants"
+    columns = _TENANT_COLUMNS
+    record_factory = staticmethod(TenantRecord.from_row)
+
+    async def get_by_slug(self, slug: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants WHERE slug = %(slug)s LIMIT 1",
+                {"slug": slug},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def get_first_by_created_at(self) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants ORDER BY created_at ASC NULLS LAST LIMIT 1"
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def get_by_ids(self, ids: Sequence[Any]) -> Sequence[TenantRecord]:
+        if not ids:
+            return []
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM tenants WHERE id = ANY(%(ids)s)",
+                {"ids": list(ids)},
+            )
+            return [TenantRecord.from_row(row) for row in rows]
+
+    async def get_by_sso_domain(self, domain: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants "
+                "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
+                {"domain": domain.lower()},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def find_by_sso_domain_ilike(self, domain: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants WHERE sso_domain ILIKE %(pattern)s LIMIT 1",
+                {"pattern": f"%{domain}%"},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def find_by_name_ilike(self, name_fragment: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants WHERE name ILIKE %(pattern)s LIMIT 1",
+                {"pattern": f"%{name_fragment}%"},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def list_ordered_by_created_at(self, *, desc: bool = True) -> Sequence[TenantRecord]:
+        order = "DESC" if desc else "ASC"
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM tenants ORDER BY created_at {order} NULLS LAST"
+            )
+            return [TenantRecord.from_row(row) for row in rows]
+
+    async def get_by_sso_domain_exact(self, sso_domain: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants WHERE sso_domain = %(domain)s LIMIT 1",
+                {"domain": sso_domain},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def get_by_sso_domain_like(self, prefix: str) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants WHERE sso_domain LIKE %(pattern)s LIMIT 1",
+                {"pattern": f"{prefix}%"},
+            )
+            return TenantRecord.from_row(row) if row else None
+
+    async def count_created_before(self, before) -> int:
+        async with self.session() as db:
+            value = await db.fetchval(
+                "SELECT COUNT(*) FROM tenants WHERE created_at < %(before)s",
+                {"before": before},
+            )
+            return int(value or 0)
+
+    async def counts_by_created_day(self, start, end) -> dict:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM tenants "
+                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                {"start": start, "end": end},
+            )
+            return {row["d"]: int(row["c"] or 0) for row in rows}
+
+    async def clear_sso_domain_except(self, keep_tenant_id: Any) -> None:
+        """IP-mode helper: clear sso_domain and disable SSO on all other tenants."""
+        async with self.session() as db:
+            await db.execute(
+                "UPDATE tenants SET sso_domain = NULL, sso_enabled = FALSE "
+                "WHERE id IS DISTINCT FROM %(keep_tenant_id)s",
+                {"keep_tenant_id": keep_tenant_id},
+            )
+
+    async def list_for_sso_regen(self) -> Sequence[TenantRecord]:
+        """SSO-enabled tenants first, then by created_at (IP-mode domain assignment)."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM tenants "
+                "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
+            )
+            return [TenantRecord.from_row(row) for row in rows]
+
+    async def delete_cascade(self, tenant_id: Any) -> None:
+        """Delete a tenant and all dependent rows in FK-safe order."""
+        params = {"tid": tenant_id}
+        statements = [
+            "DELETE FROM approval_requests WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM notifications WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)",
+            (
+                "DELETE FROM agent_agent_relationships "
+                "WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
+                "OR target_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+            ),
+            "DELETE FROM agent_relationships WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            (
+                "DELETE FROM task_logs WHERE task_id IN ("
+                "SELECT id FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s))"
+            ),
+            "DELETE FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM chat_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM chat_sessions WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM agent_triggers WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM channel_configs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM agent_permissions WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM agent_credentials WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM agent_activity_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            (
+                "DELETE FROM gateway_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
+                "OR sender_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+            ),
+            (
+                "DELETE FROM published_pages WHERE tenant_id = %(tid)s "
+                "OR agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+            ),
+            (
+                "DELETE FROM audit_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
+                "OR user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
+            ),
+            "DELETE FROM agent_tools WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
+            "DELETE FROM agents WHERE tenant_id = %(tid)s",
+            "DELETE FROM skills WHERE tenant_id = %(tid)s",
+            "DELETE FROM llm_models WHERE tenant_id = %(tid)s",
+            "DELETE FROM identity_providers WHERE tenant_id = %(tid)s",
+            "DELETE FROM tools WHERE tenant_id = %(tid)s",
+            "DELETE FROM okr_settings WHERE tenant_id = %(tid)s",
+            "DELETE FROM work_reports WHERE tenant_id = %(tid)s",
+            "DELETE FROM okr_objectives WHERE tenant_id = %(tid)s",
+            "DELETE FROM org_members WHERE tenant_id = %(tid)s",
+            "DELETE FROM org_departments WHERE tenant_id = %(tid)s",
+            "DELETE FROM invitation_codes WHERE tenant_id = %(tid)s",
+            "DELETE FROM users WHERE tenant_id = %(tid)s",
+            "DELETE FROM tenants WHERE id = %(tid)s",
+        ]
+        async with self.session() as db:
+            for sql in statements:
+                await db.execute(sql, params)
+
+
+tenant_dao = TenantDAO()

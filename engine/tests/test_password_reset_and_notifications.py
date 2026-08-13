@@ -1,0 +1,452 @@
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
+from fastapi import BackgroundTasks, HTTPException
+
+from app.api import auth as auth_api
+from app.api.notification import BroadcastRequest, broadcast_notification
+from app.core.security import hash_password, verify_password
+from app.database import transaction
+from app.schemas.schemas import ForgotPasswordRequest, ResetPasswordRequest
+from app.services import password_reset_service, system_email_service
+
+
+async def run_with_db(db, func, *args, **kwargs):
+    async with transaction(db):
+        return await func(*args, **kwargs)
+
+
+class DummyScalars:
+    def __init__(self, values):
+        self._values = list(values)
+
+    def all(self):
+        return list(self._values)
+
+
+class DummyResult:
+    def __init__(self, value=None, values=None):
+        self._value = value
+        self._values = list(values or [])
+
+    def scalar_one_or_none(self):
+        return self._value
+
+    def scalars(self):
+        return DummyScalars(self._values)
+
+
+class MockPipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.commands = []
+
+    def setex(self, key, ttl, value):
+        self.commands.append(("setex", key, ttl, value))
+        return self
+
+    def delete(self, key):
+        self.commands.append(("delete", key))
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def execute(self):
+        for cmd in self.commands:
+            if cmd[0] == "setex":
+                _, key, ttl, value = cmd
+                self.redis.setex_calls.append((key, ttl, value))
+                self.redis._data[key] = value
+            elif cmd[0] == "delete":
+                _, key = cmd
+                self.redis.deleted.append(key)
+                self.redis._data.pop(key, None)
+        self.commands.clear()
+
+
+class MockRedis:
+    def __init__(self, initial_data=None):
+        self._data = initial_data or {}
+        self.deleted = []
+        self.setex_calls = []
+
+    async def get(self, key):
+        return self._data.get(key)
+
+    async def delete(self, key):
+        self.deleted.append(key)
+        self._data.pop(key, None)
+
+    async def setex(self, key, ttl, value):
+        self.setex_calls.append((key, ttl, value))
+        self._data[key] = value
+
+    def pipeline(self, transaction=True):
+        return MockPipeline(self)
+
+
+class RecordingDB:
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.executed = []
+        self.added = []
+        self.flushed = False
+        self.committed = False
+
+    async def execute(self, statement):
+        self.executed.append(statement)
+        if self.responses:
+            return self.responses.pop(0)
+        return DummyResult()
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        self.flushed = True
+
+    async def commit(self):
+        self.flushed = True
+        self.committed = True
+
+
+def bind_recording_db(monkeypatch: pytest.MonkeyPatch, recorder: RecordingDB):
+    db = SimpleNamespace()
+    monkeypatch.setattr(db, "execute", recorder.execute)
+    monkeypatch.setattr(db, "commit", recorder.commit)
+    return db
+
+
+def configured_system_email() -> system_email_service.SystemEmailConfig:
+    return system_email_service.SystemEmailConfig(
+        from_address="bot@example.com",
+        from_name="MaraClaw",
+        smtp_host="smtp.example.com",
+        smtp_port=465,
+        smtp_username="bot@example.com",
+        smtp_password="secret",
+        smtp_ssl=True,
+        smtp_timeout_seconds=15,
+    )
+
+
+def make_user(**overrides):
+    values = {
+        "id": uuid.uuid4(),
+        "username": "alice",
+        "email": "alice@example.com",
+        "password_hash": "old-hash",
+        "display_name": "Alice",
+        "role": "member",
+        "tenant_id": uuid.uuid4(),
+        "is_active": True,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+@pytest.mark.asyncio
+async def test_create_password_reset_token_invalidates_older_tokens(monkeypatch):
+    monkeypatch.setattr(
+        password_reset_service,
+        "get_settings",
+        lambda: SimpleNamespace(PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=15, PUBLIC_BASE_URL=""),
+    )
+    user_id = uuid.uuid4()
+    mock_redis = MockRedis(initial_data={f"pwd_reset:user:{user_id}": "old-token-hash"})
+
+    async def fake_get_redis():
+        return mock_redis
+
+    monkeypatch.setattr(password_reset_service, "get_redis", fake_get_redis)
+
+    raw_token, expires_at = await password_reset_service.create_password_reset_token(user_id)
+
+    # Verify old token invalidation
+    assert "pwd_reset:token:old-token-hash" in mock_redis.deleted
+
+    # Verify new token storage
+    assert len(mock_redis.setex_calls) == 2
+    # Verify raw token is long
+    assert len(raw_token) >= 20
+    assert expires_at > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_build_password_reset_url_uses_env_public_base_url(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com/")
+
+    url = await password_reset_service.build_password_reset_url("abc123")
+
+    assert url == "https://app.example.com/reset-password?token=abc123"
+
+
+@pytest.mark.asyncio
+async def test_consume_password_reset_token_works_correctly(monkeypatch):
+    user_id = uuid.uuid4()
+    raw_token = "raw-token"
+    token_hash = password_reset_service._hash_token(raw_token)
+
+    initial_data = {
+        f"pwd_reset:token:{token_hash}": str(user_id),
+        f"pwd_reset:user:{user_id}": token_hash,
+    }
+    mock_redis = MockRedis(initial_data=initial_data)
+
+    async def fake_get_redis():
+        return mock_redis
+
+    monkeypatch.setattr(password_reset_service, "get_redis", fake_get_redis)
+
+    result = await password_reset_service.consume_password_reset_token(raw_token)
+
+    assert result is not None
+    assert result["identity_id"] == user_id
+    # Should be deleted after consumption
+    assert f"pwd_reset:token:{token_hash}" in mock_redis.deleted
+    assert f"pwd_reset:user:{user_id}" in mock_redis.deleted
+
+
+@pytest.mark.asyncio
+async def test_consume_password_reset_token_accepts_redis_bytes(monkeypatch):
+    # Given: Redis returns the stored identity ID as bytes.
+    user_id = uuid.uuid4()
+    raw_token = "raw-token"
+    token_hash = password_reset_service._hash_token(raw_token)
+    mock_redis = MockRedis(
+        initial_data={
+            f"pwd_reset:token:{token_hash}": str(user_id).encode(),
+            f"pwd_reset:user:{user_id}": token_hash,
+        }
+    )
+
+    async def fake_get_redis():
+        return mock_redis
+
+    monkeypatch.setattr(password_reset_service, "get_redis", fake_get_redis)
+
+    # When: the reset token is consumed.
+    result = await password_reset_service.consume_password_reset_token(raw_token)
+
+    # Then: the persisted byte value resolves to the original identity.
+    assert result == {"identity_id": user_id}
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_returns_generic_response_for_unknown_email(monkeypatch):
+    async def fake_resolve_email_config_async():
+        return configured_system_email()
+
+    monkeypatch.setattr(
+        "app.services.system_email_service.resolve_email_config_async",
+        fake_resolve_email_config_async,
+    )
+    background_tasks = BackgroundTasks()
+
+    # Patch identity_dao.get_by_email to return None
+    from app.dao import identity_dao
+
+    async def fake_get_by_email(email):
+        return None
+
+    monkeypatch.setattr(identity_dao, "get_by_email", fake_get_by_email)
+
+    response = await auth_api.forgot_password(
+        ForgotPasswordRequest(email="missing@example.com"),
+        background_tasks,
+    )
+
+    assert response == {
+        "ok": True,
+        "message": "If an account with that email exists, a password reset email has been sent.",
+    }
+    assert background_tasks.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_queues_background_email(monkeypatch):
+    async def fake_resolve_email_config_async():
+        return configured_system_email()
+
+    monkeypatch.setattr(
+        "app.services.system_email_service.resolve_email_config_async",
+        fake_resolve_email_config_async,
+    )
+
+    user = make_user()
+    background_tasks = BackgroundTasks()
+
+    async def fake_create_password_reset_token(*_args, **_kwargs):
+        return "raw-token", datetime.now(UTC) + timedelta(minutes=30)
+
+    async def fake_build_password_reset_url(*_args, **_kwargs):
+        return "https://app.example.com/reset-password?token=raw-token"
+
+    monkeypatch.setattr(password_reset_service, "create_password_reset_token", fake_create_password_reset_token)
+    monkeypatch.setattr(password_reset_service, "build_password_reset_url", fake_build_password_reset_url)
+
+    # Patch identity_dao.get_by_email to return our fake user
+    from app.dao import identity_dao
+
+    async def fake_get_by_email(email):
+        return user
+
+    monkeypatch.setattr(identity_dao, "get_by_email", fake_get_by_email)
+
+    response = await auth_api.forgot_password(ForgotPasswordRequest(email=user.email), background_tasks)
+
+    assert response["ok"] is True
+    assert len(background_tasks.tasks) == 1
+
+
+def test_send_system_email_uses_configured_timeout(monkeypatch):
+    captured = {}
+
+    def fake_send_smtp_email(**kwargs):
+        captured.update(kwargs)
+
+    config = system_email_service.SystemEmailConfig(
+        from_address="bot@example.com",
+        from_name="MaraClaw",
+        smtp_host="smtp.example.com",
+        smtp_port=465,
+        smtp_username="bot@example.com",
+        smtp_password="secret",
+        smtp_ssl=True,
+        smtp_timeout_seconds=27,
+    )
+    monkeypatch.setattr(system_email_service, "send_smtp_email", fake_send_smtp_email)
+
+    system_email_service._send_email_with_config_sync(config, "alice@example.com", "subject", "body")
+
+    assert captured["timeout"] == 27
+    assert captured["to_addrs"] == ["alice@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_reset_password_updates_user(monkeypatch):
+    from app.dao import identity_dao
+    from app.records.identity import IdentityRecord
+
+    identity = IdentityRecord(
+        id=uuid.uuid4(),
+        email="alice@example.com",
+        password_hash=hash_password("old-password"),
+        is_active=True,
+    )
+    updates: list[dict] = []
+
+    async def fake_consume_password_reset_token(*_args, **_kwargs):
+        return {"identity_id": identity.id}
+
+    async def fake_get(id):
+        assert id == identity.id
+        return identity
+
+    async def fake_update(*, db_obj, obj_in):
+        updates.append(dict(obj_in))
+        identity.password_hash = obj_in["password_hash"]
+        return identity
+
+    monkeypatch.setattr(password_reset_service, "consume_password_reset_token", fake_consume_password_reset_token)
+    monkeypatch.setattr(identity_dao, "get", fake_get)
+    monkeypatch.setattr(identity_dao, "update", fake_update)
+
+    response = await auth_api.reset_password(ResetPasswordRequest(token="t" * 20, new_password="new-password"))
+
+    assert response == {"ok": True}
+    assert updates
+    assert "password_hash" in updates[0]
+    assert verify_password("new-password", identity.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_rejects_missing_system_email_config(monkeypatch):
+    current_user = make_user(role="org_admin")
+
+    async def fake_resolve_email_config_async(db):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.system_email_service.resolve_email_config_async",
+        fake_resolve_email_config_async,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await broadcast_notification(
+            BroadcastRequest(title="Maintenance", body="Tonight", send_email=True),
+            background_tasks=BackgroundTasks(),
+            current_user=current_user,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "System email is not configured" in excinfo.value.detail
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_queues_email_delivery(monkeypatch):
+    current_user = make_user(role="org_admin")
+    target_user = make_user(email="bob@example.com", tenant_id=current_user.tenant_id)
+    background_tasks = BackgroundTasks()
+
+    async def fake_resolve_email_config_async(db):
+        return configured_system_email()
+
+    async def fake_list_users(*_args, **_kwargs):
+        return [target_user]
+
+    async def fake_list_agents(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "app.services.system_email_service.resolve_email_config_async",
+        fake_resolve_email_config_async,
+    )
+    monkeypatch.setattr("app.api.notification.user_dao.list_active_for_tenant", fake_list_users)
+    monkeypatch.setattr("app.api.notification.agent_dao.list_for_tenant", fake_list_agents)
+    notifications = []
+
+    async def fake_send_notification(*_args, **kwargs):
+        notifications.append(kwargs)
+
+    monkeypatch.setattr("app.services.notification_service.send_notification", fake_send_notification)
+
+    response = await broadcast_notification(
+        BroadcastRequest(title="Maintenance", body="Tonight", send_email=True),
+        background_tasks=background_tasks,
+        current_user=current_user,
+    )
+
+    assert response["ok"] is True
+    assert response["emails_sent"] == 1
+    assert len(notifications) == 1
+    assert len(background_tasks.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_deliver_broadcast_emails_continues_after_single_failure(monkeypatch):
+    from app.services.system_email_service import BroadcastEmailRecipient, deliver_broadcast_emails
+
+    delivered = []
+
+    async def fake_send_system_email(email: str, subject: str, body: str) -> None:
+        if email == "bad@example.com":
+            raise RuntimeError("smtp down")
+        delivered.append((email, subject, body))
+
+    monkeypatch.setattr("app.services.system_email_service.send_system_email", fake_send_system_email)
+
+    await deliver_broadcast_emails(
+        [
+            BroadcastEmailRecipient(email="bad@example.com", subject="s1", body="b1"),
+            BroadcastEmailRecipient(email="good@example.com", subject="s2", body="b2"),
+        ]
+    )
+
+    assert delivered == [("good@example.com", "s2", "b2")]
