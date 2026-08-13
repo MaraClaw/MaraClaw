@@ -11,22 +11,18 @@ from typing import TypedDict
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.api.feishu import _call_llm_with_config, _load_agent_and_model
 from app.config import get_settings
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.user_dao import user_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs_s
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
+from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 
 settings = get_settings()
 
@@ -336,9 +332,6 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 # ─── Event Webhook ──────────────────────────────────────
 
-_processed_teams_events: set[str] = set()
-
-
 @router.post("/channel/teams/{agent_id}/webhook")
 async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
     """Handle Microsoft Teams Bot Framework callbacks."""
@@ -383,12 +376,8 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.info(f"Teams: Updated service_url for agent {agent_id} to {service_url}")
 
         activity_id = activity.get("id")
-        if activity_id in _processed_teams_events:
+        if activity_id and channel_dedup.already_processed("teams", str(activity_id), cap=2000):
             return {"ok": True}
-        if activity_id:
-            _processed_teams_events.add(activity_id)
-            if len(_processed_teams_events) > 1000:
-                _processed_teams_events.clear()
 
         if activity.get("type") != "message":
             return {"ok": True}
@@ -409,21 +398,18 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         reply_to_id = activity.get("id")
 
         if not conversation_id or not sender_id:
-            logger.warning(f"Teams: Missing conversation_id or sender_id in activity for agent {agent_id}")
+            logger.warning(f"[Teams] Missing conversation_id or sender_id in activity for agent {agent_id}")
             return {"ok": True}
 
-        logger.info(f"Teams: Message from={sender_id}, conversation={conversation_id}: {user_text[:80]}")
+        logger.info(f"[Teams] Message from={sender_id}, conversation={conversation_id}: {user_text[:80]}")
 
-        agent_obj = await agent_dao.get(agent_id)
+        agent_obj = await channel_inbound.load_agent(agent_id)
         if not agent_obj:
-            logger.warning(f"Teams: Agent {agent_id} not found")
+            logger.warning(f"[Teams] Agent {agent_id} not found")
             return {"ok": True}
-
-        ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
 
         _extra_info = {"name": sender_name}
-        platform_user = await channel_user_service.resolve_channel_user(
-            db=None,
+        platform_user = await channel_inbound.resolve_sender_user(
             agent=agent_obj,
             channel_type="teams",
             external_user_id=sender_id,
@@ -439,15 +425,13 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             platform_user = (
                 await user_dao.update(db_obj=platform_user, obj_in={"display_name": sender_name}) or platform_user
             )
-        platform_user_id = platform_user.id
 
         _conv_type = activity.get("conversation", {}).get("conversationType", "")
         _is_group_teams = _conv_type in ("groupChat", "channel")
 
-        sess = await find_or_create_channel_session(
-            db=None,
+        sess = await channel_inbound.open_channel_session(
             agent_id=agent_id,
-            user_id=platform_user_id if not _is_group_teams else (agent_obj.creator_id or platform_user_id),
+            user_id=platform_user.id if not _is_group_teams else (agent_obj.creator_id or platform_user.id),
             external_conv_id=conversation_id,
             source_channel="microsoft_teams",
             first_message_title=user_text,
@@ -455,26 +439,6 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             group_name=activity.get("conversation", {}).get("name")
             or (f"Teams Group {conversation_id[:8]}" if _is_group_teams else None),
         )
-        session_conv_id = str(sess.id)
-        from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-        history_msgs = await chat_message_dao.list_recent(
-            agent_id=agent_id,
-            conversation_id=session_conv_id,
-            limit=ctx_size,
-        )
-        history = _conv(history_msgs)
-
-        await chat_message_dao.insert_message(
-            agent_id=agent_id,
-            user_id=platform_user_id,
-            role="user",
-            content=user_text,
-            conversation_id=session_conv_id,
-        )
-        await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-
-        _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
         async def _teams_file_sender(file_path, msg: str = ""):
             _fp = _Path(file_path)
@@ -486,47 +450,39 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                 "type": "message",
                 "conversation": {"id": conversation_id},
                 "replyToId": reply_to_id,
-                "text": f"Agent sent file: {_fp.name} (Note: file content not directly supported yet, but I can tell you about it: {msg})",
+                "text": (
+                    f"Agent sent file: {_fp.name} "
+                    f"(Note: file content not directly supported yet, but I can tell you about it: {msg})"
+                ),
             }
             await _send_teams_message(config, conversation_id, file_msg_activity)
 
         _cfs_s_token = _cfs_s.set(_teams_file_sender)
 
         try:
-            reply_text = await _call_llm_with_config(
-                _agent_model,
-                _llm_model,
-                _fallback_model,
-                agent_id,
-                user_text,
-                history=history,
-                user_id=platform_user_id,
-                session_id=session_conv_id,
+            reply_text = await channel_inbound.run_text_turn(
+                agent=agent_obj,
+                agent_id=agent_id,
+                platform_user=platform_user,
+                session=sess,
+                user_text=user_text,
             )
-            logger.info(f"Teams: LLM reply generated: {reply_text[:80]}")
+            logger.info(f"[Teams] LLM reply generated: {reply_text[:80]}")
         except Exception as e:
-            logger.exception(f"Teams: Failed to call LLM for agent {agent_id}: {e}")
+            logger.exception(f"[Teams] Failed to call LLM for agent {agent_id}: {e}")
             reply_text = "Sorry, I encountered an error processing your message."
+            try:
+                await channel_inbound.persist_assistant_message(
+                    agent_id=agent_id,
+                    user_id=platform_user.id,
+                    session=sess,
+                    content=reply_text,
+                    agent=agent_obj,
+                )
+            except Exception:
+                logger.exception("[Teams] Failed to persist error reply")
         finally:
             _cfs_s.reset(_cfs_s_token)
-
-        try:
-            await chat_message_dao.insert_message(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                role="assistant",
-                content=reply_text,
-                conversation_id=session_conv_id,
-            )
-            try:
-                fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-                if fresh:
-                    await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-            except ValueError, TypeError:
-                pass
-            logger.info(f"Teams: Saved reply to database for conversation {conversation_id}")
-        except Exception as e:
-            logger.exception(f"Teams: Failed to save reply to database: {e}")
 
         use_managed_identity = (config.extra_config or {}).get("use_managed_identity", False)
         has_credentials = (config.app_id and config.app_secret) or use_managed_identity
@@ -538,7 +494,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                         bot_channel_account = {"id": config.app_id}
                     else:
                         logger.error(
-                            "Teams: Cannot determine bot channel account ID - no recipient in activity and no app_id configured"
+                            "[Teams] Cannot determine bot channel account ID - no recipient in activity and no app_id configured"
                         )
                         raise ValueError("Cannot determine bot channel account ID")
 
@@ -555,17 +511,23 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                     "text": reply_text,
                 }
                 logger.info(
-                    f"Teams: Attempting to send reply to conversation {conversation_id}, from={bot_channel_account.get('id')}, recipient={user_account.get('id')}"
+                    f"[Teams] Attempting to send reply to conversation {conversation_id}, "
+                    f"from={bot_channel_account.get('id')}, recipient={user_account.get('id')}"
                 )
                 await _send_teams_message(config, conversation_id, reply_activity)
-                logger.info("Teams: Successfully sent reply to Teams")
+                logger.info("[Teams] Successfully sent reply to Teams")
             except Exception as e:
-                logger.exception(f"Teams: Failed to send message to Teams: {e}")
+                logger.exception(f"[Teams] Failed to send message to Teams: {e}")
         else:
             use_mi = (config.extra_config or {}).get("use_managed_identity", False)
             logger.warning(
-                f"Teams: Cannot send reply - missing credentials (managed_identity={use_mi}, app_id={bool(config.app_id)}, app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
+                f"[Teams] Cannot send reply - missing credentials "
+                f"(managed_identity={use_mi}, app_id={bool(config.app_id)}, "
+                f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
             )
+
+        if activity_id:
+            channel_dedup.mark_processed("teams", str(activity_id), cap=2000)
 
         return {"ok": True}
     except Exception as e:
