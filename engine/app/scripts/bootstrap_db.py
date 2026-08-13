@@ -63,6 +63,9 @@ PATCHES = [
     "CREATE INDEX IF NOT EXISTS ix_agent_tools_agent_tool ON agent_tools (agent_id, tool_id)",
     "CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created ON chat_messages (conversation_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent_id, last_message_at DESC)",
+    # chat / IM channel registry expansions
+    "DO $$ BEGIN ALTER TYPE channel_type_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
+    "DO $$ BEGIN ALTER TYPE im_provider_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
 ]
 
 

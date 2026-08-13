@@ -426,6 +426,7 @@ from app.api.files import enterprise_kb_router, router as files_router, upload_r
 from app.api.focus import router as focus_router
 from app.api.gateway import router as gateway_router
 from app.api.gogcli import router as gogcli_router
+from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
 from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
@@ -480,6 +481,7 @@ app.include_router(slack_router, prefix=settings.API_PREFIX)
 app.include_router(discord_router, prefix=settings.API_PREFIX)
 app.include_router(dingtalk_router, prefix=settings.API_PREFIX)
 app.include_router(google_workspace_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(google_chat_router, prefix=settings.API_PREFIX)
 app.include_router(wecom_router, prefix=settings.API_PREFIX)
 app.include_router(wechat_router, prefix=settings.API_PREFIX)
 app.include_router(teams_router, prefix=settings.API_PREFIX)

@@ -27,11 +27,19 @@ class ChannelUserService:
 
     CHANNEL_TYPE_ALIASES: ClassVar[dict[str, str]] = {
         "microsoft_teams": "teams",
+        "googlechat": "google_chat",
+        "google-chat": "google_chat",
+        "gchat": "google_chat",
     }
 
     def _normalize_channel_type(self, channel_type: str) -> str:
-        raw = (channel_type or "").strip().lower()
-        return self.CHANNEL_TYPE_ALIASES.get(raw, raw)
+        from app.services.channels.types import normalize_channel_type
+
+        stored = normalize_channel_type(channel_type) or (channel_type or "").strip().lower()
+        # Preserve historical short name used in identity provider rows for Teams.
+        if stored == "microsoft_teams":
+            return "teams"
+        return self.CHANNEL_TYPE_ALIASES.get(stored, stored)
 
     def _legacy_provider_types_for_channel(self, channel_type: str) -> list[str]:
         normalized = self._normalize_channel_type(channel_type)
@@ -40,6 +48,8 @@ class ChannelUserService:
             legacy.append("microsoft_teams")
         elif normalized == "microsoft_teams":
             legacy.append("teams")
+        elif normalized == "google_chat":
+            legacy.extend(["googlechat", "gchat"])
         return legacy
 
     def _get_channel_ids(

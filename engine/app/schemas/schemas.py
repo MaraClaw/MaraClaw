@@ -475,6 +475,7 @@ class ChannelConfigOut(BaseModel):
     agent_id: uuid.UUID
     channel_type: str
     app_id: str | None = None
+    # Secret fields are redacted by channels.redact.channel_config_out when returned from APIs.
     app_secret: str | None = None
     encrypt_key: str | None = None
     verification_token: str | None = None
@@ -482,7 +483,7 @@ class ChannelConfigOut(BaseModel):
     is_connected: bool
     last_tested_at: datetime | None = None
     extra_config: JsonObject | None = None
-    created_at: datetime
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
