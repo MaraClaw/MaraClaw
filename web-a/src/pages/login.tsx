@@ -88,7 +88,7 @@ function parseLoginError(error: unknown): {
 }
 
 export function LoginPage() {
-  const { status, login, isAdmin } = useAuth()
+  const { status, login, isAdmin, mustChangePassword } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const reduceMotion = useReducedMotion()
@@ -163,7 +163,7 @@ export function LoginPage() {
   }
 
   if (status === 'authenticated' && isAdmin) {
-    return <Navigate to={from} replace />
+    return <Navigate to={mustChangePassword ? '/account' : from} replace />
   }
 
   async function onSubmit(values: LoginFormValues) {
@@ -179,8 +179,12 @@ export function LoginPage() {
       })
 
       if (isTokenResponse(result)) {
-        toast.success('Signed in')
-        navigate(from, { replace: true })
+        const forceChange =
+          result.must_change_password === true ||
+          result.user.must_change_password === true ||
+          result.identity?.must_change_password === true
+        toast.success(forceChange ? 'Signed in — change your password to continue' : 'Signed in')
+        navigate(forceChange ? '/account' : from, { replace: true })
         return
       }
 
@@ -222,8 +226,16 @@ export function LoginPage() {
       })
 
       if (isTokenResponse(result)) {
-        toast.success(`Signed in to ${tenant.tenant_name}`)
-        navigate(from, { replace: true })
+        const forceChange =
+          result.must_change_password === true ||
+          result.user.must_change_password === true ||
+          result.identity?.must_change_password === true
+        toast.success(
+          forceChange
+            ? `Signed in to ${tenant.tenant_name} — change your password to continue`
+            : `Signed in to ${tenant.tenant_name}`,
+        )
+        navigate(forceChange ? '/account' : from, { replace: true })
         return
       }
 

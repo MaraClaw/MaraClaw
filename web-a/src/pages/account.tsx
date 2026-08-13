@@ -34,7 +34,7 @@ const schema = z
 type FormValues = z.infer<typeof schema>
 
 export function AccountPage() {
-  const { user } = useAuth()
+  const { user, mustChangePassword, refreshUser } = useAuth()
   const formId = useId()
   const formErrorId = `${formId}-form-error`
   const [formError, setFormError] = useState<string | null>(null)
@@ -56,12 +56,16 @@ export function AccountPage() {
   async function onSubmit(values: FormValues) {
     setFormError(null)
     try {
+      const wasForced = mustChangePassword
       await changePasswordRequest({
         old_password: values.old_password,
         new_password: values.new_password,
       })
       reset()
-      toast.success('Password updated')
+      await refreshUser()
+      toast.success(
+        wasForced ? 'Password updated. You can use the admin console now.' : 'Password updated',
+      )
     } catch (error) {
       if (error instanceof ApiError) {
         setFormError(formatApiDetail(error.detail) ?? 'Unable to update password.')
@@ -76,6 +80,7 @@ export function AccountPage() {
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">Account</Badge>
+          {mustChangePassword ? <Badge variant="warning">Password change required</Badge> : null}
         </div>
         <h1 className="font-display text-3xl font-semibold tracking-tight">Account</h1>
         <p className="text-sm text-muted-foreground">
@@ -83,6 +88,16 @@ export function AccountPage() {
           organizations.
         </p>
       </div>
+
+      {mustChangePassword ? (
+        <div
+          role="status"
+          className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100"
+        >
+          You signed in with a temporary password. Choose a new password before using the rest of
+          the admin console.
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

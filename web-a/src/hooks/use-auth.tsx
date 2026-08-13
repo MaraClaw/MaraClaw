@@ -15,6 +15,7 @@ import {
   isAdminUser,
   isMultiTenantResponse,
   isTokenResponse,
+  userMustChangePassword,
   type LoginRequest,
   type MultiTenantResponse,
   type TokenResponse,
@@ -28,6 +29,7 @@ type AuthContextValue = {
   user: UserOut | null
   token: string | null
   isAdmin: boolean
+  mustChangePassword: boolean
   login: (input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
   applySession: (session: TokenResponse) => void
   logout: () => void
@@ -59,9 +61,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'Admin access required. Sign in with a platform admin or organization admin account.',
       )
     }
+    const nextUser: UserOut = {
+      ...session.user,
+      must_change_password:
+        session.must_change_password === true ||
+        session.user.must_change_password === true ||
+        session.identity?.must_change_password === true,
+    }
     setStoredToken(session.access_token)
     setToken(session.access_token)
-    setUser(session.user)
+    setUser(nextUser)
     setStatus('authenticated')
   }, [])
 
@@ -114,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       token,
       isAdmin: isAdminUser(user),
+      mustChangePassword: userMustChangePassword(user),
       login,
       applySession,
       logout,
