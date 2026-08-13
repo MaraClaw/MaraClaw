@@ -246,6 +246,19 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"[startup] Default company seed or A2A enable failed: {e}")
 
+        # Genesis platform admin is required for a usable bootstrap. Fail closed so
+        # fresh installs do not serve API without an operator account.
+        from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
+
+        try:
+            await ensure_platform_admin()
+        except PlatformAdminSeedError:
+            logger.error("[startup] Platform admin seed failed: configuration or credential policy error")
+            raise
+        except Exception as e:
+            logger.error(f"[startup] Platform admin seed failed: {e}")
+            raise
+
         try:
             import shutil
             from pathlib import Path as _Path
