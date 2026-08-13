@@ -1,4 +1,4 @@
-"""File upload API for chat — saves files to agent workspace and extracts text."""
+"""File upload API for chat - saves files to agent workspace and extracts text."""
 
 import asyncio
 import base64

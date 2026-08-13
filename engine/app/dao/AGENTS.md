@@ -8,7 +8,7 @@ Pure-psycopg repositories returning `app.records` dataclasses.
 - Use `get_many(ids)` / `ANY(%(ids)s)` instead of looping `get()`.
 - Parameterized SQL only (`%(name)s`). No SQLAlchemy.
 - `BaseDAO.create` fills missing columns from the record dataclass **only if** `record_factory` is `Record.from_row` (not a lambda). `None` defaults are skipped so Postgres `DEFAULT now()` can apply.
-- Lambdas today: `UserDAO`, `SkillDAO` — do not copy that pattern. `skills.is_builtin` / `is_default` have no SQL default.
+- Lambdas today: `UserDAO`, `SkillDAO` - do not copy that pattern. `skills.is_builtin` / `is_default` have no SQL default.
 - Largest DAOs: `agent_dao.py`, `chat_dao.py`. Keep new queries in the owning DAO.
 - New table: baseline SQL → record → DAO singleton → `dao/__init__.py`. If the table FKs to tenants/agents/users **without** `ON DELETE CASCADE`, add a static delete in `tenant_dao.delete_cascade` **before** the parent row.
 

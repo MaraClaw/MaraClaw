@@ -135,7 +135,7 @@ class AgentBayClient:
         with a 40-second asyncio soft-timeout so callers receive an actionable
         error quickly rather than hanging the whole agent loop. The underlying
         SDK thread may continue briefly in the background but its result is
-        discarded — the browser will eventually settle on its own.
+        discarded - the browser will eventually settle on its own.
         """
         if not self._session or self._image_type not in ("browser", "browser_latest"):
             await self.create_session("browser_latest")
@@ -606,7 +606,7 @@ class AgentBayClient:
     async def get_browser_snapshot_base64(self) -> str | None:
         """Take a quick browser screenshot and return compressed base64 JPEG.
 
-        Used for live preview panel — no wait/sleep since we want
+        Used for live preview panel - no wait/sleep since we want
         the snapshot to reflect the current state immediately.
         Returns data:image/jpeg;base64,... or None on failure.
         """
@@ -669,7 +669,7 @@ class AgentBayClient:
 # Key: (agent_id, session_id, image_type) so each ChatSession gets
 # its own independent AgentBay instance for browser/computer/code.
 # Previously keyed by (agent_id, image_type) which meant all users
-# of the same Agent shared one browser/desktop — causing conflicts.
+# of the same Agent shared one browser/desktop - causing conflicts.
 
 _agentbay_sessions: dict[tuple[uuid.UUID, str, str], tuple[AgentBayClient, datetime]] = {}
 _AGENTBAY_SESSION_TIMEOUT = timedelta(minutes=5)
@@ -853,7 +853,7 @@ async def _inject_credentials(client: AgentBayClient, agent_id: uuid.UUID):
     try:
         session = await client._ensure_browser_initialized()
     except Exception as e:
-        logger.warning(f"[AgentBay] Cannot inject cookies — browser not initialized: {e}")
+        logger.warning(f"[AgentBay] Cannot inject cookies - browser not initialized: {e}")
         return
 
     # Build Node.js injection script.

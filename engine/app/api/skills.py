@@ -1,4 +1,4 @@
-"""Skills API — global skill registry CRUD."""
+"""Skills API - global skill registry CRUD."""
 
 import asyncio
 import io
@@ -127,7 +127,7 @@ def _extract_clawhub_zip_files(data: bytes) -> list[SkillFilePayload]:
         files.append({"path": rel, "content": content})
 
     if not any(f["path"].upper() == "SKILL.MD" for f in files):
-        raise HTTPException(400, "No SKILL.md found in ClawHub archive — not a valid skill package")
+        raise HTTPException(400, "No SKILL.md found in ClawHub archive - not a valid skill package")
     return files
 
 
@@ -371,7 +371,7 @@ async def install_from_clawhub(body: ClawhubInstallIn, current_user: UserRecord 
     # 4. Extract name/description from SKILL.md
     skill_md = next((f for f in files if f["path"].upper() == "SKILL.MD"), None)
     if not skill_md:
-        raise HTTPException(400, "No SKILL.md found — not a valid skill package")
+        raise HTTPException(400, "No SKILL.md found - not a valid skill package")
 
     frontmatter = _parse_skill_md_frontmatter(skill_md["content"])
     name = frontmatter.get("name", skill_info.get("displayName", slug))
@@ -425,7 +425,7 @@ async def import_from_url(body: UrlImportIn, current_user: UserRecord = Depends(
     # Validate SKILL.md exists
     skill_md = next((f for f in files if f["path"].upper() == "SKILL.MD"), None)
     if not skill_md:
-        raise HTTPException(400, "No SKILL.md found at this URL — not a valid skill package")
+        raise HTTPException(400, "No SKILL.md found at this URL - not a valid skill package")
 
     frontmatter = _parse_skill_md_frontmatter(skill_md["content"])
     name = frontmatter.get("name", path.rstrip("/").split("/")[-1] if path else repo)
@@ -471,7 +471,7 @@ async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depen
 
     skill_md = next((f for f in files if f["path"].upper() == "SKILL.MD"), None)
     if not skill_md:
-        raise HTTPException(400, "No SKILL.md found — not a valid skill package")
+        raise HTTPException(400, "No SKILL.md found - not a valid skill package")
 
     frontmatter = _parse_skill_md_frontmatter(skill_md["content"])
     tier = classify_portability(skill_md["content"])

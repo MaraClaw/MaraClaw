@@ -1,4 +1,4 @@
-"""Activity log API — view agent work history."""
+"""Activity log API - view agent work history."""
 
 import re
 import uuid

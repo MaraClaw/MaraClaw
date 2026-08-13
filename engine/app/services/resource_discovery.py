@@ -1,4 +1,4 @@
-"""Resource discovery — search Smithery & ModelScope registries and import MCP servers."""
+"""Resource discovery - search Smithery & ModelScope registries and import MCP servers."""
 
 import uuid
 from typing import NotRequired, TypedDict
@@ -88,7 +88,7 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
 
     Sensitive fields in tool/AgentTool config are stored encrypted (see
     api.tools._encrypt_sensitive_fields). We must decrypt here before
-    handing the value to httpx — otherwise Smithery rejects with 401.
+    handing the value to httpx - otherwise Smithery rejects with 401.
     Falls back to raw value when decrypt fails (e.g. legacy plaintext keys).
     """
 
@@ -323,7 +323,7 @@ async def _ensure_smithery_connection(
                 headers=headers,
             )
             if conn_resp.status_code not in (200, 201):
-                return {"error": f"Failed to create connection: HTTP {conn_resp.status_code} — {conn_resp.text[:200]}"}
+                return {"error": f"Failed to create connection: HTTP {conn_resp.status_code} - {conn_resp.text[:200]}"}
 
             conn_data = conn_resp.json()
             result: SmitheryConnectionSuccess = {
@@ -653,7 +653,7 @@ async def import_mcp_from_smithery(
             }
         )
         await _ensure_agent_tool(tool.id)
-        imported_tools.append(f"✅ {tool_display} (tool list not available from registry — may need configuration)")
+        imported_tools.append(f"✅ {tool_display} (tool list not available from registry - may need configuration)")
 
     result = f"🔌 Imported MCP server: **{display_name}** (`{server_id}`)\n\n"
     result += "\n".join(imported_tools)
@@ -676,7 +676,7 @@ async def import_mcp_direct(
 ) -> str:
     """Import an MCP server by directly connecting to its HTTP/SSE endpoint.
 
-    This bypasses Smithery entirely — useful for self-hosted or third-party
+    This bypasses Smithery entirely - useful for self-hosted or third-party
     MCP servers that provide their own public endpoint.
     """
     from app.services.mcp_client import MCPClient
@@ -775,7 +775,7 @@ async def import_mcp_direct(
             }
         )
         await _ensure_agent_tool(tool.id)
-        imported_tools.append(f"✅ {display_name} (tools couldn't be listed — server may need configuration)")
+        imported_tools.append(f"✅ {display_name} (tools couldn't be listed - server may need configuration)")
 
     result = f"🔌 Imported MCP server: **{display_name}**\n\n"
     result += "\n".join(imported_tools)

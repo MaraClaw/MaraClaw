@@ -208,7 +208,7 @@ def get_sandbox_config() -> SandboxConfig:
         allow_unsafe_fallback_when_bwrap_missing=settings.SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING,
         default_timeout=settings.SANDBOX_DEFAULT_TIMEOUT,
         max_timeout=settings.SANDBOX_MAX_TIMEOUT,
-        # Explicit sandbox proxy only — do not inherit global HTTP_PROXY used by
+        # Explicit sandbox proxy only - do not inherit global HTTP_PROXY used by
         # Feishu/OAuth clients (avoids credential bleed into untrusted code).
         http_proxy=settings.SANDBOX_HTTP_PROXY or None,
         https_proxy=settings.SANDBOX_HTTPS_PROXY or None,

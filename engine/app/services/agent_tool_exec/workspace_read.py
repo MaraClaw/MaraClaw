@@ -176,7 +176,7 @@ async def _storage_search_files(
         return f"No matches found for pattern '{pattern}' in {files_searched} file(s)"
     truncated = total_matches > len(results)
     truncation_note = (
-        f" (showing first {len(results)} of {total_matches}+ — refine pattern or path for more)" if truncated else ""
+        f" (showing first {len(results)} of {total_matches}+ - refine pattern or path for more)" if truncated else ""
     )
     return (
         f"🔍 Found {total_matches}+ match(es) in {files_searched} file(s) for pattern '{pattern}'{truncation_note}:\n"

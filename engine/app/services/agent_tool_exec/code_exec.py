@@ -90,7 +90,7 @@ async def _execute_code(
         agent_id: The agent's UUID (used to fetch per-agent tool config).
         ws: Agent workspace root path.
         arguments: Tool call arguments (language, code, timeout).
-        tool_name: The originating tool name — either 'execute_code' (local)
+        tool_name: The originating tool name - either 'execute_code' (local)
                    or 'execute_code_e2b' (cloud).  Used to look up the
                    correct per-agent tool config entry in the database.
     """
@@ -108,7 +108,7 @@ async def _execute_code(
     # This allows code to access skills/, workspace/, memory/ etc. directly.
     work_dir = _prepare_work_dir(ws)
 
-    # For E2B tool: do NOT fall back to local subprocess on error —
+    # For E2B tool: do NOT fall back to local subprocess on error -
     # the user explicitly chose cloud execution.
     is_e2b_tool = tool_name == "execute_code_e2b"
 
@@ -153,7 +153,7 @@ async def _execute_code(
     except ValueError as e:
         # Sandbox disabled or misconfigured
         if is_e2b_tool:
-            # Do not silently fall back — surface the config error to the user
+            # Do not silently fall back - surface the config error to the user
             return f"❌ E2B sandbox configuration error: {str(e)[:300]}\nPlease check the API key in the tool settings."
         logger.warning(f"[Sandbox] Config issue, falling back to legacy subprocess: {e}")
         return await agent_tools._execute_code_legacy(

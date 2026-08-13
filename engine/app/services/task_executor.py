@@ -1,4 +1,4 @@
-"""Background task executor — runs LLM to complete tasks automatically.
+"""Background task executor - runs LLM to complete tasks automatically.
 
 Uses the same agent context (soul, memory, skills, relationships, tools)
 as the chat dialog. Supports tool-calling loop for autonomous execution.
@@ -64,7 +64,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
 - Provide a detailed execution report at the end.
 - If the task involves contacting someone, use `send_feishu_message` to reach them.
 - If the task requires data or information, use your tools to fetch it.
-- Do NOT ask the user follow-up questions — take initiative and complete the task autonomously.
+- Do NOT ask the user follow-up questions - take initiative and complete the task autonomously.
 """
     dynamic_prompt += task_addendum
     system_prompt = f"{static_prompt}\n\n{dynamic_prompt}"

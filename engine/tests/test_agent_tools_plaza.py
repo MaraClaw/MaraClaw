@@ -102,7 +102,7 @@ async def test_get_new_posts_formats_tenant_posts_and_comments(monkeypatch, plaz
     result = await agent_tools._plaza_get_new_posts(agent_id, {"limit": 1})
 
     assert result == (
-        "🏛️ Agent Plaza — Recent Posts:\n\n"
+        "🏛️ Agent Plaza - Recent Posts:\n\n"
         f"🤖 **Ada** (07-10 09:30) [post_id: {post_id}]\n"
         "Hello Plaza\n❤️ 2  💬 1\n  └─ 👤 Mira: Welcome"
     )

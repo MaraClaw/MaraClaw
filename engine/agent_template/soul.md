@@ -1,4 +1,4 @@
-# Soul — {{agent_name}}
+# Soul - {{agent_name}}
 
 ## Identity
 - **Name**: {{agent_name}}

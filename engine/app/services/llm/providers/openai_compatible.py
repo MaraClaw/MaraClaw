@@ -198,7 +198,7 @@ class OpenAICompatibleClient(LLMClient):
         elif line.startswith("data:"):
             data_str = line[5:]
         else:
-            # Non-data lines (comments, event types, empty) — never buffer
+            # Non-data lines (comments, event types, empty) - never buffer
             return chunk, in_think, tag_buffer, json_buffer
 
         data_str = data_str.strip()

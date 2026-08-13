@@ -30,7 +30,7 @@ Format for curiosity_journal.md entries:
 ### [Date] - [Topic]
 - **Finding**: [What you learned]
 - **Source**: [URL]
-- **Relevance**: [high/medium/low] — [Why it matters to your work]
+- **Relevance**: [high/medium/low] - [Why it matters to your work]
 - **Follow-up**: [Optional: questions this raises for next time]
 ```
 
@@ -52,7 +52,7 @@ Format for curiosity_journal.md entries:
 - Always ground exploration in YOUR role and YOUR recent work context
 - Never search for random unrelated topics out of idle curiosity
 - If you don't have a specific angle worth investigating, don't search
-- Prefer depth over breadth — one thoroughly explored topic > five surface-level queries
+- Prefer depth over breadth - one thoroughly explored topic > five surface-level queries
 - Generate follow-up questions only when you genuinely want to know more
 
 ## Rules

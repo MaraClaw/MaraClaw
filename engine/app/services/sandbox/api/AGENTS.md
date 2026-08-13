@@ -13,7 +13,7 @@ API/cloud sandbox backends call third-party execution services. They must fail c
 - Keep provider SDK imports lazy when the dependency is optional.
 - Network calls must be async, timeout-bounded, and mapped into `ExecutionResult` without leaking provider internals unnecessarily.
 - Respect `SandboxConfig` fields from `app/services/sandbox/config.py`; do not invent separate env parsing in a backend.
-- Local guest proxy helpers (`resolve_proxy_env`) target subprocess/docker isolation; cloud APIs usually have their own networking — do not assume `SANDBOX_*_PROXY` is sent to third-party providers unless the backend documents that mapping.
+- Local guest proxy helpers (`resolve_proxy_env`) target subprocess/docker isolation; cloud APIs usually have their own networking - do not assume `SANDBOX_*_PROXY` is sent to third-party providers unless the backend documents that mapping.
 - Preserve supported-language mappings and output truncation when adding provider features.
 - Health checks should prove the provider endpoint is reachable without executing untrusted user code.
 

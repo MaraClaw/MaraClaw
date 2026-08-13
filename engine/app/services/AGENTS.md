@@ -17,7 +17,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 ## God Files
 
 - `agent_tools.py` is the primary no-more-growth file. Avoid adding unrelated tool families, conversion helpers, dispatch branches, or catalog tables there.
-- `llm/client.py` is compatibility glue; keep provider logic in the split LLM modules. `tool_seeder.py`, `agentbay_client.py`, `agent_seeder.py`, `feishu_service.py`, `okr_reporting.py`, and `auth_provider.py` are also large enough to prefer adjacent focused modules for new work. `org_sync_adapter.py` is a ~30-line facade — new adapters go in `org_sync/`.
+- `llm/client.py` is compatibility glue; keep provider logic in the split LLM modules. `tool_seeder.py`, `agentbay_client.py`, `agent_seeder.py`, `feishu_service.py`, `okr_reporting.py`, and `auth_provider.py` are also large enough to prefer adjacent focused modules for new work. `org_sync_adapter.py` is a ~30-line facade - new adapters go in `org_sync/`.
 - Other flat hotspots include `skill_seeder.py`, `resource_discovery.py`, `heartbeat.py`, `agent_context.py`, `workspace_collaboration.py`, `email_service.py`, `template_seeder.py`, `channel_user_service.py`, `sso_service.py`, `dingtalk_stream.py`, and `okr_scheduler.py`; extend them only when the change belongs to that exact domain.
 - `chat_persist.py` wraps post-LLM message/session/`last_active_at` writes in one `connection_ctx`. `agent_context_cache.py` is the short-TTL Redis cache for soul/memory/skills; invalidate on those workspace writes only.
 - `agent_runtime/` is leftover `__pycache__` only (no `.py`, no importers). Do not add `AGENTS.md` or treat it as live. Same for deleted `group_*` / `heartbeat_runtime` bytecode.

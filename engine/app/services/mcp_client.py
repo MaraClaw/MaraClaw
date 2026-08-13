@@ -1,8 +1,8 @@
-"""MCP (Model Context Protocol) Client — connects to external MCP servers.
+"""MCP (Model Context Protocol) Client - connects to external MCP servers.
 
 Supports two transport modes:
-1. Streamable HTTP (modern) — single URL, POST JSON-RPC, response as JSON or SSE
-2. SSE Transport (legacy but widely used) — GET /sse for event stream, POST /messages for requests
+1. Streamable HTTP (modern) - single URL, POST JSON-RPC, response as JSON or SSE
+2. SSE Transport (legacy but widely used) - GET /sse for event stream, POST /messages for requests
 
 Transport is auto-detected: tries Streamable HTTP first, falls back to SSE.
 Reference: https://modelcontextprotocol.io/docs
@@ -77,7 +77,7 @@ class MCPClient:
         return h
 
     def _parse_response(self, resp: httpx.Response) -> JsonObject:
-        """Parse response — handles both JSON and SSE (text/event-stream) formats."""
+        """Parse response - handles both JSON and SSE (text/event-stream) formats."""
         content_type = resp.headers.get("content-type", "")
 
         # Save session ID if the server returns one
@@ -240,7 +240,7 @@ class MCPClient:
             if not messages_url:
                 raise Exception("SSE endpoint did not return a messages URL")
 
-            # Phase 2: MCP handshake — initialize + initialized notification
+            # Phase 2: MCP handshake - initialize + initialized notification
             init_body: JsonObject = {
                 "jsonrpc": "2.0",
                 "id": 0,
@@ -262,7 +262,7 @@ class MCPClient:
             # Send the actual request
             post_resp = await client.post(messages_url, json=body, headers=headers_post)
 
-            # Phase 3: Read the response — either from POST response or from SSE stream
+            # Phase 3: Read the response - either from POST response or from SSE stream
             if post_resp.status_code == 200:
                 ct = post_resp.headers.get("content-type", "")
                 if "application/json" in ct:

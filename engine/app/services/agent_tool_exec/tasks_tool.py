@@ -70,12 +70,12 @@ async def _manage_tasks(
             execution_task = asyncio.create_task(execute_task(task.id, agent_id))
             del execution_task
             await _sync_tasks_to_file(agent_id, ws)
-            return f"✅ Task created: {title} — auto-execution started"
-        # Supervision task — reminder engine will pick it up
+            return f"✅ Task created: {title} - auto-execution started"
+        # Supervision task - reminder engine will pick it up
         target = args.get("supervision_target_name", "someone")
         schedule = args.get("remind_schedule", "not set")
         await _sync_tasks_to_file(agent_id, ws)
-        return f"✅ Supervision task created: '{title}' — will remind {target} on schedule ({schedule})"
+        return f"✅ Supervision task created: '{title}' - will remind {target} on schedule ({schedule})"
 
     if action == "update_status":
         task = await task_dao.find_first_by_title_ilike(agent_id, title)

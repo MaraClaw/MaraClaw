@@ -105,12 +105,12 @@ async def _build_a2a_context(
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                f"{', '.join(rel_names) if rel_names else 'none — ask your administrator to set up relationships'}"
+                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target.is_expired or (target.expires_at and datetime.now(UTC) >= target.expires_at):
             return (
-                f"⚠️ {target.name} is currently unavailable — their service period has ended. "
+                f"⚠️ {target.name} is currently unavailable - their service period has ended. "
                 f"Please contact the platform administrator."
             )
 

@@ -398,7 +398,7 @@ async def _process_tool_call(
         except Exception as exc:
             logger.debug("[LLM] Tool callback failed: {}", exc)
 
-    # Execute tool — pass on_output for execute_code streaming
+    # Execute tool - pass on_output for execute_code streaming
     _on_output = on_code_output if tool_name in ("execute_code", "execute_code_e2b") else None
     result = await execute_tool(
         tool_name,

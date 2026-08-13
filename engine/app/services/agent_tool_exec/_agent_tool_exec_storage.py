@@ -98,9 +98,9 @@ async def upsert_focus_item(
         metadata={"tool": "upsert_focus_item"},
     )
     return (
-        f"✅ Focus item saved: {item['key']} (title: {item['title']}) — {item['description']}"
+        f"✅ Focus item saved: {item['key']} (title: {item['title']}) - {item['description']}"
         if item.get("title")
-        else f"✅ Focus item saved: {item['key']} — {item['description']}"
+        else f"✅ Focus item saved: {item['key']} - {item['description']}"
     )
 
 

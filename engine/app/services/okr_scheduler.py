@@ -1,4 +1,4 @@
-"""OKR Scheduler — batch progress collection and report generation.
+"""OKR Scheduler - batch progress collection and report generation.
 
 Provides functions called by OKR Agent tools:
   - collect_all_focus_updates(): read all Agent focus.md files and sync progress
@@ -275,7 +275,7 @@ def _format_report_body(
         for kr in attention_krs:
             pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
             lines.append(
-                f"- **[{kr.status.upper()}]** {kr.title} — {pct}% ({kr.current_value}/{kr.target_value} {kr.unit or ''})"
+                f"- **[{kr.status.upper()}]** {kr.title} - {pct}% ({kr.current_value}/{kr.target_value} {kr.unit or ''})"
             )
         lines.append("")
 
@@ -292,7 +292,7 @@ def _format_report_body(
                 kr_pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
                 bar = "█" * (kr_pct // 10) + "░" * (10 - kr_pct // 10)
                 lines.append(f"- {bar} {kr.title}")
-                lines.append(f"  {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) — _{kr.status}_")
+                lines.append(f"  {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) - _{kr.status}_")
             lines.append("")
 
     member_objs = [o for o in objectives if o.owner_type != "company"]
@@ -300,11 +300,11 @@ def _format_report_body(
         lines.append("## Member Objectives\n")
         for o in member_objs:
             krs = krs_by_obj.get(str(o.id), [])
-            lines.append(f"### {o.owner_type}:{o.owner_id} — {o.title}\n")
+            lines.append(f"### {o.owner_type}:{o.owner_id} - {o.title}\n")
             for kr in krs:
                 kr_pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
                 lines.append(
-                    f"- {kr.title}: {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) — _{kr.status}_"
+                    f"- {kr.title}: {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) - _{kr.status}_"
                 )
             lines.append("")
 
@@ -439,7 +439,7 @@ def _format_monthly_report_body(
     today = datetime.now(UTC).date()
     month_label = period_start.strftime("%B %Y")
     header = (
-        f"# Monthly OKR Report — {month_label}\n"
+        f"# Monthly OKR Report - {month_label}\n"
         f"**Generated**: {today.isoformat()}  "
         f"| **Period**: {period_start.isoformat()} - {period_end.isoformat()}\n\n"
     )
@@ -478,7 +478,7 @@ def _format_monthly_report_body(
             pct = 0
             if krs:
                 pct = int(sum(min(k.current_value / k.target_value, 1) for k in krs if k.target_value) / len(krs) * 100)
-            lines.append(f"### {o.title}  —  {pct}% overall\n")
+            lines.append(f"### {o.title}  -  {pct}% overall\n")
             for kr in krs:
                 kr_pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
                 bar = "█" * (kr_pct // 10) + "░" * (10 - kr_pct // 10)
@@ -501,7 +501,7 @@ def _format_monthly_report_body(
             for kr in krs:
                 kr_pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
                 lines.append(
-                    f"- {kr.title}: {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) — _{kr.status}_"
+                    f"- {kr.title}: {kr.current_value}/{kr.target_value} {kr.unit or ''} ({kr_pct}%) - _{kr.status}_"
                 )
             lines.append("")
 
@@ -511,7 +511,7 @@ def _format_monthly_report_body(
         lines.append("The following Key Results need attention heading into next month:\n")
         for kr in attention_krs:
             kr_pct = int(kr.current_value / kr.target_value * 100) if kr.target_value else 0
-            lines.append(f"- **{kr.status.upper()}** — {kr.title} ({kr_pct}%)")
+            lines.append(f"- **{kr.status.upper()}** - {kr.title} ({kr_pct}%)")
         lines.append("")
 
     lines.append("---")

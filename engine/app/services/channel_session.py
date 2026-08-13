@@ -1,6 +1,6 @@
 """Shared helper: find-or-create ChatSession by external channel conv_id.
 
-Used by feishu.py, slack.py, discord_bot.py, wecom.py, teams.py — eliminates in-process caches.
+Used by feishu.py, slack.py, discord_bot.py, wecom.py, teams.py - eliminates in-process caches.
 """
 
 from __future__ import annotations

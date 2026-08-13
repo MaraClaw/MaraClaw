@@ -1,4 +1,4 @@
-"""DingTalk emotion reaction service — "thinking" indicator on user messages."""
+"""DingTalk emotion reaction service - "thinking" indicator on user messages."""
 
 import asyncio
 

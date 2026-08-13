@@ -400,7 +400,7 @@ class RegistrationService:
         return None
 
     async def _run_okr_member_hook(self, member_id: uuid.UUID, tenant_id: uuid.UUID | None) -> None:
-        """OKR membership hook — pure DAOs (``db`` dual-stack arg ignored)."""
+        """OKR membership hook - pure DAOs (``db`` dual-stack arg ignored)."""
         if tenant_id is None:
             return
         from app.services.okr_agent_hook import hook_new_org_member

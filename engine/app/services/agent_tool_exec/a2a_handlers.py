@@ -156,7 +156,7 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
             "\n\n--- Agent-to-Agent Message ---\n"
             "You are receiving a message from another digital employee. "
             "Reply concisely and helpfully. Focus on the request and provide a clear answer.\n"
-            "\n🔴 **RESPONSE PROTOCOL — MANDATORY:**\n"
+            "\n🔴 **RESPONSE PROTOCOL - MANDATORY:**\n"
             'You MUST call `finish(content="...")` with your complete answer. '
             "Do NOT output plain text without calling `finish`. "
             "Plain text responses will be REJECTED and you will be asked to redo.\n"
@@ -164,7 +164,7 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
             f"After you write any file (report, document, analysis, etc.) that the requesting agent needs, "
             f'you MUST call `send_file_to_agent(agent_name="{ctx.source_agent.name}", file_path="<path>")` '
             f"to deliver it. The other agent CANNOT access your workspace. "
-            f"Never just tell them the path — always deliver explicitly.\n"
+            f"Never just tell them the path - always deliver explicitly.\n"
         )
 
         conversation_messages = list(ctx.conversation_history)

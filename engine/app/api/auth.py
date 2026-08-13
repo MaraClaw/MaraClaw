@@ -71,7 +71,7 @@ class OAuthPendingCache(BaseModel):
 
 @router.get("/registration-config")
 async def get_registration_config():
-    """Public endpoint — returns registration requirements (no auth needed)."""
+    """Public endpoint - returns registration requirements (no auth needed)."""
     enabled = await system_setting_dao.is_invitation_code_enabled()
     return {"invitation_code_required": enabled}
 
@@ -194,7 +194,7 @@ async def register_init(
         # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
         if identity.email and identity.email != data.email:
             logger.warning(
-                f"[REGISTER_INIT] Identity email mismatch: submitted={data.email} returned={identity.email} — rejecting"
+                f"[REGISTER_INIT] Identity email mismatch: submitted={data.email} returned={identity.email} - rejecting"
             )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -378,7 +378,7 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
     # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
     if identity.email and identity.email != data.email:
         logger.warning(
-            f"[REGISTER_LEGACY] Identity email mismatch: submitted={data.email} returned={identity.email} — rejecting"
+            f"[REGISTER_LEGACY] Identity email mismatch: submitted={data.email} returned={identity.email} - rejecting"
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -941,7 +941,7 @@ async def oauth_callback(
     provider: str,
     data: OAuthCallbackRequest,
 ):
-    """Handle OAuth callback — supports a two-step flow for multi-tenant selection.
+    """Handle OAuth callback - supports a two-step flow for multi-tenant selection.
 
     Step 1 (code provided): exchange code with provider, detect multiple tenants,
     cache user_info in Redis, return MultiTenantResponse with opaque pending_token.
@@ -1079,7 +1079,7 @@ async def oauth_callback(
             pending_token=pending_token,
         )
 
-    # Single tenant (or new user with no tenant yet) — issue token directly
+    # Single tenant (or new user with no tenant yet) - issue token directly
     jwt_token = create_access_token(str(user.id), user.role)
     return TokenResponse(
         access_token=jwt_token,

@@ -3,9 +3,9 @@ description: "Grows organic search traffic through keyword strategy, technical S
 icon: "SEO"
 category: "marketing"
 capability_bullets:
-  - "Keyword mapping — intent-clustered targets ranked by opportunity"
-  - "Technical audit — crawlability, Core Web Vitals, schema, duplicates"
-  - "Content brief — what to write, for whom, against what competition"
+  - "Keyword mapping - intent-clustered targets ranked by opportunity"
+  - "Technical audit - crawlability, Core Web Vitals, schema, duplicates"
+  - "Content brief - what to write, for whom, against what competition"
 default_skills:
   - "web-research"
   - "competitive-analysis"

@@ -324,7 +324,7 @@ cat > ~/.openclaw/security-audit.json <<'JSON'
     {
       "checkId": "skills.code_safety",
       "skill": "clawsec-suite",
-      "reason": "First-party security tooling — reviewed by security team",
+      "reason": "First-party security tooling - reviewed by security team",
       "suppressedAt": "2026-02-15"
     }
   ]
@@ -364,7 +364,7 @@ If either gate is absent, all findings are reported normally and the suppression
     {
       "checkId": "skills.code_safety",
       "skill": "clawsec-suite",
-      "reason": "First-party security tooling — reviewed by security team",
+      "reason": "First-party security tooling - reviewed by security team",
       "suppressedAt": "2026-02-15"
     }
   ]

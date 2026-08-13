@@ -1,4 +1,4 @@
-"""Messages API — inbox, unread count, mark as read.
+"""Messages API - inbox, unread count, mark as read.
 
 After the Participant abstraction migration, agent-to-agent messages are stored
 in chat_messages (via ChatSession with source_channel='agent').
@@ -72,5 +72,5 @@ async def get_unread_count(current_user: UserRecord = Depends(get_current_user))
 
     # Count agent-to-agent sessions with recent activity
     # (Since we don't have per-message read tracking on ChatMessage yet,
-    # just return 0 for now — this can be enhanced later)
+    # just return 0 for now - this can be enhanced later)
     return {"unread_count": 0}

@@ -1,4 +1,4 @@
-"""AgentBay Take Control API — human-agent collaborative login.
+"""AgentBay Take Control API - human-agent collaborative login.
 
 Provides REST endpoints for forwarding mouse/keyboard events to an
 AgentBay session and managing the Take Control lock. When locked,
@@ -44,7 +44,7 @@ class _ControlActionResult(TypedDict):
 
 # ── In-memory Take Control lock registry ──
 # Key: (agent_id_str, session_id_str) → (user_id, lock_timestamp, env_type)
-# env_type: 'browser' | 'computer' | 'code' — which AgentBay environment the
+# env_type: 'browser' | 'computer' | 'code' - which AgentBay environment the
 # user is controlling. Stored at lock time so all subsequent TC endpoints can
 # look up the correct session type without re-deriving it from the frontend.
 _take_control_locks: dict[tuple[str, str], tuple[str, float, str]] = {}
@@ -125,7 +125,7 @@ class PressKeysRequest(BaseModel):
 
 
 class DragRequest(BaseModel):
-    """Mouse drag event forwarding — used for slider CAPTCHAs and drag-and-drop."""
+    """Mouse drag event forwarding - used for slider CAPTCHAs and drag-and-drop."""
 
     session_id: str
     from_x: int
@@ -164,12 +164,12 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
     """Retrieve the AgentBay client for the given agent + session.
 
     Search order (most to least specific):
-    1. Exact match: (agent_id, session_id, env_type) — fastest, correct in normal flow.
+    1. Exact match: (agent_id, session_id, env_type) - fastest, correct in normal flow.
     2. Env-type preference, any session: search all cached sessions for this agent
        by env_type preference. This handles the common case where the TC frontend's
        session_id doesn't exactly match the session_id the agent used when it created
        the AgentBay session (e.g., new chat thread opened mid-task).
-    3. Create new session: last resort — will show a blank desktop/browser.
+    3. Create new session: last resort - will show a blank desktop/browser.
 
     IMPORTANT: For browser sessions, this also calls _ensure_browser_initialized()
     because the browser SDK requires explicit initialization before screenshot/
@@ -204,7 +204,7 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
                         logger.warning(f"[TakeControl] Browser init on cached session failed: {e}")
                 return client
 
-    # ── Phase 2: Fallback — search all sessions for this agent by env_type preference ──
+    # ── Phase 2: Fallback - search all sessions for this agent by env_type preference ──
     # The TC frontend session_id may not match the session_id that the agent used
     # when it created the AgentBay session (e.g., agent started in conversation A,
     # user opens TC from conversation B). We still want to connect to the agent's
@@ -224,7 +224,7 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
                 best_match = ((ag_id, sess_id, it), client)
                 best_ts = last_used
         if best_match is not None:
-            break  # Found a match for preferred env_type — stop
+            break  # Found a match for preferred env_type - stop
 
     if best_match is not None:
         best_cache_key, best_client = best_match
@@ -244,7 +244,7 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
                 logger.warning(f"[TakeControl] Browser init on fallback session failed: {e}")
         return best_client
 
-    # ── Phase 3: No cached session found — create a new session ──
+    # ── Phase 3: No cached session found - create a new session ──
     # This is a last resort: the agent has no active AgentBay session at all.
     # The resulting session will show a blank browser/desktop until the agent
     # starts using it via its tools.
@@ -252,7 +252,7 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
 
     logger.warning(
         f"[TakeControl] No cached AgentBay session found for agent={agent_id} "
-        f"(env_type={env_type}). Creating new session — will show blank screen."
+        f"(env_type={env_type}). Creating new session - will show blank screen."
     )
     try:
         client = await get_agentbay_client_for_agent(agent_id, image_type=env_type, session_id=session_id)
@@ -382,7 +382,7 @@ async def _tc_browser_cleanup(agent_id: uuid.UUID, session_id: str) -> None:
         # 3. Wait for Page.loadEventFired before process.exit(): ensures Chrome has
         #    fully settled at about:blank before we disconnect. This means Chrome
         #    emits Target.detachedFromTarget (from our WebSocket close) while the
-        #    page is in a stable, loaded state — not mid-navigation — so the
+        #    page is in a stable, loaded state - not mid-navigation - so the
         #    service's Playwright state machine doesn't enter a 60-second recovery.
         # 4. No browser.close(): we let Node.js exit naturally. Chrome handles
         #    the WebSocket close without an explicit Target.detachFromTarget CDP
@@ -407,7 +407,7 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
         }
 
         // Navigate the active content page (last non-blank) to about:blank.
-        // Use raw CDP Page.navigate — the AgentBay SDK rejects about:blank
+        // Use raw CDP Page.navigate - the AgentBay SDK rejects about:blank
         // ("must start with http or https") but Chrome's CDP has no such rule.
         const contentPage = allPages.slice().reverse().find(p => p.url() !== 'about:blank')
                             || allPages[allPages.length - 1];
@@ -424,7 +424,7 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
     } catch(e) {
         console.error('CLEANUP_FAIL: ' + e.message);
     }
-    // No browser.close() — let Chrome handle WebSocket close gracefully after
+    // No browser.close() - let Chrome handle WebSocket close gracefully after
     // the page is in a stable loaded state (about:blank).
     process.exit(0);
 })();
@@ -487,7 +487,7 @@ const {{ chromium }} = require('/usr/local/lib/node_modules/playwright');
     }} catch (e) {{
         console.error('CLICK_FAIL:' + e.message);
     }}
-    // No browser.close() — avoid explicit Target.detachFromTarget.
+    // No browser.close() - avoid explicit Target.detachFromTarget.
     // Chrome handles the WebSocket close gracefully.
     process.exit(ok ? 0 : 1);
 }})();
@@ -499,7 +499,7 @@ const {{ chromium }} = require('/usr/local/lib/node_modules/playwright');
             "output": "Clicked" if "CLICK_OK" in res.get("output", "") else res.get("output", "Unknown error"),
         }
 
-    # Desktop session — use Computer API
+    # Desktop session - use Computer API
     try:
         result = await asyncio.to_thread(client._session.computer.click_mouse, x, y, button)
         success = getattr(result, "success", False)
@@ -538,7 +538,7 @@ const {{ chromium }} = require('/usr/local/lib/node_modules/playwright');
     }} catch (e) {{
         console.error('TYPE_FAIL:' + e.message);
     }}
-    // No browser.close() — avoid Target.detachFromTarget mid-navigation.
+    // No browser.close() - avoid Target.detachFromTarget mid-navigation.
     process.exit(ok ? 0 : 1);
 }})();
 """
@@ -596,7 +596,7 @@ const {{ chromium }} = require('/usr/local/lib/node_modules/playwright');
     }} catch (e) {{
         console.error('PRESS_FAIL:' + e.message);
     }}
-    // No browser.close() — avoid Target.detachFromTarget mid-navigation.
+    // No browser.close() - avoid Target.detachFromTarget mid-navigation.
     process.exit(ok ? 0 : 1);
 }})();
 """
@@ -676,7 +676,7 @@ let browser;
     }} catch (e) {{
         console.error('TC_FAIL: ' + e.message);
     }}
-    // No browser.close() — avoid Target.detachFromTarget mid-navigation.
+    // No browser.close() - avoid Target.detachFromTarget mid-navigation.
     process.exit(ok ? 0 : 1);
 }})();
 """
@@ -749,7 +749,7 @@ let browser;
         return {"status": "ok", "url": ""}
     except Exception as e:
         logger.warning(f"[TakeControl] current-url failed: {e}")
-        return {"status": "ok", "url": ""}  # Non-fatal — return empty URL
+        return {"status": "ok", "url": ""}  # Non-fatal - return empty URL
 
 
 @router.post("/click")
@@ -899,13 +899,13 @@ async def control_screenshot(
 
 @router.post("/lock")
 async def control_lock(agent_id: uuid.UUID, data: LockRequest, current_user: UserRecord = Depends(get_current_user)):
-    """Enter Take Control mode — locks the session against automatic tool execution.
+    """Enter Take Control mode - locks the session against automatic tool execution.
 
     While locked, the agent's execute_tool will return a "waiting for human"
     message instead of executing browser/computer tools.
     """
     await check_agent_access(current_user, agent_id)
-    # Allow any user with access (manage or use) — Take Control is part of
+    # Allow any user with access (manage or use) - Take Control is part of
     # the normal interaction flow, not an admin-only operation.
 
     key = (str(agent_id), data.session_id)
@@ -919,7 +919,7 @@ async def control_lock(agent_id: uuid.UUID, data: LockRequest, current_user: Use
             else:
                 return {"status": "already_locked", "locked_by": existing_user_id}
 
-    # Sanitize env_type — default to 'browser' if empty or unknown
+    # Sanitize env_type - default to 'browser' if empty or unknown
     env_type = (data.env_type or "browser").lower()
     if env_type not in ("browser", "computer", "code"):
         env_type = "browser"
@@ -938,7 +938,7 @@ async def control_lock(agent_id: uuid.UUID, data: LockRequest, current_user: Use
 async def control_unlock(
     agent_id: uuid.UUID, data: UnlockRequest, current_user: UserRecord = Depends(get_current_user)
 ):
-    """Exit Take Control mode — unlock session and optionally export cookies.
+    """Exit Take Control mode - unlock session and optionally export cookies.
 
     If export_cookies is True and platform_hint is provided, the current
     browser cookies will be exported and stored (encrypted) in the
@@ -955,7 +955,7 @@ async def control_unlock(
     export_count = 0
 
     try:
-        # Export cookies if requested (non-critical — lock is released regardless)
+        # Export cookies if requested (non-critical - lock is released regardless)
         if data.export_cookies and data.platform_hint:
             try:
                 locked_env_type = _get_session_env_type(str(agent_id), data.session_id)
@@ -1017,7 +1017,7 @@ async def _export_cookies_from_session(client, agent_id: uuid.UUID, platform_hin
     # 2. We sanitize each cookie object before exporting:
     #    - Normalize 'sameSite' to the exact casing Playwright addCookies() expects
     #      ('Strict' | 'Lax' | 'None'). CDP returns lowercase; Playwright wants title-case.
-    #    - Strip 'expires: -1' (session cookies) — Playwright will reject negative expiry.
+    #    - Strip 'expires: -1' (session cookies) - Playwright will reject negative expiry.
     #    - Ensure 'domain' does NOT have a leading dot for addCookies() compatibility.
     #      (Playwright's addCookies prefers 'example.com' not '.example.com'.)
     import base64
@@ -1041,7 +1041,7 @@ let browser;
             if (out.sameSite != null) {
                 out.sameSite = sameSiteMap[String(out.sameSite).toLowerCase()] || 'Lax';
             }
-            // Remove negative or zero expires (session cookies) — addCookies rejects them
+            // Remove negative or zero expires (session cookies) - addCookies rejects them
             if (out.expires != null && out.expires <= 0) {
                 delete out.expires;
             }

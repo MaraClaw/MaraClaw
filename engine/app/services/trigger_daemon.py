@@ -29,7 +29,7 @@ from app.services.trigger_runtime.evaluator import (
 from app.services.trigger_runtime.invoker import invoke_agent_for_triggers as invoke_agent_for_triggers_runtime
 
 TICK_INTERVAL = 15  # seconds
-DEDUP_WINDOW = 30  # seconds — same agent won't be invoked twice within this window
+DEDUP_WINDOW = 30  # seconds - same agent won't be invoked twice within this window
 MIN_POLL_INTERVAL_MINUTES = 5  # minimum poll interval to prevent abuse
 
 # Safety: per-agent on_message fire rate limiter
@@ -161,7 +161,7 @@ async def _tick():
     for agent_id, agent_triggers in fired_by_agent.items():
         last = _last_invoke.get(agent_id)
         if agent_id not in force_invoke_agents and last and (now - last).total_seconds() < DEDUP_WINDOW:
-            continue  # Skip — invoked too recently
+            continue  # Skip - invoked too recently
         _last_invoke[agent_id] = now
 
         # ── Immediately update trigger state BEFORE launching async task ──
@@ -247,7 +247,7 @@ async def wake_agent_with_context(
         elapsed = (now - _last_invoke[agent_id]).total_seconds()
         if elapsed < DEDUP_WINDOW:
             logger.info(
-                f"[A2A] Skipping wake for agent {agent_id} — invoked {elapsed:.0f}s ago (dedup window {DEDUP_WINDOW}s)"
+                f"[A2A] Skipping wake for agent {agent_id} - invoked {elapsed:.0f}s ago (dedup window {DEDUP_WINDOW}s)"
             )
             return
 
@@ -276,7 +276,7 @@ async def wake_agent_with_context(
             "You received a notification from another agent. "
             "Read the message content above, update your focus and memory if needed, "
             "and take any action you deem necessary. "
-            "Do NOT reply back to the sender unless you have a genuine question — "
+            "Do NOT reply back to the sender unless you have a genuine question - "
             "this was a notification, not a request for response."
         ),
         is_enabled=True,

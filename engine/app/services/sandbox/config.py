@@ -80,7 +80,7 @@ class SandboxConfig(BaseModel):
 
         Injection is gated on ``allow_network`` so disabled-network sandboxes
         cannot harvest proxy URLs/credentials from the environment. Only
-        explicit SandboxConfig fields are used — no ``os.environ`` fallback.
+        explicit SandboxConfig fields are used - no ``os.environ`` fallback.
         Both lowercase and uppercase keys are set for client compatibility.
         """
         if not self.allow_network:

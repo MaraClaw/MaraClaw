@@ -86,7 +86,7 @@ def _search_files(
 
     truncated = total_matches > len(results)
     truncation_note = (
-        f" (showing first {len(results)} of {total_matches}+ — refine pattern or path for more)" if truncated else ""
+        f" (showing first {len(results)} of {total_matches}+ - refine pattern or path for more)" if truncated else ""
     )
     header = (
         f"🔍 Found {total_matches}+ match(es) in {files_searched} file(s) for pattern '{pattern}'{truncation_note}:\n"

@@ -1,4 +1,4 @@
-"""Agent collaboration service — Agent-to-Agent communication."""
+"""Agent collaboration service - Agent-to-Agent communication."""
 
 import uuid
 from datetime import UTC, datetime
@@ -34,9 +34,9 @@ class CollaborationService:
     """Enable digital employees to collaborate with each other.
 
     Collaboration patterns:
-    1. Delegate — Agent A sends a task to Agent B
-    2. Consult — Agent A asks Agent B a question and waits for response
-    3. Notify — Agent A sends information to Agent B (fire-and-forget)
+    1. Delegate - Agent A sends a task to Agent B
+    2. Consult - Agent A asks Agent B a question and waits for response
+    3. Notify - Agent A sends information to Agent B (fire-and-forget)
     """
 
     async def delegate_task(

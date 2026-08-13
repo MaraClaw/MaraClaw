@@ -29,9 +29,9 @@ Program plan: `.omgb/plans/psycopg-db-migration-20260812.md`.
 
 ## Phase 3b (landed)
 
-- `app/services/sso_service.py` — pure DAO/psycopg (no SQLAlchemy).
-- `app/services/auth_provider.py` — `find_or_create_user` + provider ensure/create on DAOs.
-- `app/services/identity_provider_lookup.py` — DAO-backed preferred-provider helper.
+- `app/services/sso_service.py` - pure DAO/psycopg (no SQLAlchemy).
+- `app/services/auth_provider.py` - `find_or_create_user` + provider ensure/create on DAOs.
+- `app/services/identity_provider_lookup.py` - DAO-backed preferred-provider helper.
 - Call sites updated across auth/registration/connectors.
 
 ## Phase 3c (partial → expanded)
@@ -46,7 +46,7 @@ Program plan: `.omgb/plans/psycopg-db-migration-20260812.md`.
 - Trigger queue/claim/complete/fail/mark-fired + dispatch enqueue via trigger DAOs
 - Audit logger + notification send via pure-psycopg
 
-## Phase 5 (Alembic SQL-only posture — landed)
+## Phase 5 (Alembic SQL-only posture - landed)
 
 - `ALEMBIC_GUIDELINES.md` + `alembic/AGENTS.md` require hand-written SQL revisions
 - `alembic/env.py` documents no new `--autogenerate`; `Base.metadata` retained for inspection only

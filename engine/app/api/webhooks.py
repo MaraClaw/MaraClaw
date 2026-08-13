@@ -44,14 +44,14 @@ async def _record_and_count_hits(token: str) -> int:
 async def receive_webhook(token: str, request: Request):
     """Receive a webhook POST from an external service.
 
-    Public endpoint — no authentication required.
+    Public endpoint - no authentication required.
     Security is provided by:
     - Unique, unguessable URL token
     - Optional HMAC signature verification
     - Rate limiting (5 requests/minute per token)
     - Payload size limit (64KB)
     """
-    # Rate limiting — use per-agent limit if available
+    # Rate limiting - use per-agent limit if available
     hit_count = await _record_and_count_hits(token)
 
     # We'll check per-agent rate limit after finding the trigger below.

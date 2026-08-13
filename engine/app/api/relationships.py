@@ -1,4 +1,4 @@
-"""Agent relationship management API — human + agent-to-agent."""
+"""Agent relationship management API - human + agent-to-agent."""
 
 import uuid
 from typing import Any, TypedDict

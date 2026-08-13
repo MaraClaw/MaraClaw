@@ -11,7 +11,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
 | OpenClaw image helpers | `../docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
 | ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
-| Refactoring packets | `refactoring/` | Top-module cleanup briefs. `psycopg-migration.md` is **historical dual-stack** — live policy is the freeze scripts + root `AGENTS.md`. |
+| Refactoring packets | `refactoring/` | Top-module cleanup briefs. `psycopg-migration.md` is **historical dual-stack** - live policy is the freeze scripts + root `AGENTS.md`. |
 
 ## Update Triggers
 

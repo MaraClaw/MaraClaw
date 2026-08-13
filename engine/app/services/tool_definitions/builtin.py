@@ -7,7 +7,7 @@ from app.services.tool_definitions.agentbay import AGENTBAY_TOOLS
 from app.services.tool_definitions.deploy import DEPLOY_BUILTIN_TOOLS
 from app.services.tool_definitions.okr import OKR_BUILTIN_TOOLS
 
-# Builtin tool definitions — these map to the hardcoded AGENT_TOOLS
+# Builtin tool definitions - these map to the hardcoded AGENT_TOOLS
 BUILTIN_TOOLS = [
     FINISH_TOOL_SEED,
     {
@@ -1586,7 +1586,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     # --- OKR Tools ---
-    # These tools expose the OKR system to agents. Not default — assigned explicitly
+    # These tools expose the OKR system to agents. Not default - assigned explicitly
     # to the OKR Agent and to other agents that want to self-report progress.
     {
         "name": "get_okr",
@@ -1731,7 +1731,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # collect_okr_progress — legacy OKR Agent heartbeat collection path.
+        # collect_okr_progress - legacy OKR Agent heartbeat collection path.
         # This replaces the need to contact each member individually.
         "name": "collect_okr_progress",
         "display_name": "Collect OKR Progress",
@@ -1752,7 +1752,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # generate_okr_report — OKR Agent calls this to produce the structured report.
+        # generate_okr_report - OKR Agent calls this to produce the structured report.
         # The tool writes the report to WorkReport table and returns the markdown content
         # so the Agent can choose to post it to Plaza or send it to specific channels.
         "name": "generate_okr_report",
@@ -1782,7 +1782,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # get_okr_settings — lets OKR Agent read the tenant's OKR configuration so it
+        # get_okr_settings - lets OKR Agent read the tenant's OKR configuration so it
         # can determine whether reports are due, what time they're scheduled, etc.
         "name": "get_okr_settings",
         "display_name": "Get OKR Settings",
@@ -1803,7 +1803,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # create_objective — OKR Agent uses this after conversation-based confirmation
+        # create_objective - OKR Agent uses this after conversation-based confirmation
         # to create an O for the company, a user, or an agent. Only OKR Agent has this tool.
         "name": "create_objective",
         "display_name": "Create Objective",
@@ -1858,7 +1858,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # create_key_result — OKR Agent creates a measurable KR under a confirmed objective.
+        # create_key_result - OKR Agent creates a measurable KR under a confirmed objective.
         "name": "create_key_result",
         "display_name": "Create Key Result",
         "description": (
@@ -1902,13 +1902,13 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # update_objective — available to ALL agents, but with ownership enforcement:
+        # update_objective - available to ALL agents, but with ownership enforcement:
         # regular agents can only modify their own O; OKR Agent can modify any O.
         "name": "update_objective",
         "display_name": "Update Objective",
         "description": (
             "Modify an Objective's title, description, status, or period dates. "
-            "Regular agents can only update their own Objectives — call get_my_okr first "
+            "Regular agents can only update their own Objectives - call get_my_okr first "
             "to get your objective_id. The OKR Agent can update any member's Objective. "
             "Only provide the fields you want to change. If the request is to revise an existing OKR's "
             "goal text rather than create a new one, prefer this tool over create_objective."
@@ -1951,14 +1951,14 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # update_any_kr_progress — OKR Agent exclusive: update KR for any member.
+        # update_any_kr_progress - OKR Agent exclusive: update KR for any member.
         # Unlike update_kr_progress (self-report), this can update anyone's KR.
         # Used after collecting progress data through conversation.
         "name": "update_any_kr_progress",
         "display_name": "Update Any KR Progress",
         "description": (
             "Update the progress value of any team member's Key Result. "
-            "This is the OKR Agent's exclusive version of update_kr_progress — it can update "
+            "This is the OKR Agent's exclusive version of update_kr_progress - it can update "
             "KRs belonging to any user or agent, not just the caller's own. "
             "Use this ONLY after confirming the value with the KR owner through conversation. "
             "Get kr_id from get_okr. Optionally provide a note explaining the source."
@@ -1993,7 +1993,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # generate_monthly_okr_report — OKR Agent exclusive: produce the monthly summary report.
+        # generate_monthly_okr_report - OKR Agent exclusive: produce the monthly summary report.
         # Called automatically by the monthly_okr_report system cron trigger, or on-demand.
         "name": "generate_monthly_okr_report",
         "display_name": "Generate Monthly OKR Report",
@@ -2015,7 +2015,7 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
-        # upsert_member_daily_report — OKR Agent exclusive: create or revise a member daily report.
+        # upsert_member_daily_report - OKR Agent exclusive: create or revise a member daily report.
         "name": "upsert_member_daily_report",
         "display_name": "Upsert Member Daily Report",
         "description": (
@@ -2062,7 +2062,7 @@ BUILTIN_TOOLS = [
     },
     # --- Feishu Integration Tools ---
     # These tools require a configured Feishu channel to function.
-    # They are NOT enabled by default — agents with Feishu channels should enable them.
+    # They are NOT enabled by default - agents with Feishu channels should enable them.
     {
         "name": "send_feishu_message",
         "display_name": "Feishu Message",

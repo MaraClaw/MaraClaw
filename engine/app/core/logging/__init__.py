@@ -6,7 +6,7 @@ Application code should import from here:
     from app.core.logging import get_logger, new_trace_id
 
 Do not import ``loguru`` in app modules. This package must not import
-``app.config`` — ``app.config`` loads sandbox config, which logs.
+``app.config`` - ``app.config`` loads sandbox config, which logs.
 """
 
 from app.core.logging.adapter import Logger, get_logger, logger

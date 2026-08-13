@@ -323,7 +323,7 @@ def try_inject_screenshot_vision(
         img_id = id_match.group(1)
         entry = pop_temp_screenshot(img_id)
         if entry is None:
-            # Cache miss (expired or already consumed) — degrade gracefully
+            # Cache miss (expired or already consumed) - degrade gracefully
             logger.warning(f"[VisionInject] ImageID {img_id} not found in cache (expired?)")
             return None
         raw_bytes, grid_options = entry

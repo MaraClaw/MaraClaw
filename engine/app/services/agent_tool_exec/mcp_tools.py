@@ -93,7 +93,7 @@ async def _discover_resources(agent_id: uuid.UUID, arguments: ToolArguments) -> 
 
 
 async def _import_mcp_server(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    """Import an MCP server — either from Smithery or by direct URL."""
+    """Import an MCP server - either from Smithery or by direct URL."""
     config_value = arguments.get("config")
     config = config_value if isinstance(config_value, dict) else {}
     reauthorize = arguments.get("reauthorize") is True
@@ -101,7 +101,7 @@ async def _import_mcp_server(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     mcp_url = mcp_url_value if isinstance(mcp_url_value, str) else None
 
     if mcp_url:
-        # Direct URL import — bypass Smithery
+        # Direct URL import - bypass Smithery
         from app.services.resource_discovery import import_mcp_direct
 
         server_name_value = arguments.get("server_id") or config.pop("server_name", None)

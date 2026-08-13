@@ -12,4 +12,4 @@ Runtime **visibility and config**, not execution.
 
 Execution belongs in `agent_tool_exec/` (`@register`). Seed tables belong in `tool_definitions/`. Do not add handlers here.
 
-Facade wiring (`CatalogDependencies`) still lives on `agent_tools.py` — keep new logic out of that file.
+Facade wiring (`CatalogDependencies`) still lives on `agent_tools.py` - keep new logic out of that file.

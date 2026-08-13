@@ -36,7 +36,7 @@ The enum member for `codesandbox` is misspelled as `CODEDANDBOX` while its value
 ## Proxy And Network Policy
 
 - Guest proxy fields: `http_proxy`, `https_proxy`, `no_proxy` on `SandboxConfig` / `SandboxConfigOverrides`.
-- Platform env: `SANDBOX_HTTP_PROXY`, `SANDBOX_HTTPS_PROXY`, `SANDBOX_NO_PROXY` only — never inherit global `HTTP_PROXY` / process env into sandboxes.
+- Platform env: `SANDBOX_HTTP_PROXY`, `SANDBOX_HTTPS_PROXY`, `SANDBOX_NO_PROXY` only - never inherit global `HTTP_PROXY` / process env into sandboxes.
 - Use `SandboxConfig.resolve_proxy_env()` as the single injection helper. It returns `{}` when `allow_network` is false.
 - Local backends inject via process/container env; do not put proxy secrets on bwrap argv. See `local/AGENTS.md`.
 - Changing `allow_network` or proxy keys in agent tool config is platform/org admin only (`app/api/tools.py`).

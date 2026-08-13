@@ -38,7 +38,7 @@ async def get_desktop_screenshot(agent_id: uuid.UUID, session_id: str = "") -> s
                 cache_key = key
                 break
         else:
-            # Phase 2: fuzzy fallback — match any session for this agent + type
+            # Phase 2: fuzzy fallback - match any session for this agent + type
             for key in _agentbay_sessions:
                 key_agent_id, _, key_type = key
                 if str(key_agent_id) == str(agent_id) and key_type == "computer":

@@ -2,7 +2,7 @@
 
 Maintains long-lived Gateway connections for agents configured with
 connection_mode='gateway'.  When a user @mentions the bot or sends it a
-DM, the message is forwarded to the agent's LLM pipeline — exactly like
+DM, the message is forwarded to the agent's LLM pipeline - exactly like
 the Feishu WebSocket manager.
 
 Requires:  pip install discord.py>=2.3.0

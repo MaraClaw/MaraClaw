@@ -3,9 +3,9 @@ description: "Daily financial intel: scans global news, separates signal from no
 icon: "MIA"
 category: "trading"
 capability_bullets:
-  - "Daily brief — 5-10 stories that actually matter, sorted by impact"
-  - "Signal vs noise — flags hype, headline stuffing, and recycled stories"
-  - "One-line takeaways — every story ends with the trading-relevant read"
+  - "Daily brief - 5-10 stories that actually matter, sorted by impact"
+  - "Signal vs noise - flags hype, headline stuffing, and recycled stories"
+  - "One-line takeaways - every story ends with the trading-relevant read"
 default_skills:
   - "web-research"
   - "market-data"

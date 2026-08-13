@@ -487,7 +487,7 @@ class FeishuService:
         """Send an interactive approval card to the agent creator via Feishu."""
         import json
 
-        # Simplified — in production, use Feishu interactive card JSON
+        # Simplified - in production, use Feishu interactive card JSON
         text_content = json.dumps(
             {"text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 MaraClaw 平台审批。"}
         )

@@ -119,7 +119,7 @@ def extract_partial_content(args_str: str) -> str:
                         val_chars.append("\\")
                         val_chars.append("u")
                 else:
-                    # Incomplete \uXXXX — wait for more data
+                    # Incomplete \uXXXX - wait for more data
                     val_chars.append("\\")
                     val_chars.append("u")
             else:
@@ -550,7 +550,7 @@ class WebSocketChatHandler:
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already onboarded)."""
         if await is_onboarded(None, self.agent_id, self.user.id):
-            logger.info("[WS] Onboarding trigger ignored — pair already onboarded")
+            logger.info("[WS] Onboarding trigger ignored - pair already onboarded")
             await self.websocket.send_json(
                 {
                     "type": "onboarded",
@@ -620,7 +620,7 @@ class WebSocketChatHandler:
                 saved_content = f"[file:{file_name}]\n{saved_content}"
 
         if is_onboarding_trigger:
-            logger.info("[WS] Onboarding trigger — skipping user-message persistence")
+            logger.info("[WS] Onboarding trigger - skipping user-message persistence")
             await persist_chat_message(
                 agent_id=self.agent_id,
                 user_id=self.user.id,

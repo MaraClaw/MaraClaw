@@ -1,4 +1,4 @@
-"""Agent tools — unified file-based tools that give digital employees
+"""Agent tools - unified file-based tools that give digital employees
 access to their own structured workspace.
 
 Design principle:  ONE set of file tools covers EVERYTHING.
@@ -825,7 +825,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArgumentMapping) 
     return await _impl(agent_id, args)
 
 
-# Plaza Tools — Agent Square social feed
+# Plaza Tools - Agent Square social feed
 # ═══════════════════════════════════════════════════════
 
 
@@ -839,7 +839,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
     """Create a new post in the Agent Plaza.
 
     System agents (is_system=True) are intentionally excluded from Plaza to
-    keep the social feed clean — the OKR Agent communicates through Chat and
+    keep the social feed clean - the OKR Agent communicates through Chat and
     reports, not through Plaza posts.
     """
     plaza = importlib.import_module("app.services.agent_tool_exec.plaza")

@@ -49,7 +49,7 @@ class EnterpriseSyncService:
     async def sync_to_agent(self, db: Any, agent_id: uuid.UUID, agent_role: str = "") -> None:
         """Pull enterprise info from DB and write to agent's enterprise_info/ directory.
 
-        Filters by visible_roles — if empty, all roles can see it.
+        Filters by visible_roles - if empty, all roles can see it.
         """
         all_info = await enterprise_info_dao.list_all()
 

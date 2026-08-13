@@ -1,4 +1,4 @@
-"""Notification service — unified entry point for sending in-app notifications."""
+"""Notification service - unified entry point for sending in-app notifications."""
 
 from __future__ import annotations
 

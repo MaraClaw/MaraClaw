@@ -1,4 +1,4 @@
-"""Public pages API — serves published HTML without authentication."""
+"""Public pages API - serves published HTML without authentication."""
 
 import uuid
 
@@ -10,10 +10,10 @@ from app.dao.published_page_dao import published_page_dao
 from app.records.user import UserRecord
 from app.services.storage import get_storage_backend, normalize_storage_key
 
-# Public router — no /api prefix, no auth
+# Public router - no /api prefix, no auth
 public_router = APIRouter(tags=["pages"])
 
-# Authenticated router — under /api prefix
+# Authenticated router - under /api prefix
 router = APIRouter(prefix="/pages", tags=["pages"])
 
 # ── Public render (NO auth) ────────────────────────────

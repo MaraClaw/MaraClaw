@@ -11,7 +11,7 @@ Provider-specific organization-structure sync adapters live here. This package i
 | Department reconciliation | `departments.py`, `paths.py` | Provider-scoped department upserts, virtual root `external_id == "0"`, path rebuilds, recursive member counts |
 | Member reconciliation | `members.py` | Upserts org members, links existing platform users by email/phone, and syncs contact fields |
 | Provider adapters | `feishu.py`, `dingtalk.py`, `wecom.py`, `google_workspace.py` | API token fetching and provider payload mapping |
-| Public service entry | `app/services/org_sync_service.py` | Loads `IdentityProviderRecord`, requires tenant binding. No outer commit wrapper — each mixin `connection_ctx` commits unless the caller already opened one. |
+| Public service entry | `app/services/org_sync_service.py` | Loads `IdentityProviderRecord`, requires tenant binding. No outer commit wrapper - each mixin `connection_ctx` commits unless the caller already opened one. |
 
 ## Conventions
 

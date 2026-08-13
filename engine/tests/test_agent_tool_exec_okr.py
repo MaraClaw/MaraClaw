@@ -111,7 +111,7 @@ async def test_get_okr_preserves_happy_board_output_fragments(monkeypatch) -> No
         {"period_start": "2026-01-01", "period_end": "2026-03-31"},
     )
 
-    assert "# OKR Board — 2026-01-01 to 2026-03-31\n" in result
+    assert "# OKR Board - 2026-01-01 to 2026-03-31\n" in result
     assert "## Company Objectives" in result
     assert f"**O: Grow revenue** [50%]  objective_id={company_objective.id}" in result
     assert f"  - KR (behind): Active users  [50.0/100.0 visits]   kr_id={company_kr.id}" in result

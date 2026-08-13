@@ -86,7 +86,7 @@ def convert_chat_messages_to_llm_format(messages) -> list[OpenAIMessage]:
 
     Properly handles ``tool_call`` role records by splitting them into an
     assistant message (with ``tool_calls`` array) followed by a tool result
-    message — the format required by OpenAI / Anthropic / Gemini APIs.
+    message - the format required by OpenAI / Anthropic / Gemini APIs.
 
     Without this conversion, ``tool_call`` records would be passed with
     ``role="tool_call"`` (an invalid role), causing LLM API errors or

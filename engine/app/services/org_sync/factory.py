@@ -31,7 +31,7 @@ async def get_org_sync_adapter(
     """Factory function to create org sync adapter.
 
     Args:
-        db: Database session (accepted for compatibility; ignored — pure-psycopg path)
+        db: Database session (accepted for compatibility; ignored - pure-psycopg path)
         provider_type: Type of provider (feishu, dingtalk, etc.)
         tenant_id: Optional tenant ID
         provider_id: Optional specific provider ID (if not provided, uses first found by type)
