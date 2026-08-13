@@ -11,17 +11,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
-from app.core.security import require_role
+from app.core.security import hash_password_async, require_role
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_session_dao
-from app.dao.invitation_code_dao import invitation_code_dao
+from app.dao.identity_dao import identity_dao
+from app.dao.participant_dao import participant_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
+from app.db.errors import UniqueViolationError
+from app.db.session import connection_ctx
 from app.records.user import UserRecord
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -48,15 +51,19 @@ class CompanyStats(BaseModel):
 
 class CompanyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=200)
 
 
 class CompanyCreateResponse(BaseModel):
     company: CompanyStats
-    admin_invitation_code: str
+    org_admin_email: str
+    must_change_password: bool = True
 
 
 class PlatformSettingsOut(BaseModel):
-    allow_self_create_company: bool = True
+    allow_self_create_company: bool = False
     invitation_code_enabled: bool = False
     sso_custom_domain_redirect_enabled: bool = True
 
@@ -109,23 +116,68 @@ async def list_companies(current_user: UserRecord = Depends(require_role("platfo
 async def create_company(
     data: CompanyCreateRequest, current_user: UserRecord = Depends(require_role("platform_admin"))
 ):
-    """Create a new company and generate an admin invitation code (max_uses=1)."""
+    """Create a company and its genesis org admin (platform admin only).
+
+    The org admin is provisioned with the given email + initial password and
+    must change the password after the first successful login.
+    """
+    admin_email = str(data.admin_email).strip().lower()
+    if await identity_dao.get_by_email(admin_email):
+        raise HTTPException(status_code=409, detail="Admin email is already registered")
+
     slug = re.sub(r"[^a-z0-9]+", "-", data.name.lower().strip()).strip("-")[:40]
     if not slug:
         slug = "company"
     slug = f"{slug}-{secrets.token_hex(3)}"
 
-    tenant = await tenant_dao.create(obj_in={"name": data.name, "slug": slug, "im_provider": "web_only"})
+    password_hash = await hash_password_async(data.admin_password)
+    local_part = admin_email.split("@", 1)[0][:100] or "org-admin"
+    username = local_part
+    if await identity_dao.is_username_taken(username):
+        username = f"{local_part}_{secrets.token_hex(3)}"[:100]
 
-    code_str = secrets.token_urlsafe(12)[:16].upper()
-    await invitation_code_dao.create(
-        obj_in={
-            "code": code_str,
-            "tenant_id": tenant.id,
-            "max_uses": 1,
-            "created_by": current_user.id,
-        }
-    )
+    display_name = (data.admin_display_name or "").strip() or local_part
+
+    try:
+        async with connection_ctx():
+            tenant = await tenant_dao.create(obj_in={"name": data.name, "slug": slug, "im_provider": "web_only"})
+
+            identity = await identity_dao.create_identity(
+                email=admin_email,
+                username=username,
+                password_hash=password_hash,
+                is_platform_admin=False,
+                email_verified=True,
+                must_change_password=True,
+            )
+
+            org_admin = await user_dao.create(
+                obj_in={
+                    "identity_id": identity.id,
+                    "tenant_id": tenant.id,
+                    "display_name": display_name,
+                    "role": "org_admin",
+                    "registration_source": "platform_admin",
+                    "is_active": True,
+                    "quota_message_limit": tenant.default_message_limit,
+                    "quota_message_period": tenant.default_message_period,
+                    "quota_max_agents": tenant.default_max_agents,
+                    "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
+                }
+            )
+            # Identity-backed email/phone properties require the association for org directory bind.
+            org_admin.identity = identity
+            await participant_dao.create_for_user(
+                org_admin.id,
+                display_name=org_admin.display_name,
+                avatar_url=org_admin.avatar_url,
+            )
+
+            from app.services.registration_service import registration_service
+
+            await registration_service.bind_org_member(org_admin)
+    except UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
 
     return CompanyCreateResponse(
         company=CompanyStats(
@@ -134,8 +186,11 @@ async def create_company(
             slug=tenant.slug,
             is_active=tenant.is_active,
             created_at=tenant.created_at,
+            user_count=1,
+            org_admin_email=admin_email,
         ),
-        admin_invitation_code=code_str,
+        org_admin_email=admin_email,
+        must_change_password=True,
     )
 
 
@@ -299,7 +354,7 @@ async def get_platform_settings(current_user: UserRecord = Depends(require_role(
     settings: dict[str, bool] = {}
 
     for key, default in [
-        ("allow_self_create_company", True),
+        ("allow_self_create_company", False),
         ("invitation_code_enabled", False),
         ("sso_custom_domain_redirect_enabled", True),
     ]:

@@ -48,7 +48,7 @@ async def test_get_platform_settings_sso_toggle_default(monkeypatch):
     settings = await admin_api.get_platform_settings(current_user=current_user)
 
     assert settings.sso_custom_domain_redirect_enabled is True
-    assert settings.allow_self_create_company is True
+    assert settings.allow_self_create_company is False
     assert settings.invitation_code_enabled is False
 
 
