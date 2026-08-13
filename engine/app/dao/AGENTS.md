@@ -20,6 +20,11 @@ No dedicated DAO: `okr_alignments`, `tenant_settings`, `agent_user_onboardings`,
 
 Cascade gaps vs baseline (will 23503 on real data): `skill_files` before `skills`; `agent_templates.created_by`; `enterprise_info.updated_by`.
 
+## Identity joins
+
+- Auth-critical fields on `identities` include `is_platform_admin`, `email_verified`, and `must_change_password`.
+- Any `LEFT JOIN identities` that builds `IdentityRecord` must select **all** identity columns used by `IdentityRecord.from_row` (see `_IDENTITY_COLUMNS` in `identity_dao.py` and `user_dao.py`). Dropping `must_change_password` from the join fails the force-change gate open.
+
 ## Avoid
 
 - Do not open `app.database.async_session` (raises).

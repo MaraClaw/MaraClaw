@@ -38,6 +38,7 @@ _IDENTITY_COLUMNS = (
     "is_active",
     "is_platform_admin",
     "email_verified",
+    "must_change_password",
     "created_at",
     "updated_at",
 )
@@ -56,6 +57,7 @@ def _user_from_joined_row(row: dict[str, Any]) -> UserRecord:
                 "is_active": row.get("i_is_active"),
                 "is_platform_admin": row.get("i_is_platform_admin"),
                 "email_verified": row.get("i_email_verified"),
+                "must_change_password": row.get("i_must_change_password"),
                 "created_at": row.get("i_created_at"),
                 "updated_at": row.get("i_updated_at"),
             }

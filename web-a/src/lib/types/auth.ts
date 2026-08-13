@@ -8,6 +8,7 @@ export type IdentityOut = {
   is_active: boolean
   is_platform_admin: boolean
   email_verified: boolean
+  must_change_password?: boolean
   created_at: string
   updated_at: string
 }
@@ -27,6 +28,7 @@ export type UserOut = {
   registration_source: string | null
   is_active: boolean
   email_verified: boolean
+  must_change_password?: boolean
   created_at: string
 }
 
@@ -37,6 +39,26 @@ export type TokenResponse = {
   identity?: IdentityOut | null
   needs_company_setup?: boolean
   tenant_name?: string | null
+  must_change_password?: boolean
+}
+
+export type MustChangePasswordDetail = {
+  must_change_password: true
+  message?: string
+}
+
+export function userMustChangePassword(user: UserOut | null | undefined): boolean {
+  if (!user) return false
+  return user.must_change_password === true
+}
+
+export function isMustChangePasswordDetail(value: unknown): value is MustChangePasswordDetail {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'must_change_password' in value &&
+    (value as MustChangePasswordDetail).must_change_password === true
+  )
 }
 
 export type TenantChoice = {

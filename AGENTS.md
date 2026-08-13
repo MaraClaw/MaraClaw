@@ -153,7 +153,7 @@ cd web-l && npm install && npm run dev
 
 **Owns:** Operator console for organizations/tenants - user/role management, agent fleet admin, tool/skill policy, connector configuration, audit/activity, enterprise settings, platform-admin surfaces.
 
-**Today:** Bootstrapped SPA (`web-a/`) — React/Vite/Tailwind shell with sidebar nav placeholders. Feature screens and engine clients are WIP. Package guide: `web-a/AGENTS.md`. Admin API inventory: `engine/docs/admin-apis.md`.
+**Today:** Bootstrapped SPA (`web-a/`) — React/Vite/Tailwind shell with login, force-password-change, and sidebar nav placeholders. Feature screens and engine clients are WIP. Package guide: `web-a/AGENTS.md`. Admin API inventory: `engine/docs/admin-apis.md`.
 
 **Do not** dump admin UI into `web-l` or `web-e`.
 
@@ -189,11 +189,21 @@ cd web-a && npm install && npm run dev
 |---------|--------|-------|-------|-------|
 | Session / JWT / SSO | implement | consume (admin) | consume (user) | none / marketing only |
 | Tenant isolation | enforce | select/manage tenant | operate within membership | N/A |
-| Platform admin | flags/permissions | surface | hide | N/A |
+| Platform admin | env-seeded genesis + RBAC | surface | hide | N/A |
+| First-login password change | `identity.must_change_password` gate | force `/account` until cleared | (when product ships) | N/A |
+
+**Genesis admins (engine):**
+
+- Platform admin is seeded from `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed if missing on an empty DB). Open registration never elevates to `platform_admin`.
+- Genesis org admin for a new company is created only by platform admin via `POST /api/admin/companies` with `admin_email` + `admin_password`.
+- Both genesis accounts must change password after first successful login; JWT may still be issued, but privileged REST/WS/file paths return 403 until change.
+
+Details: `engine/docs/admin-apis.md` (genesis section), `engine/app/services/platform_admin_seeder.py`.
 
 ### Config & env
 
 - Backend secrets and process config: `engine` (+ root `.env.example` when monorepo-wide).
+- Fresh engine installs need `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` (see root and `engine/.env.example`).
 - Frontend public config (API base URL, feature flags for UI): each web package’s own env (`VITE_*` or equivalent) - never ship server secrets to the browser.
 - CORS origins for web apps are configured in **engine**, not in the frontends alone.
 
@@ -209,6 +219,8 @@ cd web-a && npm install && npm run dev
 | Monorepo routing | **`AGENTS.md`** (this file) |
 | Backend architecture | `engine/AGENTS.md` |
 | Backend subdomains | `engine/app/**/AGENTS.md`, `engine/docs/AGENTS.md`, etc. |
+| Admin API inventory + genesis rules | `engine/docs/admin-apis.md` |
+| Admin console | `web-a/AGENTS.md` |
 | Landing stack | `web-l/README.md` |
 
 When adding a substantial new package area under `web-a` or `web-e`, add a package-level `AGENTS.md` (or expand README) so this root file can stay a **router**, not a full design dump.

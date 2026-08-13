@@ -14,9 +14,15 @@
 ## Security
 
 - `security.py` owns JWT creation/decoding, password hashing, and FastAPI auth dependencies.
-- Use `get_current_user`, `get_authenticated_user`, `get_current_admin`, and `require_role(...)` from route modules.
+- Shared loader: `load_user_from_access_token(token, require_active=..., enforce_password_change=...)` loads `UserRecord` **with identity** and optionally enforces `must_change_password`.
+- Use from route modules:
+  - `get_current_user` — active user; **403** with `{must_change_password: true}` when force-change is pending (all privileged REST).
+  - `get_authenticated_user` — allows inactive + force-change; **only** for `GET /auth/me` and password change (not for tenant self-create/join mutations).
+  - `get_current_admin` / `require_role(...)` — built on `get_current_user` (inherit force-change gate).
+  - `raise_if_password_change_required(user)` — explicit check when a handler still uses `get_authenticated_user` but must block force-change users.
+- Non-Depends auth (WebSocket setup, file download query/Bearer token) **must** use `load_user_from_access_token` (not bare `decode_access_token` + `user_dao.get`). Bare `get` does not join identity, so `must_change_password` would always look false.
 - Use async password helpers from async paths; bcrypt work is intentionally pushed to a thread pool.
-- Token payloads use `sub` for user id and `role` for role.
+- Token payloads use `sub` for user id and `role` for role. Force-change is **not** in the JWT; it is re-read from identity on each request.
 
 ## Permissions
 

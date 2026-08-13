@@ -33,6 +33,7 @@ class IdentityRecord:
     is_active: bool = True
     is_platform_admin: bool = False
     email_verified: bool = False
+    must_change_password: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -47,6 +48,7 @@ class IdentityRecord:
             is_active=bool(row.get("is_active", True)),
             is_platform_admin=bool(row.get("is_platform_admin", False)),
             email_verified=bool(row.get("email_verified", False)),
+            must_change_password=bool(row.get("must_change_password", False)),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

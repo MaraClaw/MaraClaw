@@ -106,6 +106,7 @@ class TokenResponse(BaseModel):
     identity: IdentityOut | None = None
     needs_company_setup: bool = False
     tenant_name: str | None = None
+    must_change_password: bool = False
 
 
 class TenantChoice(BaseModel):
@@ -149,6 +150,7 @@ class IdentityOut(BaseModel):
     is_active: bool
     is_platform_admin: bool
     email_verified: bool
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -170,6 +172,7 @@ class UserOut(BaseModel):
     registration_source: str | None = None
     is_active: bool
     email_verified: bool = True
+    must_change_password: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

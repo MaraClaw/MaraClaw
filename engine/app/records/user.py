@@ -101,6 +101,10 @@ class UserRecord:
         return bool(self.identity and self.identity.is_platform_admin)
 
     @property
+    def must_change_password(self) -> bool:
+        return bool(self.identity and self.identity.must_change_password)
+
+    @property
     def primary_mobile(self) -> str | None:
         return self.identity.phone if self.identity else None
 

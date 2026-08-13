@@ -6,6 +6,12 @@ export type OkMessageResponse = {
   message?: string
 }
 
+export type ChangePasswordResponse = {
+  ok: boolean
+  must_change_password?: boolean
+  message?: string
+}
+
 export async function loginRequest(
   body: LoginRequest,
   signal?: AbortSignal,
@@ -53,8 +59,8 @@ export async function resetPasswordRequest(
 export async function changePasswordRequest(
   body: { old_password: string; new_password: string },
   signal?: AbortSignal,
-): Promise<OkMessageResponse> {
-  return apiRequest<OkMessageResponse>('/api/auth/me/password', {
+): Promise<ChangePasswordResponse> {
+  return apiRequest<ChangePasswordResponse>('/api/auth/me/password', {
     method: 'PUT',
     body,
     signal,

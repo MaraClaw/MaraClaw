@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, TypedDict
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from app.core.logging import logger, set_trace_id
 from app.core.permissions import check_agent_access, is_agent_expired
-from app.core.security import decode_access_token
-from app.dao import agent_dao, llm_model_dao, user_dao
+from app.core.security import load_user_from_access_token
+from app.dao import agent_dao, llm_model_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.task_dao import task_dao
@@ -322,22 +322,28 @@ class WebSocketChatHandler:
         # Accept immediately so browser sees onopen without waiting for DB setup
         await self.websocket.accept()
 
-        # Authenticate
+        # Authenticate (identity loaded; must_change_password enforced like REST)
         try:
-            payload = decode_access_token(self.token)
-            user_id = uuid.UUID(payload["sub"])
+            user = await load_user_from_access_token(
+                self.token,
+                require_active=True,
+                enforce_password_change=True,
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict) and detail.get("must_change_password"):
+                content = detail.get("message") or "Password change required before continuing."
+            else:
+                content = "Authentication failed"
+            await self.websocket.send_json({"type": "error", "content": content})
+            await self.websocket.close(code=4001)
+            return False
         except Exception:
             await self.websocket.send_json({"type": "error", "content": "Authentication failed"})
             await self.websocket.close(code=4001)
             return False
 
         try:
-            user = await user_dao.get(user_id)
-            if not user:
-                logger.error("[WS] User not found")
-                await self.websocket.send_json({"type": "error", "content": "User not found"})
-                await self.websocket.close(code=4001)
-                return False
             self.user = user
 
             logger.info(f"[WS] Checking agent access for {self.agent_id}")
@@ -366,7 +372,7 @@ class WebSocketChatHandler:
             await self._load_models(None)
 
             # Resolve or create chat session
-            conv_id = await self._resolve_chat_session(None, user_id)
+            conv_id = await self._resolve_chat_session(None, self.user.id)
             if not conv_id:
                 return False
             self.conv_id = conv_id
@@ -382,7 +388,7 @@ class WebSocketChatHandler:
 
         # Connect connection manager
         agent_id_str = str(self.agent_id)
-        await manager.connect(agent_id_str, self.websocket, self.conv_id, str(user_id))
+        await manager.connect(agent_id_str, self.websocket, self.conv_id, str(self.user.id))
         logger.info(f"[WS] Ready! Agent={self.agent_name}")
 
         # Send session_id to frontend

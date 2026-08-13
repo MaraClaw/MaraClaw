@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
     EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     EMAIL_VERIFICATION_REQUIRED: bool = False  # Require email verification for login
+    # Genesis platform admin (seeded at bootstrap). Empty disables seeding.
+    PLATFORM_ADMIN_EMAIL: str = ""
+    PLATFORM_ADMIN_PASSWORD: str = ""
     # Redis TTL for check_agent_access decisions. 0 disables the Redis layer.
     AGENT_ACCESS_CACHE_TTL_SECONDS: int = 45
     # Redis TTL for soul/memory/skill prompt fragments. 0 disables.

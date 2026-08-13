@@ -5,8 +5,8 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 ## Entry Points
 
 - `main.py` - `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`.
-- `lifespan()`: `init_pool()` first (roles `all|bootstrap|api|worker|connector`), then optional seeders, then realtime/worker/connector tasks.
-- `config.py` is the only pydantic-settings surface. New env vars need `.env.example`.
+- `lifespan()`: `init_pool()` first (roles `all|bootstrap|api|worker|connector`), then seeders (including **fail-closed** platform admin), then realtime/worker/connector tasks.
+- `config.py` is the only pydantic-settings surface. New env vars need `.env.example` (includes `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`).
 - `db/` is the live data layer. `database.py`: `async_session` raises; `transaction()` forwards to `app.db.session` (explicit session is yielded as-is for tests).
 - Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/`.
 
@@ -14,6 +14,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 
 - Preserve `PROCESS_ROLE` gating. Roles gate **side effects**; every process still serves HTTP. Python lowercases the role; Docker `entrypoint.sh` does not.
 - Schema is **not** applied in lifespan. Use `python -m app.scripts.bootstrap_db`.
+- Bootstrap role order matters: default tenant → **`ensure_platform_admin()`** → tools/templates/skills → agent seeders. Platform admin seed is not optional on greenfield.
 - `_log_bwrap_startup_status()` is warn-only.
 - Guest sandbox proxy: `SANDBOX_*_PROXY` only. See `services/sandbox/AGENTS.md`.
 - Background work: `app.core.logging.new_trace_id()` before related logs.

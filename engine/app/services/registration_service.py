@@ -168,6 +168,7 @@ class RegistrationService:
             password_hash=password_hash,
             is_platform_admin=is_platform_admin,
             email_verified=is_verified,
+            must_change_password=False,
         )
 
     # ── UserRecord create ──────────────────────────────────────────────────────────
