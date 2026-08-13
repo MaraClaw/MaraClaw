@@ -2,9 +2,9 @@
 
 # ─── MaraClaw landing (web-l) ───────────────────────────────────────────────
 # Multi-stage production image:
-#   1) deps    — install lockfile deps on Node 26 (cache-friendly layer)
-#   2) build   — typecheck + Vite production bundle
-#   3) runtime — unprivileged nginx serves static dist
+#   1) deps    - install lockfile deps on Node 26 (cache-friendly layer)
+#   2) build   - typecheck + Vite production bundle
+#   3) runtime - unprivileged nginx serves static dist
 #
 # Build:  docker build -t maraclaw-web-l .
 # Run:    docker run --rm -p 8080:8080 maraclaw-web-l
@@ -19,7 +19,7 @@ WORKDIR /app
 # glibc compatibility for some optional native optionalDeps
 RUN apk add --no-cache libc6-compat
 
-# Install by lockfile only — reproducible builds, maximizes layer cache.
+# Install by lockfile only - reproducible builds, maximizes layer cache.
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund \
   && npm cache clean --force
@@ -54,7 +54,7 @@ LABEL org.opencontainers.image.title="MaraClaw web-l" \
 # Replace the default site with our SPA config (port 8080, security headers).
 COPY --chown=nginx:nginx docker/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Static assets only — no Node runtime, no package tree, no source.
+# Static assets only - no Node runtime, no package tree, no source.
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
 # Image already runs as uid 101 (nginx). Do not escalate.
