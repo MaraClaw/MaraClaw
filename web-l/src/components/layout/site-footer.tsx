@@ -1,3 +1,4 @@
+import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { Separator } from '@/components/ui/separator'
 
 const footerLinks = [
@@ -37,12 +38,7 @@ export function SiteFooter() {
         <div className="grid gap-10 md:grid-cols-[1.2fr_1fr_1fr_1fr]">
           <div className="max-w-sm space-y-4">
             <a href="#top" className="inline-flex items-center gap-2.5">
-              <span
-                aria-hidden
-                className="flex size-9 items-center justify-center rounded-xl bg-primary text-lg"
-              >
-                🦞
-              </span>
+              <MaraClawLogo className="size-9" />
               <span className="font-display text-base font-semibold tracking-tight text-foreground">
                 MaraClaw
               </span>

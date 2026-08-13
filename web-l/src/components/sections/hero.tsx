@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, Bot, MessageSquare, ShieldCheck, Sparkles } from 'lucide-react'
 
+import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { easeOut, fadeUp, staggerContainer } from '@/lib/motion'
@@ -143,8 +144,8 @@ export function Hero() {
 
                 <div className="space-y-4 p-4 sm:p-6">
                   <div className="flex items-start gap-3">
-                    <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-sm shadow-sm">
-                      🦞
+                    <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+                      <MaraClawLogo className="size-8 rounded-lg" />
                     </span>
                     <div className="max-w-xl rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3 text-start shadow-sm">
                       <p className="text-sm font-semibold text-foreground">Chief of Staff</p>
