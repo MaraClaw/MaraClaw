@@ -123,6 +123,90 @@ async def _send_teams_channel_message(
         return f"❌ Teams message error: {str(error)[:200]}"
 
 
+async def _send_google_chat_message(
+    agent_id: uuid.UUID,
+    member_name: str,
+    message_text: str,
+    target_member: Any,
+) -> str:
+    """Send proactive Google Chat message using the latest known space/thread context."""
+    from app.services.channels.google_chat import parse_external_conv_id, send_google_chat_message
+
+    try:
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="google_chat")
+        if not config:
+            return "❌ This agent has no Google Chat channel configured"
+
+        agent = await agent_dao.get(agent_id)
+        platform_user = await get_platform_user_by_org_member(
+            db=None,
+            org_member=target_member,
+            agent_tenant_id=agent.tenant_id if agent else None,
+        )
+
+        # Prefer DM sessions owned by the member, then agent-scoped google_chat sessions
+        # (includes creator-owned group rooms the member previously messaged).
+        dm_sessions = await chat_session_dao.list_for_user(agent_id=agent_id, user_id=platform_user.id)
+        session = next((s for s in dm_sessions if s.source_channel == "google_chat"), None)
+        if session is None:
+            channel_sessions = await chat_session_dao.list_for_agent_channel(
+                agent_id=agent_id,
+                source_channel="google_chat",
+                include_groups=True,
+                limit=50,
+            )
+            # Prefer non-group, then any recent session with a spaces/ external id.
+            session = next(
+                (
+                    s
+                    for s in channel_sessions
+                    if not s.is_group and str(s.external_conv_id or "").startswith("google_chat_spaces/")
+                ),
+                None,
+            )
+            if session is None:
+                session = next(
+                    (
+                        s
+                        for s in channel_sessions
+                        if str(s.external_conv_id or "").startswith("google_chat_spaces/")
+                    ),
+                    None,
+                )
+
+        external = str(session.external_conv_id or "").strip() if session else ""
+        if session is None or not external:
+            return (
+                f"❌ Google Chat proactive send to {member_name} requires them to message the bot first "
+                "(DM preferred; group rooms work after any message in that space)"
+            )
+
+        try:
+            space_name, thread_name = parse_external_conv_id(external)
+        except ValueError:
+            return f"❌ Google Chat session for {member_name} has an invalid space reference"
+
+        await send_google_chat_message(
+            config,
+            space_name=space_name,
+            text=message_text,
+            thread_name=thread_name,
+        )
+        await _channel_provider_common()._save_channel_message(
+            agent_tools,
+            db=None,
+            agent_id=agent_id,
+            org_member=target_member,
+            external_conv_id=external,
+            source_channel="google_chat",
+            message_text=message_text,
+            log_label="GoogleChat",
+        )
+        return f"✅ Message sent to {member_name} via Google Chat"
+    except Exception as error:
+        logger.exception("[GoogleChat] Error")
+        return f"❌ Google Chat message error: {str(error)[:200]}"
+
 async def _send_wechat_channel_message(
     agent_id: uuid.UUID,
     member_name: str,

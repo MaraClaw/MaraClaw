@@ -178,6 +178,31 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
 
+    async def list_for_agent_channel(
+        self,
+        *,
+        agent_id: UUID,
+        source_channel: str,
+        include_groups: bool = True,
+        limit: int = 50,
+    ) -> Sequence[ChatSessionRecord]:
+        """List recent sessions for an agent on a given source_channel (DM + optional groups)."""
+        async with self.session() as db:
+            group_clause = "" if include_groups else "AND is_group IS FALSE "
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM chat_sessions "
+                "WHERE agent_id = %(agent_id)s AND source_channel = %(source_channel)s "
+                f"{group_clause}"
+                "ORDER BY last_message_at DESC NULLS LAST, created_at DESC "
+                "LIMIT %(limit)s",
+                {
+                    "agent_id": agent_id,
+                    "source_channel": source_channel,
+                    "limit": limit,
+                },
+            )
+            return [ChatSessionRecord.from_row(row) for row in rows]
+
     async def list_all_for_agent(self, agent_id: UUID) -> Sequence[ChatSessionRecord]:
         async with self.session() as db:
             rows = await db.fetchall(

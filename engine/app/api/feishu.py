@@ -18,17 +18,16 @@ from app.core.permissions import check_agent_access, is_agent_creator, is_agent_
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.task_dao import task_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut, TokenResponse, UserOut
-from app.services.chat_persist import persist_chat_message
+from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.feishu_service import feishu_service
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format, truncate_messages_with_pair_integrity
+from app.services.llm.utils import truncate_messages_with_pair_integrity
 from app.services.storage import agent_upload_key, get_storage_backend, store_agent_upload
 
 router = APIRouter(tags=["feishu"])
@@ -489,7 +488,6 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
 # ─── Feishu Event Webhook ───────────────────────────────
 
 # Simple in-memory dedup to avoid processing retried events
-_processed_events: set[str] = set()
 
 
 @router.post("/channel/feishu/{agent_id}/webhook")
@@ -519,10 +517,10 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
         f"[Feishu] Event processing for {agent_id}: event_type={body.get('header', {}).get('event_type', 'N/A')}"
     )
 
-    # Deduplicate - Feishu retries on slow responses
-    # Only mark as processed AFTER successful handling so retries work on crash
+    # Deduplicate - Feishu retries on slow responses.
+    # Mark only after successful handling so retries work on crash.
     event_id = body.get("header", {}).get("event_id", "")
-    if event_id in _processed_events:
+    if event_id and channel_dedup.already_processed("feishu", event_id, cap=2000):
         return {"code": 0, "msg": "already processed"}
 
     # ── Phase 1: Load config + agent/model for LLM (pure-psycopg DAOs) ──
@@ -535,13 +533,6 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
     if not app_id or not app_secret:
         logger.error(f"[Feishu] Channel credentials missing for agent {agent_id}")
         return {"code": 1, "msg": "Channel credentials not configured"}
-
-    # Mark event as processed after config is loaded successfully
-    if event_id:
-        _processed_events.add(event_id)
-        # Keep set bounded
-        if len(_processed_events) > 1000:
-            _processed_events.clear()
 
     # Handle events
     event = body.get("event", {})
@@ -666,32 +657,11 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
             else:
                 conv_id = f"feishu_p2p_{sender_user_id_from_event or sender_open_id}"
 
-            # Load recent conversation history via session (session UUID may already exist)
-            from app.services.channel_session import find_or_create_channel_session
-
-            agent_obj = await agent_dao.get(agent_id)
+            agent_obj = await channel_inbound.load_agent(agent_id)
             if agent_obj is None:
                 logger.warning(f"[Feishu] Agent {agent_id} not found")
                 return {"code": 1, "msg": "Agent not found"}
             creator_id = agent_obj.creator_id if agent_obj else agent_id
-            ctx_size = (
-                (agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE)
-                if agent_obj
-                else DEFAULT_CONTEXT_WINDOW_SIZE
-            )
-
-            # Pre-resolve session so history lookup uses the UUID  (session created later if new)
-            _pre_sess = await chat_session_dao.get_by_external_conv(
-                agent_id=agent_id,
-                external_conv_id=conv_id,
-            )
-            _history_conv_id = str(_pre_sess.id) if _pre_sess else conv_id
-            history_msgs = await chat_message_dao.list_recent(
-                agent_id=agent_id,
-                conversation_id=_history_conv_id,
-                limit=ctx_size,
-            )
-            history = convert_chat_messages_to_llm_format(history_msgs)
 
             # --- Resolve Feishu sender identity & find/create platform user ---
             import httpx as _httpx
@@ -822,10 +792,9 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
                 raise
             platform_user_id = platform_user.id
 
-            # ── Find-or-create a ChatSession via external_conv_id (DB-based, no cache needed) ──
+            # ── Shared inbound: session → history → user message ──
             _is_group = chat_type == "group"
-            _sess = await find_or_create_channel_session(
-                db=None,
+            _sess = await channel_inbound.open_channel_session(
                 agent_id=agent_id,
                 user_id=platform_user_id if not _is_group else creator_id,
                 external_conv_id=conv_id,
@@ -835,13 +804,17 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
                 group_name=f"Feishu Group {chat_id[:8]}" if _is_group else None,
             )
             session_conv_id = str(_sess.id)
-
-            await persist_chat_message(
+            history = await channel_inbound.load_history_for_session(
+                agent_id=agent_id,
+                session=_sess,
+                context_window_size=agent_obj.context_window_size,
+            )
+            await channel_inbound.persist_user_message(
                 agent_id=agent_id,
                 user_id=platform_user_id,
-                conversation_id=session_conv_id,
-                role="user",
+                session=_sess,
                 content=user_text,
+                agent=agent_obj,
             )
 
             # Prepend sender identity so the agent knows who is talking
@@ -1089,17 +1062,17 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
             if _patch_msg_id:
                 _heartbeat_task = asyncio.create_task(_heartbeat())
 
-            # Call LLM with history and streaming callback (no DB session needed)
+            # Call LLM via shared channel inbound helper (streaming callbacks preserved)
             try:
-                reply_text = await _call_llm_with_config(
-                    _agent_model,
-                    _llm_model,
-                    _fallback_model,
-                    agent_id,
-                    llm_user_text,
+                reply_text = await channel_inbound.generate_channel_reply(
+                    agent_id=agent_id,
+                    user_text=llm_user_text,
                     history=history,
                     user_id=platform_user_id,
                     session_id=session_conv_id,
+                    agent_model=_agent_model,
+                    llm_model=_llm_model,
+                    fallback_model=_fallback_model,
                     on_chunk=_ws_on_chunk,
                     on_thinking=_ws_on_thinking,
                     on_tool_call=_ws_on_tool_call,
@@ -1217,18 +1190,19 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
                 detail={"channel": "feishu", "user_text": user_text[:200], "reply": final_reply_text[:500]},
             )
 
-            # Save assistant reply to history
-            await persist_chat_message(
+            # Save assistant reply to history (shared inbound persist)
+            await channel_inbound.persist_assistant_message(
                 agent_id=agent_id,
                 user_id=platform_user_id,
-                conversation_id=session_conv_id,
-                role="assistant",
+                session=_sess,
                 content=final_reply_text,
                 thinking="".join(_thinking_buffer) or None,
-                touch_last_active=True,
                 agent=agent_obj,
+                touch_last_active=True,
             )
 
+    if event_id:
+        channel_dedup.mark_processed("feishu", event_id, cap=2000)
     return {"code": 0, "msg": "ok"}
 
 
@@ -1255,8 +1229,6 @@ async def _handle_feishu_file(
     import asyncio
     import json
     import random
-
-    from app.services.channel_session import find_or_create_channel_session
 
     msg_type = message.get("message_type", "file")
     message_id = message.get("message_id", "")
@@ -1312,8 +1284,8 @@ async def _handle_feishu_file(
             logger.error(f"[Feishu] Also failed to send error tip: {e2}")
         return
 
-    # Resolve platform user and session (pure-psycopg DAOs)
-    agent_obj = await agent_dao.get(agent_id)
+    # Resolve platform user and session (shared inbound helpers)
+    agent_obj = await channel_inbound.load_agent(agent_id)
     if agent_obj is None:
         logger.warning(f"[Feishu] Agent {agent_id} not found for file event")
         return
@@ -1404,12 +1376,11 @@ async def _handle_feishu_file(
     else:
         conv_id = f"feishu_p2p_{sender_user_id_feishu or sender_open_id}"
 
-    # Find-or-create session
+    # Shared inbound: session → history → user message
     _is_group_file = chat_type == "group"
     # For group file sessions, use agent creator as placeholder user_id
     _file_user_id = agent_obj.creator_id if _is_group_file else platform_user_id
-    _sess = await find_or_create_channel_session(
-        db=None,
+    _sess = await channel_inbound.open_channel_session(
         agent_id=agent_id,
         user_id=_file_user_id,
         external_conv_id=conv_id,
@@ -1429,24 +1400,19 @@ async def _handle_feishu_file(
         user_msg_content = f"[用户发送了图片]\n{_image_marker}"
     else:
         user_msg_content = f"[file:{filename}]"
-    await persist_chat_message(
+
+    _history = await channel_inbound.load_history_for_session(
+        agent_id=agent_id,
+        session=_sess,
+        context_window_size=agent_obj.context_window_size,
+    )
+    await channel_inbound.persist_user_message(
         agent_id=agent_id,
         user_id=platform_user_id,
-        conversation_id=session_conv_id,
-        role="user",
+        session=_sess,
         content=user_msg_content if msg_type != "image" else f"[file:{filename}]",
+        agent=agent_obj,
     )
-
-    # Load conversation history for LLM context
-    ctx_size = (
-        (agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE) if agent_obj else DEFAULT_CONTEXT_WINDOW_SIZE
-    )
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=ctx_size,
-    )
-    _history = convert_chat_messages_to_llm_format(history_msgs)
 
     # Pre-load agent/model for LLM call
     _agent_model_img, _llm_model_img, _fallback_model_img = await _load_agent_and_model(None, agent_id)
@@ -1550,15 +1516,15 @@ async def _handle_feishu_file(
 
         # Call LLM with image marker - vision models will parse it
         try:
-            reply_text = await _call_llm_with_config(
-                _agent_model_img,
-                _llm_model_img,
-                _fallback_model_img,
-                agent_id,
-                user_msg_content,
+            reply_text = await channel_inbound.generate_channel_reply(
+                agent_id=agent_id,
+                user_text=user_msg_content,
                 history=_history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
+                agent_model=_agent_model_img,
+                llm_model=_llm_model_img,
+                fallback_model=_fallback_model_img,
                 on_chunk=_img_on_chunk,
             )
         finally:
@@ -1608,14 +1574,13 @@ async def _handle_feishu_file(
                 logger.error(f"[Feishu] Failed to send image reply: {_e_fb}")
 
         # Save assistant reply in DB
-        await persist_chat_message(
+        await channel_inbound.persist_assistant_message(
             agent_id=agent_id,
             user_id=platform_user_id,
-            conversation_id=session_conv_id,
-            role="assistant",
+            session=_sess,
             content=reply_text,
-            touch_last_active=True,
             agent=agent_obj,
+            touch_last_active=True,
         )
 
         # Log activity
@@ -1656,14 +1621,13 @@ async def _handle_feishu_file(
         logger.error(f"[Feishu] Failed to send ack: {e}")
 
     # Store ack in DB
-    await persist_chat_message(
+    await channel_inbound.persist_assistant_message(
         agent_id=agent_id,
         user_id=platform_user_id,
-        conversation_id=session_conv_id,
-        role="assistant",
+        session=_sess,
         content=ack,
-        touch_last_active=True,
         agent=agent_obj,
+        touch_last_active=True,
     )
 
 

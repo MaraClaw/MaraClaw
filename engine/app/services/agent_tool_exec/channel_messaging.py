@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from collections.abc import Awaitable, Callable
 from types import ModuleType
 from typing import Any
 
@@ -10,8 +11,11 @@ from app.core.permissions import evaluate_human_relationship_status
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.user_dao import user_dao
 from app.services import agent_tools
+from app.services.channels.types import outbound_provider_key
 
 from .registry import ToolArguments
+
+ChannelSender = Callable[[uuid.UUID, str, str, Any], Awaitable[str]]
 
 
 def _channel_providers() -> ModuleType:
@@ -19,17 +23,28 @@ def _channel_providers() -> ModuleType:
 
 
 def _normalize_provider_type(value: str | None) -> str | None:
-    if not value:
-        return None
-    return "teams" if value == "microsoft_teams" else value
+    return outbound_provider_key(value)
+
+
+def _outbound_senders() -> dict[str, ChannelSender]:
+    providers = _channel_providers()
+    return {
+        "feishu": providers._send_feishu_channel_message,
+        "dingtalk": providers._send_dingtalk_message,
+        "wecom": providers._send_wecom_message,
+        "slack": providers._send_slack_message,
+        "teams": providers._send_teams_channel_message,
+        "microsoft_teams": providers._send_teams_channel_message,
+        "wechat": providers._send_wechat_channel_message,
+        "google_chat": providers._send_google_chat_message,
+    }
 
 
 async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
     """Send a proactive channel message through the recipient's configured provider."""
     member_name = _string_argument(args, "member_name")
     message_text = _string_argument(args, "message")
-    raw_target_channel = _string_argument(args, "channel").lower()
-    target_channel = "teams" if raw_target_channel == "microsoft_teams" else raw_target_channel
+    target_channel = _normalize_provider_type(_string_argument(args, "channel").lower() or None)
 
     if not member_name:
         return "❌ Please provide member_name"
@@ -98,33 +113,10 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                 )
 
         logger.info(f"[ChannelMessage] Sending to {member_name} via {provider_type}")
-        match provider_type:
-            case "feishu":
-                return await _channel_providers()._send_feishu_channel_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case "dingtalk":
-                return await _channel_providers()._send_dingtalk_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case "wecom":
-                return await _channel_providers()._send_wecom_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case "slack":
-                return await _channel_providers()._send_slack_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case "teams":
-                return await _channel_providers()._send_teams_channel_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case "wechat":
-                return await _channel_providers()._send_wechat_channel_message(
-                    agent_id, member_name, message_text, target_member
-                )
-            case _:
-                return f"❌ Unsupported channel type: {provider_type}"
+        sender = _outbound_senders().get(provider_type)
+        if not sender:
+            return f"❌ Unsupported channel type: {provider_type}"
+        return await sender(agent_id, member_name, message_text, target_member)
     except Exception as error:
         logger.exception("[ChannelMessage] Error")
         return f"❌ Channel message error: {str(error)[:200]}"

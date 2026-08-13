@@ -47,7 +47,8 @@ No `alembic/`, no `app/models/`.
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
-| Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py` | Lifespan `start_all` after `init_pool` |
+| Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |
+| Channel registry / shared helpers | `app/services/channels/` | Types, config CRUD, inbound pipeline; see `docs/channels.md` |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
 | OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node/gogcli image; see `docker/openclaw/AGENTS.md` |

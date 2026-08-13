@@ -10,6 +10,7 @@ from app.services import agent_tools
 __all__ = (
     "_send_dingtalk_message",
     "_send_feishu_channel_message",
+    "_send_google_chat_message",
     "_send_slack_message",
     "_send_teams_channel_message",
     "_send_wechat_channel_message",
@@ -68,6 +69,15 @@ async def _send_wechat_channel_message(
     target_member: Any,
 ) -> str:
     return await _chat_providers()._send_wechat_channel_message(agent_id, member_name, message_text, target_member)
+
+
+async def _send_google_chat_message(
+    agent_id: uuid.UUID,
+    member_name: str,
+    message_text: str,
+    target_member: Any,
+) -> str:
+    return await _chat_providers()._send_google_chat_message(agent_id, member_name, message_text, target_member)
 
 
 async def _send_feishu_channel_message(

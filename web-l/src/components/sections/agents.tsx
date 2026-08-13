@@ -49,7 +49,7 @@ const agents: Agent[] = [
     icon: NotebookPen,
     iconLabel: 'Notebook icon for Private Assistant',
     blurb:
-      'Discreet daily coordination — notes, drafts, reminders, and lightweight planning for busy operators.',
+      'Discreet daily coordination - notes, drafts, reminders, and lightweight planning for busy operators.',
     bullets: ['Day planning', 'Drafting support', 'Loose ends'],
   },
   {
@@ -58,7 +58,7 @@ const agents: Agent[] = [
     icon: PenLine,
     iconLabel: 'Pen icon for Content Creator',
     blurb:
-      'Turns ideas into multi-platform content — editorial calendars, blog posts, newsletters, and brand-true social copy.',
+      'Turns ideas into multi-platform content - editorial calendars, blog posts, newsletters, and brand-true social copy.',
     bullets: ['Editorial calendar', 'Long-form drafts', 'Channel adaptation'],
   },
   {
@@ -67,7 +67,7 @@ const agents: Agent[] = [
     icon: BadgeCheck,
     iconLabel: 'Badge icon for LinkedIn Content Creator',
     blurb:
-      'Builds personal-brand and B2B thought leadership on LinkedIn — posts professionals actually read and share.',
+      'Builds personal-brand and B2B thought leadership on LinkedIn - posts professionals actually read and share.',
     bullets: ['Brand voice', 'Post engineering', 'Weekly cadence'],
   },
   {
@@ -85,7 +85,7 @@ const agents: Agent[] = [
     icon: Clapperboard,
     iconLabel: 'Clapperboard icon for TikTok Strategist',
     blurb:
-      'Crafts short-video concepts that watch through — hook-driven, algorithm-aware, tuned to your niche.',
+      'Crafts short-video concepts that watch through - hook-driven, algorithm-aware, tuned to your niche.',
     bullets: ['Hook engineering', 'Content formulas', 'Posting cadence'],
   },
   {
@@ -112,7 +112,7 @@ const agents: Agent[] = [
     icon: FileBarChart2,
     iconLabel: 'Report icon for Earnings and Filings Analyst',
     blurb:
-      'Reads quarterly reports, filings, and earnings calls — surfaces what changed in operations, risk, and valuation.',
+      'Reads quarterly reports, filings, and earnings calls - surfaces what changed in operations, risk, and valuation.',
     bullets: ['Earnings deep-read', 'Filing scanner', 'Call distill'],
   },
   {
@@ -121,7 +121,7 @@ const agents: Agent[] = [
     icon: ShieldAlert,
     iconLabel: 'Shield icon for Risk Manager',
     blurb:
-      'Gatekeeps trade ideas with the same checklist every time — stage the idea, run the guards, get a clear verdict.',
+      'Gatekeeps trade ideas with the same checklist every time - stage the idea, run the guards, get a clear verdict.',
     bullets: ['Trade staging', 'Guard checks', 'GREEN / YELLOW / RED'],
   },
   {
@@ -130,7 +130,7 @@ const agents: Agent[] = [
     icon: AlarmClock,
     iconLabel: 'Alarm clock icon for Pre-Market Briefer',
     blurb:
-      'One-screen open-day brief: overnight news, futures, earnings, and data — ready before the bell.',
+      'One-screen open-day brief: overnight news, futures, earnings, and data - ready before the bell.',
     bullets: ['Overnight digest', 'Open-day setup', 'Trading cadence'],
   },
   {
@@ -139,7 +139,7 @@ const agents: Agent[] = [
     icon: GitPullRequestArrow,
     iconLabel: 'Pull request icon for Code Reviewer',
     blurb:
-      'Reads diffs like a senior engineer — correctness, security, and maintainability that matter (when you need tech too).',
+      'Reads diffs like a senior engineer - correctness, security, and maintainability that matter (when you need tech too).',
     bullets: ['Correctness checks', 'Security review', 'Maintainability'],
   },
 ]
@@ -159,7 +159,7 @@ export function Agents() {
             Specialists for every kind of company
           </h2>
           <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-            From office ops and brand marketing to markets desks — hire digital
+            From office ops and brand marketing to markets desks - hire digital
             employees that match how non-tech and hybrid teams actually work.
             Each template ships with a soul, capabilities, and sensible autonomy defaults.
           </p>

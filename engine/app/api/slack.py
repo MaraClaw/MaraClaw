@@ -43,72 +43,62 @@ async def configure_slack_channel(
     agent_id: uuid.UUID, data: SlackChannelPayload, current_user: UserRecord = Depends(get_current_user)
 ):
     """Configure Slack bot for an agent. Fields: bot_token, signing_secret."""
-    agent, _ = await check_agent_access(current_user, agent_id)
-    if not is_agent_creator(current_user, agent):
-        raise HTTPException(status_code=403, detail="Only creator can configure channel")
+    from app.services.channels import config as channel_cfg
+    from app.services.channels.redact import channel_config_out
+
+    await channel_cfg.require_channel_creator(current_user, agent_id)
 
     bot_token = data.get("bot_token", "").strip()
     signing_secret = data.get("signing_secret", "").strip()
     if not bot_token or not signing_secret:
         raise HTTPException(status_code=422, detail="bot_token and signing_secret are required")
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
-    if existing:
-        config = await channel_config_dao.update(
-            db_obj=existing,
-            obj_in={
-                "app_secret": bot_token,
-                "encrypt_key": signing_secret,
-                "is_configured": True,
-            },
-        )
-        return ChannelConfigOut.model_validate(config or existing)
-
-    config = await channel_config_dao.create(
-        obj_in={
-            "agent_id": agent_id,
-            "channel_type": "slack",
-            "app_id": "slack",
-            "app_secret": bot_token,
-            "encrypt_key": signing_secret,
-            "is_configured": True,
-        }
+    config = await channel_cfg.upsert_channel_config(
+        agent_id=agent_id,
+        channel_type="slack",
+        app_id="slack",
+        app_secret=bot_token,
+        encrypt_key=signing_secret,
+        is_configured=True,
     )
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/slack-channel", response_model=ChannelConfigOut)
 async def get_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
-    if not config:
-        raise HTTPException(status_code=404, detail="Slack not configured")
-    return ChannelConfigOut.model_validate(config)
+    from app.services.channels import config as channel_cfg
+    from app.services.channels.redact import channel_config_out
+
+    agent, _ = await check_agent_access(current_user, agent_id)
+    if not is_agent_creator(current_user, agent):
+        raise HTTPException(status_code=403, detail="Only creator can view channel credentials")
+    config = await channel_cfg.require_channel_config(agent_id, "slack")
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/slack-channel/webhook-url")
-async def get_slack_webhook_url(agent_id: uuid.UUID, request: Request, db=None):
+async def get_slack_webhook_url(
+    agent_id: uuid.UUID,
+    request: Request,
+    current_user: UserRecord = Depends(get_current_user),
+    db=None,
+):
     from app.services.platform_service import platform_service
 
+    await check_agent_access(current_user, agent_id)
     public_base = await platform_service.get_public_base_url(db, request)
     return {"webhook_url": f"{public_base}/api/channel/slack/{agent_id}/webhook"}
 
 
 @router.delete("/agents/{agent_id}/slack-channel", status_code=204)
 async def delete_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    agent, _ = await check_agent_access(current_user, agent_id)
-    if not is_agent_creator(current_user, agent):
-        raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
-    if not config:
-        raise HTTPException(status_code=404, detail="Slack not configured")
-    await channel_config_dao.delete(id=config.id)
+    from app.services.channels import config as channel_cfg
+
+    await channel_cfg.require_channel_creator(current_user, agent_id)
+    await channel_cfg.delete_channel_config(agent_id, "slack")
 
 
 # ─── Event Webhook ──────────────────────────────────────
-
-_processed_slack_events: set[str] = set()
-
 
 def _verify_slack_signature(signing_secret: str, body: bytes, headers: Mapping[str, str]) -> bool:
     """Verify Slack's HMAC-SHA256 request signature."""
@@ -147,7 +137,12 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         return Response(status_code=404)
 
     signing_secret = config.encrypt_key or ""
-    if signing_secret and not _verify_slack_signature(signing_secret, body_bytes, dict(request.headers)):
+    if not config.is_configured:
+        return Response(status_code=404)
+    if not signing_secret:
+        logger.warning("[Slack] Missing signing secret for agent %s", agent_id)
+        return Response(status_code=401)
+    if not _verify_slack_signature(signing_secret, body_bytes, dict(request.headers)):
         return Response(status_code=401)
 
     import json
@@ -164,12 +159,10 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     event = body.get("event", {})
     event_id = body.get("event_id", "")
 
-    if event_id in _processed_slack_events:
+    from app.services.channels import dedup as channel_dedup
+
+    if event_id and channel_dedup.already_processed("slack", event_id, cap=2000):
         return {"ok": True}
-    if event_id:
-        _processed_slack_events.add(event_id)
-        if len(_processed_slack_events) > 1000:
-            _processed_slack_events.clear()
 
     if event.get("bot_id") or event.get("subtype"):
         return {"ok": True}
@@ -427,4 +420,8 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         except Exception as e:
             logger.error(f"[Slack] Failed to send: {e}")
 
+    if event_id:
+        from app.services.channels import dedup as channel_dedup
+
+        channel_dedup.mark_processed("slack", event_id, cap=2000)
     return {"ok": True}

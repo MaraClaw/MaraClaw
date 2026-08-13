@@ -4,13 +4,13 @@
 BEGIN;
 
 
-DO $$ BEGIN CREATE TYPE im_provider_enum AS ENUM ('feishu', 'dingtalk', 'wecom', 'microsoft_teams', 'web_only'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE im_provider_enum AS ENUM ('feishu', 'dingtalk', 'wecom', 'microsoft_teams', 'google_chat', 'web_only'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE user_role_enum AS ENUM ('platform_admin', 'org_admin', 'agent_admin', 'member'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE agent_status_enum AS ENUM ('creating', 'running', 'idle', 'stopped', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE activity_action_enum AS ENUM ('chat_reply', 'tool_call', 'feishu_msg_sent', 'agent_msg_sent', 'web_msg_sent', 'task_created', 'task_updated', 'file_written', 'error', 'schedule_run', 'heartbeat', 'plaza_post'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE permission_scope_enum AS ENUM ('company', 'department', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE approval_status_enum AS ENUM ('pending', 'approved', 'rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE channel_type_enum AS ENUM ('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', 'atlassian', 'microsoft_teams', 'agentbay'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE channel_type_enum AS ENUM ('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', 'atlassian', 'microsoft_teams', 'agentbay', 'google_chat'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE chat_role_enum AS ENUM ('user', 'assistant', 'system', 'tool_call'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE task_type_enum AS ENUM ('todo', 'supervision'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE task_status_enum AS ENUM ('pending', 'doing', 'done'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
