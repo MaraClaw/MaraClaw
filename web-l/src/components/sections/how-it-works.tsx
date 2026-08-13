@@ -82,7 +82,7 @@ export function HowItWorks() {
                       : 'border-border bg-card',
                   )}
                 >
-                  {/* Vertical connector — mobile only, between cards */}
+                  {/* Vertical connector - mobile only, between cards */}
                   {index < steps.length - 1 ? (
                     <div
                       aria-hidden

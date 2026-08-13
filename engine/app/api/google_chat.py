@@ -170,7 +170,7 @@ async def _process_message_event(
 
     user_text = event.text
     if event.has_attachment and not user_text:
-        # Attachments not downloaded yet — honest failure instead of empty LLM turn.
+        # Attachments not downloaded yet - honest failure instead of empty LLM turn.
         notice = (
             "I received an attachment, but Google Chat attachment download is not enabled yet. "
             "Please send the content as text, or re-send with a text caption."

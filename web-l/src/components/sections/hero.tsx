@@ -1,7 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, Bot, MessageSquare, ShieldCheck, Sparkles } from 'lucide-react'
 
-import { AgentWorkspace } from '@/components/sections/agent-workspace'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { fadeUp, staggerContainer } from '@/lib/motion'
@@ -78,24 +77,22 @@ export function Hero() {
 
           <motion.ul
             variants={reduce ? undefined : fadeUp}
-            className="mt-8 flex flex-wrap items-center justify-center gap-x-5 gap-y-2.5 text-sm font-medium text-muted-foreground"
+            className="mx-auto mt-10 flex max-w-full flex-nowrap items-center justify-start gap-x-5 overflow-x-auto whitespace-nowrap px-1 pb-1 text-base font-medium text-muted-foreground [scrollbar-width:none] sm:justify-center sm:gap-x-8 sm:overflow-visible sm:text-[1.0625rem] sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden"
           >
-            <li className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="size-4 text-primary" aria-hidden />
+            <li className="inline-flex shrink-0 items-center gap-2">
+              <ShieldCheck className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
               Multi-tenant controls
             </li>
-            <li className="inline-flex items-center gap-1.5">
-              <MessageSquare className="size-4 text-primary" aria-hidden />
-              Feishu · WeCom · Slack · Google Chat · Discord · MS Teams
+            <li className="inline-flex shrink-0 items-center gap-2">
+              <MessageSquare className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
+              Feishu · WeCom · Slack · Google Chat · Discord · MS Teams · WhatsApp
             </li>
-            <li className="inline-flex items-center gap-1.5">
-              <Bot className="size-4 text-primary" aria-hidden />
+            <li className="inline-flex shrink-0 items-center gap-2">
+              <Bot className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
               20+ role templates
             </li>
           </motion.ul>
         </motion.div>
-
-        <AgentWorkspace />
       </div>
     </section>
   )
