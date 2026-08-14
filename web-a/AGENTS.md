@@ -61,6 +61,7 @@ web-a/
 | Login UI | `src/pages/login.tsx` |
 | Forgot / reset password | `src/pages/forgot-password.tsx`, `reset-password.tsx` |
 | Change password | `src/pages/account.tsx` |
+| Sign out / session | `src/pages/settings.tsx` |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |

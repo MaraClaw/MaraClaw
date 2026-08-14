@@ -22,8 +22,13 @@ export function ProtectedRoute() {
     return <Navigate to="/login" replace state={{ from: location }} />
   }
 
-  const onAccount = location.pathname === '/account' || location.pathname.startsWith('/account/')
-  if (mustChangePassword && !onAccount) {
+  const path = location.pathname
+  const allowedWhileForced =
+    path === '/account' ||
+    path.startsWith('/account/') ||
+    path === '/settings' ||
+    path.startsWith('/settings/')
+  if (mustChangePassword && !allowedWhileForced) {
     return <Navigate to="/account" replace state={{ from: location, forcePasswordChange: true }} />
   }
 
