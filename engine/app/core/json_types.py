@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeIs
+from datetime import date, datetime
+from typing import Any, Protocol, TypeIs
+from uuid import UUID
 
 type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 type JsonObject = dict[str, JsonValue]
+
+
+class SupportsJson(Protocol):
+    """HTTP-style payload that can be decoded as JSON."""
+
+    def json(self) -> object: ...
 
 
 def json_as_str(value: object) -> str | None:
@@ -47,6 +55,42 @@ def json_object_from(value: object) -> JsonObject:
     return value if is_json_object(value) else {}
 
 
+def json_loads_object(value: str | bytes | bytearray) -> JsonObject:
+    """Parse JSON text and return an object, or ``{}`` when the payload is not a mapping."""
+    return json_object_from(json_loads_value(value))
+
+
+def json_loads_value(value: str | bytes | bytearray) -> object:
+    """Parse JSON text and return the decoded value."""
+    import json
+
+    loaded: object = json.loads(value)
+    return loaded
+
+
+def json_object_from_response(response: SupportsJson) -> JsonObject:
+    """Decode an HTTP JSON body when it is an object, otherwise ``{}``."""
+    return json_object_from(response.json())
+
+
+def json_value_from_response(response: SupportsJson) -> object:
+    """Decode an HTTP JSON body without assuming an object payload."""
+    return response.json()
+
+
+def object_from_literal(value: str) -> object:
+    """Decode a JSON document or Python literal as ``object``."""
+    import ast
+    import json
+
+    try:
+        loaded: object = ast.literal_eval(value)
+        return loaded
+    except ValueError, SyntaxError:
+        loaded = json.loads(value)
+        return loaded if is_json_value(loaded) else None
+
+
 def is_str_dict(value: object) -> TypeIs[dict[str, Any]]:
     """Narrow a mapping to ``dict[str, Any]`` (JSONB objects, callback payloads)."""
     return isinstance(value, dict)
@@ -62,15 +106,91 @@ def mapping_from_row(value: object) -> dict[str, Any]:
     return value if is_str_dict(value) else {}
 
 
+def object_mapping_from(value: object) -> dict[str, object]:
+    """Return a ``dict[str, object]`` copy of a mapping, otherwise ``{}``."""
+    if not isinstance(value, dict):
+        return {}
+    mapping: dict[object, object] = dict(value)
+    return {str(key): item for key, item in mapping.items()}
+
+
 def str_list_from_row(value: object) -> list[str]:
     """Return string items from a JSON array, otherwise an empty list."""
-    if not is_any_list(value):
+    if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, str)]
+    items = list[object](value)
+    return [item for item in items if isinstance(item, str)]
 
 
 def object_list_from_row(value: object) -> list[dict[str, Any]]:
     """Return mapping items from a JSON array, otherwise an empty list."""
-    if not is_any_list(value):
+    if not isinstance(value, list):
         return []
-    return [item for item in value if is_str_dict(item)]
+    items = list[object](value)
+    return [item for item in items if is_str_dict(item)]
+
+
+def uuid_from_row(value: object) -> UUID:
+    """Require a UUID-ish cell from a DictRow."""
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
+def uuid_from_row_opt(value: object) -> UUID | None:
+    return None if value is None else uuid_from_row(value)
+
+
+def datetime_from_row(value: object) -> datetime | None:
+    return value if isinstance(value, datetime) else None
+
+
+def date_from_row(value: object) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise TypeError(f"expected date, got {type(value)!r}")
+
+
+def date_from_row_opt(value: object) -> date | None:
+    return None if value is None else date_from_row(value)
+
+
+def object_attr(value: object, name: str, default: object = None) -> object:
+    """Read an attribute without leaking ``Any`` from ``getattr``."""
+    from typing import cast
+
+    return cast(object, getattr(value, name, default))
+
+
+def str_from_row(value: object, default: str = "") -> str:
+    if isinstance(value, str):
+        return value
+    return default if value is None else str(value)
+
+
+def str_from_row_opt(value: object) -> str | None:
+    return None if value is None else str_from_row(value)
+
+
+def float_from_row(value: object, default: float = 0.0) -> float:
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default
+
+
+def uuid_list_from_rows(rows: list[dict[str, object]], key: str = "id") -> list[UUID]:
+    return [uuid_from_row(row[key]) for row in rows]
+
+
+def int_from_row(value: object, default: int = 0) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return default
