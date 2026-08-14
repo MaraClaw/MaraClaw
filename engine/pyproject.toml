@@ -178,10 +178,12 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
-# 90% gate on the admin / tenant / auth surface
+# Coverage modules for the admin / tenant / auth surface. The 90% fail-under
+# gate lives in scripts/test.sh so a single-file pytest run is not blocked.
 addopts = [
     "--cov=app.api.admin",
     "--cov=app.api.users",
+    "--cov=app.api.tenants",
     "--cov=app.services.admin_provisioning",
     "--cov=app.services.admin_audit",
     "--cov=app.services.tenant_provisioning",
@@ -189,7 +191,6 @@ addopts = [
     "--cov=app.dao.admin_audit_dao",
     "--cov=app.core.security",
     "--cov-report=term-missing:skip-covered",
-    "--cov-fail-under=90",
 ]
 
 [tool.coverage.run]
