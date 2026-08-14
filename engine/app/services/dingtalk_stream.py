@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Coroutine
 from concurrent.futures import Future as ConcurrentFuture
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
 
 import httpx
 
@@ -649,11 +649,23 @@ class DingTalkStreamManager:
                 traceback.print_exc()
                 return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, str(e)
 
-        class MaraClawChatbotHandler:
+        class MaraClawChatbotHandler(dingtalk_stream.ChatbotHandler):
             """Dispatches DingTalk stream messages to the MaraClaw LLM pipeline."""
 
-            async def process(self, message: dingtalk_stream.CallbackMessage) -> tuple[int, str]:
-                return await process_dingtalk_stream_message(message)
+            async def raw_process(
+                self, callback_message: dingtalk_stream.CallbackMessage
+            ) -> dingtalk_stream.AckMessage:
+                code, message = await process_dingtalk_stream_message(callback_message)
+                ack = dingtalk_stream.AckMessage()
+                ack.code = code
+                headers = ack.headers
+                for name, value in (
+                    ("message_id", callback_message.headers.message_id),
+                    ("content_type", "application/json"),
+                ):
+                    setattr(headers, name, value)
+                ack.data = {"response": message}
+                return ack
 
         while not stop_event.is_set() and retries <= max_retries:
             try:
@@ -662,7 +674,7 @@ class DingTalkStreamManager:
                 handler = MaraClawChatbotHandler()
                 client.register_callback_handler(
                     dingtalk_stream.chatbot.ChatbotMessage.TOPIC,
-                    cast(dingtalk_stream.CallbackHandler, handler),
+                    handler,
                 )
 
                 logger.info(
