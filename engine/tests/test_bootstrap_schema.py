@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.scripts.bootstrap_db import _statement_bodies
+
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "schema_baseline.sql"
 
@@ -55,3 +57,42 @@ def test_hot_path_indexes_are_declared() -> None:
         "ix_chat_sessions_last_message",
     ):
         assert name in sql, name
+
+
+def test_statement_bodies_keeps_semicolon_inside_comment() -> None:
+    sql = (
+        "-- Do not rely on Alembic; this file is the source of truth.\n"
+        "CREATE TABLE IF NOT EXISTS identities (id UUID NOT NULL);\n"
+    )
+    bodies = _statement_bodies(sql)
+    assert bodies == ["CREATE TABLE IF NOT EXISTS identities (id UUID NOT NULL)"]
+
+
+def test_statement_bodies_keeps_dollar_quoted_do_blocks() -> None:
+    sql = (
+        "DO $$ BEGIN CREATE TYPE im_provider_enum AS ENUM ('feishu', 'wecom'); "
+        "EXCEPTION WHEN duplicate_object THEN NULL; END $$;\n"
+        "CREATE TABLE IF NOT EXISTS identities (id UUID NOT NULL);\n"
+    )
+    bodies = _statement_bodies(sql)
+    assert len(bodies) == 2
+    assert bodies[0].startswith("DO $$ BEGIN CREATE TYPE im_provider_enum")
+    assert bodies[0].endswith("END $$")
+    assert bodies[1].startswith("CREATE TABLE IF NOT EXISTS identities")
+
+
+def test_statement_bodies_skips_transaction_wrappers() -> None:
+    sql = "BEGIN;\nCREATE TABLE IF NOT EXISTS t (id UUID);\nCOMMIT;\n"
+    assert _statement_bodies(sql) == ["CREATE TABLE IF NOT EXISTS t (id UUID)"]
+
+
+def test_baseline_splits_into_complete_statements() -> None:
+    sql = BASELINE.read_text(encoding="utf-8")
+    bodies = _statement_bodies(sql)
+    assert bodies, "baseline should produce statements"
+    assert all(not body.startswith("this file") for body in bodies)
+    assert all(not body.upper().startswith("EXCEPTION") for body in bodies)
+    assert all(not body.upper().startswith(("BEGIN", "COMMIT", "END $$")) for body in bodies)
+    do_blocks = [body for body in bodies if body.lstrip().startswith("DO $$")]
+    assert do_blocks, "baseline should include DO $$ enum/constraint blocks"
+    assert all(body.rstrip().endswith("$$") for body in do_blocks)
