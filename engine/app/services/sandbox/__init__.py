@@ -24,6 +24,7 @@ from app.services.sandbox.base import (
     ExecutionResult,
     SandboxBackend,
     SandboxCapabilities,
+    resolve_exec_timeout,
 )
 from app.services.sandbox.config import SandboxConfig, SandboxType
 from app.services.sandbox.registry import (
@@ -42,4 +43,5 @@ __all__ = [
     "get_registered_backends",
     "get_sandbox_backend",
     "register_sandbox_backend",
+    "resolve_exec_timeout",
 ]

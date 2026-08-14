@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Protocol, TypeGuard, override
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -127,7 +127,7 @@ class E2bBackend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using E2B cloud sandbox."""
-        timeout = exec_timeout
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Map language to E2B format

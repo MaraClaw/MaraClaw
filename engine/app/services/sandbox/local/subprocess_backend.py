@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import ClassVar, NotRequired, TypedDict, override
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 from app.services.workspace_paths import WorkspacePathError, resolve_path_within_root
 
@@ -447,7 +447,7 @@ class SubprocessBackend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code in a subprocess."""
-        timeout = exec_timeout
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         on_output = _execute_kwarg(kwargs, "on_output")
         agent_id = _execute_kwarg(kwargs, "agent_id")
         start_time = time.time()

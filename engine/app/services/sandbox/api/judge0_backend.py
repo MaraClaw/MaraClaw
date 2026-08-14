@@ -8,7 +8,7 @@ import httpx
 
 from app.core.json_types import json_as_int, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 # Judge0 language IDs
@@ -76,7 +76,7 @@ class Judge0Backend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using Judge0 API."""
-        timeout = exec_timeout
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Get language ID

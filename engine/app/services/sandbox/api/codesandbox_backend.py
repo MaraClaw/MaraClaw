@@ -7,7 +7,7 @@ import httpx
 
 from app.core.json_types import json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 # CodeSandbox language mapping
@@ -72,7 +72,7 @@ class CodeSandboxBackend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using CodeSandbox API."""
-        timeout = exec_timeout
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Map language

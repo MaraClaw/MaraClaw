@@ -8,7 +8,7 @@ from anyio import fail_after
 from anyio.to_thread import run_sync
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -142,7 +142,7 @@ class DockerBackend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code inside a docker container."""
-        timeout = exec_timeout
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Validate language

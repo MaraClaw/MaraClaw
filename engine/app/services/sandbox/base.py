@@ -83,6 +83,16 @@ class SandboxBackend(Protocol):
         ...
 
 
+def resolve_exec_timeout(exec_timeout: int, kwargs: dict[str, object], *, default: int = 30) -> int:
+    """Honor leftover ``timeout=`` kwargs when ``exec_timeout`` is the default."""
+    legacy = kwargs.pop("timeout", None)
+    if exec_timeout != default:
+        return exec_timeout
+    if isinstance(legacy, bool) or not isinstance(legacy, int | float):
+        return exec_timeout
+    return int(legacy)
+
+
 class BaseSandboxBackend(ABC):
     """Base class providing common functionality for sandbox backends."""
 
