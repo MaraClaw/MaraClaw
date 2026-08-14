@@ -1,6 +1,7 @@
 import inspect
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -69,7 +70,7 @@ async def test_delete_tenant_cascade_and_fallback(monkeypatch) -> None:
     deleted: list[uuid.UUID] = []
 
     async def fake_get(_id):
-        return SimpleNamespace(id=_id)
+        return SimpleNamespace(id=_id, name="Acme")
 
     async def fake_delete(_id):
         deleted.append(_id)
@@ -79,7 +80,8 @@ async def test_delete_tenant_cascade_and_fallback(monkeypatch) -> None:
         return fallback_tenant_id
 
     monkeypatch.setattr(tenants_api.tenant_dao, "get", fake_get)
-    monkeypatch.setattr(tenants_api.tenant_dao, "delete_cascade", fake_delete)
+    monkeypatch.setattr(tenants_api, "delete_tenant_and_release_identities", fake_delete)
+    monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
     monkeypatch.setattr(tenants_api.user_dao, "fallback_tenant_for_identity", fake_fallback)
 
     response = await tenants_api.delete_tenant(tenant_id, make_user(tenant_id))
@@ -99,7 +101,7 @@ async def test_delete_tenant_does_not_fallback_when_cleanup_fails(monkeypatch) -
         raise RuntimeError("cleanup failed")
 
     monkeypatch.setattr(tenants_api.tenant_dao, "get", fake_get)
-    monkeypatch.setattr(tenants_api.tenant_dao, "delete_cascade", fake_delete)
+    monkeypatch.setattr(tenants_api, "delete_tenant_and_release_identities", fake_delete)
 
     with pytest.raises(RuntimeError, match="cleanup failed"):
         await tenants_api.delete_tenant(tenant_id, make_user(tenant_id))

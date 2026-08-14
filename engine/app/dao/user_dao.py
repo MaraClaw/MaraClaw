@@ -27,6 +27,7 @@ _USER_COLUMNS = (
     "quota_period_start",
     "quota_max_agents",
     "quota_agent_ttl_hours",
+    "is_genesis",
 )
 
 _IDENTITY_COLUMNS = (
@@ -222,8 +223,121 @@ class UserDAO(BaseDAO[UserRecord]):
     async def first_by_role(self, role: str) -> UserRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM users WHERE role = %(role)s LIMIT 1",
+                f"SELECT {self._select_list()} FROM users WHERE role = %(role)s "
+                "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                 {"role": role},
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def first_org_admin_for_tenant(self, tenant_id: Any) -> UserRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
+                "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                {"tenant_id": tenant_id},
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def count_by_role(self, role: str) -> int:
+        async with self.session() as db:
+            value = await db.fetchval(
+                "SELECT COUNT(*) FROM users WHERE role = %(role)s",
+                {"role": role},
+            )
+            return int(value or 0)
+
+    async def list_by_role(self, role: str, *, include_identity: bool = True) -> Sequence[UserRecord]:
+        async with self.session() as db:
+            if include_identity:
+                rows = await db.fetchall(
+                    f"SELECT {self._select_list('u')}, {self._identity_select()} "
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.role = %(role)s ORDER BY u.created_at ASC NULLS LAST",
+                    {"role": role},
+                )
+                return [_user_from_joined_row(row) for row in rows]
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM users WHERE role = %(role)s "
+                "ORDER BY created_at ASC NULLS LAST",
+                {"role": role},
+            )
+            return [UserRecord.from_row(row) for row in rows]
+
+    async def list_org_admins_for_tenant(self, tenant_id: Any, *, include_identity: bool = True) -> Sequence[UserRecord]:
+        async with self.session() as db:
+            if include_identity:
+                rows = await db.fetchall(
+                    f"SELECT {self._select_list('u')}, {self._identity_select()} "
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
+                    "ORDER BY u.created_at ASC NULLS LAST",
+                    {"tenant_id": tenant_id},
+                )
+                return [_user_from_joined_row(row) for row in rows]
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
+                "ORDER BY created_at ASC NULLS LAST",
+                {"tenant_id": tenant_id},
+            )
+            return [UserRecord.from_row(row) for row in rows]
+
+    async def count_active_by_role(self, role: str, *, tenant_id: Any | None = None) -> int:
+        params: dict[str, Any] = {"role": role}
+        tenant_sql = ""
+        if tenant_id is not None:
+            tenant_sql = " AND tenant_id = %(tenant_id)s"
+            params["tenant_id"] = tenant_id
+        async with self.session() as db:
+            value = await db.fetchval(
+                f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}",
+                params,
+            )
+            return int(value or 0)
+
+    async def deactivate_unless_last_active(
+        self, user_id: Any, *, role: str, tenant_id: Any | None = None
+    ) -> UserRecord | None:
+        """Deactivate ``user_id`` only when another active peer of ``role`` exists."""
+        params: dict[str, Any] = {"user_id": user_id, "role": role}
+        tenant_sql = ""
+        if tenant_id is not None:
+            tenant_sql = " AND tenant_id = %(tenant_id)s"
+            params["tenant_id"] = tenant_id
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"UPDATE users SET is_active = FALSE, updated_at = now() "
+                f"WHERE id = %(user_id)s AND is_active IS TRUE AND ("
+                f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
+                f") > 1 RETURNING {self._select_list()}",
+                params,
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def list_identity_ids_for_tenant(self, tenant_id: Any) -> list[Any]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT identity_id FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND identity_id IS NOT NULL",
+                {"tenant_id": tenant_id},
+            )
+            return [row["identity_id"] for row in rows]
+
+    async def genesis_platform_admin(self) -> UserRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE role = 'platform_admin' AND is_genesis IS TRUE LIMIT 1",
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def genesis_org_admin_for_tenant(self, tenant_id: Any) -> UserRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' AND is_genesis IS TRUE LIMIT 1",
+                {"tenant_id": tenant_id},
             )
             return UserRecord.from_row(row) if row else None
 

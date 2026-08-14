@@ -55,7 +55,7 @@ class RecordingDockerClient:
 
 
 class OpenClawMemorySettings:
-    def __init__(self, wrapped_settings, memory_enabled: bool, plugin_version: str = "0.3.6"):
+    def __init__(self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.1"):
         self.wrapped_settings = wrapped_settings
         self.OPENCLAW_MEMORY_TENCENTDB_ENABLED = memory_enabled
         self.TENCENTDB_PLUGIN_VERSION = plugin_version
@@ -69,7 +69,7 @@ def test_openclaw_tencentdb_memory_setting_defaults_to_enabled():
 
 
 def test_tencentdb_plugin_version_setting_defaults_to_pinned_version():
-    assert Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "0.3.6"
+    assert Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "1.0.1"
 
 
 def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_enabled(monkeypatch):

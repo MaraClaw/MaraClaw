@@ -31,6 +31,7 @@ class UserRecord:
     quota_period_start: datetime | None = None
     quota_max_agents: int = 2
     quota_agent_ttl_hours: int = 0
+    is_genesis: bool = False
     identity: IdentityRecord | None = None
 
     @classmethod
@@ -53,6 +54,7 @@ class UserRecord:
             quota_period_start=row.get("quota_period_start"),
             quota_max_agents=int(row.get("quota_max_agents") or 2),
             quota_agent_ttl_hours=int(row.get("quota_agent_ttl_hours") or 0),
+            is_genesis=bool(row.get("is_genesis", False)),
             identity=identity,
         )
 

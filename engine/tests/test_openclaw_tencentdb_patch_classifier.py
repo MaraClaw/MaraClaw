@@ -47,9 +47,39 @@ process.stdout.write(`${process.version}\\n${acorn.version}:${ast.type}:${ast.bo
     lines = result.stdout.splitlines()
     assert len(lines) == 2, result.stdout
     node_ver, ast_line = lines
-    if not node_ver.startswith("v26.5.0"):
-        pytest.skip(f"pinned Node 26.5.0 not available ({node_ver})")
+    if not node_ver.startswith("v26.7.0"):
+        pytest.skip(f"pinned Node 26.7.0 not available ({node_ver})")
     assert ast_line.endswith(":Program:ChainExpression")
+    assert result.stderr == ""
+
+
+def test_classifier_classifies_has_hooks_if_block_with_run_after_tool_call(
+    tmp_path: Path,
+) -> None:
+    # Given - OpenClaw 2026.7.1-2 ships this gated after_tool_call shape
+    target = _write_target(
+        tmp_path,
+        "selection-hook.js",
+        """const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+  const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : void 0;
+  const hookEvent = {
+    toolName,
+    durationMs
+  };
+  hookRunnerAfter.runAfterToolCall(hookEvent, { toolName }).catch((err) => {
+    ctx.log.warn(String(err));
+  });
+}
+""",
+    )
+
+    # When
+    result = run_classifier(target)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "unpatched\n"
     assert result.stderr == ""
 
 

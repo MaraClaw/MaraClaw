@@ -60,6 +60,8 @@ def _log_bwrap_startup_status() -> None:
             logger.warning(f"[startup] bubblewrap found at {bwrap_path} but stat failed: {exc}")
 
         # Non-fatal probe: userns may be unavailable; --unshare-user-try should still succeed.
+        # Bind the host paths bwrap needs to exec /bin/true - an empty namespace
+        # reports "execvp true: No such file or directory" even when isolation works.
         try:
             probe = subprocess.run(  # noqa: S603 - fixed argv; path from shutil.which
                 [
@@ -67,8 +69,20 @@ def _log_bwrap_startup_status() -> None:
                     "--die-with-parent",
                     "--unshare-pid",
                     "--unshare-user-try",
+                    "--ro-bind-try",
+                    "/usr",
+                    "/usr",
+                    "--ro-bind-try",
+                    "/bin",
+                    "/bin",
+                    "--ro-bind-try",
+                    "/lib",
+                    "/lib",
+                    "--ro-bind-try",
+                    "/lib64",
+                    "/lib64",
                     "--",
-                    "true",
+                    "/bin/true",
                 ],
                 capture_output=True,
                 timeout=5,
@@ -246,8 +260,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"[startup] Default company seed or A2A enable failed: {e}")
 
-        # Genesis platform admin is required for a usable bootstrap. Fail closed so
-        # fresh installs do not serve API without an operator account.
+        # Genesis platform admin credentials must exist in the database, or
+        # PLATFORM_ADMIN_* env vars seed them. Fail closed otherwise.
         from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
 
         try:

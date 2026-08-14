@@ -7,12 +7,16 @@ Pure-psycopg path.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from psycopg import errors as pg_errors
 
 from app.db.pool import close_pool, init_pool
 from app.db.session import connection_ctx
+
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
+_TX_WRAPPERS = frozenset({"BEGIN", "COMMIT", "BEGIN TRANSACTION", "COMMIT TRANSACTION"})
 
 _IGNORABLE = (
     pg_errors.DuplicateTable,
@@ -67,16 +71,186 @@ PATCHES = [
     "DO $$ BEGIN ALTER TYPE channel_type_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     "DO $$ BEGIN ALTER TYPE im_provider_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     "ALTER TABLE identities ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
+    """
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id UUID NOT NULL,
+        actor_id UUID,
+        actor_role VARCHAR(32) NOT NULL,
+        actor_email VARCHAR(255),
+        action VARCHAR(100) NOT NULL,
+        target_type VARCHAR(50) NOT NULL,
+        target_id UUID,
+        tenant_id UUID,
+        changes JSON NOT NULL DEFAULT '{}',
+        details JSON NOT NULL DEFAULT '{}',
+        ip_address VARCHAR(50),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (id),
+        FOREIGN KEY(actor_id) REFERENCES users (id) ON DELETE SET NULL,
+        FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE SET NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis BOOLEAN NOT NULL DEFAULT false",
+    """
+    UPDATE users SET is_genesis = TRUE
+    WHERE id = (
+        SELECT id FROM users WHERE role = 'platform_admin'
+        ORDER BY created_at ASC NULLS LAST LIMIT 1
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM users WHERE is_genesis IS TRUE AND role = 'platform_admin'
+    )
+    """,
+    """
+    UPDATE users AS u SET is_genesis = TRUE
+    FROM (
+        SELECT DISTINCT ON (tenant_id) id
+        FROM users
+        WHERE role = 'org_admin' AND tenant_id IS NOT NULL
+        ORDER BY tenant_id, created_at ASC NULLS LAST
+    ) AS g
+    WHERE u.id = g.id
+    AND NOT EXISTS (
+        SELECT 1 FROM users AS x
+        WHERE x.tenant_id = u.tenant_id AND x.is_genesis IS TRUE AND x.role = 'org_admin'
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
+    ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin'
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
+    ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin'
+    """,
 ]
 
 
+def _clean_statement(stmt: str) -> str:
+    body = "\n".join(line for line in stmt.splitlines() if not line.strip().startswith("--")).strip()
+    if body.upper() in _TX_WRAPPERS:
+        return ""
+    return body
+
+
 def _statement_bodies(sql: str) -> list[str]:
-    cleaned = sql.replace("BEGIN;", "").replace("COMMIT;", "")
+    """Split SQL on top-level semicolons.
+
+    Semicolons inside ``--`` / ``/* */`` comments, quoted strings, and
+    dollar-quoted bodies (``DO $$ ... $$``) are not statement boundaries.
+    Transaction wrappers are dropped because ``connection_ctx`` already commits.
+    """
     bodies: list[str] = []
-    for stmt in cleaned.split(";"):
-        body = "\n".join(line for line in stmt.splitlines() if not line.strip().startswith("--")).strip()
+    buf: list[str] = []
+    i = 0
+    n = len(sql)
+    in_line_comment = False
+    in_block_comment = False
+    in_single = False
+    in_double = False
+    dollar_tag: str | None = None
+
+    def flush() -> None:
+        body = _clean_statement("".join(buf))
+        buf.clear()
         if body:
             bodies.append(body)
+
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+
+        if in_line_comment:
+            buf.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            buf.append(ch)
+            if ch == "*" and nxt == "/":
+                buf.append(nxt)
+                i += 2
+                in_block_comment = False
+                continue
+            i += 1
+            continue
+
+        if in_single:
+            buf.append(ch)
+            if ch == "'":
+                if nxt == "'":
+                    buf.append(nxt)
+                    i += 2
+                    continue
+                in_single = False
+            i += 1
+            continue
+
+        if in_double:
+            buf.append(ch)
+            if ch == '"':
+                if nxt == '"':
+                    buf.append(nxt)
+                    i += 2
+                    continue
+                in_double = False
+            i += 1
+            continue
+
+        if dollar_tag is not None:
+            if sql.startswith(dollar_tag, i):
+                buf.append(dollar_tag)
+                i += len(dollar_tag)
+                dollar_tag = None
+                continue
+            buf.append(ch)
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            buf.append(ch)
+            buf.append(nxt)
+            i += 2
+            in_line_comment = True
+            continue
+        if ch == "/" and nxt == "*":
+            buf.append(ch)
+            buf.append(nxt)
+            i += 2
+            in_block_comment = True
+            continue
+        if ch == "'":
+            buf.append(ch)
+            i += 1
+            in_single = True
+            continue
+        if ch == '"':
+            buf.append(ch)
+            i += 1
+            in_double = True
+            continue
+        if ch == "$":
+            match = _DOLLAR_TAG.match(sql, i)
+            if match:
+                dollar_tag = match.group(0)
+                buf.append(dollar_tag)
+                i += len(dollar_tag)
+                continue
+        if ch == ";":
+            flush()
+            i += 1
+            continue
+
+        buf.append(ch)
+        i += 1
+
+    flush()
     return bodies
 
 

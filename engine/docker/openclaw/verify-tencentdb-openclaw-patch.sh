@@ -40,6 +40,9 @@ non_target_digests=()
 
 is_exact_target() {
     local target="$1"
+    # GNU perl -n never runs the script body on an empty file, so it exits 0.
+    # OpenClaw ships empty Vite browser-external stubs under dist/control-ui.
+    [[ -s "$target" ]] || return 1
     if [[ "$(basename "$target")" == dispatch-*.js ]] \
         && perl -0ne 'exit 0 if /after_tool_call[\s\S]{0,2000}durationMs/; exit 1' "$target" \
         && grep -qP '^\s+durationMs\s*$' "$target"; then

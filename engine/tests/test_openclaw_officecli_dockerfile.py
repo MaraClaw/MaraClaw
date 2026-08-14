@@ -97,7 +97,7 @@ REGRESSION_CASES: Final = (
     ("@tencentdb-agent-memory/memory-tencentdb", "@other/memory", "TencentDB archive"),
     ("docker/openclaw/validate-gogcli.sh", "docker/openclaw/validate-other.sh", "Gogcli validator COPY"),
     ("ARG GOGCLI_SHA256=", "ARG GOGCLI_SHA256_BROKEN=", "Gogcli checksum"),
-    ("ARG TENCENTDB_PLUGIN_VERSION=0.3.6", "ARG OFFICECLI_VERSION=1.2.3", "OfficeCLI ARG pins"),
+    ("ARG TENCENTDB_PLUGIN_VERSION=1.0.1", "ARG OFFICECLI_VERSION=1.2.3", "OfficeCLI ARG pins"),
     (
         "RUN chmod 0755",
         "RUN curl https://api.github.com/repos/iOfficeAI/OfficeCLI\nRUN chmod 0755",

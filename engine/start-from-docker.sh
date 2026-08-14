@@ -17,8 +17,8 @@
 #   ./start-from-docker.sh -- <extra docker run args>
 #
 # Environment overrides (set in .env OR on the command line):
-#   IMAGE_NAME           image tag                       (default: maraclaw-backend:local)
-#   CONTAINER_NAME       container name                  (default: maraclaw-backend)
+#   IMAGE_NAME           image tag                       (default: maraclaw-engine:local)
+#   CONTAINER_NAME       container name                  (default: maraclaw-engine)
 #   PORT                 host port mapped to 8000        (default: 8000)
 #   DATA_DIR             host dir mounted at /data       (default: ./.docker-data)
 #   APT_MIRROR           build-time apt mirror           (e.g. mirrors.ustc.edu.cn)
@@ -55,8 +55,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # ---- Defaults (applied AFTER sourcing .env so .env can override) -----------
-IMAGE_NAME="${IMAGE_NAME:-maraclaw-backend:local}"
-CONTAINER_NAME="${CONTAINER_NAME:-maraclaw-backend}"
+IMAGE_NAME="${IMAGE_NAME:-maraclaw-engine:local}"
+CONTAINER_NAME="${CONTAINER_NAME:-maraclaw-engine}"
 PORT="${PORT:-8000}"
 DATA_DIR="${DATA_DIR:-$SCRIPT_DIR/.docker-data}"
 
@@ -133,8 +133,20 @@ RUN_ARGS=(
     --name "$CONTAINER_NAME"
     -p "${PORT}:8000"
     -v "${DATA_DIR}:/data"
+    # Setuid bwrap needs these caps plus an unconfined seccomp profile.
+    # Default Docker drops them, so execute_code cannot create namespaces
+    # (capset / pivot_root → Operation not permitted). Do not pass --privileged.
+    --cap-add=SYS_ADMIN
+    --cap-add=SETUID
+    --cap-add=SETGID
+    --cap-add=SYS_CHROOT
+    --cap-add=SETPCAP
+    --security-opt seccomp=unconfined
     # AGENT_DATA_DIR is pinned to the mount path; never let .env override it.
     -e "AGENT_DATA_DIR=/data/agents"
+    # Detached/non-TTY runs fully buffer CPython stdout; without this, uvicorn
+    # and the app logger appear silent in `docker logs` until the buffer fills.
+    -e "PYTHONUNBUFFERED=1"
 )
 
 # Forward each .env-declared variable from host env into the container.
@@ -159,6 +171,7 @@ else
 fi
 
 echo "[docker-run] Starting container $CONTAINER_NAME on http://localhost:${PORT}"
+echo "[docker-run] Warning: setuid bwrap needs SYS_ADMIN/SETUID/SETGID/SYS_CHROOT/SETPCAP and seccomp=unconfined. A sandbox escape can reach the host."
 if [ "${#EXTRA_RUN_ARGS[@]}" -gt 0 ]; then
     exec "$ENGINE" run "${RUN_ARGS[@]}" "${EXTRA_RUN_ARGS[@]}" "$IMAGE_NAME"
 else

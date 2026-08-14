@@ -7,11 +7,13 @@ REQUIRED_ARGUMENTS: Final = (
     ("BASH_VERSION", "5.2.15-2+b13"),
     ("CURL_VERSION", "7.88.1-10+deb12u15"),
     ("LIBCURL4_VERSION", "7.88.1-10+deb12u15"),
+    ("LIBICU72_VERSION", "72.1-3+deb12u1"),
 )
 REQUIRED_INSTALLS: Final = (
     "bash=${BASH_VERSION}",
     "curl=${CURL_VERSION}",
     "libcurl4=${LIBCURL4_VERSION}",
+    "libicu72=${LIBICU72_VERSION}",
 )
 VALID_BOOKWORM_PIN_BLOCK: Final = """\
 ARG BASH_VERSION=5.2.15-2+b13

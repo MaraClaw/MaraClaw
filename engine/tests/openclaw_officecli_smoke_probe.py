@@ -13,7 +13,7 @@ test "$OFFICECLI_SKIP_UPDATE" = 1
 test "$OFFICECLI_NO_AUTO_RESIDENT" = 1
 test -f "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md" && test ! -L "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md"
 test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
-test "$(node --version)" = "v26.5.0"
+test "$(node --version)" = "v26.7.0"
 test "$(node -p 'process.arch')" = "arm64"
 node --expose-internals -e 'require("internal/deps/acorn/acorn/dist/acorn").parse("export{{}}",{{sourceType:"module"}})'
 officecli_version="$(officecli --version)"

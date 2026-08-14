@@ -7,10 +7,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = REPO_ROOT / "build-openclaw-local-dockerfile.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-OPENCLAW_VERSION = "2026.7.1"
-OPENCLAW_SHA256 = "sha256:67ad539d9915efb63d5f294beeb9290b7172d23c92d8052110a9c8355f783458"
-GOGCLI_VERSION = "0.35.0"
-GOGCLI_SHA256 = "sha256:6db242904741e280e5e62ff9249fe76c075bad5cc6c06d841e011622803dce34"
+OPENCLAW_VERSION = "2026.7.1-2"
+OPENCLAW_SHA256 = "sha256:5bb525f36f471a41239615d321c441778c7e1c007018ed6d84b795be77803276"
+GOGCLI_VERSION = "0.36.0"
+GOGCLI_SHA256 = "sha256:f68e3c35c9364dea5a4e515d13a23ab30ded46401c90d89e2953dca395d7fe42"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
@@ -165,7 +165,7 @@ def test_openclaw_build_script_rejects_non_arm64_platform(tmp_path: Path) -> Non
     assert not log_path.exists()
 
 
-def test_dockerfile_pins_node_26_5_0_base_image() -> None:
+def test_dockerfile_pins_node_26_7_0_base_image() -> None:
     # Given
     content = DOCKERFILE.read_text(encoding="utf-8")
 
@@ -175,7 +175,7 @@ def test_dockerfile_pins_node_26_5_0_base_image() -> None:
     ]
 
     # Then
-    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.5.0-bookworm-slim"]
+    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.7.0-bookworm-slim"]
 
 
 def test_openclaw_dockerfile_pins_bookworm_packages_without_hadolint_ignore() -> None:
@@ -238,4 +238,4 @@ def test_openclaw_dockerfile_pins_and_verifies_gogcli_release_archive() -> None:
     )
     assert "printf '%s  %s\\n' \"${GOGCLI_SHA256#sha256:}\" /tmp/gogcli.tar.gz" in gogcli_block
     assert "sha256sum -c /tmp/gogcli.tar.gz.sha256" in gogcli_block
-    assert "tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin gog" in gogcli_block
+    assert "tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin ./gog" in gogcli_block

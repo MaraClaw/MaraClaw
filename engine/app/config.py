@@ -146,8 +146,8 @@ class Settings(BaseSettings):
     OPENCLAW_IMAGE: str = "openclaw:local"
     OPENCLAW_GATEWAY_PORT: int = 18789
     OPENCLAW_MEMORY_TENCENTDB_ENABLED: bool = True
-    TENCENTDB_PLUGIN_VERSION: str = "0.3.6"
-    GOGCLI_ENABLED: bool = False
+    TENCENTDB_PLUGIN_VERSION: str = "1.0.1"
+    GOGCLI_ENABLED: bool = True
     # Seed and default-install vendored ClawSec OpenClaw security skills.
     CLAWSEC_SKILLS_ENABLED: bool = True
 

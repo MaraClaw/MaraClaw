@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from app.dao.base import BaseDAO
@@ -65,6 +66,27 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 {"phone": normalized},
             )
             return IdentityRecord.from_row(row) if row else None
+
+    async def tombstone_orphans(self, identity_ids: Sequence[Any]) -> int:
+        """Clear unique login fields on identities that no longer have a membership.
+
+        Frees email / username / phone so the addresses can be reused after a
+        company is deleted. Login is also impossible once ``is_active`` is false
+        and the password hash is cleared.
+        """
+        if not identity_ids:
+            return 0
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE identities SET email = NULL, phone = NULL, username = NULL, "
+                "password_hash = NULL, is_active = FALSE, is_platform_admin = FALSE, "
+                "updated_at = now() "
+                "WHERE id = ANY(%(ids)s) AND NOT EXISTS ("
+                "SELECT 1 FROM users WHERE identity_id = identities.id"
+                ") RETURNING id",
+                {"ids": list(identity_ids)},
+            )
+            return len(rows)
 
     async def is_username_taken(self, username: str) -> bool:
         async with self.session() as db:

@@ -23,8 +23,9 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 - `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation).
 - `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
-- `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True`. Attach `user.identity` before `bind_org_member`. Unique email race → 409.
-- `tenants.py`: self-create / join call `raise_if_password_change_required`. Company self-create defaults **off** (`allow_self_create_company` default false).
+- `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True` via `tenant_provisioning`. Unique email race → 409. `POST /platform-admins` is **genesis platform admin only**. Genesis PA may `PATCH /platform-admins/{id}/active`. Admin trail: `GET /audit-logs`.
+- `tenants.py`: `POST /` is platform-admin only and creates a tenant with its genesis org admin (same service as `POST /admin/companies`). Join always assigns `member`. Assign-user cannot set `org_admin`.
+- `users.py`: `POST /org-admins` and promoting to `org_admin` are **genesis org admin only**. Promoting to `platform_admin` is **genesis platform admin only**. Genesis OA may `PATCH /org-admins/{id}/active`. Company trail: `GET /admin-audit-logs`.
 - Inventory for clients: `docs/admin-apis.md`.
 
 ## Catalog / secrets

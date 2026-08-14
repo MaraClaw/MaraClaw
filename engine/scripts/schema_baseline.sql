@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS users (
 	quota_period_start TIMESTAMP WITH TIME ZONE, 
 	quota_max_agents INTEGER NOT NULL DEFAULT 2, 
 	quota_agent_ttl_hours INTEGER NOT NULL DEFAULT 0, 
+	is_genesis BOOLEAN NOT NULL DEFAULT false, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(identity_id) REFERENCES identities (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
@@ -374,6 +375,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 
 CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
+	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
+	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin';
 
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 
@@ -802,6 +809,29 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at);
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+	id UUID NOT NULL,
+	actor_id UUID,
+	actor_role VARCHAR(32) NOT NULL,
+	actor_email VARCHAR(255),
+	action VARCHAR(100) NOT NULL,
+	target_type VARCHAR(50) NOT NULL,
+	target_id UUID,
+	tenant_id UUID,
+	changes JSON NOT NULL DEFAULT '{}',
+	details JSON NOT NULL DEFAULT '{}',
+	ip_address VARCHAR(50),
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(actor_id) REFERENCES users (id) ON DELETE SET NULL,
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id);
 
 CREATE TABLE IF NOT EXISTS channel_configs (
 	id UUID NOT NULL, 

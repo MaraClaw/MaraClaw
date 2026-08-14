@@ -59,18 +59,41 @@ function containsHookRunner(node) {
     });
 }
 
+function unwrapCatchCall(expression) {
+    if (
+        isNode(expression, "CallExpression")
+        && isNode(expression.callee, "MemberExpression")
+        && !expression.callee.computed
+        && !expression.callee.optional
+        && isIdentifier(expression.callee.property, "catch")
+    ) {
+        return expression.callee.object;
+    }
+    return expression;
+}
+
+function isRunAfterToolCall(expression) {
+    return (
+        isNode(expression, "CallExpression")
+        && !expression.optional
+        && isNode(expression.callee, "MemberExpression")
+        && !expression.callee.computed
+        && !expression.callee.optional
+        && isIdentifier(expression.callee.property, "runAfterToolCall")
+        && containsHookRunner(expression.callee.object)
+    );
+}
+
 function isRunner(statement) {
     if (!isNode(statement, "ExpressionStatement")) {
         return false;
     }
-    const expression = isNode(statement.expression, "AwaitExpression") ? statement.expression.argument : statement.expression;
-    if (!isNode(expression, "CallExpression") || expression.optional || expression.arguments.length !== 0) {
-        return false;
-    }
-    if (isIdentifier(expression.callee, "hookRunnerAfter")) {
+    let expression = isNode(statement.expression, "AwaitExpression") ? statement.expression.argument : statement.expression;
+    expression = unwrapCatchCall(expression);
+    if (isNode(expression, "CallExpression") && !expression.optional && expression.arguments.length === 0 && isIdentifier(expression.callee, "hookRunnerAfter")) {
         return true;
     }
-    return isNode(expression.callee, "MemberExpression") && !expression.callee.computed && !expression.callee.optional && isIdentifier(expression.callee.property, "runAfterToolCall") && containsHookRunner(expression.callee.object);
+    return isRunAfterToolCall(expression);
 }
 
 function hasPropertyName(property, name) {
@@ -130,22 +153,26 @@ function classifyObject(object) {
     return "prepatched";
 }
 
-function collectStatementLists(node, lists) {
+function isHookGatedBlock(node, parent) {
+    return isNode(node, "BlockStatement") && isNode(parent, "IfStatement") && parent.consequent === node && isMarker(parent.test);
+}
+
+function collectStatementLists(node, lists, parent = null) {
     if (node === null || typeof node !== "object") {
         return;
     }
     if (node.type === "Program" || node.type === "BlockStatement" || node.type === "StaticBlock") {
-        lists.push(node.body);
+        lists.push({ statements: node.body, seedMarker: isHookGatedBlock(node, parent) });
     } else if (node.type === "SwitchCase") {
-        lists.push(node.consequent);
+        lists.push({ statements: node.consequent, seedMarker: false });
     }
     for (const value of Object.values(node)) {
         if (Array.isArray(value)) {
             value.forEach((item) => {
-                collectStatementLists(item, lists);
+                collectStatementLists(item, lists, node);
             });
         } else {
-            collectStatementLists(value, lists);
+            collectStatementLists(value, lists, node);
         }
     }
 }
@@ -154,8 +181,8 @@ function classify(ast) {
     const lists = [];
     collectStatementLists(ast, lists);
     const associations = [];
-    for (const statements of lists) {
-        let markerSeen = false;
+    for (const { statements, seedMarker } of lists) {
+        let markerSeen = seedMarker;
         for (let index = 0; index < statements.length; index += 1) {
             const bindings = markerSeen && isRunner(statements[index + 1]) ? directBindings(statements[index]) : [];
             for (const binding of bindings) {

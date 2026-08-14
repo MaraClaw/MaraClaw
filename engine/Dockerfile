@@ -12,7 +12,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc=4:14.2.0-1 \
-        libpq-dev=17.10-0+deb13u1 \
+        libpq-dev=17.11-0+deb13u1 \
         libcairo2=1.18.4-1+b1 \
         libpango-1.0-0=1.56.3-1 \
         libpangocairo-1.0-0=1.56.3-1 \
@@ -46,7 +46,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         "tini=${TINI_VERSION}" \
-        libpq5=17.10-0+deb13u1 \
+        libpq5=17.11-0+deb13u1 \
         curl=8.14.1-2+deb13u4 \
         shadowsocks-libev=3.3.5+ds-16 \
         gosu=1.17-3+b4 \
@@ -60,7 +60,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-        chromium=150.0.7871.181-1~deb13u1 && \
+        chromium=151.0.7922.137-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 
