@@ -133,10 +133,14 @@ RUN_ARGS=(
     --name "$CONTAINER_NAME"
     -p "${PORT}:8000"
     -v "${DATA_DIR}:/data"
-    # Setuid bwrap needs the full capability bounding set plus an unconfined
-    # seccomp profile. Default Docker drops both, so execute_code cannot
-    # create namespaces (capset / pivot_root → Operation not permitted).
-    --cap-add=ALL
+    # Setuid bwrap needs these caps plus an unconfined seccomp profile.
+    # Default Docker drops them, so execute_code cannot create namespaces
+    # (capset / pivot_root → Operation not permitted). Do not pass --privileged.
+    --cap-add=SYS_ADMIN
+    --cap-add=SETUID
+    --cap-add=SETGID
+    --cap-add=SYS_CHROOT
+    --cap-add=SETPCAP
     --security-opt seccomp=unconfined
     # AGENT_DATA_DIR is pinned to the mount path; never let .env override it.
     -e "AGENT_DATA_DIR=/data/agents"
@@ -167,6 +171,7 @@ else
 fi
 
 echo "[docker-run] Starting container $CONTAINER_NAME on http://localhost:${PORT}"
+echo "[docker-run] Warning: setuid bwrap needs SYS_ADMIN/SETUID/SETGID/SYS_CHROOT/SETPCAP and seccomp=unconfined. A sandbox escape can reach the host."
 if [ "${#EXTRA_RUN_ARGS[@]}" -gt 0 ]; then
     exec "$ENGINE" run "${RUN_ARGS[@]}" "${EXTRA_RUN_ARGS[@]}" "$IMAGE_NAME"
 else

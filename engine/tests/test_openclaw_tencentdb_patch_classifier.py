@@ -47,8 +47,8 @@ process.stdout.write(`${process.version}\\n${acorn.version}:${ast.type}:${ast.bo
     lines = result.stdout.splitlines()
     assert len(lines) == 2, result.stdout
     node_ver, ast_line = lines
-    if not node_ver.startswith("v26.5.0"):
-        pytest.skip(f"pinned Node 26.5.0 not available ({node_ver})")
+    if not node_ver.startswith("v26.7.0"):
+        pytest.skip(f"pinned Node 26.7.0 not available ({node_ver})")
     assert ast_line.endswith(":Program:ChainExpression")
     assert result.stderr == ""
 
