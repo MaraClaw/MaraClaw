@@ -545,7 +545,11 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
         )
 
     monkeypatch.setattr("app.dao.identity_dao.get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr("app.dao.user_dao.get_by_identity_and_tenant", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.dao.user_dao.get_by_identity_id", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "app.services.org_membership.place_new_registration",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=None, suggested=None, needs_org_confirm=False)),
+    )
     monkeypatch.setattr(
         "app.services.system_email_service.resolve_email_config_async",
         AsyncMock(return_value=None),

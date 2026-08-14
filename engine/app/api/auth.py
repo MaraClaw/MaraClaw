@@ -32,6 +32,7 @@ from app.schemas.schemas import (
     ResendVerificationRequest,
     ResetPasswordRequest,
     SSORegisterRequest,
+    SuggestedOrg,
     TenantChoice,
     TenantSwitchRequest,
     TenantSwitchResponse,
@@ -137,6 +138,21 @@ async def _send_verification_email_task(
         logger.warning(f"Failed to send verification email for {user.email}: {exc}")
 
 
+def _suggested_org(tenant) -> SuggestedOrg | None:
+    if tenant is None:
+        return None
+    return SuggestedOrg(id=tenant.id, name=tenant.name, slug=tenant.slug)
+
+
+async def _pending_org_fields(user: UserRecord, email: str | None) -> tuple[bool, SuggestedOrg | None]:
+    if user.tenant_id is not None or getattr(user, "role", None) == "platform_admin":
+        return False, None
+    from app.services.org_membership import lookup_tenant_by_email_domain
+
+    suggested = await lookup_tenant_by_email_domain(email)
+    return True, _suggested_org(suggested)
+
+
 @router.post("/register", response_model=Any, status_code=status.HTTP_201_CREATED)
 async def register(
     data: UserRegister,
@@ -223,19 +239,43 @@ async def register_init(
             password_hash=password_hash,
         )
 
-        tenant_uuid = None
-        user = await user_dao.get_by_identity_and_tenant(identity.id, None)
+        from app.services.org_membership import (
+            DefaultOrgUnavailableError,
+            InvitationError,
+            consume_invitation_code,
+            place_new_registration,
+        )
+
+        invite_code = getattr(data, "invitation_code", None)
+        try:
+            placement = await place_new_registration(email=data.email, invitation_code=invite_code)
+        except InvitationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except DefaultOrgUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        existing_users = await user_dao.get_by_identity_id(identity.id)
+        user = existing_users[0] if existing_users else None
+        attached_via_invite = False
 
         if not user:
             user = await registration_service.create_user_with_identity(
                 identity=identity,
                 display_name=data.display_name or data.username,
                 role="member",
-                tenant_id=tenant_uuid,
+                tenant_id=placement.tenant_id,
             )
-            user.identity = identity
-        else:
-            user.identity = identity
+            attached_via_invite = bool(invite_code and placement.tenant_id is not None)
+        elif user.tenant_id is None and placement.tenant_id is not None:
+            from app.services.org_membership import attach_user_to_org
+
+            placed = await tenant_dao.get(placement.tenant_id)
+            if placed is not None:
+                user = await attach_user_to_org(user, placed)
+                attached_via_invite = bool(invite_code)
+        user.identity = identity
+        if attached_via_invite:
+            await consume_invitation_code(invite_code)
 
     # 5. Generate token outside transaction
     token = create_access_token(str(user.id), user.role)
@@ -253,6 +293,8 @@ async def register_init(
         if not identity.email_verified
         else "Registration successful.",
         needs_company_setup=user.tenant_id is None,
+        needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
+        suggested_org=_suggested_org(placement.suggested),
         target_tenant_id=data.target_tenant_id,
     )
 
@@ -282,13 +324,28 @@ async def register_sso(
     if user is None:
         raise HTTPException(status_code=400, detail="SSO registration failed")
 
-    # If no tenant, check for email domain match
-    if not user.tenant_id and user.email:
-        tenant, _ = await registration_service.get_tenant_for_registration(
-            email=user.email, invitation_code=data.invitation_code
-        )
-        if tenant:
-            user = await user_dao.update(db_obj=user, obj_in={"tenant_id": tenant.id})
+    from app.services.org_membership import (
+        DefaultOrgUnavailableError,
+        InvitationError,
+        attach_user_to_org,
+        consume_invitation_code,
+        place_new_registration,
+    )
+
+    placement = None
+    if not user.tenant_id:
+        try:
+            placement = await place_new_registration(email=user.email, invitation_code=data.invitation_code)
+        except InvitationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except DefaultOrgUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if placement.tenant_id is not None:
+            placed = await tenant_dao.get(placement.tenant_id)
+            if placed is not None:
+                user = await attach_user_to_org(user, placed)
+                if data.invitation_code:
+                    await consume_invitation_code(data.invitation_code)
 
     token = create_access_token(str(user.id), user.role)
 
@@ -298,6 +355,8 @@ async def register_sso(
         access_token=token,
         user=UserOut.model_validate(user),
         needs_company_setup=user.tenant_id is None,
+        needs_org_confirm=bool(placement and placement.needs_org_confirm and user.tenant_id is None),
+        suggested_org=_suggested_org(placement.suggested if placement else None),
     )
 
 
@@ -324,10 +383,20 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered, please login directly."
         )
 
-    tenant, _ = await registration_service.get_tenant_for_registration(
-        email=data.email, invitation_code=data.invitation_code
+    from app.services.org_membership import (
+        DefaultOrgUnavailableError,
+        InvitationError,
+        consume_invitation_code,
+        place_new_registration,
     )
-    tenant_uuid = tenant.id if tenant else None
+
+    try:
+        placement = await place_new_registration(email=data.email, invitation_code=data.invitation_code)
+    except InvitationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    tenant_uuid = placement.tenant_id
     role = "member"
 
     identity = await registration_service.find_or_create_identity(
@@ -357,6 +426,8 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
         registration_source="web",
         email_config=email_config,
     )
+    if data.invitation_code and tenant_uuid is not None:
+        await consume_invitation_code(data.invitation_code)
 
     # 4. Send verification email only when the identity still needs it (outside transaction)
     if not identity.email_verified:
@@ -373,6 +444,8 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
         if not identity.email_verified
         else "Registration successful.",
         needs_company_setup=user.tenant_id is None,
+        needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
+        suggested_org=_suggested_org(placement.suggested),
     )
 
 
@@ -515,12 +588,15 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
     must_change = bool(getattr(identity, "must_change_password", False))
     user_out = UserOut.model_validate(user)
     user_out.must_change_password = must_change
+    needs_confirm, suggested = await _pending_org_fields(user, getattr(identity, "email", None))
     return TokenResponse(
         access_token=token,
         user=user_out,
         identity=IdentityOut.model_validate(identity),
         must_change_password=must_change,
-        needs_company_setup=user.tenant_id is None,
+        needs_company_setup=needs_confirm,
+        needs_org_confirm=needs_confirm,
+        suggested_org=suggested,
     )
 
 
@@ -659,8 +735,11 @@ async def update_me(
         if existing:
             raise HTTPException(status_code=409, detail="Username already taken")
 
-    # Validate email uniqueness within tenant if changing
+    # Email is a global identity claim. Changing it requires re-verification.
     if "email" in update_data and update_data["email"] != user.identity.email:
+        taken = await identity_dao.get_by_email(update_data["email"])
+        if taken is not None and taken.id != user.identity.id:
+            raise HTTPException(status_code=409, detail="Email already registered")
         existing = await user_dao.get_by_email_and_tenant(
             email=update_data["email"],
             tenant_id=user.tenant_id,
@@ -686,6 +765,7 @@ async def update_me(
             identity_fields["username"] = value
         elif field == "email":
             identity_fields["email"] = value
+            identity_fields["email_verified"] = False
         elif field == "primary_mobile":
             identity_fields["phone"] = value
         else:

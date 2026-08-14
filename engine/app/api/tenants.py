@@ -16,10 +16,8 @@ from PIL import Image
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.json_types import JsonObject
-from app.core.security import get_authenticated_user, get_current_user, require_role
+from app.core.security import get_current_user, require_role
 from app.dao.agent_dao import agent_dao
-from app.dao.invitation_code_dao import invitation_code_dao
-from app.dao.participant_dao import participant_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
@@ -81,8 +79,50 @@ class TenantOut(BaseModel):
     default_model_id: uuid.UUID | None = None
     logo_url: str | None = None
     created_at: datetime | None = None
+    is_system: bool = False
+    is_default_end_user_org: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class EmailDomainOut(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    domain: str
+    is_default: bool
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class EmailDomainCreate(BaseModel):
+    domain: str = Field(min_length=1, max_length=255)
+    is_default: bool = False
+
+
+class EmailDomainPatch(BaseModel):
+    is_default: bool = True
+
+
+class SuggestedJoinRequest(BaseModel):
+    tenant_id: uuid.UUID | None = None
+
+
+class OrgSummary(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+
+
+class EmailLookupResponse(BaseModel):
+    match: OrgSummary | None = None
+    fallback: OrgSummary | None = None
+
+
+class JoinOrgResponse(BaseModel):
+    tenant: TenantOut
+    role: str
+    access_token: str | None = None
 
 
 class TenantCreateResponse(BaseModel):
@@ -200,23 +240,43 @@ class JoinRequest(BaseModel):
 class JoinResponse(BaseModel):
     tenant: TenantOut
     role: str
-    access_token: str | None = None  # Non-null when a new User record was created (multi-tenant switch)
+    access_token: str | None = None
+
+
+class TransferRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+    invitation_code: str | None = Field(default=None, max_length=32)
+    tenant_id: uuid.UUID | None = None
+
+
+def _require_join_allowed(current_user: UserRecord) -> None:
+    try:
+        assert_join_may_rewrite_membership(current_user)
+    except AdminGuardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post("/join", response_model=JoinResponse)
-async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get_authenticated_user)):
+async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get_current_user)):
     """Join an existing company using an invitation code.
 
-    Supports both:
-    - Registration flow (user has no tenant yet): assigns tenant directly
-    - Switch-org flow (user already has a tenant): creates a new User record"""
-    from app.core.security import raise_if_password_change_required
+    End users may belong to only one organization. A second membership is refused.
+    """
+    from app.services.org_membership import (
+        AlreadyInOrgError,
+        InvitationError,
+        attach_user_to_org,
+        consume_invitation_code,
+        require_active_invitation,
+    )
 
-    raise_if_password_change_required(current_user)
+    if current_user.tenant_id is None:
+        _require_join_allowed(current_user)
 
-    code_obj = await invitation_code_dao.get_active_by_code(data.invitation_code)
-    if not code_obj:
-        raise HTTPException(status_code=400, detail="Invalid invitation code")
+    try:
+        code_obj = await require_active_invitation(data.invitation_code)
+    except InvitationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Verify matching tenant if locked (Dedicated Link flow)
     if data.target_tenant_id and str(code_obj.tenant_id) != str(data.target_tenant_id):
@@ -224,83 +284,24 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
             status_code=403, detail="This invitation code does not belong to the required organization."
         )
 
-    if code_obj.used_count >= code_obj.max_uses:
-        raise HTTPException(status_code=400, detail="Invitation code has reached its usage limit")
-
     tenant = await tenant_dao.get(code_obj.tenant_id)
     if not tenant or not tenant.is_active:
         raise HTTPException(status_code=400, detail="Company not found or is disabled")
 
-    existing_membership = await user_dao.get_by_identity_and_tenant(current_user.identity_id, tenant.id)
-    if existing_membership:
-        raise HTTPException(status_code=400, detail="You already belong to this company")
+    if current_user.tenant_id is not None and current_user.tenant_id != tenant.id:
+        raise HTTPException(status_code=409, detail="You already belong to an organization")
 
-    assigned_role = "member"
+    try:
+        attached = await attach_user_to_org(current_user, tenant)
+    except AlreadyInOrgError as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "You already belong to an organization") from exc
 
-    access_token = None
-    final_role = assigned_role
-
-    from app.services.registration_service import registration_service
-
-    if current_user.tenant_id is None:
-        try:
-            assert_join_may_rewrite_membership(current_user)
-        except AdminGuardError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    if current_user.tenant_id is not None:
-        from app.core.security import create_access_token
-
-        new_user = await user_dao.create(
-            obj_in={
-                "identity_id": current_user.identity_id,
-                "tenant_id": tenant.id,
-                "display_name": current_user.display_name,
-                "role": assigned_role,
-                "registration_source": "web",
-                "is_active": current_user.is_active,
-                "quota_message_limit": tenant.default_message_limit,
-                "quota_message_period": tenant.default_message_period,
-                "quota_max_agents": tenant.default_max_agents,
-                "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
-            }
-        )
-
-        await participant_dao.create_for_user(
-            new_user.id,
-            display_name=new_user.display_name,
-            avatar_url=new_user.avatar_url,
-        )
-        await registration_service.bind_org_member(new_user)
-
-        access_token = create_access_token(str(new_user.id), new_user.role)
-        final_role = new_user.role
-    else:
-        role = assigned_role
-        await user_dao.update(
-            db_obj=current_user,
-            obj_in={
-                "tenant_id": tenant.id,
-                "role": role,
-                "quota_message_limit": tenant.default_message_limit,
-                "quota_message_period": tenant.default_message_period,
-                "quota_max_agents": tenant.default_max_agents,
-                "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
-            },
-        )
-        final_role = role
-        refreshed = await user_dao.get(current_user.id) or current_user
-        await registration_service.bind_org_member(refreshed)
-
-    await invitation_code_dao.update(
-        db_obj=code_obj,
-        obj_in={"used_count": code_obj.used_count + 1},
-    )
+    await consume_invitation_code(data.invitation_code)
 
     return JoinResponse(
         tenant=TenantOut.model_validate(tenant),
-        role=final_role,
-        access_token=access_token,
+        role=attached.role,
+        access_token=None,
     )
 
 
@@ -311,6 +312,164 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 async def get_registration_config():
     """Public - tenant creation is platform-admin only; self-create is gone."""
     return {"allow_self_create_company": False, "tenant_creation": "platform_admin_only"}
+
+
+def _org_summary(tenant) -> OrgSummary:
+    return OrgSummary(id=tenant.id, name=tenant.name, slug=tenant.slug)
+
+
+@router.get("/lookup-by-email", response_model=EmailLookupResponse)
+async def lookup_org_by_email(email: str):
+    """Public: which org an email would join, plus the OpenClaw fallback."""
+    from app.services.org_membership import DefaultOrgUnavailableError, get_fallback_org, lookup_tenant_by_email_domain
+
+    match = await lookup_tenant_by_email_domain(email)
+    try:
+        fallback = await get_fallback_org()
+    except DefaultOrgUnavailableError:
+        fallback = None
+    return EmailLookupResponse(
+        match=_org_summary(match) if match else None,
+        fallback=_org_summary(fallback) if fallback else None,
+    )
+
+
+@router.post("/join-suggested", response_model=JoinOrgResponse)
+async def join_suggested_org(
+    data: SuggestedJoinRequest,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Confirm joining the organization suggested by the verified email domain."""
+    from app.core.security import create_access_token
+    from app.services.org_membership import (
+        AlreadyInOrgError,
+        attach_user_to_org,
+        lookup_tenant_for_verified_email,
+    )
+
+    if current_user.tenant_id is not None:
+        raise HTTPException(status_code=409, detail="You already belong to an organization")
+    _require_join_allowed(current_user)
+    suggested = await lookup_tenant_for_verified_email(current_user)
+    if suggested is None:
+        raise HTTPException(status_code=400, detail="No organization is suggested for this account")
+    if data.tenant_id is not None and data.tenant_id != suggested.id:
+        raise HTTPException(status_code=400, detail="That organization is not the suggested match")
+    try:
+        attached = await attach_user_to_org(current_user, suggested)
+    except AlreadyInOrgError as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "You already belong to an organization") from exc
+    return JoinOrgResponse(
+        tenant=TenantOut.model_validate(suggested),
+        role=attached.role,
+        access_token=create_access_token(str(attached.id), attached.role),
+    )
+
+
+@router.post("/join-default", response_model=JoinOrgResponse)
+async def join_default_org(current_user: UserRecord = Depends(get_current_user)):
+    """Decline a suggested org and join OpenClaw."""
+    from app.core.security import create_access_token
+    from app.services.org_membership import (
+        AlreadyInOrgError,
+        DefaultOrgUnavailableError,
+        attach_user_to_org,
+        get_fallback_org,
+    )
+
+    if current_user.tenant_id is not None:
+        raise HTTPException(status_code=409, detail="You already belong to an organization")
+    _require_join_allowed(current_user)
+    try:
+        fallback = await get_fallback_org()
+        attached = await attach_user_to_org(current_user, fallback)
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AlreadyInOrgError as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "You already belong to an organization") from exc
+    return JoinOrgResponse(
+        tenant=TenantOut.model_validate(fallback),
+        role=attached.role,
+        access_token=create_access_token(str(attached.id), attached.role),
+    )
+
+
+@router.post("/transfer", response_model=JoinOrgResponse)
+async def transfer_organization(
+    data: TransferRequest,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    """Move a member from their current org to another after password confirmation."""
+    from app.core.security import create_access_token, verify_password_async
+    from app.dao.identity_dao import identity_dao
+    from app.services.org_membership import (
+        AlreadyInOrgError,
+        DefaultOrgUnavailableError,
+        InvitationError,
+        consume_invitation_code,
+        get_fallback_org,
+        lookup_tenant_for_verified_email,
+        require_active_invitation,
+        transfer_user_to_org,
+    )
+
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=400, detail="Join an organization first, then transfer")
+    _require_join_allowed(current_user)
+
+    identity = getattr(current_user, "identity", None) or await identity_dao.get(current_user.identity_id)
+    if identity is None or not identity.password_hash:
+        raise HTTPException(status_code=400, detail="This account cannot confirm a password")
+    if not await verify_password_async(data.password, identity.password_hash):
+        raise HTTPException(status_code=401, detail="Password is incorrect")
+
+    target = None
+    if data.invitation_code:
+        try:
+            code_obj = await require_active_invitation(data.invitation_code)
+        except InvitationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if data.tenant_id and str(code_obj.tenant_id) != str(data.tenant_id):
+            raise HTTPException(status_code=403, detail="This invitation code does not belong to the required organization.")
+        target = await tenant_dao.get(code_obj.tenant_id)
+        if not target or not target.is_active:
+            raise HTTPException(status_code=400, detail="Company not found or is disabled")
+    elif data.tenant_id:
+        target = await tenant_dao.get(data.tenant_id)
+        if not target or not target.is_active:
+            raise HTTPException(status_code=400, detail="Company not found or is disabled")
+        allowed = await lookup_tenant_for_verified_email(current_user)
+        try:
+            fallback = await get_fallback_org()
+        except DefaultOrgUnavailableError:
+            fallback = None
+        allowed_ids = {item.id for item in (allowed, fallback) if item is not None}
+        if target.id not in allowed_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="Transfer without an invite is only allowed to your email-domain org or OpenClaw",
+            )
+    else:
+        raise HTTPException(status_code=400, detail="Provide an invitation code or a destination organization")
+
+    if target.id == current_user.tenant_id:
+        raise HTTPException(status_code=400, detail="You already belong to that organization")
+
+    try:
+        attached = await transfer_user_to_org(current_user, target)
+    except AlreadyInOrgError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if data.invitation_code:
+        await consume_invitation_code(data.invitation_code)
+
+    return JoinOrgResponse(
+        tenant=TenantOut.model_validate(target),
+        role=attached.role,
+        access_token=create_access_token(str(attached.id), attached.role),
+    )
 
 
 # ─── Public: Resolve Tenant by Domain ───────────────────
@@ -432,6 +591,101 @@ async def get_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(ge
     return TenantOut.model_validate(tenant)
 
 
+@router.get("/{tenant_id}/email-domains", response_model=list[EmailDomainOut])
+async def list_email_domains(
+    tenant_id: uuid.UUID,
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+):
+    from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
+
+    await _get_updateable_tenant(tenant_id, current_user)
+    rows = await tenant_email_domain_dao.list_for_tenant(tenant_id)
+    return [EmailDomainOut.model_validate(row) for row in rows]
+
+
+@router.post("/{tenant_id}/email-domains", response_model=EmailDomainOut, status_code=status.HTTP_201_CREATED)
+async def create_email_domain(
+    tenant_id: uuid.UUID,
+    data: EmailDomainCreate,
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    from app.services.org_membership import DomainClaimedError, InvalidEmailDomainError, add_email_domain
+
+    await _get_updateable_tenant(tenant_id, current_user)
+    try:
+        row = await add_email_domain(tenant_id, data.domain, is_default=data.is_default)
+    except InvalidEmailDomainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Invalid email domain") from exc
+    except DomainClaimedError as exc:
+        raise HTTPException(status_code=409, detail="Email domain is already claimed") from exc
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_email_domain_add",
+        target_type="tenant",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        changes={"domain": field_change(None, row.domain)},
+        ip_address=client_ip,
+    )
+    return EmailDomainOut.model_validate(row)
+
+
+@router.patch("/{tenant_id}/email-domains/{domain_id}", response_model=EmailDomainOut)
+async def patch_email_domain(
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID,
+    data: EmailDomainPatch,
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    from app.services.org_membership import set_default_email_domain
+
+    await _get_updateable_tenant(tenant_id, current_user)
+    if not data.is_default:
+        raise HTTPException(status_code=400, detail="Clearing the default requires choosing another domain")
+    try:
+        row = await set_default_email_domain(tenant_id, domain_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Email domain not found") from exc
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_email_domain_default",
+        target_type="tenant",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        changes={"default_domain": field_change(None, row.domain)},
+        ip_address=client_ip,
+    )
+    return EmailDomainOut.model_validate(row)
+
+
+@router.delete("/{tenant_id}/email-domains/{domain_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_email_domain(
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID,
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    from app.services.org_membership import delete_email_domain
+
+    await _get_updateable_tenant(tenant_id, current_user)
+    try:
+        await delete_email_domain(tenant_id, domain_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Email domain not found") from exc
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_email_domain_delete",
+        target_type="tenant",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        details={"domain_id": str(domain_id)},
+        ip_address=client_ip,
+    )
+    return
+
+
 @router.put("/{tenant_id}", response_model=TenantOut)
 async def update_tenant(
     tenant_id: uuid.UUID,
@@ -456,6 +710,14 @@ async def update_tenant(
     if current_user.role == "platform_admin":
         update_data.pop("sso_enabled", None)
         update_data.pop("sso_domain", None)
+
+    if update_data.get("is_active") is False:
+        from app.services.org_membership import DefaultOrgUnavailableError, assert_may_deactivate_tenant
+
+        try:
+            assert_may_deactivate_tenant(tenant, making_active=False)
+        except DefaultOrgUnavailableError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     updated = await tenant_dao.update(db_obj=tenant, obj_in=update_data)
     if update_data:
@@ -651,6 +913,13 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
     tenant = await tenant_dao.get(tenant_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
+
+    from app.services.org_membership import DefaultOrgUnavailableError, assert_may_delete_tenant
+
+    try:
+        assert_may_delete_tenant(tenant)
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     identity_id = current_user.identity_id
 
