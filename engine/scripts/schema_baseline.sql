@@ -376,6 +376,9 @@ CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 
 CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id);
 
+-- CREATE TABLE IF NOT EXISTS does not add columns to an existing users table.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis BOOLEAN NOT NULL DEFAULT false;
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
 	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin';
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from psycopg import errors as pg_errors
 
+from app.db.errors import DbError
 from app.db.pool import close_pool, init_pool
 from app.db.session import connection_ctx
 
@@ -128,6 +129,17 @@ PATCHES = [
     ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin'
     """,
 ]
+
+
+def _unwrap_pg_error(exc: BaseException) -> BaseException:
+    """Return the underlying psycopg error when ``conn.execute`` wrapped it."""
+    if isinstance(exc, DbError) and isinstance(exc.orig, BaseException):
+        return exc.orig
+    return exc
+
+
+def _is_ignorable_error(exc: BaseException, kinds: tuple[type[BaseException], ...]) -> bool:
+    return isinstance(_unwrap_pg_error(exc), kinds)
 
 
 def _clean_statement(stmt: str) -> str:
@@ -261,8 +273,6 @@ async def _apply_sql_script(path: Path) -> None:
         for body in _statement_bodies(sql):
             try:
                 await conn.execute(body)
-            except _IGNORABLE as exc:
-                print(f"[bootstrap] already present: {body[:80]!r} ({exc})", flush=True)
             except Exception:
                 print(f"[bootstrap] statement failed: {body[:80]!r}", flush=True)
                 raise
@@ -285,8 +295,15 @@ async def main() -> None:
                     await conn.execute("SET lock_timeout = '2000ms'")
                     await conn.execute(sql)
                 print(f"[bootstrap] Patch applied: {sql.strip()[:80]}", flush=True)
-            except _IGNORABLE as exc:
-                print(f"[bootstrap] Patch already present: {sql.strip()[:80]} ({exc})", flush=True)
+            except Exception as exc:
+                if _is_ignorable_error(exc, _IGNORABLE):
+                    print(
+                        f"[bootstrap] Patch already present: {sql.strip()[:80]} "
+                        f"({_unwrap_pg_error(exc)})",
+                        flush=True,
+                    )
+                    continue
+                raise
         print("[bootstrap] Done", flush=True)
     finally:
         await close_pool()
