@@ -12,7 +12,6 @@ from app.config import get_settings
 from app.core.events import get_redis
 from app.core.logging import logger
 
-_REDIS_WAIT_SECONDS = 0.05
 _POLICY_VERSION_KEY = "aclver:{agent_id}"
 _DECISION_KEY = "acl:v1:{agent_id}:{user_id}"
 
@@ -57,6 +56,10 @@ def _ttl_seconds() -> int:
     return int(getattr(get_settings(), "AGENT_ACCESS_CACHE_TTL_SECONDS", 45) or 0)
 
 
+def _redis_wait_seconds() -> float:
+    return float(getattr(get_settings(), "REDIS_CACHE_WAIT_SECONDS", 0.2) or 0.2)
+
+
 def _ver_key(agent_id: uuid.UUID) -> str:
     return _POLICY_VERSION_KEY.format(agent_id=agent_id)
 
@@ -78,11 +81,11 @@ async def get_cached_level(user: Any, agent_id: uuid.UUID) -> str | None:
     if user_id is None:
         return None
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_REDIS_WAIT_SECONDS)
+        client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
         pipe = client.pipeline()
         pipe.get(_ver_key(agent_id))
         pipe.get(_dec_key(agent_id, user_id))
-        ver_raw, payload = await asyncio.wait_for(pipe.execute(), timeout=_REDIS_WAIT_SECONDS)
+        ver_raw, payload = await asyncio.wait_for(pipe.execute(), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache miss (redis): {}", type(exc).__name__)
         return None
@@ -113,8 +116,8 @@ async def read_acl_version(agent_id: uuid.UUID) -> str:
     if _ttl_seconds() <= 0:
         return "0"
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_REDIS_WAIT_SECONDS)
-        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id)), timeout=_REDIS_WAIT_SECONDS)
+        client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
+        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id)), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache ver skipped: {}", type(exc).__name__)
         return "0"
@@ -134,8 +137,8 @@ async def set_cached_level(
     if user_id is None:
         return
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_REDIS_WAIT_SECONDS)
-        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id)), timeout=_REDIS_WAIT_SECONDS)
+        client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
+        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id)), timeout=_redis_wait_seconds())
         current = str(ver_raw or "0")
         if observed_ver is not None and current != observed_ver:
             logger.debug("access_cache set skipped (ver changed)")
@@ -150,7 +153,7 @@ async def set_cached_level(
         )
         await asyncio.wait_for(
             client.set(_dec_key(agent_id, user_id), payload, ex=_ttl_seconds()),
-            timeout=_REDIS_WAIT_SECONDS,
+            timeout=_redis_wait_seconds(),
         )
     except Exception as exc:
         logger.debug("access_cache set skipped: {}", type(exc).__name__)
@@ -207,15 +210,19 @@ async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
 
 async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_REDIS_WAIT_SECONDS)
-        await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_REDIS_WAIT_SECONDS)
+        client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
+        await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_redis_wait_seconds())
+        ttl = max(_ttl_seconds() * 40, 3600)
+        expire = getattr(client, "expire", None)
+        if expire is not None:
+            await asyncio.wait_for(expire(_ver_key(agent_id), ttl), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache bump skipped: {}", type(exc).__name__)
 
 
 async def _drop_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_REDIS_WAIT_SECONDS)
-        await asyncio.wait_for(client.delete(_ver_key(agent_id)), timeout=_REDIS_WAIT_SECONDS)
+        client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
+        await asyncio.wait_for(client.delete(_ver_key(agent_id)), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache drop skipped: {}", type(exc).__name__)

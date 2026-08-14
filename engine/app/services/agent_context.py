@@ -219,7 +219,7 @@ async def build_agent_context(
     - skills/ → skill names + summaries
     - Database → relationship network (human + agent)
     """
-    from app.services.agent_context_cache import get_cached_text, set_cached_text
+    from app.services.agent_context_cache import read_cached_text, set_cached_text
 
     # --- Soul ---
     # Soul is the agent's full author-curated identity; detailed souls (e.g.
@@ -228,28 +228,28 @@ async def build_agent_context(
     # denies things its soul plainly states, with no log of the truncation.
     # Memory and relationships below keep small caps because they grow
     # unbounded at runtime; the soul does not (only seeded/explicitly edited).
-    soul = await get_cached_text(agent_id, "soul")
+    soul, soul_ver = await read_cached_text(agent_id, "soul")
     if soul is None:
         soul = await _read_file_safe(normalize_storage_key(f"{agent_id}/soul.md"), 30000)
         if soul.startswith("# "):
             soul = "\n".join(soul.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "soul", soul)
+        await set_cached_text(agent_id, "soul", soul, observed_ver=soul_ver)
 
     # --- Memory ---
-    memory = await get_cached_text(agent_id, "memory")
+    memory, memory_ver = await read_cached_text(agent_id, "memory")
     if memory is None:
         memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory/memory.md"), 2000)
         if not memory:
             memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory.md"), 2000)
         if memory.startswith("# "):
             memory = "\n".join(memory.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "memory", memory)
+        await set_cached_text(agent_id, "memory", memory, observed_ver=memory_ver)
 
     # --- Skills index (progressive disclosure) ---
-    skills_text = await get_cached_text(agent_id, "skills")
+    skills_text, skills_ver = await read_cached_text(agent_id, "skills")
     if skills_text is None:
         skills_text = await _load_skills_index(agent_id)
-        await set_cached_text(agent_id, "skills", skills_text)
+        await set_cached_text(agent_id, "skills", skills_text, observed_ver=skills_ver)
 
     # --- Relationships ---
     relationships = await _load_relationships_from_db(agent_id)

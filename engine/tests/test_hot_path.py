@@ -130,6 +130,13 @@ class _FakeRedis:
         for key in keys:
             self.store.pop(key, None)
 
+    async def incr(self, key: str) -> int:
+        if self.fail:
+            raise RuntimeError("redis down")
+        nxt = int(self.store.get(key) or 0) + 1
+        self.store[key] = str(nxt)
+        return nxt
+
 
 @pytest.mark.asyncio
 async def test_call_agent_llm_skips_dao_when_turn_preloaded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -385,6 +392,24 @@ async def test_context_cache_invalidates_on_soul_path(monkeypatch: pytest.Monkey
     await agent_context_cache.invalidate_for_workspace_paths(agent_id, "soul.md")
     await agent_context.build_agent_context(agent_id, "Name", "role")
     assert reads["n"] > after_first
+
+
+@pytest.mark.asyncio
+async def test_context_cache_rejects_stale_fill(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+
+    async def fake_redis() -> _FakeRedis:
+        return redis
+
+    monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
+
+    agent_id = uuid4()
+    _text, observed = await agent_context_cache.read_cached_text(agent_id, "soul")
+    assert _text is None
+    await agent_context_cache.invalidate_agent_context(agent_id, "soul")
+    await agent_context_cache.set_cached_text(agent_id, "soul", "stale", observed_ver=observed)
+    assert await agent_context_cache.get_cached_text(agent_id, "soul") is None
 
 
 @pytest.mark.asyncio

@@ -158,45 +158,56 @@ async def flush_temp_workspace(
     deleted: list[str] = []
     skipped: list[str] = []
 
-    async with workspace_locks(temp_workspace.agent_id, selected_paths):
-        for rel_path, local_path in local_files.items():
-            if local_path.name.startswith("_exec_tmp") or "__pycache__" in local_path.parts:
-                continue
-            data = local_path.read_bytes()
-            current_hash = content_hash_bytes(data)
-            entry = manifest.get(rel_path)
-            if entry and entry.base_hash == current_hash:
-                skipped.append(rel_path)
-                continue
-            condition = (
-                WriteCondition(version_token=entry.base_version_token) if entry else WriteCondition(require_absent=True)
-            )
-            storage_key = entry.storage_key if entry else normalize_storage_key(f"{temp_workspace.agent_id}/{rel_path}")
-            result = await storage.write_bytes_if_match(
-                storage_key,
-                data,
-                condition=condition,
-            )
-            if not result.ok:
-                conflicted.append(rel_path)
-                if conflict_mode == "fail":
-                    return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
-                continue
-            updated.append(rel_path)
+    try:
+        async with workspace_locks(temp_workspace.agent_id, selected_paths):
+            for rel_path, local_path in local_files.items():
+                if local_path.name.startswith("_exec_tmp") or "__pycache__" in local_path.parts:
+                    continue
+                data = local_path.read_bytes()
+                current_hash = content_hash_bytes(data)
+                entry = manifest.get(rel_path)
+                if entry and entry.base_hash == current_hash:
+                    skipped.append(rel_path)
+                    continue
+                condition = (
+                    WriteCondition(version_token=entry.base_version_token)
+                    if entry
+                    else WriteCondition(require_absent=True)
+                )
+                storage_key = (
+                    entry.storage_key if entry else normalize_storage_key(f"{temp_workspace.agent_id}/{rel_path}")
+                )
+                result = await storage.write_bytes_if_match(
+                    storage_key,
+                    data,
+                    condition=condition,
+                )
+                if not result.ok:
+                    conflicted.append(rel_path)
+                    if conflict_mode == "fail":
+                        return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
+                    continue
+                updated.append(rel_path)
 
-        for rel_path, entry in manifest.items():
-            if rel_path in local_files:
-                continue
-            result = await storage.delete_if_match(
-                entry.storage_key,
-                condition=WriteCondition(version_token=entry.base_version_token),
-            )
-            if not result.ok:
-                conflicted.append(rel_path)
-                if conflict_mode == "fail":
-                    return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
-                continue
-            deleted.append(rel_path)
+            for rel_path, entry in manifest.items():
+                if rel_path in local_files:
+                    continue
+                result = await storage.delete_if_match(
+                    entry.storage_key,
+                    condition=WriteCondition(version_token=entry.base_version_token),
+                )
+                if not result.ok:
+                    conflicted.append(rel_path)
+                    if conflict_mode == "fail":
+                        return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
+                    continue
+                deleted.append(rel_path)
+    finally:
+        changed = [*updated, *deleted]
+        if changed:
+            from app.services.agent_context_cache import invalidate_for_workspace_paths
+
+            await invalidate_for_workspace_paths(temp_workspace.agent_id, *changed)
 
     return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
 
