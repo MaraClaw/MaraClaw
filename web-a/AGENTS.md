@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 **Package:** `web-a` (MaraClaw admin console)  
-**Status:** Bootstrapped SPA shell (2026-08-13)
+**Status:** Live auth + companies (2026-08-14). `/users` and `/tools` still placeholders.
 
 > Monorepo routing: `../AGENTS.md`.  
 > Admin HTTP contracts: `../engine/docs/admin-apis.md`.
@@ -21,7 +21,7 @@ Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`
 
 Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password` (new password must differ from current).
 
-**Companies:** `/companies` lists orgs (platform: all; org admin: own). `/companies/:id` manages claimed email domains (`GET/POST/PATCH/DELETE /api/tenants/{id}/email-domains`). System orgs and the default end-user org (OpenClaw) are badged; the fallback org cannot be disabled.
+**Companies:** `/companies` lists orgs (platform: all; org admin: own). `/companies/:id` manages claimed email domains (`GET/POST/PATCH/DELETE /api/tenants/{id}/email-domains`). System orgs and the default end-user org (OpenClaw) are badged; the fallback org cannot be disabled. No create-company UI yet.
 
 Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
 
@@ -38,19 +38,20 @@ web-a/
 └── src/
     ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
     ├── routes/          # route table + ProtectedRoute
-    ├── pages/           # login + feature placeholders
+    ├── pages/           # login, account, companies live; users/tools placeholders
     ├── components/
     │   ├── layout/admin-shell.tsx
     │   ├── ui/          # primitives
     │   └── brand/
     ├── hooks/
     │   ├── use-theme.tsx   # maraclaw-admin-theme
-    │   └── use-auth.tsx    # session
-    └── lib/
-        ├── api.ts       # getApiBaseUrl / apiUrl
+    │   └── use-auth.tsx    # session; rejects non-admin after login
+    └── lib/             # see lib/AGENTS.md
+        ├── api.ts       # getApiBaseUrl / apiUrl (0.0.0.0 → same-origin)
         ├── http.ts      # fetch wrapper + ApiError
         ├── auth-api.ts
         ├── auth-storage.ts
+        ├── companies-api.ts
         └── types/auth.ts
 ```
 
@@ -61,15 +62,16 @@ web-a/
 | Login UI | `src/pages/login.tsx` |
 | Forgot / reset password | `src/pages/forgot-password.tsx`, `reset-password.tsx` |
 | Change password | `src/pages/account.tsx` |
-| Sign out / session | `src/pages/settings.tsx` |
+| Sign out / theme | `src/pages/settings.tsx` |
+| Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |
 | Routes | `src/routes/index.tsx` |
+| HTTP client | `src/lib/` (see nested `AGENTS.md`) |
 | Design tokens | `src/index.css` |
 | API base URL | `src/lib/api.ts`, `.env.example` |
 | Backend admin APIs | `../engine/docs/admin-apis.md` |
-| UI primitives | `src/components/ui/*` (add shadcn-style as needed) |
 
 ## CONVENTIONS
 
@@ -102,3 +104,5 @@ Production image: multi-stage Node **26.7.0** + `nginxinc/nginx-unprivileged` on
 - Do not hardcode absolute API hosts in components; use `apiUrl()`.
 - Do not dump admin UI into `web-l` or `web-e`.
 - Do not ignore `must_change_password` after login — gated admin APIs will 403 and the operator will look "stuck".
+- Do not treat `VITE_AUTH_BYPASS` as implemented — README mentions it; code does not.
+- Do not use `0.0.0.0` as a browser API host (`getApiBaseUrl` maps it to same-origin).

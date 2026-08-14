@@ -1,229 +1,114 @@
 # MaraClawOne - monorepo guide for agents
 
-**Audience:** AI coding agents and humans coordinating changes across packages.  
-**Product:** MaraClaw - OpenClaw digital employees for teams and companies (multi-tenant, tools, channels, governance).
+**Generated:** 2026-08-14  
+**Commit:** 08ac4f7  
+**Branch:** enhance-web-search  
+**Mode:** update (init-deep --max-depth=7)
 
-This file is the **repo-level map**. Package-level detail lives in nested `AGENTS.md` files (especially under `engine/`). Prefer the deepest relevant guide once you know which package owns the work.
+**Audience:** AI coding agents and humans coordinating changes across packages.  
+**Product:** MaraClaw — OpenClaw digital employees for teams and companies.
+
+This file is the **repo-level router**. Package contracts live in nested `AGENTS.md`. Prefer the deepest relevant guide once the package is known.
 
 ---
+
+## OVERVIEW
+
+Loose sibling checkout (no root workspace / turbo / compose / CI). Four packages: FastAPI `engine/` plus three independent Vite apps. Behavioral truth is `engine/`; frontends are clients.
 
 ## Package map
 
-| Directory | Role | Audience | Stack (today) | Status |
-|-----------|------|----------|---------------|--------|
-| **`engine/`** | Backend services & platform API | Server, workers, connectors | FastAPI, psycopg3, Redis, Python ≥3.14 | Mature |
-| **`web-l/`** | Marketing **landing** site | Anonymous / prospects | React 19, Vite, Tailwind v4, Framer Motion, shadcn/ui | Implemented |
-| **`web-a/`** | Web UI for **admins** | Tenant/platform operators | React 19, Vite, Tailwind v4, Radix, TanStack Query/Table, RHF+Zod, Recharts | Bootstrapped shell |
-| **`web-e/`** | Web UI for **end users** | People who chat with / manage their agents | TBD (placeholder README only) | Scaffold |
+| Directory | Role | Audience | Stack | Status |
+|-----------|------|----------|-------|--------|
+| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python ≥3.14.5 | Mature |
+| **`web-l/`** | Marketing landing | Anonymous | React 19, Vite 8 :5173, Tailwind v4, Framer, shadcn-style | Implemented (no auth/API) |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + email domains |
+| **`web-e/`** | End-user product | Members | React 19, Vite 8 :5175, RR | Live: register / login / join / transfer. Chat not built |
 
-**Rule of thumb:** one concern → one package. Do not put admin screens in `web-e`, end-user chat in `web-a`, marketing sections in either app UI, or HTML marketing pages in `engine`.
+**Rule:** one concern → one package. No admin screens in `web-e`, no member chat in `web-a`, no marketing in either app, no HTML marketing in `engine`.
 
 ```
-One/                          # MaraClawOne monorepo root
-├── AGENTS.md                 # THIS FILE - cross-package routing
-├── README.md
-├── .env.example              # Shared env template (often mirrors engine)
-├── engine/                   # Backend (API, workers, connectors, agent runtime)
-│   └── AGENTS.md             # Backend deep map - read before engine edits
-├── web-l/                    # Landing / marketing
-├── web-a/                    # Admin console (to be built)
-└── web-e/                    # End-user product UI (to be built)
+One/
+├── AGENTS.md           # THIS FILE — cross-package routing
+├── .env.example        # Shared/backend env (mirrors engine)
+├── engine/             # Backend — read engine/AGENTS.md before edits
+├── web-l/              # Landing — web-l/AGENTS.md
+├── web-a/              # Admin — web-a/AGENTS.md
+└── web-e/              # Members — web-e/AGENTS.md
 ```
 
 ---
 
-## Where should new code go?
-
-### 1. Decide by **user** and **surface**
+## WHERE TO LOOK
 
 | If the change is… | Put it in… | Not in… |
 |-------------------|------------|---------|
-| Public marketing, SEO, pricing, brand, demo CTA | **`web-l/`** | `web-a`, `web-e`, `engine` |
-| Tenant admin: users, SSO, orgs, agents fleet, tools, quotas, billing-ish ops | **`web-a/`** | `web-e`, `web-l` |
-| End-user product: chat, agent roster for members, onboarding as user, personal settings | **`web-e/`** | `web-a`, `web-l` |
-| HTTP/WS API, auth, DB, LLM, tools, sandboxes, IM connectors, seeds, schema | **`engine/`** | frontends (except API clients) |
-| Shared env contract / secrets template | Root **`.env.example`** and/or **`engine/.env.example`** | Hardcoded in UI |
+| Public marketing, SEO, brand, CTA | **`web-l/`** | `web-a`, `web-e`, `engine` |
+| Tenant/platform admin UI | **`web-a/`** | `web-e`, `web-l` |
+| Member product (auth, join, future chat) | **`web-e/`** | `web-a`, `web-l` |
+| HTTP/WS, auth, DB, LLM, tools, sandboxes, IM, schema | **`engine/`** | frontends (except clients) |
+| Shared env / secrets template | Root **`.env.example`** and/or `engine/.env.example` | Hardcoded in UI |
 
-### 2. Decide by **layer** (full-stack features)
+Full-stack: engine first (API + schema + tests), then the matching UI. Landing never calls privileged APIs.
 
-Most features touch more than one package. Split work deliberately:
-
-```
-Feature idea
-    │
-    ├─ Needs new API / data / connector?  → engine first (API + schema + tests)
-    │         then wire clients in web-a and/or web-e
-    │
-    ├─ Admin-only controls?               → web-a (calls engine)
-    ├─ Member-facing UX?                  → web-e (calls engine)
-    └─ Public story / conversion?         → web-l only (no privileged APIs)
-```
-
-| Layer | Package | Examples |
-|-------|---------|----------|
-| Persistence / schema | `engine` (`scripts/schema_baseline.sql`, DAOs, bootstrap) | New table, column, seed |
-| Business logic | `engine` (`app/services/`, `app/api/`) | Autonomy policy, tool exec, onboarding ritual |
-| Admin UX | `web-a` | Invite users, manage tenants, configure connectors |
-| End-user UX | `web-e` | Chat UI, agent picker, user onboarding |
-| Marketing copy / visuals | `web-l` | Hero, agent catalog cards, integrations list |
-
-### 3. Quick intent router
-
-| Intent | Primary package | Also read |
-|--------|-----------------|-----------|
-| “Add a REST/WS endpoint” | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
-| “Change agent role template” | `engine` | `engine/agent_templates/` (catalog) vs `engine/agent_template/` (runtime scaffold) |
-| “Fix tool / sandbox / LLM” | `engine` | `engine/app/services/` nested AGENTS |
-| “Landing hero / brand / channels list” | `web-l` | `web-l/README.md` |
-| “Admin dashboard page” | `web-a` | Create app if still placeholder; do not invent into `web-l` |
-| “Chat or user agent workspace UI” | `web-e` | Create app if still placeholder |
-| “CORS / auth cookie / API base URL” | `engine` config + the consuming frontend | Root/`.env.example` |
+| Intent | Primary | Also read |
+|--------|---------|-----------|
+| REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
+| Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
+| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS |
+| Landing copy / channels list | `web-l` | `web-l/AGENTS.md` |
+| Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
+| Chat / member workspace | `web-e` | `web-e/AGENTS.md` — chat is not built yet |
+| CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
 ---
 
 ## Package briefs
 
-### `engine/` - backend
-
-**Owns:** Multi-tenant digital-employee platform: auth, agents, tools, skills, LLM orchestration, sandboxes, storage, schedules/triggers, IM/identity connectors (Feishu, WeCom, Slack, Discord, Teams-related paths, etc.), admin APIs.
-
-**Key entry points:**
-
-| Concern | Location |
-|---------|----------|
-| App mount / lifespan | `engine/app/main.py` |
-| Settings | `engine/app/config.py`, env examples |
-| HTTP routers | `engine/app/api/` |
-| Services | `engine/app/services/` |
-| DB | `engine/app/db/`, `engine/app/dao/`, `engine/app/records/` |
-| Schema | `engine/scripts/schema_baseline.sql`, `engine/app/scripts/bootstrap_db.py` |
-| Role catalog (seeded) | `engine/agent_templates/` |
-| Runtime workspace scaffold | `engine/agent_template/` |
-| Chat / IM channels | `engine/app/services/channels/`, `engine/docs/channels.md`, per-provider `app/api/*` |
-| Tests | `engine/tests/` |
-
-**Hard constraints (do not fight these):**
-
-- No new SQLAlchemy / Alembic / `app/models/` - pure **psycopg3** + DAOs.
-- Log via `from app.core.logging import logger` - not direct loguru in app code.
-- Routes orchestrate; logic lives in services.
-- Deep detail: **`engine/AGENTS.md`** and nested `AGENTS.md` under `app/`, `services/`, etc.
-
-**Run (from `engine/`):**
+**`engine/`** — multi-tenant digital-employee platform. Entry: `app/main.py`, `app/config.py`, `app/api/`, `app/services/`, `app/db/` + `dao/` + `records/`, `scripts/schema_baseline.sql`. Role catalog `agent_templates/` ≠ workspace scaffold `agent_template/`. IM: `app/services/channels/` + `docs/channels.md`. Hard rules: psycopg3 only (no SQLAlchemy/Alembic/`app/models/`); `from app.core.logging import logger`; thin routes. Deep map: **`engine/AGENTS.md`**.
 
 ```bash
-./start-from-sourcecode.sh
-# or
-./start-from-docker.sh
-uv run --extra dev pytest
+cd engine && ./start-from-sourcecode.sh   # or ./start-from-docker.sh
+cd engine && uv run --extra dev pytest
 ```
 
-### `web-l/` - landing page
+**`web-l/`** — public marketing SPA only (hash nav, no API, no `VITE_*`). Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173).
 
-**Owns:** Public marketing site only - brand, positioning, role catalog presentation, integration lists, CTA. **No** authenticated product surfaces.
+**`web-a/`** — operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains. `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
-**Stack:** React 19 + TypeScript + Vite + Tailwind CSS v4 + Framer Motion + shadcn-style UI.
-
-**Layout:**
-
-```
-web-l/src/
-  components/
-    brand/        # MaraClawLogo mark
-    layout/       # header, footer
-    sections/     # hero, features, agents, …
-    ui/           # shadcn-style primitives
-  hooks/          # theme, etc.
-  lib/
-```
-
-**Run:**
-
-```bash
-cd web-l && npm install && npm run dev
-```
-
-**Coordination notes:**
-
-- Role names/descriptions on the landing page should stay **aligned** with `engine/agent_templates/` when they claim product truth - but landing copy may be shortened for marketing.
-- Channel badges (Feishu, WeCom, Slack, Google Chat, Discord, MS Teams, …) should not invent connectors that `engine` never plans to support; when engine adds a channel, update `web-l` only if marketing should show it.
-- Do not call privileged admin APIs from `web-l`.
-
-### `web-a/` - admin UI
-
-**Owns:** Operator console for organizations/tenants - user/role management, agent fleet admin, tool/skill policy, connector configuration, audit/activity, enterprise settings, platform-admin surfaces.
-
-**Today:** Bootstrapped SPA (`web-a/`) — React/Vite/Tailwind shell with login, force-password-change, and sidebar nav placeholders. Feature screens and engine clients are WIP. Package guide: `web-a/AGENTS.md`. Admin API inventory: `engine/docs/admin-apis.md`.
-
-**Do not** dump admin UI into `web-l` or `web-e`.
-
-**Expected relationship:** Talks only to `engine` HTTP/WS APIs with admin-scoped auth. Prefer shared design tokens/patterns with `web-e` when both exist, but keep packages deployable separately.
-
-**Run:**
-
-```bash
-cd web-a && npm install && npm run dev
-```
-
-### `web-e/` - end-user UI
-
-**Owns (when implemented):** Product experience for members - agent list, chat sessions, onboarding conversations, personal settings, non-admin tool use, notifications as a user.
-
-**Today:** Placeholder (`README.md` only). Scaffold here for member UX; **do not** put chat product UI in `web-l` or admin-only pages in `web-e`.
-
-**Expected relationship:** Talks to `engine` with end-user auth. Admin-only actions belong in `web-a` even if the same engine endpoint exists.
+**`web-e/`** — member product. JWT `maraclaw-enduser-token`. Live: register / login / org join / transfer. Home is a chat placeholder. Admin company controls stay in `web-a`. Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5175).
 
 ---
 
-## Cross-cutting coordination
+## Cross-cutting
 
-### API contract
-
-- **Source of truth for behavior:** `engine` routers + schemas + tests.
-- Frontends (`web-a`, `web-e`) are clients. Prefer typed clients generated or hand-written against engine OpenAPI/schemas once apps exist.
-- Breaking API changes: update `engine` tests first, then every consuming UI package.
-
-### Auth & tenancy
+**API:** engine routers + tests are behavior truth. Breaking changes: engine tests first, then `web-a` / `web-e` clients.
 
 | Concern | Engine | web-a | web-e | web-l |
 |---------|--------|-------|-------|-------|
-| Session / JWT / SSO | implement | consume (admin) | consume (user) | none / marketing only |
-| Tenant isolation | enforce | select/manage tenant | operate within membership | N/A |
-| Platform admin | env-seeded genesis + RBAC | surface | hide | N/A |
-| First-login password change | `identity.must_change_password` gate | force `/account` until cleared | (when product ships) | N/A |
+| Session / JWT / SSO | implement | `maraclaw-admin-token` | `maraclaw-enduser-token` | none |
+| Tenant isolation | enforce | select/manage | operate in membership | N/A |
+| Platform admin | genesis + RBAC | surface | hide (not a member login) | N/A |
+| First-login password change | `must_change_password` | force `/account` | not surfaced yet | N/A |
 
-**Genesis admins (engine):**
+Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed on empty DB). Open registration never becomes `platform_admin`. Genesis OA: platform admin via `POST /api/admin/companies` (or `POST /api/tenants/`). JWT may issue before password change; privileged REST/WS/files 403 until cleared. Details: `engine/docs/admin-apis.md`.
 
-- Platform admin is seeded from `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed if missing on an empty DB). Open registration never elevates to `platform_admin`.
-- Genesis org admin for a new company is created only by platform admin via `POST /api/admin/companies` with `admin_email` + `admin_password`.
-- Both genesis accounts must change password after first successful login; JWT may still be issued, but privileged REST/WS/file paths return 403 until change.
+**Env:** backend secrets in engine (+ root `.env.example`). Frontends: public `VITE_*` only. CORS origins live in **engine**. Fresh installs need `PLATFORM_ADMIN_*`.
 
-Details: `engine/docs/admin-apis.md` (genesis section), `engine/app/services/platform_admin_seeder.py`.
-
-### Config & env
-
-- Backend secrets and process config: `engine` (+ root `.env.example` when monorepo-wide).
-- Fresh engine installs need `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` (see root and `engine/.env.example`).
-- Frontend public config (API base URL, feature flags for UI): each web package’s own env (`VITE_*` or equivalent) - never ship server secrets to the browser.
-- CORS origins for web apps are configured in **engine**, not in the frontends alone.
-
-### Brand & copy
-
-- **Wordmark / mark:** `web-l` brand assets (`MaraClawLogo`, `public/favicon.svg`, `public/maraclaw-mark.svg`) are the current visual source. When `web-a` / `web-e` ship, reuse or extract shared brand assets deliberately - avoid three divergent lobsters/claws.
-- Product naming: **MaraClaw** (product), **OpenClaw** (agent runtime heritage). Keep that distinction in UI copy.
+**Brand:** **MaraClaw** = product, **OpenClaw** = runtime/guest heritage. Visual source is `web-l` (`MaraClawLogo`, `public/maraclaw-mark.svg`) — do not fork three marks.
 
 ### Docs for agents
 
 | Depth | File |
 |-------|------|
 | Monorepo routing | **`AGENTS.md`** (this file) |
-| Backend architecture | `engine/AGENTS.md` |
-| Backend subdomains | `engine/app/**/AGENTS.md`, `engine/docs/AGENTS.md`, etc. |
-| Admin API inventory + genesis rules | `engine/docs/admin-apis.md` |
+| Backend | `engine/AGENTS.md` + `engine/app/**/AGENTS.md` |
+| Admin HTTP + genesis | `engine/docs/admin-apis.md` |
 | Admin console | `web-a/AGENTS.md` |
-| Landing stack | `web-l/README.md` |
+| Landing | `web-l/AGENTS.md` |
+| Member UI | `web-e/AGENTS.md` |
 
-When adding a substantial new package area under `web-a` or `web-e`, add a package-level `AGENTS.md` (or expand README) so this root file can stay a **router**, not a full design dump.
+Keep this file a router. New domains get a nested `AGENTS.md`, not more root prose.
 
 ---
 
@@ -242,30 +127,8 @@ When adding a substantial new package area under `web-a` or `web-e`, add a packa
 
 ---
 
-## Suggested workflow for agents
+## NOTES
 
-1. **Classify** the request using the tables above (user × surface × layer).
-2. **Open the package `AGENTS.md` / README** for that package before editing.
-3. **Implement the source of truth first** (usually `engine` for behavioral features).
-4. **Propagate** to the correct frontend(s); skip packages that don’t need the surface.
-5. **Verify** in-package (engine: `pytest` / ruff; web-l: `npm run build`; web-a/web-e: once scaffolded).
-6. **Keep diffs scoped** - don’t “drive-by” reformat unrelated packages.
+`engine` / `web-l` (landing) / `web-a` (admin) / `web-e` (end user). Classify → open that package’s `AGENTS.md` → implement engine first for behavior → wire only the matching UI → verify in-package (`engine`: pytest/ruff; `web-*`: `npm run build`). No drive-by reformats.
 
----
-
-## Naming cheat-sheet
-
-| Short | Meaning |
-|-------|---------|
-| `engine` | Backend platform |
-| `web-l` | **L**anding |
-| `web-a` | **A**dmin UI |
-| `web-e` | **E**nd-user UI |
-| OpenClaw | Agent runtime lineage / guest image ecosystem |
-| MaraClaw | Product / brand for teams & companies |
-
-When unsure where a file belongs, ask: *Who is looking at this UI, and does it require a server secret or privileged role?*  
-- Public + no auth → `web-l`  
-- Privileged operator → `web-a`  
-- Authenticated member product → `web-e`  
-- Data, policy, or integration truth → `engine`
+Who is looking, and does it need a secret or privileged role? Public → `web-l`. Operator → `web-a`. Member → `web-e`. Data/policy → `engine`.

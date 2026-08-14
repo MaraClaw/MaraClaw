@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-08-14
-**Commit:** a704109
-**Branch:** refactor-administration
+**Commit:** 08ac4f7
+**Branch:** enhance-web-search
 **Mode:** update (init-deep --max-depth=7)
 
 ## OVERVIEW
@@ -52,6 +52,7 @@ No `alembic/`, no `app/models/`.
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
+| Web search / page read | `agent_tool_exec/web_search.py`, `search_providers.py`, `web_read.py` | Register in `_agent_tool_exec_search.py`; `agent_tools.py` only re-exports |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |
@@ -143,11 +144,7 @@ uv run python -m app.scripts.bootstrap_db
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
 - Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
-- Health is a pool ping (503 if down).
-- Image may setuid `bwrap` (`BWRAP_SETUID=1`). Local sandbox uses `--unshare-user-try`.
-- `pyproject.toml` still lists `asyncpg`; the live pool is psycopg3. Do not add new asyncpg callers.
-- `app/services/agent_runtime/` is gone. Do not recreate it or add `AGENTS.md` there.
-- Three Node pins: guest image `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, classifier/smoke expect guest/host `v26.7.0`.
-- OpenClaw guest is **linux/arm64 only**. Publish: `DOCKERHUB_NAMESPACE=… ./publish-openclaw-local-dockerfile.sh`.
-- `docs/refactoring/psycopg-migration.md` is historical dual-stack, not current policy.
-- Depth 5–7 under `clawsec_skill_files/` is AGPL payload. Do not add `AGENTS.md` there.
+- Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
+- `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 — no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
+- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only** (`DOCKERHUB_NAMESPACE=… ./publish-openclaw-local-dockerfile.sh`).
+- `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. No `AGENTS.md` under `clawsec_skill_files/` skill trees (AGPL payload).

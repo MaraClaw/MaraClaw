@@ -8,6 +8,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - `lifespan()`: `init_pool()` first (roles `all|bootstrap|api|worker|connector`), then seeders (including **fail-closed** platform admin), then realtime/worker/connector tasks.
 - `config.py` is the only pydantic-settings surface. New env vars need `.env.example` (includes `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`).
 - `db/` is the live data layer. Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/` or `app/database.py`.
+- `templates/` is a **third** template tree: fallback `HEARTBEAT.md` + `reflections.md` copied by `agent_manager` when a workspace is missing them. Not `agent_template/` (scaffold) and not `agent_templates/` (role catalog).
 
 ## Local Rules
 
