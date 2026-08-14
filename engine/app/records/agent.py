@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class AgentPermissionRecord:
@@ -50,7 +52,7 @@ class AgentRecord:
     container_port: int | None = None
     primary_model_id: UUID | None = None
     fallback_model_id: UUID | None = None
-    autonomy_policy: dict[str, Any] = field(default_factory=dict)
+    autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
     max_tokens_per_day: int | None = None
     max_tokens_per_month: int | None = None
     tokens_used_today: int = 0
@@ -89,9 +91,7 @@ class AgentRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentRecord:
-        policy = row.get("autonomy_policy") or {}
-        if not isinstance(policy, dict):
-            policy = dict(policy)
+        policy = mapping_from_row(row.get("autonomy_policy") or {})
         return cls(
             id=row["id"],
             name=row["name"],

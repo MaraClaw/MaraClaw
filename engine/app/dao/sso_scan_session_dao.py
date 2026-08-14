@@ -1,6 +1,7 @@
 """DAO for sso_scan_sessions (psycopg)."""
 
 from __future__ import annotations
+from typing import ClassVar, Any
 
 from app.dao.base import BaseDAO
 from app.records.sso_scan_session import SSOScanSessionRecord
@@ -19,9 +20,9 @@ _COLUMNS = (
 
 
 class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
-    table = "sso_scan_sessions"
-    columns = _COLUMNS
-    record_factory = staticmethod(SSOScanSessionRecord.from_row)
+    table: ClassVar[str] = "sso_scan_sessions"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(SSOScanSessionRecord.from_row)
 
 
 sso_scan_session_dao = SSOScanSessionDAO()

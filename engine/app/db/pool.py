@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import get_settings
@@ -11,10 +12,10 @@ from app.core.logging import logger
 from app.db.types import configure_connection
 from app.db.url import normalize_psycopg_conninfo
 
-_pool: AsyncConnectionPool | None = None
+_pool: AsyncConnectionPool[Any] | None = None
 
 
-def get_pool() -> AsyncConnectionPool:
+def get_pool() -> AsyncConnectionPool[Any]:
     """Return the process-global pool, or raise if not initialized."""
     if _pool is None:
         raise RuntimeError("psycopg pool is not initialized; call init_pool() during startup")
@@ -27,7 +28,7 @@ async def init_pool(
     min_size: int | None = None,
     max_size: int | None = None,
     pool_timeout: float | None = None,
-) -> AsyncConnectionPool:
+) -> AsyncConnectionPool[Any]:
     """Create and open the global async connection pool."""
     global _pool
     if _pool is not None:
@@ -47,7 +48,7 @@ async def init_pool(
     max_idle = float(getattr(settings, "DATABASE_POOL_MAX_IDLE", 600.0) or 600.0)
     max_lifetime = float(getattr(settings, "DATABASE_POOL_MAX_LIFETIME", 1800.0) or 1800.0)
 
-    async def _configure(conn: Any) -> None:
+    async def _configure(conn: AsyncConnection[Any]) -> None:
         configure_connection(conn)
 
     pool = AsyncConnectionPool(
@@ -67,12 +68,12 @@ async def init_pool(
     _pool = pool
     logger.info(
         f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s "
-        f"max_idle={max_idle}s max_lifetime={max_lifetime}s"
+        + f"max_idle={max_idle}s max_lifetime={max_lifetime}s"
     )
     return pool
 
 
-async def _check_pooled_connection(conn: Any) -> None:
+async def _check_pooled_connection(conn: AsyncConnection[Any]) -> None:
     """Reject already-closed sockets without a checkout-time ``SELECT 1``."""
     if getattr(conn, "closed", False):
         raise OSError("psycopg connection is closed")

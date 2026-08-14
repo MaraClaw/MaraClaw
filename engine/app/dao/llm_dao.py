@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -31,9 +31,9 @@ _LLM_COLUMNS = (
 class LLMModelDAO(BaseDAO[LLMModelRecord]):
     """DAO for LLM model pool rows."""
 
-    table = "llm_models"
-    columns = _LLM_COLUMNS
-    record_factory = staticmethod(LLMModelRecord.from_row)
+    table: ClassVar[str] = "llm_models"
+    columns: ClassVar[tuple[str, ...]] = _LLM_COLUMNS
+    record_factory: Any = staticmethod(LLMModelRecord.from_row)
 
     async def list_enabled(self, *, tenant_id: UUID | None = None) -> Sequence[LLMModelRecord]:
         params: dict[str, Any] = {}
@@ -53,8 +53,8 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
         async with self.session() as db:
             return await db.fetchval(
                 "SELECT id FROM llm_models "
-                "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
-                "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                + "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
+                + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                 {"tenant_id": tenant_id},
             )
 
@@ -68,7 +68,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
             else:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM llm_models "
-                    "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
+                    + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
                     {"tenant_id": tenant_id},
                 )
             return [LLMModelRecord.from_row(row) for row in rows]

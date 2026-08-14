@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from app.dao.base import BaseDAO
@@ -26,9 +26,9 @@ _COLUMNS = (
 class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
     """DAO for L3 autonomy approval requests."""
 
-    table = "approval_requests"
-    columns = _COLUMNS
-    record_factory = staticmethod(ApprovalRequestRecord.from_row)
+    table: ClassVar[str] = "approval_requests"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(ApprovalRequestRecord.from_row)
 
     async def create_pending(
         self,
@@ -42,9 +42,9 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"INSERT INTO approval_requests "
-                f"(id, agent_id, action_type, details, status, created_at) "
-                f"VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, 'pending', %(created_at)s) "
-                f"RETURNING {self._select_list()}",
+                + f"(id, agent_id, action_type, details, status, created_at) "
+                + f"VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, 'pending', %(created_at)s) "
+                + f"RETURNING {self._select_list()}",
                 {
                     "id": approval_id,
                     "agent_id": agent_id,
@@ -69,8 +69,8 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE approval_requests SET status = %(status)s, "
-                f"resolved_at = %(resolved_at)s, resolved_by = %(resolved_by)s "
-                f"WHERE id = %(id)s RETURNING {self._select_list()}",
+                + f"resolved_at = %(resolved_at)s, resolved_by = %(resolved_by)s "
+                + f"WHERE id = %(id)s RETURNING {self._select_list()}",
                 {
                     "id": approval.id,
                     "status": status,
@@ -105,8 +105,8 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM approval_requests "
-                f"WHERE agent_id = %(agent_id)s{status_sql} "
-                "ORDER BY created_at DESC NULLS LAST",
+                + f"WHERE agent_id = %(agent_id)s{status_sql} "
+                + "ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [ApprovalRequestRecord.from_row(row) for row in rows]

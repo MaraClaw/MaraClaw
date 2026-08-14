@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from app.dao.base import BaseDAO
@@ -43,15 +43,15 @@ _MESSAGE_COLUMNS = (
 class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
     """DAO for chat session rows."""
 
-    table = "chat_sessions"
-    columns = _SESSION_COLUMNS
-    record_factory = staticmethod(ChatSessionRecord.from_row)
+    table: ClassVar[str] = "chat_sessions"
+    columns: ClassVar[tuple[str, ...]] = _SESSION_COLUMNS
+    record_factory: Any = staticmethod(ChatSessionRecord.from_row)
 
     async def get_for_agent(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE id = %(session_id)s AND agent_id = %(agent_id)s",
+                + "WHERE id = %(session_id)s AND agent_id = %(agent_id)s",
                 {"session_id": session_id, "agent_id": agent_id},
             )
             return ChatSessionRecord.from_row(row) if row else None
@@ -60,7 +60,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE id = %(session_id)s AND (agent_id = %(agent_id)s OR peer_agent_id = %(agent_id)s)",
+                + "WHERE id = %(session_id)s AND (agent_id = %(agent_id)s OR peer_agent_id = %(agent_id)s)",
                 {"session_id": session_id, "agent_id": agent_id},
             )
             return ChatSessionRecord.from_row(row) if row else None
@@ -74,7 +74,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND external_conv_id = %(external_conv_id)s",
+                + "WHERE agent_id = %(agent_id)s AND external_conv_id = %(external_conv_id)s",
                 {"agent_id": agent_id, "external_conv_id": external_conv_id},
             )
             return ChatSessionRecord.from_row(row) if row else None
@@ -85,8 +85,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             return await db.fetchval(
                 "SELECT user_id FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND external_conv_id = ANY(%(patterns)s) "
-                "AND user_id IS NOT NULL LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND external_conv_id = ANY(%(patterns)s) "
+                + "AND user_id IS NOT NULL LIMIT 1",
                 {"agent_id": agent_id, "patterns": list(patterns)},
             )
 
@@ -100,8 +100,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND peer_agent_id = %(peer_agent_id)s "
-                "AND source_channel = 'agent' LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND peer_agent_id = %(peer_agent_id)s "
+                + "AND source_channel = 'agent' LIMIT 1",
                 {"agent_id": session_agent_id, "peer_agent_id": peer_agent_id},
             )
             return ChatSessionRecord.from_row(row) if row else None
@@ -115,9 +115,9 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
-                "AND source_channel = 'web' AND is_group IS FALSE AND is_primary IS TRUE "
-                "LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
+                + "AND source_channel = 'web' AND is_group IS FALSE AND is_primary IS TRUE "
+                + "LIMIT 1",
                 {"agent_id": agent_id, "user_id": user_id},
             )
             return ChatSessionRecord.from_row(row) if row else None
@@ -170,10 +170,10 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
-                "AND is_group IS FALSE "
-                "AND source_channel NOT IN ('agent', 'trigger') "
-                "ORDER BY last_message_at DESC NULLS LAST, created_at DESC",
+                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
+                + "AND is_group IS FALSE "
+                + "AND source_channel NOT IN ('agent', 'trigger') "
+                + "ORDER BY last_message_at DESC NULLS LAST, created_at DESC",
                 {"agent_id": agent_id, "user_id": user_id},
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
@@ -191,10 +191,10 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             group_clause = "" if include_groups else "AND is_group IS FALSE "
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s AND source_channel = %(source_channel)s "
-                f"{group_clause}"
-                "ORDER BY last_message_at DESC NULLS LAST, created_at DESC "
-                "LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s AND source_channel = %(source_channel)s "
+                + f"{group_clause}"
+                + "ORDER BY last_message_at DESC NULLS LAST, created_at DESC "
+                + "LIMIT %(limit)s",
                 {
                     "agent_id": agent_id,
                     "source_channel": source_channel,
@@ -207,9 +207,9 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE agent_id = %(agent_id)s "
-                "   OR (peer_agent_id = %(agent_id)s AND source_channel = 'agent') "
-                "ORDER BY last_message_at DESC NULLS LAST, created_at DESC",
+                + "WHERE agent_id = %(agent_id)s "
+                + "   OR (peer_agent_id = %(agent_id)s AND source_channel = 'agent') "
+                + "ORDER BY last_message_at DESC NULLS LAST, created_at DESC",
                 {"agent_id": agent_id},
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
@@ -226,10 +226,10 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE source_channel = 'agent' "
-                "AND (agent_id = ANY(%(ids)s) OR peer_agent_id = ANY(%(ids)s)) "
-                "ORDER BY last_message_at DESC NULLS LAST "
-                "LIMIT %(limit)s",
+                + "WHERE source_channel = 'agent' "
+                + "AND (agent_id = ANY(%(ids)s) OR peer_agent_id = ANY(%(ids)s)) "
+                + "ORDER BY last_message_at DESC NULLS LAST "
+                + "LIMIT %(limit)s",
                 {"ids": list(agent_ids), "limit": limit},
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
@@ -238,8 +238,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
-                "WHERE source_channel = 'agent' "
-                "AND (agent_id = %(agent_id)s OR peer_agent_id = %(agent_id)s)",
+                + "WHERE source_channel = 'agent' "
+                + "AND (agent_id = %(agent_id)s OR peer_agent_id = %(agent_id)s)",
                 {"agent_id": agent_id},
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
@@ -260,8 +260,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT conversation_id, COUNT(*) AS cnt FROM chat_messages "
-                f"WHERE conversation_id = ANY(%(ids)s){agent_clause} "
-                "GROUP BY conversation_id",
+                + f"WHERE conversation_id = ANY(%(ids)s){agent_clause} "
+                + "GROUP BY conversation_id",
                 params,
             )
             return {str(row["conversation_id"]): int(row["cnt"] or 0) for row in rows}
@@ -279,8 +279,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         if not mine_only:
             extra = (
                 " AND cs.source_channel NOT IN ('agent', 'trigger') "
-                " AND cs.is_group IS FALSE "
-                " AND cs.user_id = %(user_id)s"
+                + " AND cs.is_group IS FALSE "
+                + " AND cs.user_id = %(user_id)s"
             )
         async with self.session() as db:
             rows = await db.fetchall(
@@ -301,25 +301,25 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return {str(row["session_id"]): int(row["cnt"] or 0) for row in rows}
 
-    async def counts_by_created_day(self, start: Any, end: Any) -> dict[Any, int]:
+    async def counts_by_created_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM chat_sessions "
-                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
             return {row["d"]: int(row["c"] or 0) for row in rows}
 
-    async def dau_by_created_day(self, start: Any, end: Any) -> dict[Any, int]:
+    async def dau_by_created_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(DISTINCT user_id) AS c FROM chat_sessions "
-                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
             return {row["d"]: int(row["c"] or 0) for row in rows}
 
-    async def count_created_before(self, before: Any) -> int:
+    async def count_created_before(self, before: datetime) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM chat_sessions WHERE created_at < %(before)s",
@@ -327,7 +327,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return int(value or 0)
 
-    async def count_created_since(self, since: Any) -> int:
+    async def count_created_since(self, since: datetime) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM chat_sessions WHERE created_at >= %(since)s",
@@ -335,17 +335,24 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return int(value or 0)
 
-    async def channel_distribution_since(self, since: Any) -> Sequence[dict[str, Any]]:
+    async def channel_distribution_since(self, since: datetime) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT source_channel, COUNT(*) AS count FROM chat_sessions "
-                "WHERE created_at >= %(since)s "
-                "GROUP BY source_channel ORDER BY COUNT(*) DESC",
+                + "WHERE created_at >= %(since)s "
+                + "GROUP BY source_channel ORDER BY COUNT(*) DESC",
                 {"since": since},
             )
             return [{"channel": row["source_channel"], "count": int(row["count"] or 0)} for row in rows]
 
-    async def wau_mau_by_day(self, *, range_start: Any, range_end: Any, series_start: Any, series_end: Any):
+    async def wau_mau_by_day(
+        self,
+        *,
+        range_start: datetime | date,
+        range_end: datetime | date,
+        series_start: datetime | date,
+        series_end: datetime | date,
+    ):
         async with self.session() as db:
             rows = await db.fetchall(
                 """
@@ -458,9 +465,9 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
 class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
     """DAO for chat message rows."""
 
-    table = "chat_messages"
-    columns = _MESSAGE_COLUMNS
-    record_factory = staticmethod(ChatMessageRecord.from_row)
+    table: ClassVar[str] = "chat_messages"
+    columns: ClassVar[tuple[str, ...]] = _MESSAGE_COLUMNS
+    record_factory: Any = staticmethod(ChatMessageRecord.from_row)
 
     async def insert_message(
         self,
@@ -496,8 +503,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_messages "
-                "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s "
-                "ORDER BY created_at DESC LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s "
+                + "ORDER BY created_at DESC LIMIT %(limit)s",
                 {"agent_id": agent_id, "conversation_id": conversation_id, "limit": limit},
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
@@ -517,8 +524,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_messages "
-                f"WHERE conversation_id = %(conversation_id)s{before_sql} "
-                "ORDER BY created_at DESC LIMIT %(limit)s",
+                + f"WHERE conversation_id = %(conversation_id)s{before_sql} "
+                + "ORDER BY created_at DESC LIMIT %(limit)s",
                 params,
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
@@ -535,8 +542,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_messages "
-                "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s "
-                f"ORDER BY created_at {order} LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s "
+                + f"ORDER BY created_at {order} LIMIT %(limit)s",
                 {"agent_id": agent_id, "conversation_id": conversation_id, "limit": limit},
             )
             return [ChatMessageRecord.from_row(row) for row in rows]
@@ -595,8 +602,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_messages "
-                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
-                "ORDER BY created_at DESC LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s "
+                + "ORDER BY created_at DESC LIMIT %(limit)s",
                 {"agent_id": agent_id, "user_id": user_id, "limit": limit},
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
@@ -623,10 +630,10 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {group_expr} AS group_key, "
-                "MAX(created_at) AS last_at, COUNT(*) AS cnt "
-                "FROM chat_messages "
-                f"WHERE agent_id = %(agent_id)s{prefix_sql} "
-                f"GROUP BY {group_expr}",
+                + "MAX(created_at) AS last_at, COUNT(*) AS cnt "
+                + "FROM chat_messages "
+                + f"WHERE agent_id = %(agent_id)s{prefix_sql} "
+                + f"GROUP BY {group_expr}",
                 params,
             )
             return [dict(row) for row in rows]
@@ -636,7 +643,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         *,
         agent_id: UUID,
         conversation_ids: Sequence[str] | None = None,
-        user_ids: Sequence[Any] | None = None,
+        user_ids: Sequence[UUID] | None = None,
         role: str | None = None,
         ascending: bool = False,
     ) -> dict[str, str]:
@@ -682,8 +689,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT conversation_id, COUNT(*) AS cnt, MAX(created_at) AS last_at "
-                "FROM chat_messages WHERE conversation_id = ANY(%(ids)s) "
-                "GROUP BY conversation_id",
+                + "FROM chat_messages WHERE conversation_id = ANY(%(ids)s) "
+                + "GROUP BY conversation_id",
                 {"ids": list(conversation_ids)},
             )
         return {str(row["conversation_id"]): (int(row["cnt"] or 0), row.get("last_at")) for row in rows}
@@ -725,7 +732,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COUNT(*) AS cnt, MAX(created_at) AS last_at "
-                "FROM chat_messages WHERE conversation_id = %(conversation_id)s",
+                + "FROM chat_messages WHERE conversation_id = %(conversation_id)s",
                 {"conversation_id": conversation_id},
             )
             if not row:

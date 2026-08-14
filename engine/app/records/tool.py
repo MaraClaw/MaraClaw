@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class ToolRecord:
@@ -19,9 +21,9 @@ class ToolRecord:
     type: str = "builtin"
     category: str = "general"
     icon: str = "🔧"
-    parameters_schema: dict[str, Any] = field(default_factory=dict)
-    config: dict[str, Any] = field(default_factory=dict)
-    config_schema: dict[str, Any] = field(default_factory=dict)
+    parameters_schema: dict[str, Any] = field(default_factory=dict[str, Any])
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
+    config_schema: dict[str, Any] = field(default_factory=dict[str, Any])
     mcp_server_url: str | None = None
     mcp_server_name: str | None = None
     mcp_tool_name: str | None = None
@@ -34,15 +36,9 @@ class ToolRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ToolRecord:
-        parameters_schema = row.get("parameters_schema") or {}
-        config = row.get("config") or {}
-        config_schema = row.get("config_schema") or {}
-        if not isinstance(parameters_schema, dict):
-            parameters_schema = dict(parameters_schema)
-        if not isinstance(config, dict):
-            config = dict(config)
-        if not isinstance(config_schema, dict):
-            config_schema = dict(config_schema)
+        parameters_schema = mapping_from_row(row.get("parameters_schema") or {})
+        config = mapping_from_row(row.get("config") or {})
+        config_schema = mapping_from_row(row.get("config_schema") or {})
         return cls(
             id=row["id"],
             name=row["name"],
@@ -74,16 +70,14 @@ class AgentToolRecord:
     agent_id: UUID
     tool_id: UUID
     enabled: bool = True
-    config: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
     source: str = "system"
     installed_by_agent_id: UUID | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentToolRecord:
-        config = row.get("config") or {}
-        if not isinstance(config, dict):
-            config = dict(config)
+        config = mapping_from_row(row.get("config") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],

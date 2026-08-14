@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.records.agent import AgentRecord
 
 
 @dataclass(slots=True)
@@ -21,6 +24,7 @@ class AgentAgentRelationshipRecord:
     updated_by_user_id: UUID | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    target_agent: AgentRecord | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentAgentRelationshipRecord:

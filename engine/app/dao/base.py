@@ -6,10 +6,10 @@ suppressed for the SQL builders in this module.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import MISSING, fields, is_dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from app.db.connection import DbConnection
@@ -20,10 +20,10 @@ from app.db.types import as_jsonb
 class BaseDAO[RecordT]:
     """Shared CRUD helpers over a single table of plain records."""
 
-    table: str
-    pk: str = "id"
-    columns: tuple[str, ...] = ()
-    record_factory: Callable[[dict[str, Any]], RecordT]
+    table: ClassVar[str]
+    pk: ClassVar[str] = "id"
+    columns: ClassVar[tuple[str, ...]] = ()
+    record_factory: Any
 
     def __init__(self) -> None:
         if not self.table or not self.columns or not getattr(self, "record_factory", None):
@@ -40,7 +40,7 @@ class BaseDAO[RecordT]:
             return ", ".join(f"{alias}.{col}" for col in self.columns)
         return ", ".join(self.columns)
 
-    async def get(self, id: Any) -> RecordT | None:
+    async def get(self, id: UUID) -> RecordT | None:
         """Fetch one row by primary key."""
         async with self.session() as db:
             row = await db.fetchone(
@@ -49,7 +49,7 @@ class BaseDAO[RecordT]:
             )
             return self.record_factory(row) if row else None
 
-    async def get_many(self, ids: Sequence[Any]) -> list[RecordT]:
+    async def get_many(self, ids: Sequence[UUID]) -> list[RecordT]:
         """Fetch rows whose primary keys are in ``ids`` (order not preserved)."""
         if not ids:
             return []
@@ -135,14 +135,14 @@ class BaseDAO[RecordT]:
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE {self.table} SET {', '.join(assignments)} "
-                f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
+                + f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
                 params,
             )
             if row is None:
                 return db_obj
             return self.record_factory(row)
 
-    async def delete(self, *, id: Any) -> RecordT | None:
+    async def delete(self, *, id: UUID) -> RecordT | None:
         """Delete by primary key and return the deleted row when present."""
         async with self.session() as db:
             row = await db.fetchone(
@@ -152,7 +152,7 @@ class BaseDAO[RecordT]:
             return self.record_factory(row) if row else None
 
 
-def as_uuid(value: Any) -> UUID | None:
+def as_uuid(value: object) -> UUID | None:
     """Normalize optional UUID-ish values."""
     if value is None:
         return None

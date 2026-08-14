@@ -1,6 +1,7 @@
 """DAO for agent_credentials (psycopg)."""
 
 from __future__ import annotations
+from typing import ClassVar, Any
 
 from collections.abc import Sequence
 from uuid import UUID
@@ -25,15 +26,15 @@ _COLUMNS = (
 
 
 class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
-    table = "agent_credentials"
-    columns = _COLUMNS
-    record_factory = staticmethod(AgentCredentialRecord.from_row)
+    table: ClassVar[str] = "agent_credentials"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(AgentCredentialRecord.from_row)
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[AgentCredentialRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_credentials "
-                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentCredentialRecord.from_row(row) for row in rows]
@@ -43,8 +44,8 @@ class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_credentials "
-                "WHERE agent_id = %(agent_id)s AND status = 'active' "
-                "AND cookies_json IS NOT NULL",
+                + "WHERE agent_id = %(agent_id)s AND status = 'active' "
+                + "AND cookies_json IS NOT NULL",
                 {"agent_id": agent_id},
             )
             return [AgentCredentialRecord.from_row(row) for row in rows]

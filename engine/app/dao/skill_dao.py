@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -24,12 +25,16 @@ _SKILL_COLUMNS = (
 _SKILL_FILE_COLUMNS = ("id", "skill_id", "path", "content")
 
 
+def _skill_from_row(row: dict[str, Any]) -> SkillRecord:
+    return SkillRecord.from_row(row)
+
+
 class SkillDAO(BaseDAO[SkillRecord]):
     """DAO for global skill registry rows."""
 
-    table = "skills"
-    columns = _SKILL_COLUMNS
-    record_factory = staticmethod(lambda row: SkillRecord.from_row(row))
+    table: ClassVar[str] = "skills"
+    columns: ClassVar[tuple[str, ...]] = _SKILL_COLUMNS
+    record_factory: Any = staticmethod(_skill_from_row)
 
     async def get_by_folder_name(
         self,
@@ -38,7 +43,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         tenant_id: UUID | None = None,
         tenant_scoped: bool = False,
     ) -> SkillRecord | None:
-        params: dict = {"folder_name": folder_name}
+        params: dict[str, Any] = {"folder_name": folder_name}
         tenant_sql = ""
         if tenant_scoped:
             if tenant_id is not None:
@@ -58,7 +63,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             if tenant_id is not None:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM skills "
-                    "WHERE tenant_id IS NULL OR tenant_id = %(tenant_id)s ORDER BY name",
+                    + "WHERE tenant_id IS NULL OR tenant_id = %(tenant_id)s ORDER BY name",
                     {"tenant_id": tenant_id},
                 )
             else:
@@ -73,7 +78,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         role: str | None = None,
         with_files: bool = False,
     ) -> SkillRecord | None:
-        params: dict = {"skill_id": skill_id}
+        params: dict[str, Any] = {"skill_id": skill_id}
         scope_sql = ""
         if role != "platform_admin" and tenant_id is not None:
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
@@ -96,7 +101,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         role: str | None = None,
         with_files: bool = False,
     ) -> SkillRecord | None:
-        params: dict = {"folder_name": folder_name}
+        params: dict[str, Any] = {"folder_name": folder_name}
         scope_sql = ""
         if role != "platform_admin" and tenant_id is not None:
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
@@ -115,7 +120,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         async with self.session() as db:
             await db.execute("DELETE FROM skill_files WHERE skill_id = %(skill_id)s", {"skill_id": skill_id})
         for path, content in files:
-            await skill_file_dao.create(obj_in={"skill_id": skill_id, "path": path, "content": content})
+            _ = await skill_file_dao.create(obj_in={"skill_id": skill_id, "path": path, "content": content})
 
     async def delete_with_files(self, skill_id: UUID) -> None:
         async with self.session() as db:
@@ -138,7 +143,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             skill_ids = [row["id"] for row in skill_rows]
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
-                "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
+                + "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
                 {"skill_ids": skill_ids},
             )
             files_by_skill: dict[UUID, list[SkillFileRecord]] = {}
@@ -174,7 +179,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 return []
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
-                "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
+                + "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
                 {"skill_ids": [row["id"] for row in skill_rows]},
             )
             files_by_skill: dict[UUID, list[SkillFileRecord]] = {}
@@ -214,7 +219,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 }
             )
             for path, content in files:
-                await skill_file_dao.create(
+                _ = await skill_file_dao.create(
                     obj_in={"skill_id": skill.id, "path": path, "content": content},
                 )
             skill.files = list(await skill_file_dao.list_for_skill(skill.id))
@@ -237,13 +242,13 @@ class SkillDAO(BaseDAO[SkillRecord]):
             seen.add(path)
             existing_file = existing_files.get(path)
             if existing_file is None:
-                await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": path, "content": content})
+                _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": path, "content": content})
             elif existing_file.content != content:
-                await skill_file_dao.update(db_obj=existing_file, obj_in={"content": content})
+                _ = await skill_file_dao.update(db_obj=existing_file, obj_in={"content": content})
         if drop_missing_files:
             for path, existing_file in existing_files.items():
                 if path not in seen:
-                    await skill_file_dao.delete(id=existing_file.id)
+                    _ = await skill_file_dao.delete(id=existing_file.id)
         skill.files = list(await skill_file_dao.list_for_skill(skill.id))
         return skill
 
@@ -251,9 +256,9 @@ class SkillDAO(BaseDAO[SkillRecord]):
 class SkillFileDAO(BaseDAO[SkillFileRecord]):
     """DAO for skill file rows."""
 
-    table = "skill_files"
-    columns = _SKILL_FILE_COLUMNS
-    record_factory = staticmethod(SkillFileRecord.from_row)
+    table: ClassVar[str] = "skill_files"
+    columns: ClassVar[tuple[str, ...]] = _SKILL_FILE_COLUMNS
+    record_factory: Any = staticmethod(SkillFileRecord.from_row)
 
     async def list_for_skill(self, skill_id: UUID) -> Sequence[SkillFileRecord]:
         async with self.session() as db:

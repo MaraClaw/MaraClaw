@@ -1,6 +1,7 @@
 """DAO for notifications (psycopg)."""
 
 from __future__ import annotations
+from typing import ClassVar, Any
 
 from collections.abc import Sequence
 from uuid import UUID
@@ -26,16 +27,16 @@ _NOTIFICATION_COLUMNS = (
 class NotificationDAO(BaseDAO[NotificationRecord]):
     """DAO for notification rows."""
 
-    table = "notifications"
-    columns = _NOTIFICATION_COLUMNS
-    record_factory = staticmethod(NotificationRecord.from_row)
+    table: ClassVar[str] = "notifications"
+    columns: ClassVar[tuple[str, ...]] = _NOTIFICATION_COLUMNS
+    record_factory: Any = staticmethod(NotificationRecord.from_row)
 
     async def list_unread_for_agent(self, agent_id: UUID, *, limit: int = 10) -> Sequence[NotificationRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM notifications "
-                "WHERE agent_id = %(agent_id)s AND is_read IS FALSE "
-                "ORDER BY created_at ASC LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s AND is_read IS FALSE "
+                + "ORDER BY created_at ASC LIMIT %(limit)s",
                 {"agent_id": agent_id, "limit": limit},
             )
             return [NotificationRecord.from_row(row) for row in rows]
@@ -60,8 +61,8 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM notifications "
-                f"WHERE {where} ORDER BY created_at DESC "
-                "OFFSET %(offset)s LIMIT %(limit)s",
+                + f"WHERE {where} ORDER BY created_at DESC "
+                + "OFFSET %(offset)s LIMIT %(limit)s",
                 params,
             )
             return [NotificationRecord.from_row(row) for row in rows]
@@ -118,8 +119,8 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             await db.execute(
                 "DELETE FROM notifications "
-                "WHERE user_id = %(user_id)s AND ref_id = %(agent_id)s "
-                "AND type = 'system' AND title LIKE %(title_pat)s",
+                + "WHERE user_id = %(user_id)s AND ref_id = %(agent_id)s "
+                + "AND type = 'system' AND title LIKE %(title_pat)s",
                 {"user_id": user_id, "agent_id": agent_id, "title_pat": "%task failed%"},
             )
 
@@ -127,9 +128,9 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM notifications "
-                "WHERE user_id = %(user_id)s AND ref_id = %(ref_id)s "
-                "AND type = 'system' AND title LIKE %(title_pat)s "
-                "ORDER BY created_at DESC LIMIT 1",
+                + "WHERE user_id = %(user_id)s AND ref_id = %(ref_id)s "
+                + "AND type = 'system' AND title LIKE %(title_pat)s "
+                + "ORDER BY created_at DESC LIMIT 1",
                 {"user_id": user_id, "ref_id": ref_id, "title_pat": "%task failed%"},
             )
             return NotificationRecord.from_row(row) if row else None

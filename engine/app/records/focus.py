@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class AgentFocusItemRecord:
@@ -20,7 +22,7 @@ class AgentFocusItemRecord:
     status: str = "in_progress"
     kind: str = "normal"
     source: str = "user"
-    item_metadata: dict[str, Any] = field(default_factory=dict)
+    item_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     sort_order: int = 0
     completed_at: datetime | None = None
     created_at: datetime | None = None
@@ -28,9 +30,7 @@ class AgentFocusItemRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentFocusItemRecord:
-        meta = row.get("metadata") or row.get("item_metadata") or {}
-        if not isinstance(meta, dict):
-            meta = dict(meta)
+        meta = mapping_from_row(row.get("metadata") or row.get("item_metadata") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],

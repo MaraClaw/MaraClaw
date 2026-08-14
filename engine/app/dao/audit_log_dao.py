@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
 from app.dao.base import BaseDAO
 
 
@@ -19,15 +20,13 @@ class AuditLogRecord:
     action: str
     user_id: UUID | None = None
     agent_id: UUID | None = None
-    details: dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict[str, Any])
     ip_address: str | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AuditLogRecord:
-        details = row.get("details") or {}
-        if not isinstance(details, dict):
-            details = dict(details)
+        details = mapping_from_row(row.get("details") or {})
         return cls(
             id=row["id"],
             action=row["action"],
@@ -43,9 +42,9 @@ _COLUMNS = ("id", "user_id", "agent_id", "action", "details", "ip_address", "cre
 
 
 class AuditLogDAO(BaseDAO[AuditLogRecord]):
-    table = "audit_logs"
-    columns = _COLUMNS
-    record_factory = staticmethod(AuditLogRecord.from_row)
+    table: ClassVar[str] = "audit_logs"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(AuditLogRecord.from_row)
 
     async def list_scoped(
         self,
@@ -66,7 +65,7 @@ class AuditLogDAO(BaseDAO[AuditLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM audit_logs {where} "
-                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 params,
             )
             return [AuditLogRecord.from_row(row) for row in rows]

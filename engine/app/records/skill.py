@@ -41,7 +41,7 @@ class SkillRecord:
     is_builtin: bool = False
     is_default: bool = False
     created_at: datetime | None = None
-    files: list[SkillFileRecord] = field(default_factory=list)
+    files: list[SkillFileRecord] = field(default_factory=list[SkillFileRecord])
 
     @classmethod
     def from_row(cls, row: dict[str, Any], *, files: list[SkillFileRecord] | None = None) -> SkillRecord:

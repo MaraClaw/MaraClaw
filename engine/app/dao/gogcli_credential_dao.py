@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -26,9 +26,9 @@ _COLUMNS = (
 
 
 class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
-    table = "gogcli_credential_states"
-    columns = _COLUMNS
-    record_factory = staticmethod(GogcliCredentialStateRecord.from_row)
+    table: ClassVar[str] = "gogcli_credential_states"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(GogcliCredentialStateRecord.from_row)
 
     async def get_by_agent(self, agent_id: UUID) -> GogcliCredentialStateRecord | None:
         async with self.session() as db:
@@ -42,7 +42,7 @@ class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
         existing = await self.get_by_agent(agent_id)
         if existing:
             return await self.update(db_obj=existing, obj_in=fields)
-        data = {"agent_id": agent_id, **fields}
+        data: dict[str, Any] = {"agent_id": agent_id, **fields}
         return await self.create(obj_in=data)
 
 

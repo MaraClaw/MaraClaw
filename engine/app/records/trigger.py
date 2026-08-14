@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class AgentTriggerRecord:
@@ -16,7 +18,7 @@ class AgentTriggerRecord:
     agent_id: UUID
     name: str = ""
     type: str = "webhook"
-    config: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
     reason: str = ""
     focus_ref: str | None = None
     is_enabled: bool = True
@@ -30,9 +32,7 @@ class AgentTriggerRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentTriggerRecord:
-        config = row.get("config") or {}
-        if not isinstance(config, dict):
-            config = dict(config)
+        config = mapping_from_row(row.get("config") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],
@@ -62,7 +62,7 @@ class TriggerExecutionRecord:
     source: str = "webhook"
     status: str = "pending"
     idempotency_key: str = ""
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict[str, Any])
     payload_text: str = ""
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
@@ -74,9 +74,7 @@ class TriggerExecutionRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> TriggerExecutionRecord:
-        payload = row.get("payload") or {}
-        if not isinstance(payload, dict):
-            payload = dict(payload)
+        payload = mapping_from_row(row.get("payload") or {})
         return cls(
             id=row["id"],
             trigger_id=row["trigger_id"],

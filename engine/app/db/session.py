@@ -71,7 +71,7 @@ async def bind_crud_connection() -> AsyncIterator[None]:
     a no-op so ASGI tests keep working.
     """
     try:
-        get_pool()
+        _ = get_pool()
     except RuntimeError:
         yield
         return
@@ -90,7 +90,7 @@ async def optional_connection_ctx() -> AsyncIterator[DbConnection | None]:
             yield db
         return
     try:
-        get_pool()
+        _ = get_pool()
     except RuntimeError:
         yield None
         return

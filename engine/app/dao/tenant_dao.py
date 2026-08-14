@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.core.row_memo import memo_drop, memo_get, memo_set
@@ -56,13 +56,13 @@ _TENANT_COLUMNS = (
 class TenantDAO(BaseDAO[TenantRecord]):
     """DAO for Tenant records."""
 
-    table = "tenants"
-    columns = _TENANT_COLUMNS
-    record_factory = staticmethod(TenantRecord.from_row)
+    table: ClassVar[str] = "tenants"
+    columns: ClassVar[tuple[str, ...]] = _TENANT_COLUMNS
+    record_factory: Any = staticmethod(TenantRecord.from_row)
 
-    async def get(self, id: Any) -> TenantRecord | None:
+    async def get(self, id: UUID) -> TenantRecord | None:
         cached = memo_get("tenant", id)
-        if cached is not None:
+        if isinstance(cached, TenantRecord):
             return cached
         try:
             tenant_id = id if isinstance(id, UUID) else UUID(str(id))
@@ -87,7 +87,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         await bump_tenant_cache(updated.id)
         return updated
 
-    async def delete(self, *, id: Any) -> TenantRecord | None:
+    async def delete(self, *, id: UUID) -> TenantRecord | None:
         deleted = await super().delete(id=id)
         if deleted is not None:
             memo_drop("tenant", deleted.id)
@@ -98,7 +98,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenants "
-                "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
+                + "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
             )
             return TenantRecord.from_row(row) if row else None
 
@@ -117,7 +117,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             )
             return TenantRecord.from_row(row) if row else None
 
-    async def get_by_ids(self, ids: Sequence[Any]) -> Sequence[TenantRecord]:
+    async def get_by_ids(self, ids: Sequence[UUID]) -> Sequence[TenantRecord]:
         if not ids:
             return []
         async with self.session() as db:
@@ -131,7 +131,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenants "
-                "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
+                + "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
                 {"domain": domain.lower()},
             )
             return TenantRecord.from_row(row) if row else None
@@ -167,10 +167,10 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants "
-                "WHERE name_tsv @@ to_tsquery('simple', %(query)s) "
-                "ORDER BY ts_rank_cd(name_tsv, to_tsquery('simple', %(query)s)) DESC, "
-                "created_at DESC NULLS LAST "
-                "LIMIT %(limit)s",
+                + "WHERE name_tsv @@ to_tsquery('simple', %(query)s) "
+                + "ORDER BY ts_rank_cd(name_tsv, to_tsquery('simple', %(query)s)) DESC, "
+                + "created_at DESC NULLS LAST "
+                + "LIMIT %(limit)s",
                 {"query": query, "limit": limit},
             )
             return [TenantRecord.from_row(row) for row in rows]
@@ -191,7 +191,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             )
             return TenantRecord.from_row(row) if row else None
 
-    async def count_created_before(self, before) -> int:
+    async def count_created_before(self, before: object) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM tenants WHERE created_at < %(before)s",
@@ -199,22 +199,25 @@ class TenantDAO(BaseDAO[TenantRecord]):
             )
             return int(value or 0)
 
-    async def counts_by_created_day(self, start, end) -> dict:
+    async def counts_by_created_day(self, start: object, end: object) -> dict[Any, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM tenants "
-                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            counts: dict[Any, int] = {}
+            for row in rows:
+                counts[str(row["d"])] = int(row["c"] or 0)
+            return counts
 
-    async def clear_sso_domain_except(self, keep_tenant_id: Any) -> None:
+    async def clear_sso_domain_except(self, keep_tenant_id: UUID) -> None:
         """IP-mode helper: clear sso_domain and disable SSO on all other tenants."""
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE tenants SET sso_domain = NULL, sso_enabled = FALSE "
-                "WHERE id IS DISTINCT FROM %(keep_tenant_id)s AND "
-                "(sso_domain IS NOT NULL OR sso_enabled IS TRUE) RETURNING id",
+                + "WHERE id IS DISTINCT FROM %(keep_tenant_id)s AND "
+                + "(sso_domain IS NOT NULL OR sso_enabled IS TRUE) RETURNING id",
                 {"keep_tenant_id": keep_tenant_id},
             )
         for row in rows:
@@ -227,11 +230,11 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants "
-                "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
+                + "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
             )
             return [TenantRecord.from_row(row) for row in rows]
 
-    async def delete_cascade(self, tenant_id: Any) -> None:
+    async def delete_cascade(self, tenant_id: UUID) -> None:
         """Delete a tenant and all dependent rows in FK-safe order."""
         params = {"tid": tenant_id}
         user_ids: list[Any] = []
@@ -242,13 +245,13 @@ class TenantDAO(BaseDAO[TenantRecord]):
             "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)",
             (
                 "DELETE FROM agent_agent_relationships "
-                "WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                "OR target_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+                + "WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
+                + "OR target_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
             ),
             "DELETE FROM agent_relationships WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             (
                 "DELETE FROM task_logs WHERE task_id IN ("
-                "SELECT id FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s))"
+                + "SELECT id FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s))"
             ),
             "DELETE FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             "DELETE FROM chat_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
@@ -260,15 +263,15 @@ class TenantDAO(BaseDAO[TenantRecord]):
             "DELETE FROM agent_activity_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             (
                 "DELETE FROM gateway_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                "OR sender_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+                + "OR sender_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
             ),
             (
                 "DELETE FROM published_pages WHERE tenant_id = %(tid)s "
-                "OR agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
+                + "OR agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
             ),
             (
                 "DELETE FROM audit_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                "OR user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
+                + "OR user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
             ),
             "DELETE FROM agent_tools WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             "DELETE FROM agents WHERE tenant_id = %(tid)s",

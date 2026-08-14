@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from uuid import UUID
+
+from datetime import datetime
+from typing import Any, ClassVar
 
 from app.dao.base import BaseDAO
 from app.db.errors import UniqueViolationError
@@ -48,20 +51,20 @@ _EXECUTION_COLUMNS = (
 class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     """DAO for agent trigger definitions."""
 
-    table = "agent_triggers"
-    columns = _TRIGGER_COLUMNS
-    record_factory = staticmethod(AgentTriggerRecord.from_row)
+    table: ClassVar[str] = "agent_triggers"
+    columns: ClassVar[tuple[str, ...]] = _TRIGGER_COLUMNS
+    record_factory: Any = staticmethod(AgentTriggerRecord.from_row)
 
-    async def list_for_agent(self, agent_id: Any) -> list[AgentTriggerRecord]:
+    async def list_for_agent(self, agent_id: UUID) -> list[AgentTriggerRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentTriggerRecord.from_row(row) for row in rows]
 
-    async def get_for_agent(self, trigger_id: Any, agent_id: Any) -> AgentTriggerRecord | None:
+    async def get_for_agent(self, trigger_id: UUID, agent_id: UUID) -> AgentTriggerRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_triggers WHERE id = %(id)s AND agent_id = %(agent_id)s",
@@ -87,22 +90,22 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                "WHERE type = 'webhook' AND is_enabled IS TRUE "
-                "AND config->>'token' = %(token)s LIMIT 1",
+                + "WHERE type = 'webhook' AND is_enabled IS TRUE "
+                + "AND config->>'token' = %(token)s LIMIT 1",
                 {"token": token},
             )
             return AgentTriggerRecord.from_row(row) if row else None
 
-    async def get_by_agent_and_name(self, agent_id: Any, name: str) -> AgentTriggerRecord | None:
+    async def get_by_agent_and_name(self, agent_id: UUID, name: str) -> AgentTriggerRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                "WHERE agent_id = %(agent_id)s AND name = %(name)s LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND name = %(name)s LIMIT 1",
                 {"agent_id": agent_id, "name": name},
             )
             return AgentTriggerRecord.from_row(row) if row else None
 
-    async def count_enabled_for_agent(self, agent_id: Any) -> int:
+    async def count_enabled_for_agent(self, agent_id: UUID) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM agent_triggers WHERE agent_id = %(agent_id)s AND is_enabled IS TRUE",
@@ -110,13 +113,13 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return int(value or 0)
 
-    async def disable_for_tenant(self, tenant_id: Any) -> int:
+    async def disable_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agent_triggers SET is_enabled = FALSE "
-                "WHERE is_enabled IS TRUE AND agent_id IN ("
-                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
-                ") RETURNING id",
+                + "WHERE is_enabled IS TRUE AND agent_id IN ("
+                + "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                + ") RETURNING id",
                 {"tenant_id": tenant_id},
             )
             return len(rows)
@@ -125,9 +128,9 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
 class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     """DAO for durable trigger execution queue rows."""
 
-    table = "trigger_executions"
-    columns = _EXECUTION_COLUMNS
-    record_factory = staticmethod(TriggerExecutionRecord.from_row)
+    table: ClassVar[str] = "trigger_executions"
+    columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
+    record_factory: Any = staticmethod(TriggerExecutionRecord.from_row)
 
     async def try_enqueue(self, *, obj_in: dict[str, Any]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
@@ -167,7 +170,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         self,
         *,
         sources: list[str],
-        now,
+        now: datetime,
         limit: int,
     ) -> list[tuple[TriggerExecutionRecord, AgentTriggerRecord]]:
         """Claim pending/expired-lease executions with FOR UPDATE SKIP LOCKED."""

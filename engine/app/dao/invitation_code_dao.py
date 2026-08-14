@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from app.dao.base import BaseDAO
 from app.records.invitation import InvitationCodeRecord
@@ -23,29 +25,29 @@ _COLUMNS = (
 class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
     """DAO for InvitationCode records."""
 
-    table = "invitation_codes"
-    columns = _COLUMNS
-    record_factory = staticmethod(InvitationCodeRecord.from_row)
+    table: ClassVar[str] = "invitation_codes"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(InvitationCodeRecord.from_row)
 
     async def get_active_by_code(self, code: str) -> InvitationCodeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                "WHERE code = %(code)s AND is_active IS TRUE AND tenant_id IS NOT NULL LIMIT 1",
+                + "WHERE code = %(code)s AND is_active IS TRUE AND tenant_id IS NOT NULL LIMIT 1",
                 {"code": code},
             )
             return InvitationCodeRecord.from_row(row) if row else None
 
-    async def get_for_tenant(self, code_id: Any, tenant_id: Any) -> InvitationCodeRecord | None:
+    async def get_for_tenant(self, code_id: UUID, tenant_id: UUID) -> InvitationCodeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                "WHERE id = %(id)s AND tenant_id = %(tenant_id)s LIMIT 1",
+                + "WHERE id = %(id)s AND tenant_id = %(tenant_id)s LIMIT 1",
                 {"id": code_id, "tenant_id": tenant_id},
             )
             return InvitationCodeRecord.from_row(row) if row else None
 
-    async def count_for_tenant(self, tenant_id: Any, *, search: str | None = None) -> int:
+    async def count_for_tenant(self, tenant_id: UUID, *, search: str | None = None) -> int:
         params: dict[str, Any] = {"tenant_id": tenant_id}
         search_sql = ""
         if search:
@@ -60,7 +62,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
 
     async def list_for_tenant(
         self,
-        tenant_id: Any,
+        tenant_id: UUID,
         *,
         search: str | None = None,
         offset: int = 0,
@@ -78,17 +80,17 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                f"WHERE tenant_id = %(tenant_id)s{search_sql} "
-                "ORDER BY created_at DESC NULLS LAST OFFSET %(offset)s LIMIT %(limit)s",
+                + f"WHERE tenant_id = %(tenant_id)s{search_sql} "
+                + "ORDER BY created_at DESC NULLS LAST OFFSET %(offset)s LIMIT %(limit)s",
                 params,
             )
             return [InvitationCodeRecord.from_row(row) for row in rows]
 
-    async def list_all_for_tenant(self, tenant_id: Any) -> Sequence[InvitationCodeRecord]:
+    async def list_all_for_tenant(self, tenant_id: UUID) -> Sequence[InvitationCodeRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                "WHERE tenant_id = %(tenant_id)s ORDER BY created_at ASC NULLS LAST",
+                + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at ASC NULLS LAST",
                 {"tenant_id": tenant_id},
             )
             return [InvitationCodeRecord.from_row(row) for row in rows]

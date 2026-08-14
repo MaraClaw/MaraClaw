@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -43,10 +43,10 @@ _LIKE_COLUMNS = (
 # Hide posts/comments authored by system or non-company agents.
 _HIDDEN_AGENT_EXISTS = (
     "EXISTS ("
-    "SELECT 1 FROM agents a "
-    "WHERE a.id = {author_col} "
-    "AND (a.is_system IS TRUE OR COALESCE(a.access_mode, 'company') <> 'company')"
-    ")"
+    + "SELECT 1 FROM agents a "
+    + "WHERE a.id = {author_col} "
+    + "AND (a.is_system IS TRUE OR COALESCE(a.access_mode, 'company') <> 'company')"
+    + ")"
 )
 _PRIVATE_OR_SYSTEM_POST = (
     f"(plaza_posts.author_type = 'agent' AND {_HIDDEN_AGENT_EXISTS.format(author_col='plaza_posts.author_id')})"
@@ -56,9 +56,9 @@ _PRIVATE_OR_SYSTEM_POST = (
 class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
     """DAO for plaza_posts rows."""
 
-    table = "plaza_posts"
-    columns = _POST_COLUMNS
-    record_factory = staticmethod(PlazaPostRecord.from_row)
+    table: ClassVar[str] = "plaza_posts"
+    columns: ClassVar[tuple[str, ...]] = _POST_COLUMNS
+    record_factory: Any = staticmethod(PlazaPostRecord.from_row)
 
     async def list_posts_recent(
         self,
@@ -98,7 +98,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM plaza_posts{where_sql} "
-                "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+                + "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
                 params,
             )
             return [PlazaPostRecord.from_row(row) for row in rows]
@@ -118,20 +118,20 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             )
             total_comments = await db.fetchval(
                 "SELECT COUNT(*) FROM plaza_comments "
-                "JOIN plaza_posts ON plaza_comments.post_id = plaza_posts.id "
-                f"WHERE {post_filter}",
+                + "JOIN plaza_posts ON plaza_comments.post_id = plaza_posts.id "
+                + f"WHERE {post_filter}",
                 params,
             )
             today_posts = await db.fetchval(
                 f"SELECT COUNT(*) FROM plaza_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
-                f"AND {post_filter}",
+                + f"AND {post_filter}",
                 params,
             )
             top_rows = await db.fetchall(
                 "SELECT author_name, author_type, COUNT(*) AS post_count "
-                f"FROM plaza_posts WHERE {post_filter} "
-                "GROUP BY author_name, author_type "
-                "ORDER BY post_count DESC LIMIT 5",
+                + f"FROM plaza_posts WHERE {post_filter} "
+                + "GROUP BY author_name, author_type "
+                + "ORDER BY post_count DESC LIMIT 5",
                 params,
             )
             return {
@@ -154,7 +154,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE plaza_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
-                f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
+                + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id},
             )
             return PlazaPostRecord.from_row(row) if row else None
@@ -163,7 +163,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE plaza_posts SET likes_count = GREATEST(COALESCE(likes_count, 0) + %(delta)s, 0) "
-                f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
+                + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id, "delta": delta},
             )
             return PlazaPostRecord.from_row(row) if row else None
@@ -172,9 +172,9 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
 class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
     """DAO for plaza_comments rows."""
 
-    table = "plaza_comments"
-    columns = _COMMENT_COLUMNS
-    record_factory = staticmethod(PlazaCommentRecord.from_row)
+    table: ClassVar[str] = "plaza_comments"
+    columns: ClassVar[tuple[str, ...]] = _COMMENT_COLUMNS
+    record_factory: Any = staticmethod(PlazaCommentRecord.from_row)
 
     async def list_comments_for_post(
         self,
@@ -189,7 +189,7 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM plaza_comments "
-                f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
+                + f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
                 params,
             )
             return [PlazaCommentRecord.from_row(row) for row in rows]
@@ -212,15 +212,15 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
 class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
     """DAO for plaza_likes rows."""
 
-    table = "plaza_likes"
-    columns = _LIKE_COLUMNS
-    record_factory = staticmethod(PlazaLikeRecord.from_row)
+    table: ClassVar[str] = "plaza_likes"
+    columns: ClassVar[tuple[str, ...]] = _LIKE_COLUMNS
+    record_factory: Any = staticmethod(PlazaLikeRecord.from_row)
 
     async def get_by_post_and_author(self, post_id: UUID, author_id: UUID) -> PlazaLikeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM plaza_likes "
-                "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
+                + "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
                 {"post_id": post_id, "author_id": author_id},
             )
             return PlazaLikeRecord.from_row(row) if row else None

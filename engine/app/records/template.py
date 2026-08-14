@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row, str_list_from_row
+
 
 @dataclass(slots=True)
 class AgentTemplateRecord:
@@ -18,10 +20,10 @@ class AgentTemplateRecord:
     icon: str = "🤖"
     category: str = "general"
     soul_template: str = ""
-    default_skills: list[str] = field(default_factory=list)
-    default_mcp_servers: list[str] = field(default_factory=list)
-    default_autonomy_policy: dict[str, Any] = field(default_factory=dict)
-    capability_bullets: list[str] = field(default_factory=list)
+    default_skills: list[str] = field(default_factory=list[str])
+    default_mcp_servers: list[str] = field(default_factory=list[str])
+    default_autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
+    capability_bullets: list[str] = field(default_factory=list[str])
     bootstrap_content: str | None = None
     is_builtin: bool = False
     created_by: UUID | None = None
@@ -29,18 +31,10 @@ class AgentTemplateRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentTemplateRecord:
-        default_skills = row.get("default_skills") or []
-        default_mcp_servers = row.get("default_mcp_servers") or []
-        default_autonomy_policy = row.get("default_autonomy_policy") or {}
-        capability_bullets = row.get("capability_bullets") or []
-        if not isinstance(default_skills, list):
-            default_skills = list(default_skills)
-        if not isinstance(default_mcp_servers, list):
-            default_mcp_servers = list(default_mcp_servers)
-        if not isinstance(default_autonomy_policy, dict):
-            default_autonomy_policy = dict(default_autonomy_policy)
-        if not isinstance(capability_bullets, list):
-            capability_bullets = list(capability_bullets)
+        default_skills = str_list_from_row(row.get("default_skills") or [])
+        default_mcp_servers = str_list_from_row(row.get("default_mcp_servers") or [])
+        default_autonomy_policy = mapping_from_row(row.get("default_autonomy_policy") or {})
+        capability_bullets = str_list_from_row(row.get("capability_bullets") or [])
         return cls(
             id=row["id"],
             name=row["name"],

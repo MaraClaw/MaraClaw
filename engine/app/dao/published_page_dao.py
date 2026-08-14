@@ -1,6 +1,7 @@
 """DAO for published_pages (psycopg)."""
 
 from __future__ import annotations
+from typing import ClassVar, Any
 
 from collections.abc import Sequence
 from uuid import UUID
@@ -22,9 +23,9 @@ _COLUMNS = (
 
 
 class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
-    table = "published_pages"
-    columns = _COLUMNS
-    record_factory = staticmethod(PublishedPageRecord.from_row)
+    table: ClassVar[str] = "published_pages"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(PublishedPageRecord.from_row)
 
     async def get_by_short_id(self, short_id: str) -> PublishedPageRecord | None:
         async with self.session() as db:
@@ -38,7 +39,7 @@ class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM published_pages "
-                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [PublishedPageRecord.from_row(row) for row in rows]

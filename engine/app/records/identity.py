@@ -8,6 +8,8 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 class AuthProviderType(StrEnum):
     """Supported authentication provider types."""
@@ -63,16 +65,14 @@ class IdentityProviderRecord:
     name: str
     is_active: bool = True
     sso_login_enabled: bool = False
-    config: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
     tenant_id: UUID | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> IdentityProviderRecord:
-        config = row.get("config") or {}
-        if not isinstance(config, dict):
-            config = dict(config)
+        config = mapping_from_row(row.get("config") or {})
         return cls(
             id=row["id"],
             provider_type=str(row["provider_type"]),

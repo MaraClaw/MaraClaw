@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class ChannelConfigRecord:
@@ -22,15 +24,13 @@ class ChannelConfigRecord:
     is_configured: bool = False
     is_connected: bool = False
     last_tested_at: datetime | None = None
-    extra_config: dict[str, Any] = field(default_factory=dict)
+    extra_config: dict[str, Any] = field(default_factory=dict[str, Any])
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ChannelConfigRecord:
-        extra = row.get("extra_config") or {}
-        if not isinstance(extra, dict):
-            extra = dict(extra)
+        extra = mapping_from_row(row.get("extra_config") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
+from app.core.json_types import is_str_dict
 from app.dao.base import BaseDAO
 from app.records.system_setting import SystemSettingRecord
 
@@ -13,10 +14,10 @@ _COLUMNS = ("key", "value", "updated_at")
 class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
     """Typed access layer for platform-level system settings."""
 
-    table = "system_settings"
-    pk = "key"
-    columns = _COLUMNS
-    record_factory = staticmethod(SystemSettingRecord.from_row)
+    table: ClassVar[str] = "system_settings"
+    pk: ClassVar[str] = "key"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(SystemSettingRecord.from_row)
 
     async def get_by_key(self, key: str) -> SystemSettingRecord | None:
         async with self.session() as db:
@@ -48,10 +49,12 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
         value = await self.get_value(key, None)
         if value is None:
             return default
-        if not isinstance(value, dict):
+        if not is_str_dict(value):
             return default
         enabled = value.get("enabled")
-        return enabled if isinstance(enabled, bool) else default
+        if isinstance(enabled, bool):
+            return enabled
+        return default
 
     async def set_flag(self, key: str, enabled: bool) -> SystemSettingRecord:
         existing = await self.get_by_key(key)

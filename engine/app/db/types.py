@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 
-def configure_connection(conn: Any) -> None:
+def configure_connection(conn: AsyncConnection[Any]) -> None:
     """Apply project-wide connection defaults.
 
     Called for every pooled connection. Prefer JSONB for dict/list payloads
@@ -18,6 +19,6 @@ def configure_connection(conn: Any) -> None:
     conn.row_factory = dict_row
 
 
-def as_jsonb(value: Any) -> Jsonb:
+def as_jsonb(value: object) -> Jsonb:
     """Wrap a Python value for JSONB bind parameters."""
     return Jsonb(value)

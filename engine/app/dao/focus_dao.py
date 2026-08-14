@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -28,9 +28,9 @@ _COLUMNS = (
 
 
 class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
-    table = "agent_focus_items"
-    columns = _COLUMNS
-    record_factory = staticmethod(AgentFocusItemRecord.from_row)
+    table: ClassVar[str] = "agent_focus_items"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(AgentFocusItemRecord.from_row)
 
     def _select_list(self, alias: str | None = None) -> str:
         # Map SQL column "metadata" into a consistent select list.
@@ -54,8 +54,8 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_focus_items "
-                f"WHERE agent_id = %(agent_id)s{completed_sql} "
-                "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
+                + f"WHERE agent_id = %(agent_id)s{completed_sql} "
+                + "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
                 params,
             )
             return [AgentFocusItemRecord.from_row(row) for row in rows]
@@ -102,20 +102,20 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 val_sql = ", ".join(f"%({c})s" for c in cols)
                 result = await db.fetchone(
                     f"INSERT INTO agent_focus_items ({col_sql}) VALUES ({val_sql}) "
-                    "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
+                    + "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
                     params,
                 )
                 if result:
                     inserted += 1
         return inserted
 
-    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: dict[str, Any]) -> AgentFocusItemRecord:
+    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")
         return await super().update(db_obj=db_obj, obj_in=data)
 
-    async def create(self, *, obj_in: dict[str, Any]) -> AgentFocusItemRecord:
+    async def create(self, *, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")

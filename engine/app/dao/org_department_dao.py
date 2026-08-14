@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -27,16 +27,16 @@ _COLUMNS = (
 class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
     """DAO for organization department rows."""
 
-    table = "org_departments"
-    columns = _COLUMNS
-    record_factory = staticmethod(OrgDepartmentRecord.from_row)
+    table: ClassVar[str] = "org_departments"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(OrgDepartmentRecord.from_row)
 
     async def get_by_external(self, *, external_id: str, provider_id: UUID) -> OrgDepartmentRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_departments "
-                "WHERE external_id = %(external_id)s AND provider_id = %(provider_id)s "
-                "LIMIT 1",
+                + "WHERE external_id = %(external_id)s AND provider_id = %(provider_id)s "
+                + "LIMIT 1",
                 {"external_id": external_id, "provider_id": provider_id},
             )
             return OrgDepartmentRecord.from_row(row) if row else None
@@ -53,7 +53,7 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
         async with self.session() as db:
             return await db.fetchall(
                 "SELECT id, parent_id, member_count FROM org_departments "
-                "WHERE provider_id = %(provider_id)s AND status = 'active'",
+                + "WHERE provider_id = %(provider_id)s AND status = 'active'",
                 {"provider_id": provider_id},
             )
 
@@ -61,8 +61,8 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE org_departments SET status = 'deleted', synced_at = %(now)s "
-                "WHERE provider_id = %(provider_id)s "
-                "AND synced_at < %(sync_start)s AND status <> 'deleted'",
+                + "WHERE provider_id = %(provider_id)s "
+                + "AND synced_at < %(sync_start)s AND status <> 'deleted'",
                 {"provider_id": provider_id, "sync_start": sync_start, "now": now},
             )
 
@@ -99,10 +99,10 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
         async with self.session() as db:
             return await db.fetchall(
                 f"SELECT {self._select_list('d')}, "
-                "p.name AS provider_name, p.provider_type AS provider_type "
-                "FROM org_departments d "
-                "LEFT JOIN identity_providers p ON p.id = d.provider_id "
-                f"WHERE {where} ORDER BY d.name",
+                + "p.name AS provider_name, p.provider_type AS provider_type "
+                + "FROM org_departments d "
+                + "LEFT JOIN identity_providers p ON p.id = d.provider_id "
+                + f"WHERE {where} ORDER BY d.name",
                 params or None,
             )
 

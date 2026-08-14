@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class AgentActivityLogRecord:
@@ -16,15 +18,13 @@ class AgentActivityLogRecord:
     agent_id: UUID
     action_type: str
     summary: str
-    detail_json: dict[str, Any] = field(default_factory=dict)
+    detail_json: dict[str, Any] = field(default_factory=dict[str, Any])
     related_id: UUID | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AgentActivityLogRecord:
-        detail = row.get("detail_json") or {}
-        if not isinstance(detail, dict):
-            detail = dict(detail) if detail else {}
+        detail = mapping_from_row(row.get("detail_json") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],

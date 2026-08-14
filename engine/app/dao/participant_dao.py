@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from uuid import UUID
+
+from typing import Any, ClassVar
 
 from app.dao.base import BaseDAO
 from app.records.participant import ParticipantRecord
@@ -13,13 +15,13 @@ _COLUMNS = ("id", "type", "ref_id", "display_name", "avatar_url", "created_at")
 class ParticipantDAO(BaseDAO[ParticipantRecord]):
     """DAO for Participant records."""
 
-    table = "participants"
-    columns = _COLUMNS
-    record_factory = staticmethod(ParticipantRecord.from_row)
+    table: ClassVar[str] = "participants"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(ParticipantRecord.from_row)
 
     async def create_for_user(
         self,
-        user_id: Any,
+        user_id: UUID,
         display_name: str | None = None,
         avatar_url: str | None = None,
     ) -> ParticipantRecord:
@@ -32,7 +34,7 @@ class ParticipantDAO(BaseDAO[ParticipantRecord]):
             }
         )
 
-    async def get_by_type_ref(self, type: str, ref_id: Any) -> ParticipantRecord | None:
+    async def get_by_type_ref(self, type: str, ref_id: UUID) -> ParticipantRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM participants WHERE type = %(type)s AND ref_id = %(ref_id)s LIMIT 1",

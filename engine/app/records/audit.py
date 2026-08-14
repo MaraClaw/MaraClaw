@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.json_types import mapping_from_row
+
 
 @dataclass(slots=True)
 class ApprovalRequestRecord:
@@ -15,7 +17,7 @@ class ApprovalRequestRecord:
     id: UUID
     agent_id: UUID
     action_type: str
-    details: dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict[str, Any])
     status: str = "pending"
     created_at: datetime | None = None
     resolved_at: datetime | None = None
@@ -23,9 +25,7 @@ class ApprovalRequestRecord:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ApprovalRequestRecord:
-        details = row.get("details") or {}
-        if not isinstance(details, dict):
-            details = dict(details)
+        details = mapping_from_row(row.get("details") or {})
         return cls(
             id=row["id"],
             agent_id=row["agent_id"],
@@ -50,19 +50,15 @@ class AdminAuditLogRecord:
     target_type: str
     target_id: UUID | None
     tenant_id: UUID | None
-    changes: dict[str, Any] = field(default_factory=dict)
-    details: dict[str, Any] = field(default_factory=dict)
+    changes: dict[str, Any] = field(default_factory=dict[str, Any])
+    details: dict[str, Any] = field(default_factory=dict[str, Any])
     ip_address: str | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> AdminAuditLogRecord:
-        changes = row.get("changes") or {}
-        details = row.get("details") or {}
-        if not isinstance(changes, dict):
-            changes = dict(changes)
-        if not isinstance(details, dict):
-            details = dict(details)
+        changes = mapping_from_row(row.get("changes") or {})
+        details = mapping_from_row(row.get("details") or {})
         return cls(
             id=row["id"],
             actor_id=row.get("actor_id"),

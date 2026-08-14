@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from types import SimpleNamespace
+from typing import Any, ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -24,15 +24,15 @@ _COLUMNS = (
 
 
 class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
-    table = "agent_agent_relationships"
-    columns = _COLUMNS
-    record_factory = staticmethod(AgentAgentRelationshipRecord.from_row)
+    table: ClassVar[str] = "agent_agent_relationships"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(AgentAgentRelationshipRecord.from_row)
 
     async def exists(self, agent_id: UUID, target_agent_id: UUID) -> bool:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM agent_agent_relationships "
-                "WHERE agent_id = %(agent_id)s AND target_agent_id = %(target_agent_id)s LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND target_agent_id = %(target_agent_id)s LIMIT 1",
                 {"agent_id": agent_id, "target_agent_id": target_agent_id},
             )
             return value is not None
@@ -41,7 +41,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         """Create link if missing; return True when a row was inserted."""
         if await self.exists(agent_id, target_agent_id):
             return False
-        await self.create(
+        _ = await self.create(
             obj_in={
                 "agent_id": agent_id,
                 "target_agent_id": target_agent_id,
@@ -74,8 +74,8 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {agent_cols} FROM agents a "
-                "JOIN agent_agent_relationships r ON r.target_agent_id = a.id "
-                f"WHERE {' AND '.join(clauses)}",
+                + "JOIN agent_agent_relationships r ON r.target_agent_id = a.id "
+                + f"WHERE {' AND '.join(clauses)}",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -88,7 +88,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
             )
             return [AgentAgentRelationshipRecord.from_row(row) for row in rows]
 
-    async def list_for_agent_with_targets(self, agent_id: UUID) -> list[SimpleNamespace]:
+    async def list_for_agent_with_targets(self, agent_id: UUID) -> list[AgentAgentRelationshipRecord]:
         """Relationships for an agent with attached target agent records."""
         from app.dao.agent_dao import agent_dao
 
@@ -96,9 +96,9 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('r')}, {agent_cols} "
-                "FROM agent_agent_relationships r "
-                "LEFT JOIN agents a ON a.id = r.target_agent_id "
-                "WHERE r.agent_id = %(agent_id)s",
+                + "FROM agent_agent_relationships r "
+                + "LEFT JOIN agents a ON a.id = r.target_agent_id "
+                + "WHERE r.agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
             return [_relationship_with_target(row, agent_dao.columns) for row in rows]
@@ -115,27 +115,20 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_agent_relationships "
-                "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
+                + "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"rel_id": rel_id, "agent_id": agent_id},
             )
             return AgentAgentRelationshipRecord.from_row(row) if row else None
 
 
-def _relationship_with_target(row: dict[str, object], agent_columns: Sequence[str]) -> SimpleNamespace:
-    target = None
+def _relationship_with_target(row: dict[str, Any], agent_columns: Sequence[str]) -> AgentAgentRelationshipRecord:
+    target: AgentRecord | None = None
     if row.get("a_id") is not None:
-        agent_row = {col: row.get(f"a_{col}") for col in agent_columns}
-        target = AgentRecord.from_row(agent_row)  # type: ignore[arg-type]
-    return SimpleNamespace(
-        id=row["id"],
-        agent_id=row["agent_id"],
-        target_agent_id=row["target_agent_id"],
-        relation=row.get("relation") or "collaborator",
-        description=row.get("description") or "",
-        created_by_user_id=row.get("created_by_user_id"),
-        updated_by_user_id=row.get("updated_by_user_id"),
-        target_agent=target,
-    )
+        agent_row: dict[str, Any] = {col: row.get(f"a_{col}") for col in agent_columns}
+        target = AgentRecord.from_row(agent_row)
+    record = AgentAgentRelationshipRecord.from_row(row)
+    record.target_agent = target
+    return record
 
 
 agent_agent_relationship_dao = AgentAgentRelationshipDAO()

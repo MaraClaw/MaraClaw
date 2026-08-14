@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from app.dao.base import BaseDAO
 from app.records.identity import IdentityProviderRecord
@@ -24,30 +26,30 @@ _COLUMNS = (
 class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
     """DAO for IdentityProvider records."""
 
-    table = "identity_providers"
-    columns = _COLUMNS
-    record_factory = staticmethod(IdentityProviderRecord.from_row)
+    table: ClassVar[str] = "identity_providers"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    record_factory: Any = staticmethod(IdentityProviderRecord.from_row)
 
     async def get_by_type_and_tenant(
         self,
         provider_type: str,
-        tenant_id: Any | None,
+        tenant_id: UUID | None,
     ) -> IdentityProviderRecord | None:
         async with self.session() as db:
             if tenant_id is None:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    "WHERE provider_type = %(provider_type)s AND tenant_id IS NULL "
-                    "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                    "LIMIT 1",
+                    + "WHERE provider_type = %(provider_type)s AND tenant_id IS NULL "
+                    + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                    + "LIMIT 1",
                     {"provider_type": provider_type},
                 )
             else:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    "WHERE provider_type = %(provider_type)s AND tenant_id = %(tenant_id)s "
-                    "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                    "LIMIT 1",
+                    + "WHERE provider_type = %(provider_type)s AND tenant_id = %(tenant_id)s "
+                    + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                    + "LIMIT 1",
                     {"provider_type": provider_type, "tenant_id": tenant_id},
                 )
             return IdentityProviderRecord.from_row(row) if row else None
@@ -55,7 +57,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
     async def get_preferred(
         self,
         provider_type: str,
-        tenant_id: Any | None = None,
+        tenant_id: UUID | None = None,
         *,
         is_active: bool | None = True,
     ) -> IdentityProviderRecord | None:
@@ -68,7 +70,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
     async def _get_preferred_scoped(
         self,
         provider_type: str,
-        tenant_id: Any | None,
+        tenant_id: UUID | None,
         *,
         is_active: bool | None,
     ) -> IdentityProviderRecord | None:
@@ -84,14 +86,14 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                f"WHERE {' AND '.join(clauses)} "
-                "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                "LIMIT 1",
+                + f"WHERE {' AND '.join(clauses)} "
+                + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                + "LIMIT 1",
                 params,
             )
             return IdentityProviderRecord.from_row(row) if row else None
 
-    async def list_active_sso_for_tenant(self, tenant_id: Any | None) -> Sequence[IdentityProviderRecord]:
+    async def list_active_sso_for_tenant(self, tenant_id: UUID | None) -> Sequence[IdentityProviderRecord]:
         """Active providers with SSO login enabled, scoped to tenant or global."""
         params: dict[str, Any] = {}
         if tenant_id is not None:
@@ -102,24 +104,24 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                f"WHERE is_active IS TRUE AND sso_login_enabled IS TRUE{tenant_sql}",
+                + f"WHERE is_active IS TRUE AND sso_login_enabled IS TRUE{tenant_sql}",
                 params,
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
 
-    async def list_active(self, tenant_id: Any | None = None) -> Sequence[IdentityProviderRecord]:
+    async def list_active(self, tenant_id: UUID | None = None) -> Sequence[IdentityProviderRecord]:
         async with self.session() as db:
             if tenant_id is None:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    "WHERE is_active IS TRUE AND tenant_id IS NULL "
-                    "ORDER BY name"
+                    + "WHERE is_active IS TRUE AND tenant_id IS NULL "
+                    + "ORDER BY name"
                 )
             else:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    "WHERE is_active IS TRUE AND tenant_id = %(tenant_id)s "
-                    "ORDER BY name",
+                    + "WHERE is_active IS TRUE AND tenant_id = %(tenant_id)s "
+                    + "ORDER BY name",
                     {"tenant_id": tenant_id},
                 )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -129,18 +131,18 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                "WHERE provider_type = %(provider_type)s AND is_active IS TRUE",
+                + "WHERE provider_type = %(provider_type)s AND is_active IS TRUE",
                 {"provider_type": provider_type},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
 
-    async def list_active_sso_excluding_tenant(self, tenant_id: Any) -> Sequence[IdentityProviderRecord]:
+    async def list_active_sso_excluding_tenant(self, tenant_id: UUID) -> Sequence[IdentityProviderRecord]:
         """Active SSO-enabled providers belonging to other tenants (IP conflict checks)."""
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                "WHERE sso_login_enabled IS TRUE AND is_active IS TRUE "
-                "AND tenant_id IS DISTINCT FROM %(tenant_id)s",
+                + "WHERE sso_login_enabled IS TRUE AND is_active IS TRUE "
+                + "AND tenant_id IS DISTINCT FROM %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -148,7 +150,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
     async def get_or_create(
         self,
         provider_type: str,
-        tenant_id: Any | None,
+        tenant_id: UUID | None,
         *,
         name: str | None = None,
         sso_login_enabled: bool = False,
@@ -167,12 +169,12 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
             }
         )
 
-    async def list_for_tenant(self, tenant_id: Any) -> Sequence[IdentityProviderRecord]:
+    async def list_for_tenant(self, tenant_id: UUID) -> Sequence[IdentityProviderRecord]:
         """All providers for a tenant (including inactive), newest first."""
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
+                + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
                 {"tenant_id": tenant_id},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -181,20 +183,20 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                "WHERE tenant_id IS NULL ORDER BY created_at DESC NULLS LAST"
+                + "WHERE tenant_id IS NULL ORDER BY created_at DESC NULLS LAST"
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
 
-    async def count_active_sso(self, tenant_id: Any) -> int:
+    async def count_active_sso(self, tenant_id: UUID) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM identity_providers "
-                "WHERE tenant_id = %(tenant_id)s AND sso_login_enabled IS TRUE AND is_active IS TRUE",
+                + "WHERE tenant_id = %(tenant_id)s AND sso_login_enabled IS TRUE AND is_active IS TRUE",
                 {"tenant_id": tenant_id},
             )
             return int(value or 0)
 
-    async def delete_nullifying_org_refs(self, provider_id: Any) -> None:
+    async def delete_nullifying_org_refs(self, provider_id: UUID) -> None:
         """Nullify org member/department FKs then delete the provider."""
         async with self.session() as db:
             await db.execute(
