@@ -133,8 +133,16 @@ RUN_ARGS=(
     --name "$CONTAINER_NAME"
     -p "${PORT}:8000"
     -v "${DATA_DIR}:/data"
+    # Setuid bwrap needs the full capability bounding set plus an unconfined
+    # seccomp profile. Default Docker drops both, so execute_code cannot
+    # create namespaces (capset / pivot_root → Operation not permitted).
+    --cap-add=ALL
+    --security-opt seccomp=unconfined
     # AGENT_DATA_DIR is pinned to the mount path; never let .env override it.
     -e "AGENT_DATA_DIR=/data/agents"
+    # Detached/non-TTY runs fully buffer CPython stdout; without this, uvicorn
+    # and the app logger appear silent in `docker logs` until the buffer fills.
+    -e "PYTHONUNBUFFERED=1"
 )
 
 # Forward each .env-declared variable from host env into the container.
