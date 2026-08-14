@@ -1,6 +1,6 @@
 # docker/openclaw
 
-Guest **OpenClaw agent image** helpers. Not the FastAPI API. Image contract also lives in repo-root `Dockerfile.openclaw` and `build-openclaw-local-dockerfile.sh`.
+Guest **OpenClaw agent image** helpers. Not the FastAPI API. Image contract also lives in repo-root `Dockerfile.openclaw`, `build-openclaw-local-dockerfile.sh` (local `openclaw:local` tag), and `publish-openclaw-local-dockerfile.sh` (Docker Hub `${namespace}/openclaw:${OPENCLAW_VERSION}`).
 
 ## Chain
 
@@ -21,8 +21,9 @@ USER: node
 
 ## Pins
 
-- Base: `node:26.5.0-bookworm-slim` (not backend `python:3.14.6-slim-trixie`, not sandbox `node:26.5.0-slim`).
-- gogcli **linux/arm64 only**. `build-openclaw-local-dockerfile.sh` uses **docker buildx** and exits if `DOCKER_PLATFORM` is anything else.
+- Base: `node:26.7.0-bookworm-slim` (not backend `python:3.14.6-slim-trixie`, not sandbox `node:26.5.0-slim`).
+- gogcli **linux/arm64 only**. `build-openclaw-local-dockerfile.sh` and `publish-openclaw-local-dockerfile.sh` use **docker buildx** and exit if `DOCKER_PLATFORM` is anything else.
+- Publish requires `DOCKERHUB_NAMESPACE` or `OPENCLAW_PUBLISH_IMAGE` and an existing `docker login`. It tags `openclaw:local` then pushes `${repo}:${OPENCLAW_VERSION}` (and `:latest` when `PUSH_LATEST=1`).
 - OfficeCLI is **runtime** download, never baked into the Dockerfile.
 - TencentDB plugin install prefers the cached `.tgz`; missing cache may fall through to npm.
 
