@@ -343,6 +343,7 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, db: object | 
     user_id = user.id
     memo = access_cache.memo_get(user_id, agent_id)
     if memo is not None:
+        _reject_expired_use(memo[0], memo[1])
         return memo
 
     agent = await agent_dao.get(agent_id)
@@ -351,6 +352,7 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, db: object | 
 
     cached = await access_cache.get_cached_level(user, agent_id)
     if cached is not None:
+        _reject_expired_use(agent, cached)
         access_cache.memo_set(user_id, agent_id, agent, cached)
         return agent, cached
 
@@ -358,6 +360,7 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, db: object | 
     level = await _compute_access_level(user, agent)
     if level not in {"manage", "use"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
+    _reject_expired_use(agent, level)
 
     await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed_ver)
     access_cache.memo_set(user_id, agent_id, agent, level)
@@ -374,3 +377,12 @@ def is_agent_expired(agent: _AgentLike) -> bool:
     expires_at = getattr(agent, "expires_at", None)
     is_expired = bool(getattr(agent, "is_expired", False))
     return bool(is_expired or (expires_at and datetime.now(UTC) > expires_at))
+
+
+def _reject_expired_use(agent: _AgentLike, level: str) -> None:
+    """Block use-level access to expired agents; manage can still extend them."""
+    if level == "use" and is_agent_expired(agent):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This Agent has expired and is off duty. Please contact your admin to extend its service.",
+        )
