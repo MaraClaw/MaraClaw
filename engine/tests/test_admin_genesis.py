@@ -224,83 +224,44 @@ async def test_reset_password_clears_must_change_flag(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_company_provisions_genesis_org_admin(monkeypatch):
     tenant_id = uuid.uuid4()
-    identity_id = uuid.uuid4()
-    user_id = uuid.uuid4()
-
     tenant = SimpleNamespace(
         id=tenant_id,
         name="Acme",
         slug="acme-abc",
         is_active=True,
         created_at=None,
-        default_message_limit=50,
-        default_message_period="permanent",
-        default_max_agents=2,
-        default_agent_ttl_hours=0,
     )
-    identity = SimpleNamespace(
-        id=identity_id,
-        email="orgadmin@acme.com",
-        username="orgadmin",
-        must_change_password=True,
-    )
-    org_admin = SimpleNamespace(
-        id=user_id,
-        identity_id=identity_id,
-        tenant_id=tenant_id,
-        display_name="Org Admin",
-        avatar_url=None,
-        role="org_admin",
-        identity=None,
+    provisioned = SimpleNamespace(
+        tenant=tenant,
+        org_admin=SimpleNamespace(id=uuid.uuid4(), role="org_admin"),
+        admin_email="orgadmin@acme.com",
     )
     platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None)
+    monkeypatch.setattr("app.api.admin.create_tenant_with_org_admin", AsyncMock(return_value=provisioned))
 
-    create_identity = AsyncMock(return_value=identity)
-    create_user = AsyncMock(return_value=org_admin)
-    monkeypatch.setattr("app.api.admin.identity_dao.get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr("app.api.admin.identity_dao.is_username_taken", AsyncMock(return_value=False))
-    monkeypatch.setattr("app.api.admin.hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr("app.api.admin.tenant_dao.create", AsyncMock(return_value=tenant))
-    monkeypatch.setattr("app.api.admin.identity_dao.create_identity", create_identity)
-    monkeypatch.setattr("app.api.admin.user_dao.create", create_user)
-    monkeypatch.setattr("app.api.admin.participant_dao.create_for_user", AsyncMock())
-
-    bind = AsyncMock()
-    with (
-        patch("app.api.admin.connection_ctx") as ctx,
-        patch("app.services.registration_service.registration_service.bind_org_member", bind),
-    ):
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        result = await admin_api.create_company(
-            admin_api.CompanyCreateRequest(
-                name="Acme",
-                admin_email="orgadmin@acme.com",
-                admin_password="temp-password",
-                admin_display_name="Org Admin",
-            ),
-            current_user=platform_user,
-        )
+    result = await admin_api.create_company(
+        admin_api.CompanyCreateRequest(
+            name="Acme",
+            admin_email="orgadmin@acme.com",
+            admin_password="temp-password",
+            admin_display_name="Org Admin",
+        ),
+        current_user=platform_user,
+    )
 
     assert result.org_admin_email == "orgadmin@acme.com"
     assert result.must_change_password is True
-    kwargs = create_identity.await_args.kwargs
-    assert kwargs["must_change_password"] is True
-    assert kwargs["is_platform_admin"] is False
-    user_kwargs = create_user.await_args.kwargs["obj_in"]
-    assert user_kwargs["role"] == "org_admin"
-    assert user_kwargs["registration_source"] == "platform_admin"
-    bind.assert_awaited_once()
-    bound_user = bind.await_args.args[0]
-    assert bound_user.identity is identity
+    assert result.company.id == tenant_id
+    assert result.company.user_count == 1
 
 
 @pytest.mark.asyncio
 async def test_create_company_rejects_existing_admin_email(monkeypatch):
+    from app.services.tenant_provisioning import AdminEmailTakenError
+
     monkeypatch.setattr(
-        "app.api.admin.identity_dao.get_by_email",
-        AsyncMock(return_value=_identity_ns(email="taken@example.com")),
+        "app.api.admin.create_tenant_with_org_admin",
+        AsyncMock(side_effect=AdminEmailTakenError("taken@example.com")),
     )
     platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
 

@@ -24,6 +24,6 @@ uv run pytest -x --tb=short
 ## Coverage
 
 - Strong: auth, A2A/tools dispatch (`test_agent_tools_dispatch_contract.py` is the name freeze), storage/sandbox helpers, logging service, freeze scripts, schema **text** contracts.
-- Genesis admin: `test_admin_genesis.py` — platform seeder (create / elevate-with-password / refuse / fail-closed), `must_change_password` gate, same-password reject, company create write kwargs, register non-elevation. Extend when changing bootstrap or force-change.
+- Genesis admin: `test_admin_genesis.py` — platform seeder (create / elevate-with-password / refuse / fail-closed), `must_change_password` gate, same-password reject, company create response mapping, register non-elevation. Tenant+admin write kwargs live in `test_tenant_create.py`. Extend when changing bootstrap or force-change.
 - Thin: live Postgres, `bootstrap_db` execution, full lifespan, Redis, connector daemons, AgentBay/browser, PPTX.
 - CI has no database service. Prefer focused tests next to the contract you change.

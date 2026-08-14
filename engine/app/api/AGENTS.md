@@ -23,8 +23,8 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 - `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation).
 - `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
-- `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True`. Attach `user.identity` before `bind_org_member`. Unique email race → 409.
-- `tenants.py`: self-create / join call `raise_if_password_change_required`. Company self-create defaults **off** (`allow_self_create_company` default false).
+- `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True` via `tenant_provisioning`. Unique email race → 409.
+- `tenants.py`: `POST /` is platform-admin only and creates a tenant with its genesis org admin (same service as `POST /admin/companies`). Join still calls `raise_if_password_change_required`. The `allow_self_create_company` flag no longer gates tenant creation.
 - Inventory for clients: `docs/admin-apis.md`.
 
 ## Catalog / secrets

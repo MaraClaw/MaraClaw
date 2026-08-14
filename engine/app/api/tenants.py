@@ -1,12 +1,11 @@
 """Tenant (Company) management API.
 
-Public endpoints for self-service company creation and joining.
-Admin endpoints for platform-level company management.
+Public endpoints for joining a company.
+Platform-admin endpoint to create a tenant with its genesis org admin.
 """
 
 import io
 import re
-import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
@@ -14,7 +13,7 @@ from typing import TypedDict
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.core.json_types import JsonObject
 from app.core.security import get_authenticated_user, get_current_user, require_role
@@ -27,6 +26,7 @@ from app.dao.user_dao import user_dao
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.storage import ensure_local_path, get_storage_backend, normalize_storage_key
+from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -43,7 +43,9 @@ class TokenUsageBucket(TypedDict):
 
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    target_tenant_id: uuid.UUID | None = None
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=200)
 
 
 class TenantOut(BaseModel):
@@ -62,6 +64,12 @@ class TenantOut(BaseModel):
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class TenantCreateResponse(BaseModel):
+    tenant: TenantOut
+    org_admin_email: str
+    must_change_password: bool = True
 
 
 class TenantUpdate(BaseModel):
@@ -108,141 +116,37 @@ async def _get_updateable_tenant(
     return tenant
 
 
-# ─── Helpers ────────────────────────────────────────────
+# ─── Platform admin: create tenant with genesis org admin ─
 
 
-def _slugify(name: str) -> str:
-    """Generate a URL-friendly slug from a company name.
+@router.post("/", response_model=TenantCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_tenant(
+    data: TenantCreate,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+):
+    """Create a company and its genesis org admin (platform admin only).
 
-    Uses a layered transliteration strategy so non-Latin company names produce
-    meaningful, readable slugs instead of collapsing to the generic 'company'
-    placeholder:
-
-      1. pypinyin   - CJK Han characters -> pinyin (for example, a Chinese company name becomes `gongsi`)
-      2. anyascii   - remaining non-ASCII scripts → closest ASCII approximation
-                      (Korean '안녕' → 'annyeong', Japanese 'ひらがな' → 'hiragana',
-                       Arabic 'مرحبا' → 'mrhb', Cyrillic 'Привет' → 'Privet', …)
-      3. NFKD norm  - accented Latin chars stripped of diacritics (é → e)
-
-    A short random hex suffix is always appended to guarantee global uniqueness
-    even when two tenants choose the same company name.
+    The org admin is provisioned with the given email + initial password and
+    must change the password after the first successful login.
     """
-    import unicodedata
+    identity_is_platform_admin = bool(getattr(getattr(current_user, "identity", None), "is_platform_admin", False))
+    if current_user.role != "platform_admin" and not identity_is_platform_admin:
+        raise HTTPException(status_code=403, detail="Platform admin access required")
 
-    from anyascii import anyascii
-    from pypinyin import lazy_pinyin
-
-    # Step 1: Convert CJK characters to pinyin; non-CJK chars pass through unchanged.
-    # lazy_pinyin with errors='default' keeps non-CJK chars as-is so they are
-    # handled by the subsequent anyascii pass rather than being silently dropped.
-    parts = lazy_pinyin(name, errors="default")
-    text = "".join(parts)
-
-    # Step 2: Convert remaining non-ASCII characters using anyascii.
-    # anyascii is a no-op on ASCII input, so it is safe to apply to the whole
-    # string after pypinyin has already processed the CJK portion.
-    text = anyascii(text)
-
-    # Step 3: Normalize any remaining accented Latin chars (é → e, ü → u, etc.)
-    # and drop anything that still cannot be represented in ASCII.
-    text = unicodedata.normalize("NFKD", text)
-    text = text.encode("ascii", "ignore").decode("ascii")
-
-    # Step 4: Lowercase, collapse non-alphanumeric runs to hyphens, trim to 40 chars.
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower().strip())
-    slug = slug.strip("-")[:40]
-
-    if not slug:
-        # Extremely unlikely after anyascii, but keep as a safety net
-        # for inputs that are entirely punctuation or whitespace.
-        slug = "company"
-
-    # Add a short random hex suffix to ensure global uniqueness.
-    return f"{slug}-{secrets.token_hex(3)}"
-
-
-class SelfCreateResponse(BaseModel):
-    """Response for self-create company, includes token for context switching."""
-
-    tenant: TenantOut
-    access_token: str | None = None  # Non-null when a new User record was created (multi-tenant switch)
-
-
-@router.post("/self-create", response_model=SelfCreateResponse, status_code=status.HTTP_201_CREATED)
-async def self_create_company(data: TenantCreate, current_user: UserRecord = Depends(get_authenticated_user)):
-    """Create a new company (self-service). The creator becomes org_admin.
-
-    Supports both:
-    - Registration flow (user has no tenant yet): assigns tenant directly
-    - Switch-org flow (user already has a tenant): creates a new User record for the new tenant
-    """
-    # Block self-creation if locked to a specific tenant (Dedicated Link flow)
-    if data.target_tenant_id is not None:
-        raise HTTPException(
-            status_code=403,
-            detail="Company creation is not allowed via this link. Please join your assigned organization.",
+    try:
+        provisioned = await create_tenant_with_org_admin(
+            name=data.name,
+            admin_email=str(data.admin_email),
+            admin_password=data.admin_password,
+            admin_display_name=data.admin_display_name,
         )
+    except AdminEmailTakenError as exc:
+        raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
 
-    from app.core.security import raise_if_password_change_required
-
-    raise_if_password_change_required(current_user)
-
-    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=False)
-    if not allowed and current_user.role != "platform_admin":
-        raise HTTPException(status_code=403, detail="Company self-creation is currently disabled")
-
-    slug = _slugify(data.name)
-    tenant = await tenant_dao.create(obj_in={"name": data.name, "slug": slug, "im_provider": "web_only"})
-
-    access_token = None
-
-    from app.services.registration_service import registration_service
-
-    if current_user.tenant_id is not None:
-        from app.core.security import create_access_token
-
-        new_user = await user_dao.create(
-            obj_in={
-                "identity_id": current_user.identity_id,
-                "tenant_id": tenant.id,
-                "display_name": current_user.display_name,
-                "role": "org_admin",
-                "registration_source": "web",
-                "is_active": current_user.is_active,
-                "quota_message_limit": tenant.default_message_limit,
-                "quota_message_period": tenant.default_message_period,
-                "quota_max_agents": tenant.default_max_agents,
-                "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
-            }
-        )
-
-        await participant_dao.create_for_user(
-            new_user.id,
-            display_name=new_user.display_name,
-            avatar_url=new_user.avatar_url,
-        )
-        await registration_service.bind_org_member(new_user)
-
-        access_token = create_access_token(str(new_user.id), new_user.role)
-    else:
-        await user_dao.update(
-            db_obj=current_user,
-            obj_in={
-                "tenant_id": tenant.id,
-                "role": "org_admin" if current_user.role == "member" else current_user.role,
-                "quota_message_limit": tenant.default_message_limit,
-                "quota_message_period": tenant.default_message_period,
-                "quota_max_agents": tenant.default_max_agents,
-                "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
-            },
-        )
-        # Reload for bind with updated tenant fields
-        refreshed = await user_dao.get(current_user.id) or current_user
-        await registration_service.bind_org_member(refreshed)
-
-    return SelfCreateResponse(
-        tenant=TenantOut.model_validate(tenant),
-        access_token=access_token,
+    return TenantCreateResponse(
+        tenant=TenantOut.model_validate(provisioned.tenant),
+        org_admin_email=provisioned.admin_email,
+        must_change_password=True,
     )
 
 

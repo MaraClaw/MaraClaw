@@ -29,11 +29,11 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 | Account | How created | First-login rule |
 |---------|-------------|------------------|
 | **Platform admin** | Env vars `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (seeded at bootstrap; fail-closed if missing on empty DB) | Must change password after first successful login (`identity.must_change_password`) |
-| **Genesis org admin** | Platform admin only: `POST /api/admin/companies` with `admin_email` + `admin_password` | Must change password after first successful login |
+| **Genesis org admin** | Platform admin only: `POST /api/tenants` or `POST /api/admin/companies` with `admin_email` + `admin_password` | Must change password after first successful login |
 
 Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Platform admin membership is **null-tenant** so disabling a company cannot lock out the operator.
 
-While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant self-create/join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Company self-create defaults **off** (`allow_self_create_company=false`).
+While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). The `allow_self_create_company` flag is retained on platform settings but does not create tenants.
 
 Base path for most routes: **`/api`**.
 
@@ -66,6 +66,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | Method | Path | Auth | Request | Response / notes |
 |--------|------|------|---------|------------------|
 | `GET` | `/api/tenants/` | platform_admin | — | `TenantOut[]` all tenants |
+| `POST` | `/api/tenants/` | platform_admin | `{ name, admin_email, admin_password, admin_display_name? }` | **201** `{ tenant: TenantOut, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin. Duplicate admin email → **409**. Replaces `POST /api/tenants/self-create`. |
 | `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `org_admin` \| `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }` |
 
 **SSO note:** On `PUT /api/tenants/{tenant_id}`, platform admins **cannot** set `sso_enabled` / `sso_domain` (stripped server-side). SSO is managed by the company’s own org admin via Enterprise settings / identity providers.
@@ -99,7 +100,6 @@ sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/self-create` | Authenticated; creator becomes org_admin (flag-gated) |
 | `POST` | `/api/tenants/join` | Invite code join |
 | `GET` | `/api/tenants/registration-config` | Public |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
