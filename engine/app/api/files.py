@@ -6,6 +6,7 @@ import io
 import mimetypes
 import uuid
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File as FastFile, HTTPException, UploadFile as UploadFileType, status
@@ -185,7 +186,7 @@ def _visible_storage_key(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUI
 
 
 async def _require_agent_file_delete_access(
-    db,
+    db: object | None,
     current_user: UserRecord,
     agent_id: uuid.UUID,
 ) -> None:
@@ -200,9 +201,11 @@ async def _require_agent_file_delete_access(
 
 
 @router.get("/", response_model=list[FileInfo])
-async def list_files(agent_id: uuid.UUID, path: str = "", current_user: UserRecord = Depends(get_current_user)):
+async def list_files(
+    agent_id: uuid.UUID, path: str = "", current_user: UserRecord = Depends(get_current_user)
+) -> list[FileInfo]:
     """List files and directories in an agent's file system."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     storage = get_storage_backend()
     storage_key, is_enterprise = _visible_storage_key(agent_id, path, current_user.tenant_id)
     normalized_path = (path or "").strip().strip("/")
@@ -214,7 +217,7 @@ async def list_files(agent_id: uuid.UUID, path: str = "", current_user: UserReco
     elif path_exists and not path_is_dir:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path is not a directory")
 
-    items = []
+    items: list[FileInfo] = []
     if not path and current_user.tenant_id:
         items.append(
             FileInfo(
@@ -257,7 +260,7 @@ async def list_files(agent_id: uuid.UUID, path: str = "", current_user: UserReco
 @router.get("/content", response_model=FileContent)
 async def read_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)):
     """Read the content of a file."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -351,7 +354,11 @@ def _extract_document_text(target: Path, kind: str) -> str:
             prs = Presentation(str(target))
             slides = []
             for idx, slide in enumerate(prs.slides, start=1):
-                texts = [shape.text.strip() for shape in slide.shapes if hasattr(shape, "text") and shape.text.strip()]
+                texts: list[str] = []
+                for shape in slide.shapes:
+                    raw_text = getattr(shape, "text", None)
+                    if isinstance(raw_text, str) and raw_text.strip():
+                        texts.append(raw_text.strip())
                 slides.append(f"Slide {idx}\n" + "\n".join(texts))
             return "\n\n".join(slides)
     except ImportError as exc:
@@ -383,16 +390,18 @@ def _parse_csv_rows(text: str) -> list[list[str]]:
     for row in rows[:500]:
         values = list(row)
         while values and not str(values[-1] or "").strip():
-            values.pop()
+            _ = values.pop()
         if values:
             normalized.append(values)
     return normalized
 
 
 @router.get("/preview")
-async def preview_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)):
+async def preview_file(
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Return a browser-friendly preview payload for Workspace files."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     storage = get_storage_backend()
     key, _ = _visible_storage_key(agent_id, path, current_user.tenant_id)
     if not await storage.exists(key) or not await storage.is_file(key):
@@ -446,7 +455,7 @@ async def preview_file(agent_id: uuid.UUID, path: str, current_user: UserRecord 
                 for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
                     values = ["" if cell is None else str(cell) for cell in row]
                     while values and not str(values[-1] or "").strip():
-                        values.pop()
+                        _ = values.pop()
                     if any(value.strip() for value in values):
                         rows.append(values)
                 sheets.append(
@@ -546,7 +555,7 @@ async def download_file(
         enforce_password_change=True,
     )
 
-    await check_agent_access(user, agent_id)
+    _ = await check_agent_access(user, agent_id)
     storage = get_storage_backend()
     key, _ = _visible_storage_key(agent_id, path, user.tenant_id)
     if not await storage.exists(key) or not await storage.is_file(key):
@@ -575,10 +584,10 @@ async def download_file(
 
 @router.put("/content")
 async def write_file(
-    agent_id: uuid.UUID, path: str, data: FileWrite, current_user: UserRecord = Depends(get_current_user), db=None
-):
+    agent_id: uuid.UUID, path: str, data: FileWrite, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+) -> dict[str, Any]:
     """Write content to a file (create or overwrite)."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -592,7 +601,7 @@ async def write_file(
         target, _, _ = _visible_path(agent_id, path, current_user.tenant_id)
         target.parent.mkdir(parents=True, exist_ok=True)
         async with aiofiles.open(target, "w", encoding="utf-8") as f:
-            await f.write(data.content)
+            _ = await f.write(data.content)
         return {"status": "ok", "path": path, "revision_id": None}
 
     result = await write_workspace_file(
@@ -616,10 +625,10 @@ async def write_file(
 
 @router.post("/locks")
 async def lock_file(
-    agent_id: uuid.UUID, data: FileLockBody, current_user: UserRecord = Depends(get_current_user), db=None
+    agent_id: uuid.UUID, data: FileLockBody, current_user: UserRecord = Depends(get_current_user), db: object | None = None
 ):
     """Acquire or refresh a short-lived human editing lock for a file."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(data.path):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Focus is stored in the system database.")
     lock = await acquire_edit_lock(
@@ -633,19 +642,19 @@ async def lock_file(
 
 
 @router.delete("/locks")
-async def unlock_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db=None):
+async def unlock_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None):
     """Release the current user's edit lock for a file."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     await release_edit_lock(db, agent_id=agent_id, path=path, user_id=current_user.id)
     return {"status": "ok", "path": path}
 
 
 @router.get("/revisions")
 async def get_file_revisions(
-    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db=None
-):
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+) -> list[dict[str, Any]]:
     """List version history for the currently opened Workspace file."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
         return []
     if path.startswith("enterprise_info"):
@@ -670,10 +679,10 @@ async def get_file_revisions(
 
 @router.post("/restore")
 async def restore_file_revision(
-    agent_id: uuid.UUID, data: RestoreRevisionBody, current_user: UserRecord = Depends(get_current_user), db=None
-):
+    agent_id: uuid.UUID, data: RestoreRevisionBody, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+) -> dict[str, Any]:
     """Restore a file to a previous revision's after-content."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     revision = await workspace_file_revision_dao.get_for_agent(data.revision_id, agent_id)
     if not revision:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found")
@@ -703,7 +712,7 @@ async def delete_file(
     path: str,
     expected_version_token: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-    db=None,
+    db: object | None = None,
 ):
     """Delete a file."""
     await _require_agent_file_delete_access(db, current_user, agent_id)
@@ -740,15 +749,19 @@ class ImportSkillBody(BaseModel):
 @router.post("/import-skill")
 async def import_skill_to_agent(
     agent_id: uuid.UUID, body: ImportSkillBody, current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, Any]:
     """Import a global skill into this agent's skills/ workspace folder.
 
     Copies all files from the global skill registry into
     <agent_workspace>/skills/<folder_name>/.
     """
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
-    skill = await skill_dao.get(body.skill_id)
+    try:
+        skill_id = uuid.UUID(body.skill_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid skill id")
+    skill = await skill_dao.get(skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
 
@@ -783,9 +796,9 @@ async def upload_file_to_workspace(
     file: UploadFileType = FastFile(...),
     path: str = "workspace/knowledge_base",
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Upload a binary file to agent workspace."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     normalized_path = (path or "").strip().strip("/")
     if not normalized_path or normalized_path == ".":
@@ -854,7 +867,7 @@ def _enterprise_storage_key(tenant_id: str, rel_path: str = "") -> str:
 async def list_enterprise_kb_files(
     path: str = "",
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[dict[str, Any]]:
     """List files in enterprise knowledge base (tenant-scoped)."""
     if not current_user.tenant_id:
         return []
@@ -863,7 +876,7 @@ async def list_enterprise_kb_files(
     if not await storage.exists(storage_key) or not await storage.is_dir(storage_key):
         return []
 
-    items = []
+    items: list[dict[str, Any]] = []
     for entry in await storage.list_dir(storage_key):
         if entry.name == ".gitkeep":
             continue
@@ -885,7 +898,7 @@ async def upload_enterprise_kb_file(
     file: UploadFileType = FastFile(...),
     sub_path: str = "",
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Upload a file to enterprise knowledge base (tenant-scoped)."""
     # Only admin can upload to enterprise KB
     if current_user.role not in ("platform_admin", "org_admin"):
@@ -1002,9 +1015,9 @@ class UrlImportBody(BaseModel):
 @router.post("/import-from-clawhub")
 async def agent_import_from_clawhub(
     agent_id: uuid.UUID, body: ClawhubImportBody, current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, Any]:
     """Import a skill from ClawHub directly into this agent's skills/ workspace."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     from app.api.skills import (
         _fetch_clawhub_skill_archive,
@@ -1041,7 +1054,7 @@ async def agent_import_from_clawhub(
         if not str(file_path).startswith(str(base.resolve())):
             continue
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(f["content"], encoding="utf-8")
+        _ = file_path.write_text(f["content"], encoding="utf-8")
         written.append(f["path"])
 
     return {
@@ -1056,9 +1069,9 @@ async def agent_import_from_clawhub(
 @router.post("/import-from-url")
 async def agent_import_from_url(
     agent_id: uuid.UUID, body: UrlImportBody, current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, Any]:
     """Import a skill from a GitHub URL directly into this agent's skills/ workspace."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     from app.api.skills import _fetch_github_directory, _get_github_token, _parse_github_url
 
@@ -1087,7 +1100,7 @@ async def agent_import_from_url(
         if not str(file_path).startswith(str(base.resolve())):
             continue
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(f["content"], encoding="utf-8")
+        _ = file_path.write_text(f["content"], encoding="utf-8")
         written.append(f["path"])
 
     return {

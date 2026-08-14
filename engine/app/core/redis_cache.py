@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Any
 
 from app.config import get_settings
@@ -79,7 +79,7 @@ async def cache_set(key: str, value: str, *, ttl: int) -> bool:
         return False
     try:
         client = await _client()
-        await client.set(key, value, ex=ttl)
+        _ = await client.set(key, value, ex=ttl)
     except Exception as exc:
         _trip()
         logger.debug("redis_cache set skipped: {}", type(exc).__name__)
@@ -106,7 +106,7 @@ async def cache_delete(*keys: str) -> None:
         return
     try:
         client = await _client()
-        await client.delete(*keys)
+        _ = await client.delete(*keys)
     except Exception as exc:
         logger.debug("redis_cache delete skipped: {}", type(exc).__name__)
 
@@ -121,7 +121,7 @@ async def cache_get_json(key: str) -> Any | None:
         return None
 
 
-async def cache_set_json(key: str, value: Any, *, ttl: int) -> bool:
+async def cache_set_json(key: str, value: object, *, ttl: int) -> bool:
     try:
         payload = json.dumps(value, default=_json_default, separators=(",", ":"))
     except TypeError, ValueError:
@@ -129,9 +129,10 @@ async def cache_set_json(key: str, value: Any, *, ttl: int) -> bool:
     return await cache_set(key, payload, ttl=ttl)
 
 
-def _json_default(value: Any) -> Any:
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
+def _json_default(value: object) -> object:
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return isoformat()
     return str(value)
 
 
@@ -157,7 +158,7 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
     expire_for = ttl if ttl and ttl > 0 else 3600
     try:
         client = await _client()
-        await client.incr(version_key)
+        _ = await client.incr(version_key)
         expire = getattr(client, "expire", None)
         if expire is not None:
             await expire(version_key, max(expire_for, 3600))
@@ -165,12 +166,12 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
         logger.debug("redis_cache incr skipped: {}", type(exc).__name__)
 
 
-def begin_deferred_versions() -> Any:
+def begin_deferred_versions() -> Token[set[str] | None]:
     pending: set[str] = set()
     return _deferred_incrs.set(pending)
 
 
-def end_deferred_versions(token: Any) -> None:
+def end_deferred_versions(token: Token[set[str] | None]) -> None:
     _deferred_incrs.reset(token)
 
 

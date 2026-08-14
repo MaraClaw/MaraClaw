@@ -2,9 +2,10 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
 from app.core.security import get_current_user
@@ -45,17 +46,17 @@ class ScheduleOut(BaseModel):
     creator_username: str | None = None
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 @router.get("/", response_model=list[ScheduleOut])
-async def list_schedules(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def list_schedules(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> list[ScheduleOut]:
     """List all schedules for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     schedules = await agent_schedule_dao.list_for_agent(agent_id)
     creator_ids = {s.created_by for s in schedules if s.created_by}
     creator_map = await user_dao.usernames_for_ids(list(creator_ids)) if creator_ids else {}
-    out_list = []
+    out_list: list[ScheduleOut] = []
     for s in schedules:
         s_out = ScheduleOut.model_validate(s)
         s_out.creator_username = creator_map.get(s.created_by)
@@ -130,7 +131,7 @@ async def delete_schedule(
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    await agent_schedule_dao.delete(id=sched.id)
+    _ = await agent_schedule_dao.delete(id=sched.id)
 
 
 @router.post("/{schedule_id}/run")
@@ -149,12 +150,12 @@ async def trigger_schedule(
     from app.api.background_tasks import schedule_background_task
     from app.services.scheduler import _execute_schedule
 
-    schedule_background_task(
+    _ = schedule_background_task(
         _execute_schedule(sched.id, sched.agent_id, sched.instruction),
         "execute schedule",
     )
 
-    await agent_schedule_dao.update(
+    _ = await agent_schedule_dao.update(
         db_obj=sched,
         obj_in={
             "last_run_at": datetime.now(UTC),
@@ -168,22 +169,22 @@ async def trigger_schedule(
 @router.get("/{schedule_id}/history")
 async def get_schedule_history(
     agent_id: uuid.UUID, schedule_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[dict[str, Any]]:
     """Get execution history for a schedule from activity logs."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     async with connection_ctx() as conn:
         rows = await conn.fetchall(
             "SELECT id, created_at, summary, detail_json FROM agent_activity_logs "
-            "WHERE agent_id = %(agent_id)s AND action_type = 'schedule_run' "
-            "ORDER BY created_at DESC LIMIT 200",
+            + "WHERE agent_id = %(agent_id)s AND action_type = 'schedule_run' "
+            + "ORDER BY created_at DESC LIMIT 200",
             {"agent_id": agent_id},
         )
 
-    history = []
+    history: list[dict[str, Any]] = []
     schedule_id_str = str(schedule_id)
     for log in rows:
-        detail = log.get("detail_json") or {}
+        detail: dict[str, Any] = log.get("detail_json") or {}
         if not isinstance(detail, dict):
             detail = dict(detail) if detail else {}
         if detail.get("schedule_id") != schedule_id_str:

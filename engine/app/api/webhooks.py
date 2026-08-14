@@ -32,10 +32,10 @@ async def _record_and_count_hits(token: str) -> int:
     key = f"webhook:rate:{token}"
     member = f"{now}:{hashlib.sha256(f'{token}:{now}'.encode()).hexdigest()[:8]}"
     async with redis.pipeline(transaction=True) as pipe:
-        pipe.zremrangebyscore(key, 0, now - 60)
-        pipe.zadd(key, {member: now})
-        pipe.zcard(key)
-        pipe.expire(key, 120)
+        _ = pipe.zremrangebyscore(key, 0, now - 60)
+        _ = pipe.zadd(key, {member: now})
+        _ = pipe.zcard(key)
+        _ = pipe.expire(key, 120)
         _, _, count, _ = await pipe.execute()
     return int(count)
 

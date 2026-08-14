@@ -8,12 +8,12 @@ import io
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, ClassVar, TypedDict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 from app.core.json_types import JsonObject
 from app.core.security import get_current_user, require_role
@@ -84,7 +84,7 @@ class TenantOut(BaseModel):
     is_system: bool = False
     is_default_end_user_org: bool = False
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     @computed_field
     @property
@@ -99,7 +99,7 @@ class EmailDomainOut(BaseModel):
     is_default: bool
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class EmailDomainCreate(BaseModel):
@@ -293,6 +293,8 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
             status_code=403, detail="This invitation code does not belong to the required organization."
         )
 
+    if code_obj.tenant_id is None:
+        raise HTTPException(status_code=400, detail="Invitation code has no organization")
     tenant = await tenant_dao.get(code_obj.tenant_id)
     if not tenant or not tenant.is_active:
         raise HTTPException(status_code=400, detail="Company not found or is disabled")
@@ -318,12 +320,12 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 
 
 @router.get("/registration-config")
-async def get_registration_config():
+async def get_registration_config() -> dict[str, Any]:
     """Public - tenant creation is platform-admin only; self-create is gone."""
     return {"allow_self_create_company": False, "tenant_creation": "platform_admin_only"}
 
 
-def _org_summary(tenant) -> OrgSummary:
+def _org_summary(tenant: TenantRecord) -> OrgSummary:
     return OrgSummary(id=tenant.id, name=tenant.name, slug=tenant.slug)
 
 
@@ -440,6 +442,8 @@ async def transfer_organization(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if data.tenant_id and str(code_obj.tenant_id) != str(data.tenant_id):
             raise HTTPException(status_code=403, detail="This invitation code does not belong to the required organization.")
+        if code_obj.tenant_id is None:
+            raise HTTPException(status_code=400, detail="Invitation code has no organization")
         target = await tenant_dao.get(code_obj.tenant_id)
         if not target or not target.is_active:
             raise HTTPException(status_code=400, detail="Company not found or is disabled")
@@ -485,7 +489,7 @@ async def transfer_organization(
 
 
 @router.get("/resolve-by-domain")
-async def resolve_tenant_by_domain(domain: str):
+async def resolve_tenant_by_domain(domain: str) -> dict[str, Any]:
     """Resolve a tenant by its sso_domain or subdomain slug.
 
     sso_domain is stored as a full URL (e.g. "https://acme.maraclaw.ai" or "http://1.2.3.4:3009").
@@ -607,7 +611,7 @@ async def list_email_domains(
 ):
     from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     rows = await tenant_email_domain_dao.list_for_tenant(tenant_id)
     return [EmailDomainOut.model_validate(row) for row in rows]
 
@@ -621,7 +625,7 @@ async def create_email_domain(
 ):
     from app.services.org_membership import DomainClaimedError, InvalidEmailDomainError, add_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     try:
         row = await add_email_domain(tenant_id, data.domain, is_default=data.is_default)
     except InvalidEmailDomainError as exc:
@@ -650,7 +654,7 @@ async def patch_email_domain(
 ):
     from app.services.org_membership import set_default_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     if not data.is_default:
         raise HTTPException(status_code=400, detail="Clearing the default requires choosing another domain")
     try:
@@ -678,7 +682,7 @@ async def remove_email_domain(
 ):
     from app.services.org_membership import delete_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     try:
         await delete_email_domain(tenant_id, domain_id)
     except KeyError as exc:
@@ -733,7 +737,7 @@ async def update_tenant(
             )
         new_active = bool(update_data.pop("is_active"))
         try:
-            await set_tenant_active(tenant, is_active=new_active)
+            _ = await set_tenant_active(tenant, is_active=new_active)
         except DefaultOrgUnavailableError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_changes["is_active"] = field_change(tenant.is_active, new_active)
@@ -785,7 +789,7 @@ async def upload_tenant_logo(
         raise HTTPException(status_code=400, detail="Logo image must be 1 MB or smaller")
     try:
         image = Image.open(io.BytesIO(data))
-        image.load()
+        _ = image.load()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid image file") from exc
     if image.width != image.height:
@@ -910,7 +914,9 @@ async def repair_genesis_org_admin(
 
 
 @router.delete("/{tenant_id}")
-async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def delete_tenant(
+    tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Permanently delete a company and ALL its data.
 
     Only the org_admin of the specified tenant (or a platform_admin) may call
@@ -943,6 +949,8 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     identity_id = current_user.identity_id
+    if identity_id is None:
+        raise HTTPException(status_code=400, detail="Account has no identity")
 
     await delete_tenant_and_release_identities(tenant_id)
     await write_admin_audit(

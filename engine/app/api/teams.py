@@ -12,7 +12,14 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.config import get_settings
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    is_json_object,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    mapping_from_row,
+)
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -48,6 +55,27 @@ class TeamsChannelPayload(TypedDict, total=False):
 _teams_tokens: dict[str, TeamsAccessToken] = {}  # agent_id -> {access_token, expires_at}
 
 
+def _extra_config(config: ChannelConfigRecord) -> JsonObject:
+    return json_object_from(config.extra_config)
+
+
+def _json_mapping(value: object) -> JsonObject:
+    return json_object_from(value)
+
+
+def _oauth_error_fields(payload: object) -> tuple[str, str]:
+    data = json_object_from(payload)
+    nested = data.get("error")
+    if is_json_object(nested):
+        code = json_as_str_or(nested.get("code"), "unknown")
+        description = json_as_str_or(nested.get("message"), json_as_str_or(data.get("message"), "No description"))
+        return code, description
+    error_code = json_as_str_or(data.get("error"), "unknown")
+    fallback_message = json_as_str_or(data.get("message"), "No description")
+    error_description = json_as_str_or(data.get("error_description"), fallback_message)
+    return error_code, error_description
+
+
 async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
     """Get or refresh Microsoft Teams access token.
 
@@ -61,26 +89,31 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
         logger.debug(f"Teams: Using cached access token for agent {agent_id}")
         return cached["access_token"]
 
-    use_managed_identity = (config.extra_config or {}).get("use_managed_identity", False)
+    extra = _extra_config(config)
+    use_managed_identity = bool(extra.get("use_managed_identity", False))
 
     if use_managed_identity:
         try:
-            from azure.core.credentials import AccessToken
-            from azure.identity.aio import DefaultAzureCredential
+            import importlib
 
-            credential = DefaultAzureCredential()
+            azure_identity = importlib.import_module("azure.identity.aio")
+            credential = azure_identity.DefaultAzureCredential()
             scope = "https://api.botframework.com/.default"
-            token: AccessToken = await credential.get_token(scope)
+            token = await credential.get_token(scope)
+            access_token_raw: object = getattr(token, "token", None)
+            expires_on_raw: object = getattr(token, "expires_on", None)
+            if not isinstance(access_token_raw, str) or not isinstance(expires_on_raw, (int, float)):
+                return None
 
             _teams_tokens[agent_id] = {
-                "access_token": token.token,
-                "expires_at": token.expires_on,
+                "access_token": access_token_raw,
+                "expires_at": float(expires_on_raw),
             }
             logger.info(
-                f"Teams: Successfully obtained access token via managed identity for agent {agent_id}, expires at {token.expires_on}"
+                f"Teams: Successfully obtained access token via managed identity for agent {agent_id}, expires at {expires_on_raw}"
             )
             await credential.close()
-            return token.token
+            return access_token_raw
         except ImportError:
             logger.error("Teams: azure-identity package not installed. Install it with: pip install azure-identity")
             return None
@@ -94,7 +127,11 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
         logger.error(f"Teams: Missing app_id or app_secret for agent {agent_id}")
         return None
 
-    tenant_id = (config.extra_config or {}).get("tenant_id") or os.environ.get("TEAMS_TENANT_ID") or "common"
+    tenant_raw = extra.get("tenant_id")
+    if isinstance(tenant_raw, str) and tenant_raw:
+        tenant_id = tenant_raw
+    else:
+        tenant_id = os.environ.get("TEAMS_TENANT_ID") or "common"
     token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
         "client_id": app_id,
@@ -108,9 +145,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
             if resp.status_code != 200:
                 error_body = resp.text
                 try:
-                    error_json = resp.json()
-                    error_description = error_json.get("error_description", "No description")
-                    error_code = error_json.get("error", "unknown")
+                    error_code, error_description = _oauth_error_fields(resp.json())
                     logger.error(
                         f"Teams: OAuth token request failed for agent {agent_id}: status={resp.status_code}, error={error_code}, description={error_description}"
                     )
@@ -120,13 +155,15 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
                     )
                 logger.error(f"Teams: Token URL={token_url}, tenant_id={tenant_id}, client_id={app_id[:20]}...")
                 return None
-            token_data = resp.json()
-            access_token = token_data["access_token"]
-            expires_in = token_data["expires_in"]
+            token_data = json_object_from(resp.json())
+            access_token = token_data.get("access_token")
+            expires_in = token_data.get("expires_in")
+            if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
+                return None
 
             _teams_tokens[agent_id] = {
                 "access_token": access_token,
-                "expires_at": time.time() + expires_in,
+                "expires_at": time.time() + float(expires_in),
             }
             logger.info(f"Teams: Successfully obtained access token for agent {agent_id}, expires in {expires_in}s")
             return access_token
@@ -134,9 +171,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
         error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
         try:
             if hasattr(e, "response") and e.response:
-                error_json = e.response.json()
-                error_description = error_json.get("error_description", "No description")
-                error_code = error_json.get("error", "unknown")
+                error_code, error_description = _oauth_error_fields(e.response.json())
                 logger.error(
                     f"Teams: OAuth token HTTP error for agent {agent_id}: status={e.response.status_code}, error={error_code}, description={error_description}"
                 )
@@ -158,7 +193,7 @@ async def _send_teams_message(config: ChannelConfigRecord, conversation_id: str,
         logger.error(f"Teams: No access token for agent {config.agent_id}, cannot send message")
         raise ValueError("No access token available")
 
-    service_url = (config.extra_config or {}).get("service_url")
+    service_url = _extra_config(config).get("service_url")
     if not isinstance(service_url, str) or not service_url:
         logger.error(f"Teams: No service_url in config for agent {config.agent_id}, cannot send message")
         raise ValueError(f"No service_url in config for agent {config.agent_id}")
@@ -200,11 +235,7 @@ async def _send_teams_message_single_chunk(
             if resp.status_code != 200:
                 error_body = resp.text
                 try:
-                    error_json = resp.json()
-                    error_description = error_json.get("error", {}).get(
-                        "message", error_json.get("message", "No description")
-                    )
-                    error_code = error_json.get("error", {}).get("code", "unknown")
+                    error_code, error_description = _oauth_error_fields(resp.json())
                     logger.error(
                         f"Teams: Failed to send message: status={resp.status_code}, error={error_code}, description={error_description}"
                     )
@@ -215,17 +246,13 @@ async def _send_teams_message_single_chunk(
                 logger.error(
                     f"Teams: POST URL={post_url}, conversation_id={conversation_id}, service_url={service_url}"
                 )
-            resp.raise_for_status()
+            _ = resp.raise_for_status()
             logger.info(f"Teams: Sent message to conversation {conversation_id}")
     except httpx.HTTPStatusError as e:
         error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
         try:
             if hasattr(e, "response") and e.response:
-                error_json = e.response.json()
-                error_description = error_json.get("error", {}).get(
-                    "message", error_json.get("message", "No description")
-                )
-                error_code = error_json.get("error", {}).get("code", "unknown")
+                error_code, error_description = _oauth_error_fields(e.response.json())
                 logger.error(
                     f"Teams: HTTP error sending message: status={e.response.status_code}, error={error_code}, description={error_description}"
                 )
@@ -261,13 +288,13 @@ async def configure_teams_channel(
 
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
     if existing:
-        extra = dict(existing.extra_config or {})
+        extra = json_object_from(existing.extra_config)
         if tenant_id:
             extra["tenant_id"] = tenant_id
         elif "tenant_id" in extra and not tenant_id:
             extra.pop("tenant_id", None)
         extra["use_managed_identity"] = use_managed_identity
-        obj_in: dict = {
+        obj_in: dict[str, object] = {
             "is_configured": True,
             "extra_config": extra,
         }
@@ -277,7 +304,7 @@ async def configure_teams_channel(
         config = await channel_config_dao.update(db_obj=existing, obj_in=obj_in)
         return ChannelConfigOut.model_validate(config or existing)
 
-    extra_config: dict = {}
+    extra_config: JsonObject = {}
     if tenant_id:
         extra_config["tenant_id"] = tenant_id
     if use_managed_identity:
@@ -299,7 +326,7 @@ async def configure_teams_channel(
 @router.get("/agents/{agent_id}/teams-channel", response_model=ChannelConfigOut)
 async def get_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     """Get Microsoft Teams channel configuration for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
@@ -308,10 +335,10 @@ async def get_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
 
 @router.get("/agents/{agent_id}/teams-channel/webhook-url")
 async def get_teams_webhook_url(
-    agent_id: uuid.UUID, request: Request, current_user: UserRecord = Depends(get_current_user), db=None
+    agent_id: uuid.UUID, request: Request, current_user: UserRecord = Depends(get_current_user), db: object | None = None
 ):
     """Get the Microsoft Teams webhook URL for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(db, request)
@@ -327,7 +354,7 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 # ─── Event Webhook ──────────────────────────────────────
@@ -338,23 +365,27 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
     try:
         body_bytes = await request.body()
         try:
-            body = json.loads(body_bytes)
+            parsed_body: object = json.loads(body_bytes)
         except json.JSONDecodeError as e:
             logger.error(f"Teams: Failed to parse JSON body: {e}, body={body_bytes[:200]}")
             return Response(status_code=400, content="Invalid JSON")
 
-        if isinstance(body, dict) and "type" in body:
-            activity = body
-        elif isinstance(body, dict) and "activity" in body:
-            activity = body["activity"]
+        activity: JsonObject
+        if is_json_object(parsed_body) and "type" in parsed_body:
+            activity = parsed_body
+        elif is_json_object(parsed_body) and "activity" in parsed_body:
+            activity = _json_mapping(parsed_body.get("activity"))
         else:
             logger.warning(
-                f"Teams: Unexpected body structure for agent {agent_id}: {list(body.keys()) if isinstance(body, dict) else type(body)}"
+                f"Teams: Unexpected body structure for agent {agent_id}: {list(parsed_body.keys()) if is_json_object(parsed_body) else type(parsed_body)}"
             )
-            activity = body if isinstance(body, dict) else {}
+            activity = parsed_body if is_json_object(parsed_body) else {}
 
+        from_account = _json_mapping(activity.get("from"))
+        from_id = json_as_str_or(from_account.get("id"), "unknown")
+        text_preview = json_as_str(activity.get("text"))
         logger.info(
-            f"Teams: Webhook received for agent {agent_id}, activity type={activity.get('type')}, from={activity.get('from', {}).get('id', 'unknown')}, text={activity.get('text', '')[:50] if activity.get('text') else 'no text'}"
+            f"Teams: Webhook received for agent {agent_id}, activity type={activity.get('type')}, from={from_id}, text={text_preview[:50] if text_preview else 'no text'}"
         )
 
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
@@ -362,9 +393,9 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.warning(f"Teams: Webhook received for unconfigured agent {agent_id}")
             return Response(status_code=404)
 
-        service_url = activity.get("serviceUrl")
-        if service_url and (config.extra_config or {}).get("service_url") != service_url:
-            extra = dict(config.extra_config or {})
+        extra = _extra_config(config)
+        service_url = json_as_str(activity.get("serviceUrl"))
+        if service_url and extra.get("service_url") != service_url:
             extra["service_url"] = service_url
             config = (
                 await channel_config_dao.update(
@@ -382,19 +413,21 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         if activity.get("type") != "message":
             return {"ok": True}
 
-        bot_id = config.app_id
-        if not bot_id:
-            bot_id = activity.get("recipient", {}).get("id")
-        if bot_id and activity.get("from", {}).get("id") == bot_id:
+        recipient = _json_mapping(activity.get("recipient"))
+        bot_id = config.app_id or json_as_str(recipient.get("id"))
+        if bot_id and from_account.get("id") == bot_id:
             return {"ok": True}
 
-        user_text = activity.get("text", "").strip()
+        user_text = str(activity.get("text", "") or "").strip()
         if not user_text:
             return {"ok": True}
 
-        conversation_id = activity.get("conversation", {}).get("id")
-        sender_id = activity.get("from", {}).get("id")
-        sender_name = activity.get("from", {}).get("name", f"Teams User {sender_id[:8]}")
+        conversation = _json_mapping(activity.get("conversation"))
+        conversation_id = json_as_str(conversation.get("id"))
+        sender_id = json_as_str(from_account.get("id"))
+        sender_name = json_as_str(from_account.get("name")) or (
+            f"Teams User {sender_id[:8]}" if sender_id else "Teams User"
+        )
         reply_to_id = activity.get("id")
 
         if not conversation_id or not sender_id:
@@ -408,12 +441,11 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.warning(f"[Teams] Agent {agent_id} not found")
             return {"ok": True}
 
-        _extra_info = {"name": sender_name}
         platform_user = await channel_inbound.resolve_sender_user(
             agent=agent_obj,
             channel_type="teams",
             external_user_id=sender_id,
-            extra_info=_extra_info,
+            extra_info=mapping_from_row({"name": sender_name}),
         )
 
         if (
@@ -426,8 +458,11 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                 await user_dao.update(db_obj=platform_user, obj_in={"display_name": sender_name}) or platform_user
             )
 
-        _conv_type = activity.get("conversation", {}).get("conversationType", "")
+        _conv_type = json_as_str_or(conversation.get("conversationType"))
         _is_group_teams = _conv_type in ("groupChat", "channel")
+        group_name = json_as_str(conversation.get("name")) or (
+            f"Teams Group {conversation_id[:8]}" if _is_group_teams else None
+        )
 
         sess = await channel_inbound.open_channel_session(
             agent_id=agent_id,
@@ -436,23 +471,22 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             source_channel="microsoft_teams",
             first_message_title=user_text,
             is_group=_is_group_teams,
-            group_name=activity.get("conversation", {}).get("name")
-            or (f"Teams Group {conversation_id[:8]}" if _is_group_teams else None),
+            group_name=group_name,
         )
 
-        async def _teams_file_sender(file_path, msg: str = ""):
+        async def _teams_file_sender(file_path: str | _Path, msg: str = "") -> None:
             _fp = _Path(file_path)
-            use_mi = (config.extra_config or {}).get("use_managed_identity", False)
+            use_mi = bool(_extra_config(config).get("use_managed_identity", False))
             has_creds = (config.app_id and config.app_secret) or use_mi
             if not has_creds or not conversation_id:
                 return
             file_msg_activity: JsonObject = {
                 "type": "message",
-                "conversation": {"id": conversation_id},
+                "conversation": _json_mapping({"id": conversation_id}),
                 "replyToId": reply_to_id,
                 "text": (
                     f"Agent sent file: {_fp.name} "
-                    f"(Note: file content not directly supported yet, but I can tell you about it: {msg})"
+                    + f"(Note: file content not directly supported yet, but I can tell you about it: {msg})"
                 ),
             }
             await _send_teams_message(config, conversation_id, file_msg_activity)
@@ -484,46 +518,46 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         finally:
             _cfs_s.reset(_cfs_s_token)
 
-        use_managed_identity = (config.extra_config or {}).get("use_managed_identity", False)
+        use_managed_identity = bool(_extra_config(config).get("use_managed_identity", False))
         has_credentials = (config.app_id and config.app_secret) or use_managed_identity
         if has_credentials and conversation_id:
             try:
-                bot_channel_account = activity.get("recipient", {})
+                bot_channel_account = _json_mapping(activity.get("recipient"))
                 if not bot_channel_account.get("id"):
                     if config.app_id:
-                        bot_channel_account = {"id": config.app_id}
+                        bot_channel_account = _json_mapping({"id": config.app_id})
                     else:
                         logger.error(
                             "[Teams] Cannot determine bot channel account ID - no recipient in activity and no app_id configured"
                         )
                         raise ValueError("Cannot determine bot channel account ID")
 
-                user_account = activity.get("from", {})
+                user_account = _json_mapping(activity.get("from"))
                 if not user_account.get("id"):
-                    user_account = {"id": sender_id, "name": sender_name}
+                    user_account = _json_mapping({"id": sender_id, "name": sender_name})
 
                 reply_activity: JsonObject = {
                     "type": "message",
                     "from": bot_channel_account,
-                    "conversation": {"id": conversation_id},
+                    "conversation": _json_mapping({"id": conversation_id}),
                     "recipient": user_account,
                     "replyToId": reply_to_id,
                     "text": reply_text,
                 }
                 logger.info(
                     f"[Teams] Attempting to send reply to conversation {conversation_id}, "
-                    f"from={bot_channel_account.get('id')}, recipient={user_account.get('id')}"
+                    + f"from={bot_channel_account.get('id')}, recipient={user_account.get('id')}"
                 )
                 await _send_teams_message(config, conversation_id, reply_activity)
                 logger.info("[Teams] Successfully sent reply to Teams")
             except Exception as e:
                 logger.exception(f"[Teams] Failed to send message to Teams: {e}")
         else:
-            use_mi = (config.extra_config or {}).get("use_managed_identity", False)
+            use_mi = bool(_extra_config(config).get("use_managed_identity", False))
             logger.warning(
                 f"[Teams] Cannot send reply - missing credentials "
-                f"(managed_identity={use_mi}, app_id={bool(config.app_id)}, "
-                f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
+                + f"(managed_identity={use_mi}, app_id={bool(config.app_id)}, "
+                + f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
             )
 
         if activity_id:

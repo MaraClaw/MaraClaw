@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
@@ -59,10 +60,10 @@ class UserOut(BaseModel):
     created_at: str | None = None
     source: str = "registered"  # 'registered' | 'feishu' | 'dingtalk' | 'wecom' | etc.
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
-def _user_out(u, agents_count: int = 0) -> UserOut:
+def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
     return UserOut(
         id=u.id,
         username=u.username or u.email or f"{u.registration_source or 'user'}_{str(u.id)[:8]}",
@@ -82,7 +83,9 @@ def _user_out(u, agents_count: int = 0) -> UserOut:
 
 
 @router.get("/", response_model=list[UserOut])
-async def list_users(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)):
+async def list_users(
+    tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
+) -> list[UserOut]:
     """List all users in the specified tenant (admin only)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -96,7 +99,7 @@ async def list_users(tenant_id: str | None = None, current_user: UserRecord = De
 
     users = await user_dao.list_for_tenant_ordered(tenant_uuid, include_identity=True)
 
-    out = []
+    out: list[UserOut] = []
     for u in users:
         agents_count = await agent_dao.count_active_for_creator(u.id)
         out.append(_user_out(u, agents_count=agents_count))
@@ -188,12 +191,12 @@ class AdminAuditLogOut(BaseModel):
     target_type: str
     target_id: uuid.UUID | None = None
     tenant_id: uuid.UUID | None = None
-    changes: dict
-    details: dict
+    changes: dict[str, Any]
+    details: dict[str, Any]
     ip_address: str | None = None
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 @router.post("/org-admins", response_model=OrgAdminCreateResponse, status_code=status.HTTP_201_CREATED)

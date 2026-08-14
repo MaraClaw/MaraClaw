@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from app.config import Settings
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.core.security import (
@@ -19,6 +20,7 @@ from app.core.security import (
 )
 from app.dao import identity_dao, system_setting_dao, tenant_dao, user_dao
 from app.db.session import connection_ctx
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import (
     ForgotPasswordRequest,
@@ -72,7 +74,7 @@ class OAuthPendingCache(BaseModel):
 
 
 @router.get("/registration-config")
-async def get_registration_config():
+async def get_registration_config() -> dict[str, bool]:
     """Public endpoint - returns registration requirements (no auth needed)."""
     enabled = await system_setting_dao.is_invitation_code_enabled()
     return {"invitation_code_required": enabled}
@@ -82,9 +84,9 @@ async def get_registration_config():
 async def check_duplicate(
     email: str | None = Query(None, description="Email to check"),
     username: str | None = Query(None, description="Username to check"),
-):
+) -> dict[str, Any]:
     """Check if email or username already exists."""
-    result = {"email_exists": False, "username_exists": False, "conflicts": []}
+    result: dict[str, Any] = {"email_exists": False, "username_exists": False, "conflicts": []}
 
     if email and await identity_dao.get_by_email(email):
         result["email_exists"] = True
@@ -101,7 +103,7 @@ async def check_duplicate(
 async def _send_verification_email_task(
     user: UserRecord,
     background_tasks: BackgroundTasks,
-    settings: Any,
+    settings: Settings,
 ) -> None:
     """Helper to create verification token and add email task to background tasks."""
     from app.services.email_verification_service import email_verification_service
@@ -113,6 +115,9 @@ async def _send_verification_email_task(
         return
 
     try:
+        if user.identity_id is None:
+            logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
+            return
         identity = await identity_dao.get(user.identity_id)
 
         if not identity:
@@ -139,7 +144,7 @@ async def _send_verification_email_task(
         logger.warning(f"Failed to send verification email for {user.email}: {exc}")
 
 
-def _suggested_org(tenant) -> SuggestedOrg | None:
+def _suggested_org(tenant: TenantRecord | None) -> SuggestedOrg | None:
     if tenant is None:
         return None
     return SuggestedOrg(id=tenant.id, name=tenant.name, slug=tenant.slug)
@@ -361,7 +366,9 @@ async def register_sso(
     )
 
 
-async def _handle_normal_register(data: UserRegister, background_tasks: BackgroundTasks, settings):
+async def _handle_normal_register(
+    data: UserRegister, background_tasks: BackgroundTasks, settings: Settings
+) -> Any:
     """Legacy normal registration handler."""
     logger.info(f"[REGISTER_LEGACY] email={data.email}")
 
@@ -438,7 +445,7 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
     token = create_access_token(str(user.id), user.role)
     return RegisterInitResponse(
         user_id=user.id,
-        email=user.email,
+        email=user.email or "",
         access_token=token,
         user=UserOut.model_validate(user),
         message="Registration successful. Please verify your email."
@@ -489,7 +496,7 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
             # SMTP missing: auto-verify users (DAO commits each write)
             tx_identity = await identity_dao.get(identity.id)
             if tx_identity:
-                await identity_dao.update(
+                _ = await identity_dao.update(
                     db_obj=tx_identity,
                     obj_in={"email_verified": True, "is_active": True},
                 )
@@ -497,7 +504,7 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
                 identity.is_active = True
                 users = await user_dao.get_by_identity_id(tx_identity.id)
                 for u in users:
-                    await user_dao.update(db_obj=u, obj_in={"is_active": True})
+                    _ = await user_dao.update(db_obj=u, obj_in={"is_active": True})
         else:
             # Find any user record (just for the task)
             user = await user_dao.get_representative_user_for_identity(identity.id)
@@ -639,7 +646,7 @@ async def get_email_hint(username: str):
 async def forgot_password(
     data: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
-):
+) -> dict[str, Any]:
     """Request a password reset link for a global Identity."""
     from app.services.system_email_service import resolve_email_config_async
 
@@ -651,7 +658,7 @@ async def forgot_password(
             detail="Password reset is currently unavailable (no mail server configured).",
         )
 
-    generic_response = {
+    generic_response: dict[str, Any] = {
         "ok": True,
         "message": "If an account with that email exists, a password reset email has been sent.",
     }
@@ -701,7 +708,7 @@ async def reset_password(data: ResetPasswordRequest):
     identity = await identity_dao.get(identity_id)
     if not identity or not identity.is_active:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
-    await identity_dao.update(
+    _ = await identity_dao.update(
         db_obj=identity,
         obj_in={"password_hash": new_hash, "must_change_password": False},
     )
@@ -775,7 +782,7 @@ async def update_me(
     if identity_fields:
         user.identity = await identity_dao.update(db_obj=user.identity, obj_in=identity_fields)
     if user_fields:
-        await user_dao.update(db_obj=user, obj_in=user_fields)
+        _ = await user_dao.update(db_obj=user, obj_in=user_fields)
         # Re-load so identity proxies remain available for response mapping.
         user = await user_dao.get_with_identity(user.id) or user
     elif identity_fields:
@@ -797,8 +804,10 @@ async def update_me(
 @router.get("/my-tenants", response_model=list[TenantChoice])
 async def get_my_tenants(
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[TenantChoice]:
     """Get all tenants associated with the current user's identity."""
+    if current_user.identity_id is None:
+        return []
     # 1. Get all user records for this identity
     users = await user_dao.get_by_identity_id(current_user.identity_id)
 
@@ -828,6 +837,10 @@ async def switch_tenant(
     current_user: UserRecord = Depends(get_current_user),
 ):
     """Switch to a different tenant and return a new token and redirect URL."""
+    if current_user.identity_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this organization."
+        )
     # 1. Verify membership
     target_user = await user_dao.get_by_identity_and_tenant(current_user.identity_id, data.tenant_id)
 
@@ -907,7 +920,7 @@ async def change_password(
     tx_identity = await identity_dao.get(identity.id)
     if not tx_identity:
         raise HTTPException(status_code=404, detail="Identity not found")
-    await identity_dao.update(
+    _ = await identity_dao.update(
         db_obj=tx_identity,
         obj_in={"password_hash": new_hash, "must_change_password": False},
     )
@@ -921,7 +934,7 @@ async def change_password(
 @router.get("/providers")
 async def list_providers(
     tenant_id: uuid.UUID | None = Query(None, description="Optional tenant ID"),
-):
+) -> list[dict[str, Any]]:
     """List all available identity providers."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -953,7 +966,7 @@ async def _cache_oauth_pending(
         token_data=token_data,
         allowed_tenant_ids=allowed_tenant_ids or [],
     ).model_dump_json()
-    await r.set(f"{_OAUTH_PENDING_PREFIX}{pending_token}", payload, ex=_OAUTH_PENDING_TTL)
+    _ = await r.set(f"{_OAUTH_PENDING_PREFIX}{pending_token}", payload, ex=_OAUTH_PENDING_TTL)
 
 
 async def _get_oauth_pending(pending_token: str) -> OAuthPendingCache | None:
@@ -965,7 +978,7 @@ async def _get_oauth_pending(pending_token: str) -> OAuthPendingCache | None:
     if not raw:
         return None
     # Single-use: delete immediately after retrieval
-    await r.delete(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
+    _ = await r.delete(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
     return OAuthPendingCache.model_validate_json(raw)
 
 
@@ -1186,7 +1199,7 @@ async def bind_identity(
                 detail="This identity is already linked to another account",
             )
 
-        await sso_service.link_identity(
+        _ = await sso_service.link_identity(
             str(current_user.id),
             provider,
             lookup_provider_user_id,
@@ -1250,7 +1263,7 @@ async def verify_email(data: VerifyEmailRequest):
     )
     users = await user_dao.get_by_identity_id(identity.id)
     for u in users:
-        await user_dao.update(db_obj=u, obj_in={"is_active": True})
+        _ = await user_dao.update(db_obj=u, obj_in={"is_active": True})
 
     # Find a representative user (read-only)
     user = await user_dao.get_representative_user_for_identity(identity.id)
@@ -1272,13 +1285,13 @@ async def verify_email(data: VerifyEmailRequest):
 async def resend_verification(
     data: ResendVerificationRequest,
     background_tasks: BackgroundTasks,
-):
+) -> dict[str, Any]:
     """Resend email verification link."""
     from app.config import get_settings
     from app.services.system_email_service import resolve_email_config_async
 
     # Always return success to prevent email enumeration
-    generic_response = {
+    generic_response: dict[str, Any] = {
         "ok": True,
         "message": "If an account with that email exists, a verification email has been sent.",
     }

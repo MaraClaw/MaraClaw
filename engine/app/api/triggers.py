@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.api.auth import get_current_user
 from app.core.json_types import JsonObject
 from app.dao.trigger_dao import agent_trigger_dao
+from app.records.user import UserRecord
 
 router = APIRouter(prefix="/api/agents", tags=["triggers"])
 
@@ -40,7 +41,7 @@ class TriggerUpdate(BaseModel):
 
 
 @router.get("/{agent_id}/triggers", response_model=list[TriggerResponse])
-async def list_agent_triggers(agent_id: uuid.UUID, user=Depends(get_current_user)):
+async def list_agent_triggers(agent_id: uuid.UUID, user: UserRecord = Depends(get_current_user)):
     """List all triggers for an agent."""
     _ = user
     triggers = await agent_trigger_dao.list_for_agent(agent_id)
@@ -71,7 +72,7 @@ async def update_trigger(
     agent_id: uuid.UUID,
     trigger_id: uuid.UUID,
     body: TriggerUpdate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Update a trigger (from frontend management UI)."""
     _ = user
@@ -83,7 +84,7 @@ async def update_trigger(
     if "expires_at" in updates and updates["expires_at"] is not None:
         updates["expires_at"] = datetime.fromisoformat(updates["expires_at"])
     if updates:
-        await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+        _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
 
     return {"ok": True}
 
@@ -92,7 +93,7 @@ async def update_trigger(
 async def delete_trigger(
     agent_id: uuid.UUID,
     trigger_id: uuid.UUID,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Delete a trigger entirely."""
     _ = user
@@ -100,5 +101,5 @@ async def delete_trigger(
     if not trigger:
         raise HTTPException(404, "Trigger not found")
 
-    await agent_trigger_dao.delete(id=trigger.id)
+    _ = await agent_trigger_dao.delete(id=trigger.id)
     return {"ok": True}

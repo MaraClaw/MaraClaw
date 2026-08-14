@@ -70,7 +70,7 @@ async def get_cache_redis() -> redis.Redis:
 async def publish_event(channel: str, data: JsonObject) -> None:
     """Publish an event to a Redis Pub/Sub channel."""
     r = await get_redis()
-    await r.publish(channel, json.dumps(data))
+    _ = await r.publish(channel, json.dumps(data))
 
 
 async def close_redis() -> None:

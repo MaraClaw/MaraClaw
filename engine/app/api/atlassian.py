@@ -6,6 +6,7 @@ the agent uses Jira, Confluence, and Compass via the Atlassian Rovo MCP server.
 """
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -63,7 +64,7 @@ async def configure_atlassian_channel(
         )
         from app.api.background_tasks import schedule_background_task
 
-        schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
+        _ = schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
         return _serialize(config or existing)
 
     config = await channel_config_dao.create(
@@ -78,13 +79,13 @@ async def configure_atlassian_channel(
     )
     from app.api.background_tasks import schedule_background_task
 
-    schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
+    _ = schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
     return _serialize(config)
 
 
 @router.get("/agents/{agent_id}/atlassian-channel")
 async def get_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
@@ -99,13 +100,15 @@ async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 @router.post("/agents/{agent_id}/atlassian-channel/test")
-async def check_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def check_atlassian_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Test connectivity to Atlassian Rovo MCP and list available tools."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
     if not config or not config.app_secret:
         raise HTTPException(status_code=400, detail="Atlassian not configured")
@@ -139,7 +142,7 @@ def _serialize(config: ChannelConfigRecord) -> dict[str, JsonValue]:
     }
 
 
-async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID, db=None) -> str | None:
+async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID, db: object | None = None) -> str | None:
     """Return the configured Atlassian API key for the given agent, or None."""
     from app.config import get_settings
     from app.core.security import decrypt_data

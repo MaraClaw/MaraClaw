@@ -59,8 +59,8 @@ class AgentPermissionUserAccess(BaseModel):
 
 class AgentPermissionUpdate(BaseModel):
     scope_type: str = "company"
-    scope_ids: list[uuid.UUID] = Field(default_factory=list)
-    user_access: list[AgentPermissionUserAccess] = Field(default_factory=list)
+    scope_ids: list[uuid.UUID] = Field(default_factory=list[uuid.UUID])
+    user_access: list[AgentPermissionUserAccess] = Field(default_factory=list[AgentPermissionUserAccess])
     access_level: str = "use"
 
 
@@ -126,7 +126,7 @@ async def _archive_agent_task_history(agent_id: uuid.UUID, archive_dir: Path) ->
         )
 
     archive_path = archive_dir / "task_history.json"
-    await AsyncPath(archive_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _ = await AsyncPath(archive_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return archive_path
 
 
@@ -212,7 +212,7 @@ async def _persist_agent_runtime(agent: AgentRecord) -> AgentRecord:
 
 
 @router.get("/templates")
-async def list_templates(current_user: UserRecord = Depends(get_current_user)):
+async def list_templates(current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """List all available agent templates."""
     _ = current_user
     templates = await agent_template_dao.list_all_ordered()
@@ -267,7 +267,7 @@ async def list_agents(
 async def _set_agent_status_error(agent_id: uuid.UUID) -> None:
     agent = await agent_dao.get(agent_id)
     if agent:
-        await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
+        _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
 
 
 async def _background_agent_setup(
@@ -316,7 +316,7 @@ async def _background_agent_setup(
             import asyncio
 
             storage = get_storage_backend()
-            await asyncio.gather(
+            _ = await asyncio.gather(
                 *[storage.write_text(key, content, encoding="utf-8") for key, content in skill_files_to_write]
             )
             logger.info(f"[_skills_copy] background agent={agent_id} files={len(skill_files_to_write)} completed")
@@ -336,7 +336,7 @@ async def _background_agent_setup(
                 if result_msg.startswith("❌"):
                     logger.warning(
                         f"[create_agent] background MCP pre-install for '{server_id}' "
-                        f"on agent {agent_id} reported error: {result_msg[:200]}"
+                        + f"on agent {agent_id} reported error: {result_msg[:200]}"
                     )
                 else:
                     logger.info(
@@ -353,8 +353,8 @@ async def _background_agent_setup(
             logger.error(f"[background_agent_setup] Agent {agent_id} not found before starting container")
             return
 
-        await agent_manager.start_container(None, agent)
-        await _persist_agent_runtime(agent)
+        _ = await agent_manager.start_container(None, agent)
+        _ = await _persist_agent_runtime(agent)
 
         if agent.tenant_id:
             await hook_new_agent(None, agent.id, agent.tenant_id)
@@ -443,7 +443,7 @@ async def create_agent(
             }
         )
 
-        await participant_dao.create(
+        _ = await participant_dao.create(
             obj_in={
                 "type": "agent",
                 "ref_id": agent.id,
@@ -453,13 +453,13 @@ async def create_agent(
         )
 
         if data.permission_scope_type == "company":
-            await agent_permission_dao.create(
+            _ = await agent_permission_dao.create(
                 obj_in={"agent_id": agent.id, "scope_type": "company", "access_level": access_level}
             )
         elif data.permission_scope_type == "user":
             if data.permission_scope_ids:
                 for scope_id in data.permission_scope_ids:
-                    await agent_permission_dao.create(
+                    _ = await agent_permission_dao.create(
                         obj_in={
                             "agent_id": agent.id,
                             "scope_type": "user",
@@ -468,7 +468,7 @@ async def create_agent(
                         }
                     )
             else:
-                await agent_permission_dao.create(
+                _ = await agent_permission_dao.create(
                     obj_in={
                         "agent_id": agent.id,
                         "scope_type": "user",
@@ -477,7 +477,7 @@ async def create_agent(
                     }
                 )
         else:
-            await agent_permission_dao.create(
+            _ = await agent_permission_dao.create(
                 obj_in={
                     "agent_id": agent.id,
                     "scope_type": "user",
@@ -486,7 +486,7 @@ async def create_agent(
                 }
             )
 
-    await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
+    _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
 
     if agent.agent_type == "openclaw":
         raw_key = f"oc-{secrets.token_urlsafe(32)}"
@@ -537,7 +537,7 @@ async def create_agent(
 async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     """Get agent details."""
     agent, access_level = await check_agent_access(current_user, agent_id)
-    await _lazy_reset_token_counters(agent)
+    _ = await _lazy_reset_token_counters(agent)
     out_model = await _agent_to_out(agent, current_user.id)
     out = out_model.model_dump()
     out["access_level"] = access_level
@@ -557,7 +557,9 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
 
 
 @router.get("/{agent_id}/permissions")
-async def get_agent_permissions(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_agent_permissions(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Get agent permission scope."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     perms = list(await agent_permission_dao.list_for_agent(agent_id))
@@ -584,8 +586,8 @@ async def get_agent_permissions(agent_id: uuid.UUID, current_user: UserRecord = 
         "use",
     )
 
-    scope_names = []
-    user_access = []
+    scope_names: list[dict[str, Any]] = []
+    user_access: list[dict[str, Any]] = []
     display_user_ids = {uuid.UUID(sid) for sid in scope_ids}
     if access_mode == "custom":
         if agent.creator_id:
@@ -618,7 +620,7 @@ async def get_agent_permissions(agent_id: uuid.UUID, current_user: UserRecord = 
             is_creator = agent.creator_id == u.id
             is_admin = u.role in ("platform_admin", "org_admin")
             is_required = access_mode == "custom" and (is_creator or is_admin)
-            item = {
+            item: dict[str, Any] = {
                 "id": sid,
                 "name": u.display_name or u.username,
                 "username": u.username,
@@ -671,7 +673,7 @@ async def update_agent_permissions(
             db_obj=agent,
             obj_in={"access_mode": "company", "company_access_level": access_level},
         )
-        await agent_permission_dao.create(
+        _ = await agent_permission_dao.create(
             obj_in={"agent_id": agent_id, "scope_type": "company", "access_level": access_level}
         )
     elif scope_type == "private":
@@ -679,7 +681,7 @@ async def update_agent_permissions(
             db_obj=agent,
             obj_in={"access_mode": "private", "company_access_level": access_level},
         )
-        await agent_permission_dao.create(
+        _ = await agent_permission_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "scope_type": "user",
@@ -708,13 +710,13 @@ async def update_agent_permissions(
             if uid in required_manager_ids:
                 lvl = "manage"
             seen_user_ids.add(uid)
-            await agent_permission_dao.create(
+            _ = await agent_permission_dao.create(
                 obj_in={"agent_id": agent_id, "scope_type": "user", "scope_id": uid, "access_level": lvl}
             )
         for sid in scope_ids:
             if sid not in seen_user_ids:
                 seen_user_ids.add(sid)
-                await agent_permission_dao.create(
+                _ = await agent_permission_dao.create(
                     obj_in={
                         "agent_id": agent_id,
                         "scope_type": "user",
@@ -724,7 +726,7 @@ async def update_agent_permissions(
                 )
         for uid in required_manager_ids:
             if uid not in seen_user_ids:
-                await agent_permission_dao.create(
+                _ = await agent_permission_dao.create(
                     obj_in={"agent_id": agent_id, "scope_type": "user", "scope_id": uid, "access_level": "manage"}
                 )
 
@@ -744,7 +746,7 @@ async def update_agent_permissions(
 @router.get("/{agent_id}/permissions/candidates")
 async def get_agent_permission_candidates(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, list[dict[str, Any]]]:
     """Return org members that can be granted custom access."""
     from app.services.channel_user_service import get_platform_user_by_org_member
 
@@ -752,6 +754,8 @@ async def get_agent_permission_candidates(
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can change permissions")
 
+    if agent.tenant_id is None:
+        return {"candidates": []}
     members = list(await org_member_dao.list_permission_candidates(tenant_id=agent.tenant_id, search=search, limit=50))
 
     linked_user_ids = [m.user_id for m in members if m.user_id]
@@ -761,7 +765,7 @@ async def get_agent_permission_candidates(
         uid: u for uid, u in users_by_id.items() if agent.tenant_id is None or u.tenant_id == agent.tenant_id
     }
 
-    candidates = []
+    candidates: list[dict[str, Any]] = []
     for m in members:
         if m.user_id:
             u = users_by_id.get(m.user_id)
@@ -875,7 +879,7 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
             if "avatar_url" in update_data:
                 p_updates["avatar_url"] = agent.avatar_url
             if p_updates:
-                await participant_dao.update(db_obj=p, obj_in=p_updates)
+                _ = await participant_dao.update(db_obj=p, obj_in=p_updates)
 
     out_model = await _agent_to_out(agent, current_user.id)
     out = out_model.model_dump()
@@ -903,7 +907,7 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
 
     archive_dir: Path | None = None
     try:
-        await agent_manager.remove_container(agent)
+        _ = await agent_manager.remove_container(agent)
     except get_cancelled_exc_class():
         raise
     except ClientNotFoundError, DockerException, NoSuchContainer:
@@ -916,7 +920,7 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
         pass
     if archive_dir is not None:
         try:
-            await _archive_agent_task_history(agent.id, archive_dir)
+            _ = await _archive_agent_task_history(agent.id, archive_dir)
         except get_cancelled_exc_class():
             raise
         except OSError:
@@ -932,7 +936,7 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can start agent")
 
-    await agent_manager.start_container(None, agent)
+    _ = await agent_manager.start_container(None, agent)
     agent = await _persist_agent_runtime(agent)
     return await _agent_to_out(agent, current_user.id)
 
@@ -944,7 +948,7 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can stop agent")
 
-    await agent_manager.stop_container(agent)
+    _ = await agent_manager.stop_container(agent)
     agent = await _persist_agent_runtime(agent)
     return await _agent_to_out(agent, current_user.id)
 
@@ -952,7 +956,7 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
 @router.get("/{agent_id}/approvals")
 async def list_agent_approvals(
     agent_id: uuid.UUID, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[dict[str, Any]]:
     """List approval requests for a specific agent. Only creator or admin can view."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
@@ -982,9 +986,9 @@ async def resolve_agent_approval(
     approval_id: uuid.UUID,
     data: AgentApprovalResolveRequest,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Approve or reject a pending approval for a specific agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     from app.services.autonomy_service import autonomy_service
 
@@ -1010,7 +1014,7 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
         raise HTTPException(status_code=400, detail="API keys are only available for OpenClaw agents")
 
     raw_key = f"oc-{secrets.token_urlsafe(32)}"
-    await agent_dao.update(
+    _ = await agent_dao.update(
         db_obj=agent,
         obj_in={"api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest()},
     )
@@ -1019,9 +1023,11 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
 
 
 @router.get("/{agent_id}/gateway-messages")
-async def list_gateway_messages(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def list_gateway_messages(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """List recent gateway messages for an OpenClaw agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     messages = await gateway_message_dao.list_recent(agent_id, limit=50)
     sender_ids = {m.sender_agent_id for m in messages if m.sender_agent_id}

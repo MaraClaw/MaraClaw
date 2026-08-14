@@ -20,7 +20,7 @@ POST      /api/okr/trigger-member-outreach         (P4 onboarding: fire OKR Agen
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -50,6 +50,7 @@ from app.records.okr import (
     OKRObjectiveRecord,
     OKRSettingsRecord,
 )
+from app.records.user import UserRecord
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
 
@@ -77,7 +78,7 @@ type TrackedMember = tuple[uuid.UUID, str, uuid.UUID | None, str | None, str | N
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _is_okr_admin(user) -> bool:
+def _is_okr_admin(user: UserRecord) -> bool:
     return getattr(user, "role", None) in ("org_admin", "platform_admin")
 
 
@@ -88,13 +89,20 @@ def _dashboard_write_forbidden() -> HTTPException:
     )
 
 
+def _require_tenant_id(user: UserRecord) -> uuid.UUID:
+    tenant_id = user.tenant_id
+    if tenant_id is None:
+        raise HTTPException(status_code=400, detail="Tenant context required")
+    return tenant_id
+
+
 async def _sync_okr_agent_relationships(tenant_id: uuid.UUID, okr_agent_id: uuid.UUID) -> None:
     """Auto-connect the OKR Agent to all active org members and company-visible agents."""
-    await agent_relationship_dao.delete_for_agent(okr_agent_id)
-    await agent_agent_relationship_dao.delete_for_agent(okr_agent_id)
+    _ = await agent_relationship_dao.delete_for_agent(okr_agent_id)
+    _ = await agent_agent_relationship_dao.delete_for_agent(okr_agent_id)
 
     for member_id in await org_member_dao.list_active_ids_for_tenant(tenant_id):
-        await agent_relationship_dao.create(
+        _ = await agent_relationship_dao.create(
             obj_in={
                 "agent_id": okr_agent_id,
                 "member_id": member_id,
@@ -106,7 +114,7 @@ async def _sync_okr_agent_relationships(tenant_id: uuid.UUID, okr_agent_id: uuid
     for agent in await agent_dao.list_active_nonsystem_for_tenant(
         tenant_id, exclude_id=okr_agent_id, company_only=True
     ):
-        await agent_agent_relationship_dao.create(
+        _ = await agent_agent_relationship_dao.create(
             obj_in={
                 "agent_id": okr_agent_id,
                 "target_agent_id": agent.id,
@@ -177,7 +185,7 @@ async def _sync_okr_report_triggers(settings: OKRSettingsRecord) -> None:
             )
             triggers[name] = created
             return
-        await agent_trigger_dao.update(
+        _ = await agent_trigger_dao.update(
             db_obj=trigger,
             obj_in={
                 "config": config,
@@ -193,8 +201,8 @@ async def _sync_okr_report_triggers(settings: OKRSettingsRecord) -> None:
         is_enabled=bool(settings.enabled and settings.daily_report_enabled),
         reason=(
             "System trigger: daily OKR collection. When daily reporting is enabled, "
-            "the OKR Agent should collect today's final daily update only from members "
-            "and agents already in its relationship list."
+            + "the OKR Agent should collect today's final daily update only from members "
+            + "and agents already in its relationship list."
         ),
     )
     await _ensure_trigger(
@@ -211,13 +219,13 @@ async def _sync_okr_report_triggers(settings: OKRSettingsRecord) -> None:
     )
     biweekly = triggers.get("biweekly_okr_checkin")
     if biweekly:
-        await agent_trigger_dao.update(
+        _ = await agent_trigger_dao.update(
             db_obj=biweekly,
             obj_in={
                 "is_enabled": bool(settings.enabled),
                 "reason": (
                     "System trigger: fires on the 1st and 15th of every month at 10:00 "
-                    "to perform the mandatory bi-weekly OKR check-in."
+                    + "to perform the mandatory bi-weekly OKR check-in."
                 ),
             },
         )
@@ -457,9 +465,9 @@ class CompanyReportRegenerate(BaseModel):
 
 
 @router.get("/settings", response_model=OKRSettingsOut)
-async def get_okr_settings(user=Depends(get_current_user)):
+async def get_okr_settings(user: UserRecord = Depends(get_current_user)):
     """Return OKR configuration for the current tenant."""
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     okr_agent_id_str = str(settings.okr_agent_id) if settings.okr_agent_id else None
     return OKRSettingsOut(
         enabled=settings.enabled,
@@ -477,14 +485,14 @@ async def get_okr_settings(user=Depends(get_current_user)):
 
 
 @router.put("/settings", response_model=OKRSettingsOut)
-async def update_okr_settings(body: OKRSettingsUpdate, user=Depends(get_current_user)):
+async def update_okr_settings(body: OKRSettingsUpdate, user: UserRecord = Depends(get_current_user)):
     """Update OKR configuration. Org admins only."""
     # Allow org admins and platform admins to modify OKR settings.
     # user.role is the canonical authority; is_admin is not a real field.
     if getattr(user, "role", None) not in ("org_admin", "platform_admin"):
         raise HTTPException(403, "Only org admins can modify OKR settings")
 
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     period_is_locked = settings.first_enabled_at is not None
 
     if period_is_locked:
@@ -499,7 +507,7 @@ async def update_okr_settings(body: OKRSettingsUpdate, user=Depends(get_current_
                 "OKR period length is locked after OKR is first enabled.",
             )
 
-    updates: dict = {
+    updates: dict[str, Any] = {
         "weekly_report_enabled": False,
         "weekly_report_day": 0,
     }
@@ -526,9 +534,9 @@ async def update_okr_settings(body: OKRSettingsUpdate, user=Depends(get_current_
     if body.enabled and not settings.okr_agent_id:
         from app.services.agent_seeder import seed_okr_agent_for_tenant
 
-        logger.info(f"[OKR] OKR enabled for tenant {user.tenant_id} - auto-seeding OKR Agent")
-        await seed_okr_agent_for_tenant(user.tenant_id, user.id)
-        refreshed = await _get_or_create_settings(user.tenant_id)
+        logger.info(f"[OKR] OKR enabled for tenant {_require_tenant_id(user)} - auto-seeding OKR Agent")
+        await seed_okr_agent_for_tenant(_require_tenant_id(user), user.id)
+        refreshed = await _get_or_create_settings(_require_tenant_id(user))
         await _sync_okr_report_triggers(refreshed)
         okr_agent_id_str = str(refreshed.okr_agent_id) if refreshed.okr_agent_id else None
         settings = refreshed
@@ -552,7 +560,7 @@ async def update_okr_settings(body: OKRSettingsUpdate, user=Depends(get_current_
 
 
 @router.post("/sync-relationships")
-async def sync_okr_relationships(user=Depends(get_current_user)):
+async def sync_okr_relationships(user: UserRecord = Depends(get_current_user)):
     """Manually re-sync the OKR Agent's relationship network.
 
     Connects the OKR Agent to all active OrgMembers (org-structure-synced humans)
@@ -564,11 +572,11 @@ async def sync_okr_relationships(user=Depends(get_current_user)):
     if getattr(user, "role", None) not in ("org_admin", "platform_admin"):
         raise HTTPException(403, "Only org admins can sync OKR relationships")
 
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     if not settings.okr_agent_id:
         raise HTTPException(404, "OKR Agent not found for this tenant. Enable OKR in Company Settings first.")
     okr_agent_id = settings.okr_agent_id
-    await _sync_okr_agent_relationships(user.tenant_id, okr_agent_id)
+    await _sync_okr_agent_relationships(_require_tenant_id(user), okr_agent_id)
     return {"status": "ok", "okr_agent_id": str(okr_agent_id)}
 
 
@@ -576,17 +584,17 @@ async def sync_okr_relationships(user=Depends(get_current_user)):
 
 
 @router.get("/periods", response_model=list[PeriodOut])
-async def list_periods(user=Depends(get_current_user)):
+async def list_periods(user: UserRecord = Depends(get_current_user)):
     """Return OKR periods from first enablement through the next period.
 
     Periods are computed from the tenant's locked OKR cadence. Once OKR has
     been enabled for a tenant, the first enabled period remains the start of
     the selectable history even if OKR is later disabled and re-enabled.
     """
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     first_enabled_at = settings.first_enabled_at
     if first_enabled_at is None and settings.enabled:
-        earliest_period_start = await okr_objective_dao.earliest_period_start(user.tenant_id)
+        earliest_period_start = await okr_objective_dao.earliest_period_start(_require_tenant_id(user))
         if earliest_period_start:
             first_enabled_at = datetime.combine(
                 earliest_period_start,
@@ -676,7 +684,7 @@ def _obj_to_out(
 async def list_objectives(
     period_start: str | None = None,
     period_end: str | None = None,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """List all Objectives for the current tenant within a period.
 
@@ -685,13 +693,13 @@ async def list_objectives(
     Includes owner_name resolved from User.display_name or Agent.name.
     """
     if not period_start or not period_end:
-        settings = await _get_or_create_settings(user.tenant_id)
+        settings = await _get_or_create_settings(_require_tenant_id(user))
         ps, pe = _compute_current_period(settings.period_frequency, settings.period_length_days)
     else:
         ps = date.fromisoformat(period_start)
         pe = date.fromisoformat(period_end)
 
-    objectives = await okr_objective_dao.list_for_period(user.tenant_id, period_start=ps, period_end=pe)
+    objectives = await okr_objective_dao.list_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
     obj_ids = [o.id for o in objectives]
     all_krs = await okr_key_result_dao.list_for_objectives(obj_ids)
     krs_by_obj: dict[uuid.UUID, list[OKRKeyResultRecord]] = {}
@@ -704,7 +712,7 @@ async def list_objectives(
     user_names = await user_dao.display_names_for_ids(user_owner_ids) if user_owner_ids else {}
     unresolved_ids = [oid for oid in user_owner_ids if oid not in user_names]
     if unresolved_ids:
-        user_names.update(await org_member_dao.names_for_ids(unresolved_ids))
+        _ = user_names.update(await org_member_dao.names_for_ids(unresolved_ids))
 
     agent_names = await agent_dao.names_for_ids(agent_owner_ids) if agent_owner_ids else {}
 
@@ -721,7 +729,7 @@ async def list_objectives(
 
 
 @router.post("/objectives", response_model=ObjectiveOut)
-async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)):
+async def create_objective(body: ObjectiveCreate, user: UserRecord = Depends(get_current_user)):
     """Create a new Objective."""
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
@@ -746,7 +754,7 @@ async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)
                         resolved_owner_id = candidate
                         logger.info(
                             f"[create_objective] Channel-only OrgMember {candidate} "
-                            f"has no user_id - storing OrgMember.id as owner_id"
+                            + f"has no user_id - storing OrgMember.id as owner_id"
                         )
                 else:
                     raise HTTPException(
@@ -758,7 +766,7 @@ async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)
 
     obj = await okr_objective_dao.create(
         obj_in={
-            "tenant_id": user.tenant_id,
+            "tenant_id": _require_tenant_id(user),
             "title": body.title,
             "description": body.description,
             "owner_type": body.owner_type,
@@ -774,13 +782,13 @@ async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)
 async def update_objective(
     objective_id: uuid.UUID,
     body: ObjectiveUpdate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Update an Objective's title, description or status."""
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    obj = await okr_objective_dao.get_for_tenant(objective_id, user.tenant_id)
+    obj = await okr_objective_dao.get_for_tenant(objective_id, _require_tenant_id(user))
     if not obj:
         raise HTTPException(404, "Objective not found")
 
@@ -799,16 +807,16 @@ async def update_objective(
 @router.delete("/objectives/{objective_id}")
 async def delete_objective(
     objective_id: uuid.UUID,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Soft delete an Objective (set status to archived)."""
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    obj = await okr_objective_dao.get_for_tenant(objective_id, user.tenant_id)
+    obj = await okr_objective_dao.get_for_tenant(objective_id, _require_tenant_id(user))
     if not obj:
         raise HTTPException(404, "Objective not found")
-    await okr_objective_dao.update(db_obj=obj, obj_in={"status": "archived"})
+    _ = await okr_objective_dao.update(db_obj=obj, obj_in={"status": "archived"})
     return {"status": "success"}
 
 
@@ -816,9 +824,9 @@ async def delete_objective(
 
 
 @router.get("/objectives/{objective_id}/key-results", response_model=list[KeyResultOut])
-async def list_key_results(objective_id: uuid.UUID, user=Depends(get_current_user)):
+async def list_key_results(objective_id: uuid.UUID, user: UserRecord = Depends(get_current_user)):
     """List all KRs for the given Objective."""
-    if not await okr_objective_dao.get_for_tenant(objective_id, user.tenant_id):
+    if not await okr_objective_dao.get_for_tenant(objective_id, _require_tenant_id(user)):
         raise HTTPException(404, "Objective not found")
     return [_kr_to_out(kr) for kr in await okr_key_result_dao.list_for_objective(objective_id)]
 
@@ -827,13 +835,13 @@ async def list_key_results(objective_id: uuid.UUID, user=Depends(get_current_use
 async def create_key_result(
     objective_id: uuid.UUID,
     body: KeyResultCreate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Create a new Key Result under the specified Objective."""
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    if not await okr_objective_dao.get_for_tenant(objective_id, user.tenant_id):
+    if not await okr_objective_dao.get_for_tenant(objective_id, _require_tenant_id(user)):
         raise HTTPException(404, "Objective not found")
 
     kr = await okr_key_result_dao.create(
@@ -852,7 +860,7 @@ async def create_key_result(
 async def update_key_result(
     kr_id: uuid.UUID,
     body: KeyResultUpdate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Update a Key Result's fields or current progress value.
 
@@ -862,7 +870,7 @@ async def update_key_result(
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    row = await okr_key_result_dao.get_with_tenant(kr_id, user.tenant_id)
+    row = await okr_key_result_dao.get_with_tenant(kr_id, _require_tenant_id(user))
     if not row:
         raise HTTPException(404, "Key Result not found")
     kr, _ = row
@@ -884,7 +892,7 @@ async def update_key_result(
         kr = await okr_key_result_dao.update(db_obj=kr, obj_in=updates)
 
     if body.current_value is not None and body.current_value != prev_value:
-        await okr_progress_log_dao.create(
+        _ = await okr_progress_log_dao.create(
             obj_in={
                 "kr_id": kr_id,
                 "previous_value": prev_value,
@@ -899,7 +907,7 @@ async def update_key_result(
 async def update_kr_progress_endpoint(
     kr_id: uuid.UUID,
     body: ProgressUpdate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Convenience endpoint for updating only the current progress value.
 
@@ -909,7 +917,7 @@ async def update_kr_progress_endpoint(
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    row = await okr_key_result_dao.get_with_tenant(kr_id, user.tenant_id)
+    row = await okr_key_result_dao.get_with_tenant(kr_id, _require_tenant_id(user))
     if not row:
         raise HTTPException(404, "Key Result not found")
     kr, _ = row
@@ -936,7 +944,7 @@ async def update_kr_progress_endpoint(
             "last_updated_at": datetime.now(UTC),
         },
     )
-    await okr_progress_log_dao.create(
+    _ = await okr_progress_log_dao.create(
         obj_in={
             "kr_id": kr_id,
             "previous_value": prev_value,
@@ -951,17 +959,17 @@ async def update_kr_progress_endpoint(
 @router.delete("/key-results/{kr_id}")
 async def delete_key_result(
     kr_id: uuid.UUID,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Hard delete a key result."""
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
-    row = await okr_key_result_dao.get_with_tenant(kr_id, user.tenant_id)
+    row = await okr_key_result_dao.get_with_tenant(kr_id, _require_tenant_id(user))
     if not row:
         raise HTTPException(404, "Key Result not found")
-    await okr_progress_log_dao.delete_for_kr(kr_id)
-    await okr_key_result_dao.delete(id=kr_id)
+    _ = await okr_progress_log_dao.delete_for_kr(kr_id)
+    _ = await okr_key_result_dao.delete(id=kr_id)
     return {"status": "success"}
 
 
@@ -987,13 +995,13 @@ def _serialize_company_report(report: CompanyReportRecord) -> CompanyReportOut:
 @router.get("/member-daily-reports", response_model=list[MemberDailyReportOut])
 async def list_member_daily_reports(
     report_date: str | None = None,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """List all member daily reports for a specific date plus missing members."""
     from app.services.okr_reporting import list_member_daily_reports_for_date
 
     target_day = date.fromisoformat(report_date) if report_date else datetime.now(UTC).date()
-    items = await list_member_daily_reports_for_date(user.tenant_id, target_day)
+    items = await list_member_daily_reports_for_date(_require_tenant_id(user), target_day)
     return [
         MemberDailyReportOut(
             id=f"{item['member_type']}:{item['member_id']}:{target_day.isoformat()}",
@@ -1015,7 +1023,7 @@ async def list_member_daily_reports(
 @router.post("/member-daily-reports", response_model=MemberDailyReportOut)
 async def upsert_member_daily_report(
     body: MemberDailyReportUpsert,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Create or update a member daily report.
 
@@ -1037,7 +1045,7 @@ async def upsert_member_daily_report(
 
     report_date = date.fromisoformat(body.report_date)
     report = await _upsert(
-        tenant_id=user.tenant_id,
+        tenant_id=_require_tenant_id(user),
         member_type=target_member_type,
         member_id=target_member_id,
         report_date=report_date,
@@ -1045,7 +1053,7 @@ async def upsert_member_daily_report(
         source=body.source,
     )
     member_map = {
-        (member.member_type, str(member.member_id)): member for member in await list_tracked_okr_members(user.tenant_id)
+        (member.member_type, str(member.member_id)): member for member in await list_tracked_okr_members(_require_tenant_id(user))
     }
     member_meta = member_map.get((report.member_type, str(report.member_id)))
     return MemberDailyReportOut(
@@ -1067,19 +1075,19 @@ async def upsert_member_daily_report(
 async def list_company_reports_api(
     report_type: str | None = None,
     limit: int = 50,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """List company-level reports from the new reporting pipeline."""
     from app.services.okr_reporting import list_company_reports
 
-    reports = await list_company_reports(user.tenant_id, report_type=report_type, limit=limit)
+    reports = await list_company_reports(_require_tenant_id(user), report_type=report_type, limit=limit)
     return [_serialize_company_report(report) for report in reports]
 
 
 @router.post("/company-reports/regenerate", response_model=CompanyReportOut)
 async def regenerate_company_report(
     body: CompanyReportRegenerate,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """Rebuild a single company report for a target period."""
     if getattr(user, "role", None) not in ("org_admin", "platform_admin"):
@@ -1093,11 +1101,11 @@ async def regenerate_company_report(
 
     period_start = date.fromisoformat(body.period_start)
     if body.report_type == "daily":
-        report = await generate_company_daily_report(user.tenant_id, period_start)
+        report = await generate_company_daily_report(_require_tenant_id(user), period_start)
     elif body.report_type == "weekly":
-        report = await generate_company_weekly_report(user.tenant_id, period_start)
+        report = await generate_company_weekly_report(_require_tenant_id(user), period_start)
     elif body.report_type == "monthly":
-        report = await generate_company_monthly_report(user.tenant_id, period_start)
+        report = await generate_company_monthly_report(_require_tenant_id(user), period_start)
     else:
         raise HTTPException(400, "Invalid report_type")
 
@@ -1108,10 +1116,10 @@ async def regenerate_company_report(
 async def list_reports(
     report_type: str | None = None,  # "daily" | "weekly" | None for both
     limit: int = 50,
-    user=Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
     """List work reports for the current tenant, newest first."""
-    reports = await work_report_dao.list_for_tenant(user.tenant_id, report_type=report_type, limit=limit)
+    reports = await work_report_dao.list_for_tenant(_require_tenant_id(user), report_type=report_type, limit=limit)
     return [
         WorkReportOut(
             id=str(r.id),
@@ -1131,7 +1139,7 @@ async def list_reports(
 
 
 @router.get("/members-without-okr")
-async def members_without_okr(user=Depends(get_current_user)):
+async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Return tracked members (those in OKR Agent's relationship list) who lack
     OKRs in the current period.  Also returns:
     - okr_agent_id        : UUID of the OKR Agent for the chat-link button
@@ -1139,15 +1147,15 @@ async def members_without_okr(user=Depends(get_current_user)):
     - tracked_user_ids    : UUIDs of all tracked platform users (for UI filtering)
     - tracked_agent_ids   : UUIDs of all tracked agents (for UI filtering)
     """
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     if not settings.enabled:
         raise HTTPException(403, "OKR is not enabled for this tenant")
 
     ps, pe = _compute_current_period(settings.period_frequency, settings.period_length_days)
     company_okr_exists = await okr_objective_dao.company_exists_for_period(
-        user.tenant_id, period_start=ps, period_end=pe
+        _require_tenant_id(user), period_start=ps, period_end=pe
     )
-    covered_ids = await okr_objective_dao.list_owner_ids_for_period(user.tenant_id, period_start=ps, period_end=pe)
+    covered_ids = await okr_objective_dao.list_owner_ids_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
 
     okr_agent_id_val: uuid.UUID | None = settings.okr_agent_id
     okr_agent_id_str: str | None = str(okr_agent_id_val) if okr_agent_id_val else None
@@ -1234,7 +1242,7 @@ async def members_without_okr(user=Depends(get_current_user)):
                 )
 
     if not okr_agent_id_val or (not tracked_user_ids and not tracked_agent_ids):
-        for row in await agent_dao.list_id_name_avatar_active_nonsystem(user.tenant_id):
+        for row in await agent_dao.list_id_name_avatar_active_nonsystem(_require_tenant_id(user)):
             tracked_agent_ids.append(str(row["id"]))
             if row["id"] not in covered_ids:
                 members_without_okr.append(
@@ -1248,7 +1256,7 @@ async def members_without_okr(user=Depends(get_current_user)):
                     }
                 )
 
-        for row in await user_dao.list_id_name_avatar_for_tenant(user.tenant_id):
+        for row in await user_dao.list_id_name_avatar_for_tenant(_require_tenant_id(user)):
             tracked_user_ids.append(str(row["id"]))
             if row["id"] not in covered_ids:
                 members_without_okr.append(
@@ -1262,7 +1270,7 @@ async def members_without_okr(user=Depends(get_current_user)):
                     }
                 )
 
-    last_outreach_error = None
+    last_outreach_error: dict[str, Any] | None = None
     if okr_agent_id_val:
         notif = await notification_dao.latest_system_task_failed(user_id=user.id, ref_id=okr_agent_id_val)
         if notif:
@@ -1339,7 +1347,7 @@ async def members_without_okr(user=Depends(get_current_user)):
 
 
 @router.post("/trigger-member-outreach")
-async def trigger_member_outreach(user=Depends(get_current_user)):
+async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Admin-initiated trigger: instruct the OKR Agent to contact all tracked
     members who haven't set their OKRs for the current period.
 
@@ -1352,7 +1360,7 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
 
     Returns immediately with status=accepted.
     """
-    settings = await _get_or_create_settings(user.tenant_id)
+    settings = await _get_or_create_settings(_require_tenant_id(user))
     if not settings.enabled:
         raise HTTPException(403, "OKR is not enabled for this tenant")
 
@@ -1370,9 +1378,9 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
             "OKR Agent not found. Please ensure OKR is enabled and the agent has been seeded.",
         )
 
-    covered_ids = await okr_objective_dao.list_owner_ids_for_period(user.tenant_id, period_start=ps, period_end=pe)
+    covered_ids = await okr_objective_dao.list_owner_ids_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
     company_okrs = await okr_objective_dao.list_for_period(
-        user.tenant_id, period_start=ps, period_end=pe, owner_types=["company"]
+        _require_tenant_id(user), period_start=ps, period_end=pe, owner_types=["company"]
     )
     company_okr_krs: dict[uuid.UUID, Sequence[OKRKeyResultRecord]] = {}
     for co in company_okrs:
@@ -1407,7 +1415,7 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
         if not target_user_id:
             return []
         msgs = await chat_message_dao.list_recent_for_agent_user(agent_id=okr_agent.id, user_id=target_user_id, limit=3)
-        return [(m.role, m.content, m.created_at) for m in msgs]
+        return [(m.role, m.content, created) for m in msgs if (created := m.created_at) is not None]
 
     admin_username = await user_dao.display_name_for_id(user.id) or str(user.id)
 
@@ -1450,15 +1458,15 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
             if display:
                 username_hint = (
                     f'\n  Platform account: "{display}"'
-                    f"  (use this as the recipient identifier in send_platform_message)"
+                    + f"  (use this as the recipient identifier in send_platform_message)"
                 )
 
         member_block = (
             f"--- Member {index}: {org_member.name} ---\n"
-            f"  Type: Channel member{username_hint}\n"
-            f"  How to send: {channel_hint}\n"
-            f"  Recent chat history (last 3 messages):\n"
-            f"{history_str}"
+            + f"  Type: Channel member{username_hint}\n"
+            + f"  How to send: {channel_hint}\n"
+            + f"  Recent chat history (last 3 messages):\n"
+            + f"{history_str}"
         )
         members_to_contact.append(member_block)
         index += 1
@@ -1468,17 +1476,17 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
             continue
         member_block = (
             f"--- Member {index}: {agent_member.name} [Agent] ---\n"
-            f'  STEP 1 → send_message_to_agent(agent_name="{agent_member.name}",\n'
-            f'             message="[OKR Agent] Based on the company OKRs, describe your primary Objectives and Key Results '
-            f'for this period ({ps.isoformat()} ~ {pe.isoformat()}).")\n'
-            f"  STEP 2 → Read the reply carefully from the tool result.\n"
-            f"  STEP 3 → Call this EXACTLY (use the UUID below verbatim, do NOT invent one):\n"
-            f'    create_objective(title="<their objective>", owner_type="agent",\n'
-            f'                    owner_id="{agent_member.id}",\n'
-            f'                    period_start="{ps.isoformat()}", period_end="{pe.isoformat()}")\n'
-            f"  STEP 4 → For EACH Key Result they mentioned:\n"
-            f'    create_key_result(objective_id="<id from STEP 3 result>",\n'
-            f'                     title="<KR title>", target_value=<number>, unit="<unit if stated>")'
+            + f'  STEP 1 → send_message_to_agent(agent_name="{agent_member.name}",\n'
+            + f'             message="[OKR Agent] Based on the company OKRs, describe your primary Objectives and Key Results '
+            + f'for this period ({ps.isoformat()} ~ {pe.isoformat()}).")\n'
+            + f"  STEP 2 → Read the reply carefully from the tool result.\n"
+            + f"  STEP 3 → Call this EXACTLY (use the UUID below verbatim, do NOT invent one):\n"
+            + f'    create_objective(title="<their objective>", owner_type="agent",\n'
+            + f'                    owner_id="{agent_member.id}",\n'
+            + f'                    period_start="{ps.isoformat()}", period_end="{pe.isoformat()}")\n'
+            + f"  STEP 4 → For EACH Key Result they mentioned:\n"
+            + f'    create_key_result(objective_id="<id from STEP 3 result>",\n'
+            + f'                     title="<KR title>", target_value=<number>, unit="<unit if stated>")'
         )
         members_to_contact.append(member_block)
         index += 1
@@ -1554,7 +1562,7 @@ Contact the {len(members_to_contact)} member(s) below who have NOT set their OKR
     from app.api.background_tasks import schedule_background_task
     from app.services.heartbeat import run_agent_oneshot
 
-    schedule_background_task(
+    _ = schedule_background_task(
         run_agent_oneshot(
             agent_id=okr_agent.id,
             prompt=task_prompt,
@@ -1568,7 +1576,7 @@ Contact the {len(members_to_contact)} member(s) below who have NOT set their OKR
         "status": "accepted",
         "message": (
             f"OKR Agent outreach task triggered for {len(members_to_contact)} member(s). "
-            "You can check the conversation details in the OKR Agent's chat history."
+            + "You can check the conversation details in the OKR Agent's chat history."
         ),
         "okr_agent_id": str(okr_agent.id),
         "members_count": len(members_to_contact),
@@ -1576,14 +1584,14 @@ Contact the {len(members_to_contact)} member(s) below who have NOT set their OKR
 
 
 @router.post("/trigger-daily-collection")
-async def trigger_daily_collection(user=Depends(get_current_user)):
+async def trigger_daily_collection(user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Admin-triggered daily collection for tracked OKR relationships only."""
     if getattr(user, "role", None) not in ("org_admin", "platform_admin"):
         raise HTTPException(403, "Only org admins can trigger daily collection")
     from app.services.okr_daily_collection import trigger_daily_collection_for_tenant
 
     try:
-        result = await trigger_daily_collection_for_tenant(user.tenant_id)
+        result = await trigger_daily_collection_for_tenant(_require_tenant_id(user))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1599,7 +1607,7 @@ async def trigger_daily_collection(user=Depends(get_current_user)):
         "status": "accepted",
         "message": (
             f"Daily OKR collection sent to {result['sent_humans']} human target(s) and "
-            f"{result['sent_agents']} agent target(s). Reply triggers are now active."
+            + f"{result['sent_agents']} agent target(s). Reply triggers are now active."
         ),
         "okr_agent_id": result["okr_agent_id"],
         "member_count": result["total_targets"],

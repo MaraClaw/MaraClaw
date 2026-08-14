@@ -5,18 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from contextvars import ContextVar
-from typing import Any
+from contextvars import ContextVar, Token
+from typing import Protocol, ClassVar
 
 from app.config import get_settings
 from app.core.events import get_redis
 from app.core.logging import logger
+from app.records.agent import AgentRecord
 
 _POLICY_VERSION_KEY = "aclver:{agent_id}"
 _DECISION_KEY = "acl:v1:{agent_id}:{user_id}"
 
+class _UserLike(Protocol):
+    id: uuid.UUID
+    role: str
+    tenant_id: uuid.UUID | None
+
+
 # (user_id, agent_id) -> (agent, level)
-_request_memo: ContextVar[dict[tuple[uuid.UUID, uuid.UUID], tuple[Any, str]] | None] = ContextVar(
+_request_memo: ContextVar[dict[tuple[uuid.UUID, uuid.UUID], tuple[AgentRecord, str]] | None] = ContextVar(
     "agent_access_memo",
     default=None,
 )
@@ -26,30 +33,30 @@ _deferred_acl: ContextVar[_DeferredAcl | None] = ContextVar("agent_acl_deferred"
 
 
 class _DeferredAcl:
-    __slots__ = ("bumps", "drops")
+    __slots__: ClassVar[tuple[str, ...]] = ("bumps", "drops")
 
     def __init__(self) -> None:
         self.bumps: set[uuid.UUID] = set()
         self.drops: set[uuid.UUID] = set()
 
 
-def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[Any, str] | None:
+def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[AgentRecord, str] | None:
     memo = _request_memo.get()
     if not memo:
         return None
     return memo.get((user_id, agent_id))
 
 
-def memo_set(user_id: uuid.UUID, agent_id: uuid.UUID, agent: Any, level: str) -> None:
+def memo_set(user_id: uuid.UUID, agent_id: uuid.UUID, agent: AgentRecord, level: str) -> None:
     memo = _request_memo.get()
     if memo is None:
         memo = {}
-        _request_memo.set(memo)
+        _ = _request_memo.set(memo)
     memo[(user_id, agent_id)] = (agent, level)
 
 
 def clear_request_memo() -> None:
-    _request_memo.set(None)
+    _ = _request_memo.set(None)
 
 
 def _ttl_seconds() -> int:
@@ -68,12 +75,12 @@ def _dec_key(agent_id: uuid.UUID, user_id: uuid.UUID) -> str:
     return _DECISION_KEY.format(agent_id=agent_id, user_id=user_id)
 
 
-def _tenant_token(user: Any) -> str:
+def _tenant_token(user: _UserLike) -> str:
     tenant_id = getattr(user, "tenant_id", None)
     return str(tenant_id) if tenant_id is not None else ""
 
 
-async def get_cached_level(user: Any, agent_id: uuid.UUID) -> str | None:
+async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
     """Return a cached manage/use level, or None on miss / Redis disabled / error."""
     if _ttl_seconds() <= 0:
         return None
@@ -83,8 +90,8 @@ async def get_cached_level(user: Any, agent_id: uuid.UUID) -> str | None:
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
         pipe = client.pipeline()
-        pipe.get(_ver_key(agent_id))
-        pipe.get(_dec_key(agent_id, user_id))
+        _ = pipe.get(_ver_key(agent_id))
+        _ = pipe.get(_dec_key(agent_id, user_id))
         ver_raw, payload = await asyncio.wait_for(pipe.execute(), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache miss (redis): {}", type(exc).__name__)
@@ -125,7 +132,7 @@ async def read_acl_version(agent_id: uuid.UUID) -> str:
 
 
 async def set_cached_level(
-    user: Any,
+    user: _UserLike,
     agent_id: uuid.UUID,
     level: str,
     *,
@@ -151,7 +158,7 @@ async def set_cached_level(
                 "ver": current,
             }
         )
-        await asyncio.wait_for(
+        _ = await asyncio.wait_for(
             client.set(_dec_key(agent_id, user_id), payload, ex=_ttl_seconds()),
             timeout=_redis_wait_seconds(),
         )
@@ -159,13 +166,13 @@ async def set_cached_level(
         logger.debug("access_cache set skipped: {}", type(exc).__name__)
 
 
-def begin_deferred_acl() -> Any:
+def begin_deferred_acl() -> Token[_DeferredAcl | None]:
     """Start queuing aclver ops until ``flush_deferred_acl`` / ``end_deferred_acl``."""
     pending = _DeferredAcl()
     return _deferred_acl.set(pending)
 
 
-def end_deferred_acl(token: Any) -> None:
+def end_deferred_acl(token: Token[_DeferredAcl | None]) -> None:
     _deferred_acl.reset(token)
 
 
@@ -211,7 +218,7 @@ async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
 async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
-        await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_redis_wait_seconds())
+        _ = await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_redis_wait_seconds())
         ttl = max(_ttl_seconds() * 40, 3600)
         expire = getattr(client, "expire", None)
         if expire is not None:
@@ -223,6 +230,6 @@ async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
 async def _drop_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
-        await asyncio.wait_for(client.delete(_ver_key(agent_id)), timeout=_redis_wait_seconds())
+        _ = await asyncio.wait_for(client.delete(_ver_key(agent_id)), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache drop skipped: {}", type(exc).__name__)

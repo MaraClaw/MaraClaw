@@ -22,10 +22,10 @@ class Logger:
         exc: bool | BaseException | None = None,
         extra: tuple[tuple[str, object], ...] | None = None,
     ) -> None:
-        self._name = name
-        self._depth = depth
-        self._exc = exc
-        self._extra = extra
+        self._name: str | None = name
+        self._depth: int = depth
+        self._exc: bool | BaseException | None = exc
+        self._extra: tuple[tuple[str, object], ...] | None = extra
 
     def bind(self, **extra: object) -> Logger:
         current = dict(self._extra or ())

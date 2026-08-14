@@ -1,6 +1,7 @@
 """Notification API - list, count, mark-read, and broadcast."""
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -36,7 +37,7 @@ async def list_notifications(
     unread_only: bool = Query(False),
     category: str | None = Query(None),
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[dict[str, Any]]:
     """List notifications for the current user, newest first."""
     notifications = await notification_dao.list_for_user(
         current_user.id,
@@ -99,8 +100,8 @@ async def broadcast_notification(
     req: BroadcastRequest,
     background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
-    db=None,
-):
+    db: object | None = None,
+) -> dict[str, Any]:
     """Send a notification to all users and agents in the current tenant.
     Requires org_admin or platform_admin role."""
     if current_user.role not in ("platform_admin", "org_admin"):
@@ -130,7 +131,7 @@ async def broadcast_notification(
         include_identity=req.send_email,
     )
     for user in users:
-        await send_notification(
+        _ = await send_notification(
             None,
             user_id=user.id,
             type="broadcast",
@@ -142,7 +143,7 @@ async def broadcast_notification(
 
     agents = await agent_dao.list_for_tenant(tenant_id)
     for agent in agents:
-        await send_notification(
+        _ = await send_notification(
             None,
             agent_id=agent.id,
             type="broadcast",

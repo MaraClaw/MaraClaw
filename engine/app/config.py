@@ -1,5 +1,6 @@
 """Application configuration."""
 
+from typing import ClassVar
 import os
 import socket
 import uuid
@@ -7,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.sandbox.config import SandboxConfig, SandboxType
 
@@ -208,12 +209,12 @@ class Settings(BaseSettings):
     SANDBOX_HTTPS_PROXY: str = ""
     SANDBOX_NO_PROXY: str = ""
 
-    model_config = {
-        "env_file": [".env", "../.env"],
-        "env_file_encoding": "utf-8",
-        "case_sensitive": True,
-        "extra": "ignore",
-    }
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_file=[".env", "../.env"],
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 @lru_cache

@@ -23,7 +23,7 @@ def _ver_key(tenant_id: UUID) -> str:
     return cache_key("tenantver", tenant_id)
 
 
-def _parse_uuid(value: Any) -> UUID | None:
+def _parse_uuid(value: object) -> UUID | None:
     if value is None:
         return None
     if isinstance(value, UUID):
@@ -34,7 +34,7 @@ def _parse_uuid(value: Any) -> UUID | None:
         return None
 
 
-def _parse_dt(value: Any) -> datetime | None:
+def _parse_dt(value: object) -> datetime | None:
     if value is None or isinstance(value, datetime):
         return value
     if isinstance(value, str):
@@ -131,7 +131,7 @@ async def set_cached_tenant(tenant: TenantRecord, *, observed_ver: str | None = 
     ver = await read_version(_ver_key(tenant.id))
     if observed_ver is not None and ver != observed_ver:
         return
-    await cache_set_json(_row_key(tenant.id), _dump(tenant, ver), ttl=_ttl())
+    _ = await cache_set_json(_row_key(tenant.id), _dump(tenant, ver), ttl=_ttl())
 
 
 async def bump_tenant_cache(tenant_id: UUID | None) -> None:

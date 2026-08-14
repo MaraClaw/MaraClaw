@@ -7,10 +7,9 @@ the same turn must ``set`` or ``drop`` so later reads do not see a stale row.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from typing import Any
 from uuid import UUID
 
-_memo: ContextVar[dict[tuple[str, str], Any] | None] = ContextVar("row_memo", default=None)
+_memo: ContextVar[dict[tuple[str, str], object] | None] = ContextVar("row_memo", default=None)
 
 
 def _token(value: UUID | str | None) -> str | None:
@@ -19,7 +18,7 @@ def _token(value: UUID | str | None) -> str | None:
     return str(value)
 
 
-def memo_get(kind: str, item_id: UUID | str | None) -> Any | None:
+def memo_get(kind: str, item_id: UUID | str | None) -> object | None:
     key = _token(item_id)
     if key is None:
         return None
@@ -29,14 +28,14 @@ def memo_get(kind: str, item_id: UUID | str | None) -> Any | None:
     return store.get((kind, key))
 
 
-def memo_set(kind: str, item_id: UUID | str | None, value: Any) -> None:
+def memo_set(kind: str, item_id: UUID | str | None, value: object) -> None:
     key = _token(item_id)
     if key is None:
         return
     store = _memo.get()
     if store is None:
         store = {}
-        _memo.set(store)
+        _ = _memo.set(store)
     store[(kind, key)] = value
 
 
@@ -75,4 +74,4 @@ def clear_entity_memo() -> None:
 
 
 def clear_row_memo() -> None:
-    _memo.set(None)
+    _ = _memo.set(None)

@@ -16,6 +16,8 @@ from app.core.permissions import (
 )
 from app.core.security import get_current_user
 from app.dao import agent_agent_relationship_dao, agent_dao, agent_relationship_dao, org_member_dao, user_dao
+from app.records.agent import AgentRecord
+from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.org_sync_adapter import derive_member_department_paths
@@ -53,16 +55,16 @@ def _display_provider_name(provider_name: str | None, provider_type: str | None)
     return provider_name
 
 
-async def _can_manage_agent(user_id: uuid.UUID, agent: Any) -> bool:
+async def _can_manage_agent(user_id: uuid.UUID, agent: AgentRecord) -> bool:
     return (await get_agent_access_level_for_user_id(None, user_id, agent)) == "manage"
 
 
 async def _get_valid_member_user_id(
-    member: Any,
+    member: OrgMemberRecord,
     tenant_id: uuid.UUID | None,
 ) -> uuid.UUID | None:
     """Return the linked platform user only when it belongs to the same tenant."""
-    if not getattr(member, "user_id", None):
+    if member.user_id is None:
         return None
     user = await user_dao.get(member.user_id)
     if not user or not user.is_active or user.tenant_id != tenant_id:
@@ -129,7 +131,9 @@ def _dedupe_agent_relationships(items: list[AgentRelationshipIn], agent_id: uuid
 
 
 @router.get("/")
-async def get_relationships(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_relationships(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """Get all human relationships for this agent."""
     source_agent, _access_level = await check_agent_access(current_user, agent_id)
     if await ensure_access_granted_platform_relationships(
@@ -144,7 +148,7 @@ async def get_relationships(agent_id: uuid.UUID, current_user: UserRecord = Depe
         None,
         [r.member for r in rows if r.member],
     )
-    out = []
+    out: list[dict[str, Any]] = []
     for r in rows:
         linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
         out.append(
@@ -189,6 +193,8 @@ async def search_human_relationship_candidates(
     if access_mode != "company":
         allowed_user_ids = list(await get_agent_accessible_user_ids(None, agent))
 
+    if agent.tenant_id is None:
+        return []
     rows = await org_member_dao.list_relationship_candidates(
         tenant_id=agent.tenant_id,
         search=search_text or None,
@@ -257,7 +263,7 @@ async def save_relationships(
     existing_list = await agent_relationship_dao.list_for_agent(agent_id)
     existing_by_member = {r.member_id: r for r in existing_list}
 
-    await agent_relationship_dao.delete_for_agent(agent_id)
+    _ = await agent_relationship_dao.delete_for_agent(agent_id)
 
     for r in _dedupe_human_relationships(data.relationships):
         if r.member_id.startswith("platform-user:"):
@@ -267,6 +273,8 @@ async def save_relationships(
                 raise HTTPException(status_code=400, detail="Platform user is not available")
             if not await get_agent_access_level_for_user_id(None, platform_user.id, _agent):
                 raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
+            if _agent.tenant_id is None:
+                raise HTTPException(status_code=400, detail="Agent has no organization")
             member = await org_member_dao.get_active_by_user_and_tenant(platform_user.id, _agent.tenant_id)
             if not member:
                 member = await org_member_dao.create(
@@ -297,7 +305,7 @@ async def save_relationships(
         if linked_user_id and not await get_agent_access_level_for_user_id(None, linked_user_id, _agent):
             raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
         existing = existing_by_member.get(member_id)
-        await agent_relationship_dao.create(
+        _ = await agent_relationship_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "member_id": member_id,
@@ -322,7 +330,7 @@ async def delete_relationship(
         raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
     rel = await agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
     if rel:
-        await agent_relationship_dao.delete(id=rel_id)
+        _ = await agent_relationship_dao.delete(id=rel_id)
         await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}
@@ -334,7 +342,7 @@ async def delete_relationship(
 @router.get("/agent-candidates")
 async def search_visible_agents(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[dict[str, Any]]:
     """Search manageable agent candidates for relationship creation."""
     source_agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -363,11 +371,13 @@ async def search_visible_agents(
 
 
 @router.get("/agents")
-async def get_agent_relationships(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_agent_relationships(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """Get all agent-to-agent relationships."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     rels = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
-    out = []
+    out: list[dict[str, Any]] = []
     for r in rels:
         status_info = await evaluate_agent_relationship_status(None, r, current_user_id=current_user.id)
         out.append(
@@ -393,7 +403,9 @@ async def get_agent_relationships(agent_id: uuid.UUID, current_user: UserRecord 
 
 
 @router.get("/agents/candidates")
-async def get_agent_relationship_candidates(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_agent_relationship_candidates(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """Backward-compatible alias for searchable agent candidates."""
     return await search_visible_agents(
         agent_id=agent_id,
@@ -414,7 +426,7 @@ async def save_agent_relationships(
     existing_list = await agent_agent_relationship_dao.list_for_agent(agent_id)
     existing_by_target = {r.target_agent_id: r for r in existing_list}
 
-    await agent_agent_relationship_dao.delete_for_agent(agent_id)
+    _ = await agent_agent_relationship_dao.delete_for_agent(agent_id)
 
     visible_ids = {
         a.id
@@ -434,7 +446,7 @@ async def save_agent_relationships(
         if not await _can_manage_agent(current_user.id, target_agent):
             raise HTTPException(status_code=403, detail="You must manage both agents to create this relationship")
         existing = existing_by_target.get(target_id)
-        await agent_agent_relationship_dao.create(
+        _ = await agent_agent_relationship_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "target_agent_id": target_id,
@@ -459,7 +471,7 @@ async def delete_agent_relationship(
         raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
     rel = await agent_agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
     if rel:
-        await agent_agent_relationship_dao.delete(id=rel_id)
+        _ = await agent_agent_relationship_dao.delete(id=rel_id)
         await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}

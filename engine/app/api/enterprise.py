@@ -103,7 +103,7 @@ async def _load_llm_test_api_key(model_id: str | None) -> str | None:
 async def probe_llm_model(
     data: LLMTestRequest,
     current_user: UserRecord = Depends(get_current_admin),
-):
+) -> dict[str, Any]:
     """Test an LLM model configuration by making a simple API call."""
     import time
 
@@ -135,7 +135,9 @@ async def probe_llm_model(
 
 
 @router.get("/llm-models", response_model=list[LLMModelOut])
-async def list_llm_models(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)):
+async def list_llm_models(
+    tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
+) -> list[LLMModelOut]:
     """List LLM models scoped to the selected tenant."""
     if tenant_id and current_user.role != "platform_admin" and str(current_user.tenant_id) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access other tenant's models")
@@ -181,7 +183,7 @@ async def add_llm_model(
     if model.tenant_id and model.enabled:
         tenant = await tenant_dao.get(model.tenant_id)
         if tenant and tenant.default_model_id is None:
-            await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+            _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
 
     return LLMModelOut.model_validate(model)
 
@@ -203,10 +205,10 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     previous_default = tenant.default_model_id
-    await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
 
     if previous_default and previous_default != model.id:
-        await agent_dao.migrate_primary_model(
+        _ = await agent_dao.migrate_primary_model(
             tenant_id=tenant.id,
             old_model_id=previous_default,
             new_model_id=model.id,
@@ -238,7 +240,7 @@ async def remove_llm_model(
 
     if agent_names:
         await agent_dao.nullify_model_references(model_id)
-    await llm_model_dao.delete(id=model_id)
+    _ = await llm_model_dao.delete(id=model_id)
 
 
 @router.put("/llm-models/{model_id}", response_model=LLMModelOut)
@@ -303,7 +305,7 @@ async def update_enterprise_info(
     info = await enterprise_sync_service.update_enterprise_info(
         None, info_type, data.content, data.visible_roles, current_user.id
     )
-    await enterprise_sync_service.sync_to_all_agents(None)
+    _ = await enterprise_sync_service.sync_to_all_agents(None)
     return EnterpriseInfoOut.model_validate(info)
 
 
@@ -313,7 +315,7 @@ async def update_enterprise_info(
 @router.get("/approvals", response_model=list[ApprovalRequestOut])
 async def list_approvals(
     tenant_id: str | None = None, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[ApprovalRequestOut]:
     """List approval requests scoped to a tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     tenant_uuid = uuid.UUID(tid) if tid else None
@@ -326,7 +328,7 @@ async def list_approvals(
     )
 
     agent_names = await agent_dao.names_for_ids(list({a.agent_id for a in approvals}))
-    out = []
+    out: list[ApprovalRequestOut] = []
     for a in approvals:
         d = ApprovalRequestOut.model_validate(a)
         d.agent_name = agent_names.get(a.agent_id)
@@ -417,7 +419,7 @@ class TenantQuotaUpdate(BaseModel):
 
 
 @router.get("/tenant-quotas")
-async def get_tenant_quotas(current_user: UserRecord = Depends(get_current_user)):
+async def get_tenant_quotas(current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Get tenant quota defaults and heartbeat settings."""
     if not current_user.tenant_id:
         return {}
@@ -438,7 +440,9 @@ async def get_tenant_quotas(current_user: UserRecord = Depends(get_current_user)
 
 
 @router.patch("/tenant-quotas")
-async def update_tenant_quotas(data: TenantQuotaUpdate, current_user: UserRecord = Depends(get_current_admin)):
+async def update_tenant_quotas(
+    data: TenantQuotaUpdate, current_user: UserRecord = Depends(get_current_admin)
+) -> dict[str, Any]:
     """Update tenant quota defaults (admin only). Enforces heartbeat floor on existing agents."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="No tenant assigned")
@@ -472,7 +476,9 @@ class TestEmailRequest(BaseModel):
 
 
 @router.post("/system-email/test")
-async def send_test_email_endpoint(data: TestEmailRequest, current_user: UserRecord = Depends(get_current_admin)):
+async def send_test_email_endpoint(
+    data: TestEmailRequest, current_user: UserRecord = Depends(get_current_admin)
+) -> dict[str, Any]:
     """Send a test email to verify SMTP configuration (admin only)."""
     import smtplib
     import ssl
@@ -488,7 +494,7 @@ async def send_test_email_endpoint(data: TestEmailRequest, current_user: UserRec
             status_code=400,
             detail=(
                 "SMTP authentication failed. Please check that the SMTP username is the full email address "
-                "and that the password/app password is valid for this mailbox."
+                + "and that the password/app password is valid for this mailbox."
             ),
         ) from e
     except (TimeoutError, ssl.SSLError) as e:
@@ -496,8 +502,8 @@ async def send_test_email_endpoint(data: TestEmailRequest, current_user: UserRec
             status_code=400,
             detail=(
                 f"SMTP TLS/connect timed out: {e}. Please verify the SMTP host, port, and SSL/TLS mode. "
-                "For Zoho, the SMTP host depends on the account data center, for example smtp.zoho.com "
-                "or smtp.zoho.com.cn."
+                + "For Zoho, the SMTP host depends on the account data center, for example smtp.zoho.com "
+                + "or smtp.zoho.com.cn."
             ),
         ) from e
     except Exception as e:
@@ -505,7 +511,7 @@ async def send_test_email_endpoint(data: TestEmailRequest, current_user: UserRec
 
 
 @router.get("/email-templates")
-async def get_email_templates_endpoint(current_user: UserRecord = Depends(get_current_admin)):
+async def get_email_templates_endpoint(current_user: UserRecord = Depends(get_current_admin)) -> dict[str, Any]:
     """Get email templates (current values + available variables per scenario)."""
     from app.services.system_email_service import (
         DEFAULT_EMAIL_TEMPLATES,
@@ -529,7 +535,7 @@ class EmailTemplatesUpdate(BaseModel):
 @router.put("/email-templates")
 async def update_email_templates_endpoint(
     data: EmailTemplatesUpdate, current_user: UserRecord = Depends(get_current_admin)
-):
+) -> dict[str, Any]:
     """Save email templates (admin only)."""
     from app.services.system_email_service import EMAIL_TEMPLATE_VARIABLES
 
@@ -540,9 +546,9 @@ async def update_email_templates_endpoint(
 
     setting = await system_setting_dao.get_by_key("email_templates")
     if setting:
-        await system_setting_dao.update(db_obj=setting, obj_in={"value": data.templates})
+        _ = await system_setting_dao.update(db_obj=setting, obj_in={"value": data.templates})
     else:
-        await system_setting_dao.create(obj_in={"key": "email_templates", "value": data.templates})
+        _ = await system_setting_dao.create(obj_in={"key": "email_templates", "value": data.templates})
     return {"success": True, "message": "Email templates saved"}
 
 
@@ -554,7 +560,7 @@ class SettingUpdate(BaseModel):
 
 
 @router.get("/system-settings/notification_bar/public")
-async def get_notification_bar_public():
+async def get_notification_bar_public() -> dict[str, Any]:
     """Public (no auth) endpoint to read the notification bar config."""
     setting = await system_setting_dao.get_by_key("notification_bar")
     if not setting or not setting.value:
@@ -567,7 +573,7 @@ async def get_notification_bar_public():
 
 
 @router.get("/system-settings/{key}")
-async def get_system_setting(key: str, current_user: UserRecord = Depends(get_current_user)):
+async def get_system_setting(key: str, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Get a system setting by key."""
     _ = current_user
     setting = await system_setting_dao.get_by_key(key)
@@ -581,7 +587,9 @@ async def get_system_setting(key: str, current_user: UserRecord = Depends(get_cu
 
 
 @router.put("/system-settings/{key}")
-async def update_system_setting(key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_admin)):
+async def update_system_setting(
+    key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_admin)
+) -> dict[str, Any]:
     """Create or update a system setting."""
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
@@ -624,7 +632,7 @@ async def _sync_tenant_sso_state(tenant_id: uuid.UUID) -> None:
 
         updates["sso_domain"] = sso_base
 
-    await tenant_dao.update(db_obj=tenant, obj_in=updates)
+    _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
 
 
 async def _regenerate_all_sso_domains() -> None:
@@ -639,12 +647,12 @@ async def _regenerate_all_sso_domains() -> None:
         if is_ip:
             if i == 0:
                 sso_base = await platform_service.get_tenant_sso_base_url(tenant)
-                await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
+                _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
             else:
-                await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": None})
+                _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": None})
         else:
             sso_base = await platform_service.get_tenant_sso_base_url(tenant)
-            await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
+            _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
         logger.info(f"[SSO regen] tenant={tenant.slug} sso_domain={tenant.sso_domain if i == 0 or not is_ip else None}")
 
 
@@ -791,8 +799,8 @@ def _sanitize_identity_provider_config(provider_type: str, config: JsonObject | 
         return None
     sanitized = dict(config)
     if provider_type == "google_workspace":
-        sanitized.pop("google_admin_refresh_token", None)
-        sanitized.pop("google_admin_refresh_token_encrypted", None)
+        _ = sanitized.pop("google_admin_refresh_token", None)
+        _ = sanitized.pop("google_admin_refresh_token_encrypted", None)
     return sanitized
 
 
@@ -1034,7 +1042,7 @@ async def delete_identity_provider(provider_id: uuid.UUID, current_user: UserRec
 @router.get("/org/departments")
 async def list_org_departments(
     tenant_id: str | None = None, provider_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, Any]:
     """List all departments, optionally filtered by tenant or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     is_global_admin = current_user.role == "platform_admin" and not effective_tenant_id
@@ -1080,7 +1088,7 @@ async def list_org_members(
     tenant_id: str | None = None,
     provider_id: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[dict[str, Any]]:
     """List org members, optionally filtered by department, search, tenant, or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     is_global_admin = current_user.role == "platform_admin" and not effective_tenant_id
@@ -1167,7 +1175,7 @@ async def wecom_org_sync_verify(
     if not isinstance(token, str) or not isinstance(aes_key, str) or not token or not aes_key:
         logger.warning(
             f"[WeCom Verify] Provider {provider_id} is missing verify_token or verify_aes_key in config. "
-            "Please configure them in the WeCom provider settings."
+            + "Please configure them in the WeCom provider settings."
         )
         return _Response(status_code=400)
 
@@ -1210,7 +1218,7 @@ async def wecom_callback_verify_universal(
     if expected_sig != msg_signature:
         logger.warning(
             f"[WeCom Callback] Signature mismatch: token={token[:8]}... "
-            f"expected={expected_sig[:16]}... got={msg_signature[:16]}..."
+            + f"expected={expected_sig[:16]}... got={msg_signature[:16]}..."
         )
         return _Response(status_code=403)
 
@@ -1231,15 +1239,16 @@ class InvitationCodeCreate(BaseModel):
     max_uses: int = 1
 
 
-def _require_tenant_admin(current_user: UserRecord) -> None:
+def _require_tenant_admin(current_user: UserRecord) -> uuid.UUID:
     """Check that the user is org_admin or platform_admin with a tenant."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Requires admin privileges")
-    if not current_user.tenant_id:
+    if current_user.tenant_id is None:
         raise HTTPException(status_code=400, detail="No company assigned")
+    return current_user.tenant_id
 
 
-async def _ensure_invitation_email_enabled(db=None) -> None:
+async def _ensure_invitation_email_enabled(db: object | None = None) -> None:
     """Require enabled system email before accepting email invitations."""
     from app.services.system_email_service import resolve_email_config_async
 
@@ -1261,16 +1270,18 @@ def _new_invitation_code() -> str:
 
 
 @router.post("/invitation-codes")
-async def create_invitation_codes(data: InvitationCodeCreate, current_user: UserRecord = Depends(get_current_user)):
+async def create_invitation_codes(
+    data: InvitationCodeCreate, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Batch-create invitation codes for the current user's company."""
-    _require_tenant_admin(current_user)
+    tenant_id = _require_tenant_admin(current_user)
     codes_created = []
     for _ in range(min(data.count, 100)):
         code_str = _new_invitation_code()
-        await invitation_code_dao.create(
+        _ = await invitation_code_dao.create(
             obj_in={
                 "code": code_str,
-                "tenant_id": current_user.tenant_id,
+                "tenant_id": tenant_id,
                 "max_uses": data.max_uses,
                 "created_by": current_user.id,
             }
@@ -1286,15 +1297,15 @@ async def invite_users(
     data: UserInviteRequest,
     background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Batch-invite users via email to the current user's company."""
-    _require_tenant_admin(current_user)
+    tenant_id = _require_tenant_admin(current_user)
     if not data.emails:
         raise HTTPException(status_code=400, detail="No emails provided")
 
     from app.services.system_email_service import send_company_invitation_email
 
-    tenant = await tenant_dao.get(current_user.tenant_id)
+    tenant = await tenant_dao.get(tenant_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Company not found")
 
@@ -1309,17 +1320,17 @@ async def invite_users(
             continue
 
         code_str = _new_invitation_code()
-        await invitation_code_dao.create(
+        _ = await invitation_code_dao.create(
             obj_in={
                 "code": code_str,
-                "tenant_id": current_user.tenant_id,
+                "tenant_id": tenant_id,
                 "max_uses": 1,
                 "created_by": current_user.id,
             }
         )
 
         invite_url = f"{base_url}/login?code={code_str}&email={email}"
-        inviter_name = current_user.display_name or current_user.username
+        inviter_name = current_user.display_name or current_user.username or "Admin"
 
         background_tasks.add_task(
             send_company_invitation_email,
@@ -1336,15 +1347,15 @@ async def invite_users(
 @router.get("/invitation-codes")
 async def list_invitation_codes(
     page: int = 1, page_size: int = 20, search: str = "", current_user: UserRecord = Depends(get_current_user)
-):
+) -> dict[str, Any]:
     """List invitation codes for the current user's company."""
-    _require_tenant_admin(current_user)
+    tenant_id = _require_tenant_admin(current_user)
 
     search_term = search or None
-    total = await invitation_code_dao.count_for_tenant(current_user.tenant_id, search=search_term)
+    total = await invitation_code_dao.count_for_tenant(tenant_id, search=search_term)
     offset = (max(page, 1) - 1) * page_size
     codes = await invitation_code_dao.list_for_tenant(
-        current_user.tenant_id,
+        tenant_id,
         search=search_term,
         offset=offset,
         limit=page_size,
@@ -1370,13 +1381,13 @@ async def list_invitation_codes(
 @router.get("/invitation-codes/export")
 async def export_invitation_codes_csv(current_user: UserRecord = Depends(get_current_user)):
     """Export invitation codes for the current user's company as CSV."""
-    _require_tenant_admin(current_user)
+    tenant_id = _require_tenant_admin(current_user)
     import csv
     import io
 
     from fastapi.responses import StreamingResponse
 
-    codes = await invitation_code_dao.list_all_for_tenant(current_user.tenant_id)
+    codes = await invitation_code_dao.list_all_for_tenant(tenant_id)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -1392,7 +1403,7 @@ async def export_invitation_codes_csv(current_user: UserRecord = Depends(get_cur
             ]
         )
 
-    output.seek(0)
+    _ = output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
@@ -1403,10 +1414,10 @@ async def export_invitation_codes_csv(current_user: UserRecord = Depends(get_cur
 @router.delete("/invitation-codes/{code_id}")
 async def deactivate_invitation_code(code_id: str, current_user: UserRecord = Depends(get_current_user)):
     """Deactivate an invitation code (must belong to current user's company)."""
-    _require_tenant_admin(current_user)
+    tenant_id = _require_tenant_admin(current_user)
 
-    code = await invitation_code_dao.get_for_tenant(uuid.UUID(code_id), current_user.tenant_id)
+    code = await invitation_code_dao.get_for_tenant(uuid.UUID(code_id), tenant_id)
     if not code:
         raise HTTPException(status_code=404, detail="Code not found")
-    await invitation_code_dao.update(db_obj=code, obj_in={"is_active": False})
+    _ = await invitation_code_dao.update(db_obj=code, obj_in={"is_active": False})
     return {"status": "deactivated"}

@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -183,7 +183,7 @@ async def configure_whatsapp_channel(
 
 @router.get("/agents/{agent_id}/whatsapp-channel", response_model=ChannelConfigOut)
 async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
@@ -191,7 +191,7 @@ async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel/webhook-url")
-async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request, db=None):
+async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(db, request)
@@ -207,7 +207,7 @@ async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 @router.get("/channel/whatsapp/{agent_id}/webhook")
@@ -242,7 +242,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
     if app_secret and not _verify_signature(app_secret, body, signature):
         return Response(status_code=401)
 
-    payload = await request.json()
+    payload: dict[str, Any] = await request.json()
     for entry in payload.get("entry", []) or []:
         for change in entry.get("changes", []) or []:
             value = change.get("value") or {}
@@ -299,14 +299,14 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 )
                 history = _conv(history_msgs)
 
-                await chat_message_dao.insert_message(
+                _ = await chat_message_dao.insert_message(
                     agent_id=agent_id,
                     user_id=platform_user_id,
                     role="user",
                     content=user_text,
                     conversation_id=session_conv_id,
                 )
-                await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+                _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
                 _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
@@ -327,7 +327,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
 
                 try:
                     await _send_whatsapp_messages(config, sender_phone, reply_text)
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=platform_user_id,
                         role="assistant",
@@ -337,7 +337,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     try:
                         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                         if fresh:
-                            await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+                            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
                     except ValueError, TypeError:
                         pass
                 except Exception as exc:

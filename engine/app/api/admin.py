@@ -6,10 +6,10 @@ and control platform-level settings.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field, computed_field
+from pydantic import BaseModel, EmailStr, Field, computed_field, ConfigDict
 
 from app.core.security import require_role
 from app.dao.activity_log_dao import agent_activity_log_dao
@@ -121,7 +121,7 @@ class AdminAuditLogOut(BaseModel):
     ip_address: str | None = None
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class PlatformSettingsOut(BaseModel):
@@ -143,7 +143,7 @@ class PlatformSettingsUpdate(BaseModel):
 async def list_companies(
     q: str | None = None,
     current_user: UserRecord = Depends(require_role("platform_admin")),
-):
+) -> list[CompanyStats]:
     """List companies with stats. ``q`` is prefix full-text search on name and slug."""
     query = (q or "").strip()
     if len(query) > 200:
@@ -152,7 +152,7 @@ async def list_companies(
         tenants = await tenant_dao.search_by_name(query)
     else:
         tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
-    result = []
+    result: list[CompanyStats] = []
 
     for tenant in tenants:
         tid = tenant.id
@@ -360,7 +360,7 @@ async def toggle_company(
 
     new_state = not tenant.is_active
     try:
-        await set_tenant_active(tenant, is_active=new_state)
+        _ = await set_tenant_active(tenant, is_active=new_state)
     except DefaultOrgUnavailableError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -382,14 +382,14 @@ async def toggle_company(
 @router.get("/metrics/timeseries", response_model=list[dict[str, Any]])
 async def get_platform_timeseries(
     start_date: datetime, end_date: datetime, current_user: UserRecord = Depends(require_role("platform_admin"))
-):
+) -> list[dict[str, Any]]:
     """Get daily platform metrics within a date range.
 
     Returns per-day: companies, users, tokens (existing) +
     sessions, DAU, WAU, MAU (new).
     """
-    companies_by_day = await tenant_dao.counts_by_created_day(start_date, end_date)
-    users_by_day = await user_dao.counts_by_created_day(start_date, end_date)
+    companies_by_day: dict[Any, int] = await tenant_dao.counts_by_created_day(start_date, end_date)
+    users_by_day: dict[Any, int] = await user_dao.counts_by_created_day(start_date, end_date)
     tokens_by_day = await agent_activity_log_dao.tokens_by_day(start_date, end_date)
     cache_by_day = await agent_activity_log_dao.cache_read_by_day(start_date, end_date)
     sessions_by_day = await chat_session_dao.counts_by_created_day(start_date, end_date)
@@ -401,18 +401,18 @@ async def get_platform_timeseries(
         series_end=end_date.date(),
     )
 
-    result = []
+    result: list[dict[str, Any]] = []
     current_d = start_date.date()
     end_d = end_date.date()
 
-    total_companies = await tenant_dao.count_created_before(start_date)
-    total_users = await user_dao.count_created_before(start_date)
+    total_companies: int = await tenant_dao.count_created_before(start_date)
+    total_users: int = await user_dao.count_created_before(start_date)
     total_tokens, total_cache_read = await agent_dao.sum_tokens_created_before(start_date)
     total_sessions = await chat_session_dao.count_created_before(start_date)
 
     while current_d <= end_d:
-        nc = companies_by_day.get(current_d, 0)
-        nu = users_by_day.get(current_d, 0)
+        nc: int = companies_by_day.get(current_d, 0)
+        nu: int = users_by_day.get(current_d, 0)
         nt = tokens_by_day.get(current_d, 0)
         ncache = cache_by_day.get(current_d, 0)
         ns = sessions_by_day.get(current_d, 0)
@@ -449,10 +449,12 @@ async def get_platform_timeseries(
 
 
 @router.get("/metrics/leaderboards")
-async def get_platform_leaderboards(current_user: UserRecord = Depends(require_role("platform_admin"))):
+async def get_platform_leaderboards(
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> dict[str, list[dict[str, Any]]]:
     """Get Top 20 token consuming companies and agents."""
     top_companies_raw = await agent_dao.top_token_companies(limit=20)
-    top_companies = []
+    top_companies: list[dict[str, Any]] = []
     for row in top_companies_raw:
         total = row["total"] or 0
         top_companies.append(
@@ -465,7 +467,7 @@ async def get_platform_leaderboards(current_user: UserRecord = Depends(require_r
         )
 
     top_agents_raw = await agent_dao.top_token_agents(limit=20)
-    top_agents = []
+    top_agents: list[dict[str, Any]] = []
     for row in top_agents_raw:
         total = row["tokens"] or 0
         top_agents.append(
@@ -482,7 +484,7 @@ async def get_platform_leaderboards(current_user: UserRecord = Depends(require_r
 
 
 @router.get("/metrics/enhanced")
-async def get_enhanced_metrics(current_user: UserRecord = Depends(require_role("platform_admin"))):
+async def get_enhanced_metrics(current_user: UserRecord = Depends(require_role("platform_admin"))) -> dict[str, Any]:
     """Enhanced platform metrics: retention, avg tokens/session,
     channel distribution, tool categories, and churn warnings.
     """
@@ -542,7 +544,7 @@ async def update_platform_settings(
         previous[key] = await system_setting_dao.is_flag_enabled(key, default=False)
 
     for key, value in updates.items():
-        await system_setting_dao.set_flag(key, bool(value))
+        _ = await system_setting_dao.set_flag(key, bool(value))
 
     if updates:
         await write_admin_audit(

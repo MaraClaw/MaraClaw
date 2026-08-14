@@ -4,7 +4,7 @@ import os
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -110,7 +110,7 @@ async def configure_discord_channel(
 
 @router.get("/agents/{agent_id}/discord-channel", response_model=ChannelConfigOut)
 async def get_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
@@ -118,7 +118,7 @@ async def get_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = De
 
 
 @router.get("/agents/{agent_id}/discord-channel/webhook-url")
-async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request, db=None):
+async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(db, request)
@@ -139,7 +139,7 @@ async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord =
         await discord_gateway_manager.stop_client(agent_id)
     except Exception as error:
         logger.warning(f"[Discord] Failed to stop Gateway client: {error}")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 # ─── Slash Command Registration ─────────────────────────
@@ -149,7 +149,7 @@ async def _register_slash_commands(application_id: str, bot_token: str) -> Disco
     """Register /ask global slash command with Discord API."""
     import httpx
 
-    command = {
+    command: dict[str, Any] = {
         "name": "ask",
         "description": "Ask the AI agent a question",
         "options": [
@@ -186,7 +186,7 @@ def _verify_discord_signature(public_key: str, body: bytes, headers: Mapping[str
             return False
 
         verify_key = VerifyKey(bytes.fromhex(public_key))
-        verify_key.verify(f"{timestamp}".encode() + body, bytes.fromhex(signature))
+        _ = verify_key.verify(f"{timestamp}".encode() + body, bytes.fromhex(signature))
         return True
     except Exception:
         return False
@@ -201,13 +201,13 @@ async def _send_discord_followup(application_id: str, bot_token: str, interactio
     async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
         for i, chunk in enumerate(chunks):
             if i == 0:
-                await client.patch(
+                _ = await client.patch(
                     f"https://discord.com/api/v10/webhooks/{application_id}/{interaction_token}/messages/@original",
                     headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
                     json={"content": chunk},
                 )
             else:
-                await client.post(
+                _ = await client.post(
                     f"https://discord.com/api/v10/webhooks/{application_id}/{interaction_token}",
                     headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
                     json={"content": chunk},
@@ -215,7 +215,7 @@ async def _send_discord_followup(application_id: str, bot_token: str, interactio
 
 
 @router.post("/channel/discord/{agent_id}/webhook")
-async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
+async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> Response | dict[str, Any]:
     """Handle Discord Interaction webhooks (PING + slash commands)."""
     body_bytes = await request.body()
 
@@ -314,14 +314,14 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
             )
             history = _conv(history_msgs)
 
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=platform_user_id,
                 role="user",
                 content=user_text,
                 conversation_id=session_conv_id,
             )
-            await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
             _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
@@ -341,7 +341,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
             )
             logger.info(f"[Discord] LLM reply: {reply_text[:80]}")
 
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=platform_user_id,
                 role="assistant",
@@ -351,7 +351,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
             try:
                 fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                 if fresh:
-                    await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+                    _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
             except ValueError, TypeError:
                 pass
 
@@ -363,7 +363,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request):
 
         from app.api.background_tasks import schedule_background_task
 
-        schedule_background_task(handle_in_background(), "handle Discord interaction")
+        _ = schedule_background_task(handle_in_background(), "handle Discord interaction")
         return {"type": 5}
 
     return {"type": 1}

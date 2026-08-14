@@ -17,7 +17,9 @@ router = APIRouter(prefix="/org", tags=["organization"])
 
 
 @router.get("/users", response_model=list[UserOut])
-async def list_users(tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)):
+async def list_users(
+    tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)
+) -> list[UserOut]:
     """List users, optionally filtered by tenant."""
     target_tenant_id = current_user.tenant_id
     if current_user.role in ("platform_admin", "org_admin") and tenant_id:
@@ -49,6 +51,7 @@ async def admin_update_user(
     if (
         "email" in update_data
         and update_data["email"] != user.email
+        and user.tenant_id is not None
         and await identity_dao.is_email_taken_in_tenant(update_data["email"], user.tenant_id, exclude_user_id=user.id)
     ):
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -57,6 +60,7 @@ async def admin_update_user(
     if (
         "primary_mobile" in update_data
         and update_data["primary_mobile"] != user.primary_mobile
+        and user.tenant_id is not None
         and await identity_dao.is_phone_taken_in_tenant(
             update_data["primary_mobile"], user.tenant_id, exclude_user_id=user.id
         )
@@ -76,7 +80,7 @@ async def admin_update_user(
     if identity_fields and user.identity_id:
         identity = await identity_dao.get(user.identity_id)
         if identity:
-            await identity_dao.update(db_obj=identity, obj_in=identity_fields)
+            _ = await identity_dao.update(db_obj=identity, obj_in=identity_fields)
 
     # Sync email/phone to OrgMember if changed
     if "email" in update_data or "primary_mobile" in update_data:

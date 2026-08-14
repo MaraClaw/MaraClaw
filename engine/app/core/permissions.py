@@ -5,15 +5,22 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol, TypedDict
+from typing import ClassVar, Protocol, TypedDict
 
 from fastapi import HTTPException, status
 
 from app.core import access_cache
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
-from app.records.agent import AgentRecord
+from app.records.agent import AgentPermissionRecord, AgentRecord
+from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
+from app.records.agent_relationship import AgentRelationshipRecord
 
-_NEED_PERMS = object()
+
+class _NeedPerms:
+    __slots__: ClassVar[tuple[str, ...]] = ()
+
+
+_NEED_PERMS = _NeedPerms()
 
 
 class RelationshipStatus(TypedDict):
@@ -61,19 +68,19 @@ async def list_visible_agents(
     )
 
 
-def is_company_visible_agent(agent: Any) -> bool:
+def is_company_visible_agent(agent: _AgentLike) -> bool:
     """Return whether an agent participates in company-public surfaces."""
     return (getattr(agent, "access_mode", None) or "company") == "company"
 
 
-def _is_admin(user: Any) -> bool:
-    return getattr(user, "role", None) in ("platform_admin", "org_admin")
+def _is_admin(user: _UserLike) -> bool:
+    return user.role in ("platform_admin", "org_admin")
 
 
 def decide_agent_access(
-    user: Any,
-    agent: Any,
-    permissions: Sequence[Any] | None = None,
+    user: _UserLike,
+    agent: _AgentLike,
+    permissions: Sequence[AgentPermissionRecord] | None = None,
 ) -> str | None:
     """Return 'manage', 'use', or None. Does not load rows.
 
@@ -81,12 +88,12 @@ def decide_agent_access(
     treat the list as empty (caller should load first).
     """
     early = _access_without_permissions(user, agent)
-    if early is not _NEED_PERMS:
-        return early
-    return _access_from_permissions(user, agent, permissions or ())
+    if isinstance(early, _NeedPerms):
+        return _access_from_permissions(user, agent, permissions or ())
+    return early
 
 
-def _access_without_permissions(user: Any, agent: Any) -> Any:
+def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | None | _NeedPerms:
     if getattr(agent, "tenant_id", None) != getattr(user, "tenant_id", None):
         return None
     if getattr(agent, "creator_id", None) == getattr(user, "id", None):
@@ -100,7 +107,9 @@ def _access_without_permissions(user: Any, agent: Any) -> Any:
     return _NEED_PERMS
 
 
-def _access_from_permissions(user: Any, agent: Any, permissions: Sequence[Any]) -> str | None:
+def _access_from_permissions(
+    user: _UserLike, agent: _AgentLike, permissions: Sequence[AgentPermissionRecord]
+) -> str | None:
     access_mode = getattr(agent, "access_mode", None) or "company"
     if access_mode == "company":
         company_level = getattr(agent, "company_access_level", None) or next(
@@ -115,18 +124,18 @@ def _access_from_permissions(user: Any, agent: Any, permissions: Sequence[Any]) 
     return None
 
 
-async def _compute_access_level(user: Any, agent: Any) -> str | None:
+async def _compute_access_level(user: _UserLike, agent: _AgentLike) -> str | None:
     early = _access_without_permissions(user, agent)
-    if early is not _NEED_PERMS:
-        return early
-    permissions = await agent_permission_dao.list_for_agent(agent.id)
-    return _access_from_permissions(user, agent, permissions)
+    if isinstance(early, _NeedPerms):
+        permissions = await agent_permission_dao.list_for_agent(agent.id)
+        return _access_from_permissions(user, agent, permissions)
+    return early
 
 
 async def get_agent_access_level_for_user_id(
-    db: Any,
+    db: object | None,
     user_id: uuid.UUID | None,
-    agent: Any,
+    agent: _AgentLike,
 ) -> str | None:
     """Return 'manage', 'use', or None for a platform user and an agent.
 
@@ -155,14 +164,14 @@ async def get_agent_access_level_for_user_id(
 
 
 async def user_can_manage_agent_id(
-    db: Any,
+    db: object | None,
     user_id: uuid.UUID | None,
-    agent: Any,
+    agent: _AgentLike,
 ) -> bool:
     return (await get_agent_access_level_for_user_id(db, user_id, agent)) == "manage"
 
 
-async def get_agent_accessible_user_ids(db: Any, agent: Any) -> set[uuid.UUID]:
+async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -> set[uuid.UUID]:
     """Return platform users who can access an agent under current policy."""
     del db
     access_mode = getattr(agent, "access_mode", None) or "company"
@@ -171,17 +180,19 @@ async def get_agent_accessible_user_ids(db: Any, agent: Any) -> set[uuid.UUID]:
         ids.add(agent.creator_id)
 
     if access_mode == "company":
-        ids.update(await user_dao.list_active_ids_for_tenant(agent.tenant_id))
+        if agent.tenant_id is not None:
+            ids.update(await user_dao.list_active_ids_for_tenant(agent.tenant_id))
         return ids
 
     if access_mode == "custom":
         ids.update(await agent_permission_dao.list_user_scope_ids(agent.id))
-        ids.update(await user_dao.list_active_admin_ids_for_tenant(agent.tenant_id))
+        if agent.tenant_id is not None:
+            ids.update(await user_dao.list_active_admin_ids_for_tenant(agent.tenant_id))
 
     return ids
 
 
-def _agent_available(agent: Any | None) -> tuple[bool, str | None]:
+def _agent_available(agent: AgentRecord | None) -> tuple[bool, str | None]:
     if not agent:
         return False, "target_not_found"
     if getattr(agent, "status", None) in ("stopped", "error"):
@@ -192,8 +203,8 @@ def _agent_available(agent: Any | None) -> tuple[bool, str | None]:
 
 
 async def evaluate_agent_relationship_status(
-    db: Any,
-    rel: Any,
+    db: object | None,
+    rel: AgentAgentRelationshipRecord,
     *,
     current_user_id: uuid.UUID | None = None,
 ) -> RelationshipStatus:
@@ -249,7 +260,7 @@ async def evaluate_agent_relationship_status(
             "access_status_reason": None,
         }
 
-    candidate_user_ids = [
+    candidate_user_ids: list[uuid.UUID | None] = [
         current_user_id,
         source.creator_id,
     ]
@@ -275,10 +286,10 @@ async def evaluate_agent_relationship_status(
 
 
 async def evaluate_human_relationship_status(
-    db: Any,
-    rel: Any,
+    db: object | None,
+    rel: AgentRelationshipRecord,
     *,
-    source_agent: Any | None = None,
+    source_agent: AgentRecord | None = None,
 ) -> RelationshipStatus:
     """Compute the effective status for an Agent -> Human relationship."""
     del db
@@ -323,7 +334,9 @@ async def evaluate_human_relationship_status(
     }
 
 
-async def check_agent_access(user: Any, agent_id: uuid.UUID, db: Any = None) -> tuple[Any, str]:
+async def check_agent_access(
+    user: _UserLike, agent_id: uuid.UUID, db: object | None = None
+) -> tuple[AgentRecord, str]:
     """Check if a user has access to a specific agent.
 
     Returns (agent, access_level) where access_level is 'manage' or 'use'.
@@ -357,12 +370,12 @@ async def check_agent_access(user: Any, agent_id: uuid.UUID, db: Any = None) -> 
     return agent, level
 
 
-def is_agent_creator(user: Any, agent: Any) -> bool:
+def is_agent_creator(user: _UserLike, agent: _AgentLike) -> bool:
     """Check if the user is the creator (admin) of the agent."""
     return agent.creator_id == user.id
 
 
-def is_agent_expired(agent: Any) -> bool:
+def is_agent_expired(agent: _AgentLike) -> bool:
     """Return True if the agent is manually marked expired or its expires_at is in the past."""
     expires_at = getattr(agent, "expires_at", None)
     return bool(getattr(agent, "is_expired", False) or (expires_at and datetime.now(UTC) > expires_at))

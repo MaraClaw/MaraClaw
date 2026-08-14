@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -95,7 +95,7 @@ async def get_wechat_qrcode_status(
 
     if payload.get("status") == "confirmed":
         existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
-        extra = {
+        extra: dict[str, Any] = {
             "bot_token": payload.get("bot_token", ""),
             "ilink_user_id": payload.get("ilink_user_id", ""),
             "baseurl": payload.get("baseurl") or WECHAT_ILINK_BASE_URL,
@@ -108,7 +108,7 @@ async def get_wechat_qrcode_status(
             extra["route_tag"] = route_tag
 
         if existing:
-            await channel_config_dao.update(
+            _ = await channel_config_dao.update(
                 db_obj=existing,
                 obj_in={
                     "app_id": payload.get("ilink_bot_id", ""),
@@ -119,7 +119,7 @@ async def get_wechat_qrcode_status(
                 },
             )
         else:
-            await channel_config_dao.create(
+            _ = await channel_config_dao.create(
                 obj_in={
                     "agent_id": agent_id,
                     "channel_type": "wechat",
@@ -134,7 +134,7 @@ async def get_wechat_qrcode_status(
         if _role_enabled("connector"):
             from app.api.background_tasks import schedule_background_task
 
-            schedule_background_task(wechat_poll_manager.start_client(agent_id), "start WeChat polling client")
+            _ = schedule_background_task(wechat_poll_manager.start_client(agent_id), "start WeChat polling client")
 
     return payload
 
@@ -157,7 +157,7 @@ async def get_wechat_qrcode_image(agent_id: uuid.UUID, url: str, current_user: U
 
 @router.get("/agents/{agent_id}/wechat-channel", response_model=ChannelConfigOut)
 async def get_wechat_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
     if not config:
         raise HTTPException(status_code=404, detail="WeChat not configured")
@@ -175,4 +175,4 @@ async def delete_wechat_channel(agent_id: uuid.UUID, current_user: UserRecord = 
         raise HTTPException(status_code=404, detail="WeChat not configured")
 
     await wechat_poll_manager.stop_client(agent_id)
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)

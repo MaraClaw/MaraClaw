@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TypedDict, overload
+from typing import Any, TypedDict, overload
 from xml.parsers.expat import ExpatError, ParserCreate
 
 import httpx
@@ -172,7 +172,7 @@ def _parse_wecom_xml(xml: bytes | str) -> WeComXmlFields:
         parser.StartElementHandler = start_element
         parser.CharacterDataHandler = character_data
         parser.EndElementHandler = end_element
-        parser.Parse(raw, True)
+        _ = parser.Parse(raw, True)
     except ExpatError as exc:
         raise ValueError("Invalid WeCom XML") from exc
     return WeComXmlFields({tag: "".join(parts) for tag, parts in field_parts.items()})
@@ -314,7 +314,7 @@ async def configure_wecom_channel(
 
 @router.get("/agents/{agent_id}/wecom-channel", response_model=ChannelConfigOut)
 async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
@@ -328,7 +328,7 @@ async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
 
 
 @router.get("/agents/{agent_id}/wecom-channel/webhook-url")
-async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request, db=None):
+async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
     public_base = await platform_service.get_public_base_url(db, request)
     return {"webhook_url": f"{public_base}/api/channel/wecom/{agent_id}/webhook"}
 
@@ -342,7 +342,7 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
     await wecom_stream_manager.stop_client(agent_id)
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 # ─── Event Webhook ──────────────────────────────────────
@@ -600,14 +600,14 @@ async def _process_wecom_text(
     )
     history = _conv(history_msgs)
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="user",
         content=user_text,
         conversation_id=session_conv_id,
     )
-    await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     from app.api.feishu import _load_agent_and_model
 
@@ -657,7 +657,7 @@ async def _process_wecom_text(
                     logger.info(f"[WeCom KF] send_msg result: {res_send.json()}")
                 else:
                     # Default legacy Send as text
-                    await client.post(
+                    _ = await client.post(
                         f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}",
                         json={
                             "touser": from_user,
@@ -669,7 +669,7 @@ async def _process_wecom_text(
     except Exception as e:
         logger.error(f"[WeCom] Failed to send reply: {e}")
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="assistant",
@@ -679,7 +679,7 @@ async def _process_wecom_text(
     try:
         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
         if fresh:
-            await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
     except ValueError, TypeError:
         pass
 
@@ -742,7 +742,7 @@ async def wecom_callback(code: str, state: str | None = None):
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
             if session:
-                await sso_scan_session_dao.update(
+                _ = await sso_scan_session_dao.update(
                     db_obj=session,
                     obj_in={
                         "status": "authorized",

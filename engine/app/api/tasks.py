@@ -31,13 +31,13 @@ async def list_tasks(
     status_filter: str | None = None,
     type_filter: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[TaskOut]:
     """List tasks for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     tasks_list = await task_dao.list_for_agent(agent_id, status=status_filter, type=type_filter)
     creator_ids = {t.created_by for t in tasks_list if t.created_by}
     creator_map = await user_dao.usernames_for_ids(list(creator_ids)) if creator_ids else {}
-    out_list = []
+    out_list: list[TaskOut] = []
     for t in tasks_list:
         t_out = TaskOut.model_validate(t)
         t_out.creator_username = creator_map.get(t.created_by)
@@ -48,7 +48,7 @@ async def list_tasks(
 @router.post("/", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 async def create_task(agent_id: uuid.UUID, data: TaskCreate, current_user: UserRecord = Depends(get_current_user)):
     """Create a new task for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     task = await task_dao.create(
         obj_in={
             "agent_id": agent_id,
@@ -71,7 +71,7 @@ async def create_task(agent_id: uuid.UUID, data: TaskCreate, current_user: UserR
         from app.api.background_tasks import schedule_background_task
         from app.services.task_executor import execute_task
 
-        schedule_background_task(execute_task(task.id, agent_id), "execute task")
+        _ = schedule_background_task(execute_task(task.id, agent_id), "execute task")
 
     return task_out
 
@@ -81,7 +81,7 @@ async def update_task(
     agent_id: uuid.UUID, task_id: uuid.UUID, data: TaskUpdate, current_user: UserRecord = Depends(get_current_user)
 ):
     """Update a task."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     task = await task_dao.get_for_agent(task_id, agent_id)
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -93,7 +93,7 @@ async def update_task(
 @router.get("/{task_id}/logs", response_model=list[TaskLogOut])
 async def get_task_logs(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     """Get progress logs for a task."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     logs = await task_log_dao.list_for_task(task_id)
     return [TaskLogOut.model_validate(log) for log in logs]
 
@@ -103,7 +103,7 @@ async def add_task_log(
     agent_id: uuid.UUID, task_id: uuid.UUID, data: TaskLogCreate, current_user: UserRecord = Depends(get_current_user)
 ):
     """Add a progress log entry to a task."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     # Ensure task belongs to agent
     task = await task_dao.get_for_agent(task_id, agent_id)
     if not task:
@@ -128,6 +128,6 @@ async def trigger_task(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: Us
     from app.api.background_tasks import schedule_background_task
     from app.services.task_executor import execute_task
 
-    schedule_background_task(execute_task(task.id, agent_id), "execute task")
+    _ = schedule_background_task(execute_task(task.id, agent_id), "execute task")
 
     return {"status": "triggered", "task_id": str(task_id)}

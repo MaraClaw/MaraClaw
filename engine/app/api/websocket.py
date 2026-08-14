@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -48,6 +48,20 @@ LIVE_CODE_TRUNCATED_NOTICE = "\n\n[... live output truncated; execution continue
 
 type WebSocketConnection = tuple[WebSocket, str | None, str | None]
 type RealtimeMessage = dict[str, object]
+
+
+def _json_object_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if isinstance(key, str):
+            result[key] = item
+    return result
+
+
+def _payload_str(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
 
 
 class ToolLivePreview(TypedDict, total=False):
@@ -150,7 +164,7 @@ class ConnectionManager:
         if agent_id not in self.active_connections:
             self.active_connections[agent_id] = []
         self.active_connections[agent_id].append((websocket, session_id, user_id))
-        await realtime_router.register_connection(
+        _ = await realtime_router.register_connection(
             agent_id=agent_id,
             websocket=websocket,
             session_id=session_id,
@@ -229,7 +243,7 @@ manager = ConnectionManager()
 
 
 async def maybe_mark_session_read_for_active_viewer(
-    db: Any,
+    db: object | None,
     *,
     agent_id: uuid.UUID,
     session_id: str,
@@ -248,7 +262,7 @@ async def maybe_mark_session_read_for_active_viewer(
     if not session:
         return False
 
-    await chat_session_dao.update(db_obj=session, obj_in={"last_read_at_by_user": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=session, obj_in={"last_read_at_by_user": datetime.now(UTC)})
     return True
 
 
@@ -268,8 +282,8 @@ async def websocket_chat(
 class WebSocketChatHandler:
     """Manages connection lifecycle, message polling, LLM orchestration, and persistence for a single user-agent session."""
 
-    user: UserRecord | Any
-    agent: AgentRecord | Any
+    user: UserRecord
+    agent: AgentRecord
     conv_id: str
 
     def __init__(
@@ -280,11 +294,11 @@ class WebSocketChatHandler:
         session_id: str | None = None,
         lang: str = "en",
     ):
-        self.websocket = websocket
-        self.agent_id = agent_id
-        self.token = token
-        self.session_id_param = session_id
-        self.lang = lang
+        self.websocket: WebSocket = websocket
+        self.agent_id: uuid.UUID = agent_id
+        self.token: str = token
+        self.session_id_param: str | None = session_id
+        self.lang: str = lang
 
         # State fields initialized during setup
         self.agent_name: str = ""
@@ -293,9 +307,9 @@ class WebSocketChatHandler:
         self.welcome_message: str = ""
         self.ctx_size: int = 100
         self.user_display_name: str = ""
-        self.llm_model: LLMModelRecord | Any | None = None
-        self.fallback_llm_model: LLMModelRecord | Any | None = None
-        self.history_messages: list[ChatMessageRecord | Any] = []
+        self.llm_model: LLMModelRecord | None = None
+        self.fallback_llm_model: LLMModelRecord | None = None
+        self.history_messages: list[ChatMessageRecord] = []
         self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
 
@@ -332,7 +346,7 @@ class WebSocketChatHandler:
         except HTTPException as exc:
             detail = exc.detail
             if isinstance(detail, dict) and detail.get("must_change_password"):
-                content = detail.get("message") or "Password change required before continuing."
+                content: str = detail.get("message") or "Password change required before continuing."
             else:
                 content = "Authentication failed"
             await self.websocket.send_json({"type": "error", "content": content})
@@ -399,7 +413,7 @@ class WebSocketChatHandler:
 
         return True
 
-    async def _load_models(self, db: Any):
+    async def _load_models(self, db: object | None):
         """Loads primary and fallback models for the agent."""
         del db
         if self.agent.primary_model_id:
@@ -418,12 +432,13 @@ class WebSocketChatHandler:
             elif self.fallback_llm_model:
                 logger.info(f"[WS] Fallback model loaded: {self.fallback_llm_model.model}")
 
-        if not self.llm_model and self.fallback_llm_model:
-            self.llm_model = self.fallback_llm_model
+        fallback = self.fallback_llm_model
+        if not self.llm_model and fallback is not None:
+            self.llm_model = fallback
             self.fallback_llm_model = None
-            logger.info(f"[WS] Primary model unavailable, using fallback: {self.llm_model.model}")
+            logger.info(f"[WS] Primary model unavailable, using fallback: {fallback.model}")
 
-    async def _resolve_chat_session(self, db: Any, user_id: uuid.UUID) -> str | None:
+    async def _resolve_chat_session(self, db: object | None, user_id: uuid.UUID) -> str | None:
         """Resolves existing session or creates a new one."""
         del db
         conv_id = self.session_id_param
@@ -451,7 +466,7 @@ class WebSocketChatHandler:
                 logger.info(f"[WS] Selected primary session {conv_id}")
         return conv_id
 
-    async def _load_history(self, db: Any):
+    async def _load_history(self, db: object | None):
         """Loads and prepares history messages for the conversation."""
         del db
         try:
@@ -477,16 +492,17 @@ class WebSocketChatHandler:
             await self.websocket.send_json({"type": "done", "role": "assistant", "content": self.welcome_message})
 
         while True:
-            data = await self.websocket.receive_json()
+            data = _json_object_payload(await self.websocket.receive_json())
 
             # Set a unique trace ID for this specific message processing.
             trace_id = str(uuid.uuid4())[:12]
             set_trace_id(trace_id)
 
-            content = data.get("content", "")
-            display_content = data.get("display_content", "")
-            file_name = data.get("file_name", "")
-            override_model_id = data.get("model_id")
+            content = _payload_str(data.get("content", ""))
+            display_content = _payload_str(data.get("display_content", ""))
+            file_name = _payload_str(data.get("file_name", ""))
+            override_raw = data.get("model_id")
+            override_model_id = override_raw if isinstance(override_raw, str) else None
             is_onboarding_trigger = data.get("kind") == "onboarding_trigger"
             logger.info(f"[WS] Received: {content[:50]}" + (" [onboarding]" if is_onboarding_trigger else ""))
 
@@ -531,7 +547,7 @@ class WebSocketChatHandler:
             else:
                 assistant_response = (
                     f"⚠️ {self.agent_name} has no LLM model configured. "
-                    "Please select a model in the agent's Settings tab."
+                    + "Please select a model in the agent's Settings tab."
                 )
                 thinking_content = []
                 queued_messages = []
@@ -566,7 +582,7 @@ class WebSocketChatHandler:
             return True
         return False
 
-    async def _resolve_effective_model(self, override_model_id: str | None) -> Any | None:
+    async def _resolve_effective_model(self, override_model_id: str | None) -> LLMModelRecord | None:
         """Reloads model config and resolves effective model (taking overrides into account)."""
         _agent_cur = await agent_dao.get(self.agent_id)
         if _agent_cur:
@@ -656,7 +672,7 @@ class WebSocketChatHandler:
 
     async def _route_openclaw(self, content: str):
         """Enqueues message for OpenClaw edge node poll."""
-        await gateway_message_dao.create(
+        _ = await gateway_message_dao.create(
             obj_in={
                 "agent_id": self.agent_id,
                 "sender_user_id": self.user.id,
@@ -675,7 +691,7 @@ class WebSocketChatHandler:
         )
 
     async def _run_llm_and_stream(
-        self, effective_llm_model: Any, is_onboarding_trigger: bool
+        self, effective_llm_model: LLMModelRecord, is_onboarding_trigger: bool
     ) -> tuple[str, list[str], list[RealtimeMessage]]:
         """Calls the LLM and streams response chunks to WebSocket."""
         start_gen = perf_counter()
@@ -812,7 +828,7 @@ class WebSocketChatHandler:
                     )
                     if _onb:
                         onboarding_message: OpenAIMessage = {"role": "system", "content": _onb.prompt}
-                        _truncated = [onboarding_message, *_truncated]
+                        _truncated: list[OpenAIMessage] = [onboarding_message, *_truncated]
                         if _onb.lock_on_first_chunk:
                             needs_onboarding_mark = True
                             onboarding_target_phase = _onb.target_phase
@@ -889,17 +905,17 @@ class WebSocketChatHandler:
             queued_messages: list[RealtimeMessage] = []
             while not llm_task.done():
                 try:
-                    msg = await asyncio.wait_for(self.websocket.receive_json(), timeout=0.5)
+                    msg = _json_object_payload(await asyncio.wait_for(self.websocket.receive_json(), timeout=0.5))
                     if msg.get("type") == "abort":
                         logger.info("[WS] Abort received, cancelling LLM task")
-                        llm_task.cancel()
+                        _ = llm_task.cancel()
                         aborted = True
                         break
                     queued_messages.append(msg)
                 except TimeoutError:
                     continue
                 except WebSocketDisconnect:
-                    llm_task.cancel()
+                    _ = llm_task.cancel()
                     raise
 
             if aborted:
@@ -1011,7 +1027,7 @@ class WebSocketChatHandler:
                 tool_call_id=data.get("call_id"),
                 reasoning_content=data.get("reasoning_content"),
             )
-            await maybe_mark_session_read_for_active_viewer(
+            _ = await maybe_mark_session_read_for_active_viewer(
                 None,
                 agent_id=self.agent_id,
                 session_id=self.conv_id,
@@ -1058,7 +1074,7 @@ class WebSocketChatHandler:
             logger.info(f"[WS] Task created: {task.id}")
             from app.api.background_tasks import schedule_background_task
 
-            schedule_background_task(execute_task(task.id, self.agent_id), "execute web task")
+            _ = schedule_background_task(execute_task(task.id, self.agent_id), "execute web task")
             assistant_response += f"\n\n📋 Task synced to task board: [{task_title}]"
         except Exception as te:
             logger.error(f"[WS] Task creation failed: {te}")
@@ -1076,7 +1092,7 @@ class WebSocketChatHandler:
             touch_last_active=True,
             agent=self.agent,
         )
-        await maybe_mark_session_read_for_active_viewer(
+        _ = await maybe_mark_session_read_for_active_viewer(
             None,
             agent_id=self.agent_id,
             session_id=self.conv_id,

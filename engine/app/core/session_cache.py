@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from app.config import get_settings
+from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
@@ -44,7 +45,7 @@ def identity_version_key(identity_id: UUID) -> str:
     return cache_key("sessver", "i", identity_id)
 
 
-def _parse_uuid(value: Any) -> UUID | None:
+def _parse_uuid(value: object) -> UUID | None:
     if value is None:
         return None
     if isinstance(value, UUID):
@@ -55,7 +56,7 @@ def _parse_uuid(value: Any) -> UUID | None:
         return None
 
 
-def _parse_dt(value: Any) -> datetime | None:
+def _parse_dt(value: object) -> datetime | None:
     if value is None or isinstance(value, datetime):
         return value
     if isinstance(value, str):
@@ -68,7 +69,7 @@ def _parse_dt(value: Any) -> datetime | None:
 
 def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, Any]:
     identity = user.identity
-    ident_payload = None
+    ident_payload: dict[str, Any] | None = None
     if identity is not None:
         ident_payload = {
             "id": str(identity.id),
@@ -109,14 +110,14 @@ def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, Any]
 
 def _from_snapshot(data: dict[str, Any]) -> UserRecord | None:
     raw_user = data.get("user")
-    if not isinstance(raw_user, dict):
+    if not is_str_dict(raw_user):
         return None
     user_id = _parse_uuid(raw_user.get("id"))
     if user_id is None:
         return None
     identity = None
     raw_ident = data.get("identity")
-    if isinstance(raw_ident, dict) and raw_ident.get("id") is not None:
+    if is_str_dict(raw_ident) and raw_ident.get("id") is not None:
         ident_id = _parse_uuid(raw_ident.get("id"))
         if ident_id is None:
             return None
@@ -175,12 +176,12 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
     if _ttl() <= 0:
         return None
     payload = await cache_get_json(_sess_key(user_id))
-    if not isinstance(payload, dict):
+    if not is_str_dict(payload):
         return None
     user_ver = await read_version(user_version_key(user_id))
     ident_id = None
     raw_ident = payload.get("identity")
-    if isinstance(raw_ident, dict):
+    if is_str_dict(raw_ident):
         ident_id = _parse_uuid(raw_ident.get("id"))
     ident_ver = await read_version(identity_version_key(ident_id)) if ident_id else "0"
     if str(payload.get("u_ver") or "0") != user_ver:
@@ -217,7 +218,7 @@ async def set_cached_user(
         logger.debug("session_cache set skipped (ident ver)")
         return
     payload = _snapshot(user, user_ver, ident_ver)
-    await cache_set_json(_sess_key(user.id), payload, ttl=_ttl())
+    _ = await cache_set_json(_sess_key(user.id), payload, ttl=_ttl())
 
 
 async def bump_user_session(user_id: UUID | None) -> None:
@@ -237,10 +238,11 @@ async def bump_identity_session(identity_id: UUID | None) -> None:
     if _ttl() <= 0:
         return
     await bump_version(identity_version_key(identity_id), ttl=_ttl() * 40)
+    members: list[UserRecord] = []
     try:
         from app.dao.user_dao import user_dao
 
-        members = await user_dao.get_by_identity_id(identity_id)
+        members = list(await user_dao.get_by_identity_id(identity_id))
     except Exception:
         members = []
     for member in members:

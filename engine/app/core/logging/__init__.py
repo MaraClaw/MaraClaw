@@ -22,7 +22,7 @@ from app.core.logging.service import (
 )
 
 # Configure from the environment on first import so early module logs work.
-configure_logging()
+_ = configure_logging()
 
 __all__ = [
     "Logger",

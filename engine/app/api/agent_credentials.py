@@ -8,7 +8,7 @@ using AES-256-CBC and are NEVER returned in API responses.
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -106,7 +106,7 @@ async def create_credential(
                 detail=f"Invalid cookies_json format: {e}",
             ) from e
 
-    obj_in: dict = {
+    obj_in: dict[str, Any] = {
         "agent_id": agent_id,
         "credential_type": data.credential_type,
         "platform": data.platform,
@@ -148,7 +148,7 @@ async def update_credential(
 
     settings = get_settings()
     update_data = data.model_dump(exclude_unset=True)
-    obj_in: dict = {}
+    obj_in: dict[str, Any] = {}
 
     # Handle plaintext fields
     for field in ("credential_type", "platform", "display_name", "status"):
@@ -195,4 +195,4 @@ async def delete_credential(
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    await agent_credential_dao.delete(id=cred.id)
+    _ = await agent_credential_dao.delete(id=cred.id)

@@ -4,10 +4,11 @@ These schemas ensure that sensitive fields (cookies_json)
 are never returned to the frontend in API responses.
 """
 
+from typing import ClassVar
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class AgentCredentialCreate(BaseModel):
@@ -48,4 +49,4 @@ class AgentCredentialResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

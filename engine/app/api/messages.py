@@ -5,6 +5,8 @@ in chat_messages (via ChatSession with source_channel='agent').
 This API now queries chat_sessions + chat_messages for the inbox.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 
 from app.core.security import get_current_user
@@ -17,7 +19,9 @@ router = APIRouter(tags=["messages"])
 
 
 @router.get("/messages/inbox")
-async def get_inbox(limit: int = Query(50, le=200), current_user: UserRecord = Depends(get_current_user)):
+async def get_inbox(
+    limit: int = Query(50, le=200), current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """Get agent-to-agent messages for agents the current user manages.
 
     Returns recent messages from ChatSessions with source_channel='agent'
@@ -39,7 +43,7 @@ async def get_inbox(limit: int = Query(50, le=200), current_user: UserRecord = D
         participant.id: participant for participant in await participant_dao.get_many(list(participant_ids))
     }
 
-    result_list = []
+    result_list: list[dict[str, Any]] = []
     for sess in sessions:
         for msg in messages_by_conv.get(str(sess.id), []):
             sender_name = "Unknown"
