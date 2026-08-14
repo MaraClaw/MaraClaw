@@ -5,7 +5,16 @@
 export function getApiBaseUrl(): string {
   const raw = import.meta.env.VITE_API_BASE_URL
   if (typeof raw === 'string' && raw.trim()) {
-    return raw.replace(/\/$/, '')
+    const base = raw.replace(/\/$/, '')
+    try {
+      // 0.0.0.0 is a listen address. Browsers cannot use it as a destination.
+      if (new URL(base).hostname === '0.0.0.0') {
+        return ''
+      }
+    } catch {
+      // Relative or invalid — keep the trimmed value.
+    }
+    return base
   }
   return ''
 }

@@ -21,7 +21,7 @@ Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`
 
 Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password` (new password must differ from current).
 
-**Companies (platform admin):** engine `POST /api/admin/companies` takes `name` + genesis `admin_email` / `admin_password` (not invitation-code-only create). See `../engine/docs/admin-apis.md`.
+**Companies:** `/companies` lists orgs (platform: all; org admin: own). `/companies/:id` manages claimed email domains (`GET/POST/PATCH/DELETE /api/tenants/{id}/email-domains`). System orgs and the default end-user org (OpenClaw) are badged; the fallback org cannot be disabled.
 
 Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
 
@@ -61,6 +61,7 @@ web-a/
 | Login UI | `src/pages/login.tsx` |
 | Forgot / reset password | `src/pages/forgot-password.tsx`, `reset-password.tsx` |
 | Change password | `src/pages/account.tsx` |
+| Sign out / session | `src/pages/settings.tsx` |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |

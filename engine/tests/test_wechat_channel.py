@@ -2,7 +2,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from types import SimpleNamespace, TracebackType
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,92 +35,6 @@ class _ChannelSession:
     def __init__(self, session_id: uuid.UUID) -> None:
         self.id = session_id
         self.last_message_at: datetime | None = None
-
-
-class _Result:
-    __slots__ = ("_rows", "_scalar")
-
-    def __init__(
-        self,
-        *,
-        scalar: _Agent | _ChannelSession | None = None,
-        rows: tuple[_HistoryMessage, ...] = (),
-    ) -> None:
-        self._scalar = scalar
-        self._rows = rows
-
-    def scalar_one_or_none(self) -> _Agent | _ChannelSession | None:
-        return self._scalar
-
-    def scalars(self) -> _Scalars:
-        return _Scalars(self._rows)
-
-
-class _Scalars:
-    __slots__ = ("_rows",)
-
-    def __init__(self, rows: tuple[_HistoryMessage, ...]) -> None:
-        self._rows = rows
-
-    def all(self) -> tuple[_HistoryMessage, ...]:
-        return self._rows
-
-
-class _RecordingSession:
-    __slots__ = ("added", "events", "label", "queries", "responses")
-
-    def __init__(self, label: str, responses: list[_Result], events: list[str]) -> None:
-        self.label = label
-        self.responses = responses
-        self.events = events
-        self.added: list[object] = []
-        self.queries: list[object] = []
-
-    async def execute(self, statement: object) -> _Result:
-        self.queries.append(statement)
-        if not self.responses:
-            raise AssertionError(f"unexpected execute in {self.label}")
-        return self.responses.pop(0)
-
-    def add(self, message: object) -> None:
-        self.added.append(message)
-        self.events.append(f"{self.label}:add:{message.role}")
-
-    async def commit(self) -> None:
-        self.events.append(f"{self.label}:commit")
-
-
-class _SessionContext:
-    __slots__ = ("_events", "_session")
-
-    def __init__(self, session: _RecordingSession, events: list[str]) -> None:
-        self._session = session
-        self._events = events
-
-    async def __aenter__(self) -> _RecordingSession:
-        self._events.append(f"{self._session.label}:enter")
-        return self._session
-
-    async def __aexit__(
-        self,
-        _exception_type: type[BaseException] | None,
-        _exception: BaseException | None,
-        _traceback: TracebackType | None,
-    ) -> None:
-        self._events.append(f"{self._session.label}:exit")
-
-
-class _SessionFactory:
-    __slots__ = ("_events", "_sessions")
-
-    def __init__(self, sessions: list[_RecordingSession], events: list[str]) -> None:
-        self._sessions = sessions
-        self._events = events
-
-    def __call__(self) -> _SessionContext:
-        if not self._sessions:
-            raise AssertionError("unexpected async_session call")
-        return _SessionContext(self._sessions.pop(0), self._events)
 
 
 async def test_process_wechat_message_converts_newest_first_tool_history_to_canonical_chronology(

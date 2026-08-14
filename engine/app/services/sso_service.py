@@ -22,7 +22,11 @@ class SSOService:
     DOMAIN_TENANT_HINTS: ClassVar[dict[str, str]] = {}
 
     async def match_user_by_email(self, email: str, tenant_id: str | None) -> UserRecord | None:
-        """Find existing active user by email (tenant-scoped when provided)."""
+        """Find an existing user by email, including pending (no-org) rows.
+
+        Prefer a same-tenant match, then a pending ``tenant_id is None`` member
+        (so SSO can finish org confirm), then any other non-platform-admin row.
+        """
         if not email:
             return None
         user = await user_dao.get_by_email_and_tenant(email, tenant_id)
@@ -33,12 +37,20 @@ class SSOService:
         if not identity:
             return None
         users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
+        pending = None
+        any_member = None
         for candidate in users:
-            if not candidate.is_active:
+            if getattr(candidate, "role", None) == "platform_admin":
                 continue
-            if tenant_id is None or str(candidate.tenant_id) == str(tenant_id):
+            if tenant_id is not None and candidate.tenant_id is not None and str(candidate.tenant_id) == str(tenant_id):
                 return candidate
-        return None
+            if candidate.tenant_id is None and pending is None:
+                pending = candidate
+            elif any_member is None:
+                any_member = candidate
+        if tenant_id is None:
+            return pending or any_member
+        return pending or any_member
 
     async def match_user_by_mobile(self, mobile: str, tenant_id: str) -> UserRecord | None:
         """Find existing active user by mobile phone number."""

@@ -536,14 +536,7 @@ def test_local_workspace_mutations_preserve_protections_errors_and_success(monke
 
 
 @pytest.mark.asyncio
-async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io(monkeypatch, tmp_path):
-    # Given
-    def unexpected_session():
-        raise AssertionError("protected tasks snapshot move must not open the database")
-
-    monkeypatch.setattr(agent_tools, "async_session", unexpected_session, raising=False)
-
-    # When
+async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io(tmp_path):
     result = await workspace._execute_workspace_mutation(
         "move_file",
         {"source_path": "tasks.json", "destination_path": "workspace/tasks.json"},

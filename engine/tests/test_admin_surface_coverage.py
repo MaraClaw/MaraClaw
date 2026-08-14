@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api import admin as admin_api, tenants as tenants_api, users as users_api
+from app.api import admin as admin_api, auth as auth_api, tenants as tenants_api, users as users_api
 from app.records.audit import AdminAuditLogRecord
 from app.records.tenant import TenantRecord
 from app.services import admin_provisioning as provisioning
@@ -21,7 +21,16 @@ from app.services.tenant_provisioning import AdminEmailTakenError
 _NOW = datetime.now(UTC)
 
 
-def _user(*, role="platform_admin", user_id=None, tenant_id=None, is_active=True, email="a@b.com", is_genesis=False):
+def _user(
+    *,
+    role="platform_admin",
+    user_id=None,
+    tenant_id=None,
+    is_active=True,
+    email="a@b.com",
+    is_genesis=False,
+    email_verified=True,
+):
     uid = user_id or uuid.uuid4()
     return SimpleNamespace(
         id=uid,
@@ -34,6 +43,7 @@ def _user(*, role="platform_admin", user_id=None, tenant_id=None, is_active=True
         is_active=is_active,
         is_genesis=is_genesis,
         email=email,
+        email_verified=email_verified,
         username="admin",
         created_at=_NOW,
         quota_message_limit=50,
@@ -285,18 +295,12 @@ async def test_tenants_join_registration_and_me(monkeypatch):
     tenant = _tenant()
     user = _user(role="member", tenant_id=None)
     code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5, invitation_code="ABCD")
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
-    monkeypatch.setattr(tenants_api.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=None))
-    monkeypatch.setattr(tenants_api.user_dao, "update", AsyncMock(return_value=user))
-    monkeypatch.setattr(tenants_api.user_dao, "get", AsyncMock(return_value=user))
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "update", AsyncMock())
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(
-            "app.services.registration_service.registration_service.bind_org_member",
-            AsyncMock(),
-        )
-        result = await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="ABCD"), user)
+    monkeypatch.setattr("app.services.org_membership.consume_invitation_code", AsyncMock())
+    attached = _user(role="member", tenant_id=tenant.id)
+    monkeypatch.setattr("app.services.org_membership.attach_user_to_org", AsyncMock(return_value=attached))
+    result = await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="ABCD"), user)
     assert result.role == "member"
 
     monkeypatch.setattr(tenants_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=False))
@@ -328,6 +332,125 @@ async def test_tenants_join_registration_and_me(monkeypatch):
     )
     usage = await tenants_api.get_my_tenant_token_usage(member)
     assert usage["today"]["total_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_transfer_requires_correct_password_then_moves(monkeypatch):
+    source = _tenant()
+    dest = _tenant()
+    member = _user(role="member", tenant_id=source.id)
+    member.identity = SimpleNamespace(password_hash="hashed")
+    code = SimpleNamespace(tenant_id=dest.id, used_count=0, max_uses=3)
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=dest))
+    monkeypatch.setattr("app.services.org_membership.consume_invitation_code", AsyncMock())
+    monkeypatch.setattr("app.core.security.verify_password_async", AsyncMock(side_effect=[False, True]))
+    monkeypatch.setattr("app.core.security.create_access_token", lambda *a, **k: "tok")
+    moved = _user(role="member", tenant_id=dest.id)
+    monkeypatch.setattr("app.services.org_membership.transfer_user_to_org", AsyncMock(return_value=moved))
+
+    with pytest.raises(HTTPException) as denied:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="wrong", invitation_code="X"),
+            member,
+        )
+    assert denied.value.status_code == 401
+
+    out = await tenants_api.transfer_organization(
+        tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+        member,
+    )
+    assert out.access_token == "tok"
+    assert out.tenant.id == dest.id
+
+
+@pytest.mark.asyncio
+async def test_transfer_blocks_genesis(monkeypatch):
+    genesis = _user(role="org_admin", tenant_id=uuid.uuid4(), is_genesis=True)
+    genesis.identity = SimpleNamespace(password_hash="hashed")
+    monkeypatch.setattr("app.core.security.verify_password_async", AsyncMock(return_value=True))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            genesis,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_join_suggested_requires_verified_email_and_blocks_platform_admin(monkeypatch):
+    tenant = _tenant()
+    member = _user(role="member", tenant_id=None, email="ada@acme.com", email_verified=False)
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=None),
+    )
+    with pytest.raises(HTTPException) as unverified:
+        await tenants_api.join_suggested_org(tenants_api.SuggestedJoinRequest(), member)
+    assert unverified.value.status_code == 400
+
+    pa = _user(role="platform_admin", tenant_id=None, email_verified=True)
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=tenant),
+    )
+    with pytest.raises(HTTPException) as blocked:
+        await tenants_api.join_suggested_org(tenants_api.SuggestedJoinRequest(), pa)
+    assert blocked.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_join_suggested_attaches_verified_member(monkeypatch):
+    tenant = _tenant()
+    member = _user(role="member", tenant_id=None, email="ada@acme.com")
+    attached = _user(role="member", tenant_id=tenant.id)
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=tenant),
+    )
+    monkeypatch.setattr("app.services.org_membership.attach_user_to_org", AsyncMock(return_value=attached))
+    monkeypatch.setattr("app.core.security.create_access_token", lambda *a, **k: "tok")
+    out = await tenants_api.join_suggested_org(tenants_api.SuggestedJoinRequest(tenant_id=tenant.id), member)
+    assert out.access_token == "tok"
+    assert out.tenant.id == tenant.id
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_blocks_system_org(monkeypatch):
+    tenant = _tenant(is_system=True)
+    pa = _user(role="platform_admin")
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.delete_tenant(tenant.id, pa)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_me_clears_email_verified_and_checks_global_email(monkeypatch):
+    from app.schemas.schemas import UserUpdate
+
+    identity = SimpleNamespace(id=uuid.uuid4(), email="old@a.com", username="ada", phone=None, email_verified=True)
+    user = _user(role="member", tenant_id=uuid.uuid4(), email="old@a.com")
+    user.identity = identity
+    captured: dict = {}
+
+    async def _update_identity(*, db_obj, obj_in):
+        captured.update(obj_in)
+        return identity
+
+    monkeypatch.setattr(auth_api.user_dao, "get_with_identity", AsyncMock(return_value=user))
+    monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_api.user_dao, "get_by_email_and_tenant", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_api.identity_dao, "update", _update_identity)
+    monkeypatch.setattr(auth_api.UserOut, "model_validate", staticmethod(lambda value: value))
+    monkeypatch.setattr(
+        "app.services.registration_service.registration_service.sync_org_member_contact_from_user",
+        AsyncMock(),
+    )
+
+    await auth_api.update_me(UserUpdate(email="new@a.com"), user)
+    assert captured["email"] == "new@a.com"
+    assert captured["email_verified"] is False
 
 
 @pytest.mark.asyncio
@@ -544,21 +667,11 @@ async def test_tenants_org_admin_scope_and_join_switch(monkeypatch):
 
     other = _user(role="member", tenant_id=uuid.uuid4())
     code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5)
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     monkeypatch.setattr(tenants_api.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=None))
-    new_u = _user(role="member", tenant_id=tenant.id)
-    monkeypatch.setattr(tenants_api.user_dao, "create", AsyncMock(return_value=new_u))
-    monkeypatch.setattr(tenants_api.participant_dao, "create_for_user", AsyncMock())
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "update", AsyncMock())
-    from unittest.mock import patch
-
-    with (
-        patch("app.services.registration_service.registration_service.bind_org_member", AsyncMock()),
-        patch("app.core.security.create_access_token", return_value="tok"),
-    ):
-        joined = await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), other)
-    assert joined.access_token == "tok"
-    assert joined.role == "member"
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), other)
+    assert exc.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -605,25 +718,35 @@ async def test_get_updateable_tenant_and_join_errors(monkeypatch):
     with pytest.raises(HTTPException):
         await tenants_api._get_updateable_tenant(tenant.id, _user(role="platform_admin"))
 
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=None))
+    from app.services.org_membership import InvitationError
+
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(side_effect=InvitationError("Invalid invitation code")),
+    )
     with pytest.raises(HTTPException):
         await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="NOPE"), _user(role="member"))
 
-    code = SimpleNamespace(tenant_id=uuid.uuid4(), used_count=5, max_uses=5)
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(side_effect=InvitationError("Invalid invitation code")),
+    )
     with pytest.raises(HTTPException):
         await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), _user(role="member"))
 
     code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5)
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
     with pytest.raises(HTTPException):
         await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), _user(role="member"))
 
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
-    monkeypatch.setattr(tenants_api.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=_user()))
-    with pytest.raises(HTTPException):
-        await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), _user(role="member"))
+    with pytest.raises(HTTPException) as already:
+        await tenants_api.join_company(
+            tenants_api.JoinRequest(invitation_code="X"),
+            _user(role="member", tenant_id=uuid.uuid4()),
+        )
+    assert already.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -722,7 +845,7 @@ async def test_provisioning_last_active_and_non_admin(monkeypatch):
 async def test_join_wrong_tenant_and_delete_logo(monkeypatch):
     tenant = _tenant()
     code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5)
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     with pytest.raises(HTTPException):
         await tenants_api.join_company(
             tenants_api.JoinRequest(invitation_code="X", target_tenant_id=uuid.uuid4()),
@@ -802,7 +925,7 @@ async def test_join_refuses_genesis_platform_admin_rewrite(monkeypatch):
     tenant = _tenant()
     genesis = _user(role="platform_admin", tenant_id=None, is_genesis=True)
     code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5)
-    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenants_api.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as exc:

@@ -5,32 +5,10 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_build_agent_context_does_not_inject_legacy_focus_file(monkeypatch):
+async def test_build_agent_context_does_not_inject_legacy_focus_file():
     from app.services.agent_context import build_agent_context
 
     agent_id = uuid.uuid4()
-
-    class EmptyResult:
-        def scalar_one_or_none(self):
-            return None
-
-        def scalars(self):
-            return self
-
-        def all(self):
-            return []
-
-    class EmptySession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, _exc_type, _exc_value, _traceback):
-            return None
-
-        async def execute(self, _statement):
-            return EmptyResult()
-
-    monkeypatch.setattr("app.database.async_session", lambda: EmptySession(), raising=False)
 
     async def fake_read_file(key, _max_chars=3000):
         if key == f"{agent_id}/focus.md":

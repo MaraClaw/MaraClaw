@@ -21,6 +21,7 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 - Command uses `--unshare-user-try` and `--unshare-cgroup-try` so older kernels / `user.max_user_namespaces=0` can skip unavailable namespaces without hard-failing.
 - Production Docker image may set setuid on `bwrap` (`BWRAP_SETUID=1`, default) for hosts without unprivileged user namespaces. Guest distro (Debian trixie) does not remove **host kernel** constraints.
 - Setuid bwrap is incompatible with `--security-opt no-new-privileges` and Kubernetes `allowPrivilegeEscalation: false`. Prefer enabling host userns on modern fleets and build with `BWRAP_SETUID=0` when setuid is unnecessary.
+- Docker run must grant `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` (see `start-from-docker.sh`). Without `NET_ADMIN`+`SYS_PTRACE`, non-root setuid bwrap fails with `capset failed: Operation not permitted`.
 - Startup logs bwrap path, mode/setuid, and a short namespace probe; probe failure is a warning only.
 
 ## Proxy env

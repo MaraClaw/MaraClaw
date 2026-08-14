@@ -50,6 +50,8 @@ class CompanyStats(BaseModel):
     is_active: bool
     sso_enabled: bool = False
     sso_domain: str | None = None
+    is_system: bool = False
+    is_default_end_user_org: bool = False
     created_at: datetime | None = None
     user_count: int = 0
     agent_count: int = 0
@@ -152,6 +154,8 @@ async def list_companies(current_user: UserRecord = Depends(require_role("platfo
                 is_active=tenant.is_active,
                 sso_enabled=tenant.sso_enabled,
                 sso_domain=tenant.sso_domain,
+                is_system=getattr(tenant, "is_system", False),
+                is_default_end_user_org=getattr(tenant, "is_default_end_user_org", False),
                 created_at=tenant.created_at,
                 user_count=user_count,
                 agent_count=agent_count,
@@ -206,6 +210,8 @@ async def create_company(
             name=tenant.name,
             slug=tenant.slug,
             is_active=tenant.is_active,
+            is_system=getattr(tenant, "is_system", False),
+            is_default_end_user_org=getattr(tenant, "is_default_end_user_org", False),
             created_at=tenant.created_at,
             user_count=1,
             org_admin_email=provisioned.admin_email,
@@ -335,6 +341,13 @@ async def toggle_company(
         raise HTTPException(status_code=404, detail="Company not found")
 
     new_state = not tenant.is_active
+    if not new_state:
+        from app.services.org_membership import DefaultOrgUnavailableError, assert_may_deactivate_tenant
+
+        try:
+            assert_may_deactivate_tenant(tenant, making_active=False)
+        except DefaultOrgUnavailableError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     await tenant_dao.update(db_obj=tenant, obj_in={"is_active": new_state})
 
     if not new_state:

@@ -31,6 +31,15 @@ class RegisterInitRequest(BaseModel):
     password: str = Field(min_length=6, max_length=128)
     display_name: str | None = None
     target_tenant_id: uuid.UUID | None = None
+    invitation_code: str | None = None
+
+
+class SuggestedOrg(BaseModel):
+    """Organization offered at registration or pending-confirm login."""
+
+    id: uuid.UUID
+    name: str
+    slug: str
 
 
 class RegisterInitResponse(BaseModel):
@@ -43,6 +52,8 @@ class RegisterInitResponse(BaseModel):
     user: UserOut  # Include full user info
     needs_company_setup: bool = True
     target_tenant_id: uuid.UUID | None = None
+    needs_org_confirm: bool = False
+    suggested_org: SuggestedOrg | None = None
 
 
 class RegisterCompleteRequest(BaseModel):
@@ -107,6 +118,8 @@ class TokenResponse(BaseModel):
     needs_company_setup: bool = False
     tenant_name: str | None = None
     must_change_password: bool = False
+    needs_org_confirm: bool = False
+    suggested_org: SuggestedOrg | None = None
 
 
 class TenantChoice(BaseModel):

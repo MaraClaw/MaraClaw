@@ -16,7 +16,6 @@ from app.core.security import hash_password_async
 from app.dao import (
     identity_dao,
     identity_provider_dao,
-    invitation_code_dao,
     org_member_dao,
     participant_dao,
     tenant_dao,
@@ -66,11 +65,10 @@ class RegistrationService:
     # ── TenantRecord detection ─────────────────────────────────────────────────────
 
     async def detect_tenant_by_email(self, email: str) -> TenantRecord | None:
-        """Detect tenant based on email domain."""
-        if not email or "@" not in email:
-            return None
-        domain = email.split("@")[1].lower()
-        return await tenant_dao.get_by_sso_domain(domain)
+        """Detect tenant based on a claimed email domain (not SSO host)."""
+        from app.services.org_membership import lookup_tenant_by_email_domain
+
+        return await lookup_tenant_by_email_domain(email)
 
     # ── Duplicate check ──────────────────────────────────────────────────────
 
@@ -192,6 +190,17 @@ class RegistrationService:
         if not email_config:
             is_active = True  # Auto-activate when no SMTP configured
 
+        quota: dict[str, Any] = {}
+        if tenant_id is not None:
+            tenant = await tenant_dao.get(tenant_id)
+            if tenant is not None:
+                quota = {
+                    "quota_message_limit": tenant.default_message_limit,
+                    "quota_message_period": tenant.default_message_period,
+                    "quota_max_agents": tenant.default_max_agents,
+                    "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
+                }
+
         user = await user_dao.create(
             obj_in={
                 "identity_id": identity.id,
@@ -200,6 +209,7 @@ class RegistrationService:
                 "role": role,
                 "registration_source": registration_source,
                 "is_active": is_active or identity.is_platform_admin,
+                **quota,
             }
         )
         user.identity = identity
@@ -230,9 +240,14 @@ class RegistrationService:
         tenant_id = None
         sso_tenant_id: str | None = None
         if email:
-            tenant = await self.detect_tenant_by_email(email)
-            tenant_id = tenant.id if tenant else None
-            sso_tenant_id = str(tenant.id) if tenant else None
+            from app.services.org_membership import place_new_registration
+
+            placement = await place_new_registration(email=email)
+            tenant_id = placement.tenant_id
+            if placement.suggested is not None:
+                sso_tenant_id = str(placement.suggested.id)
+            elif placement.tenant_id is not None:
+                sso_tenant_id = str(placement.tenant_id)
 
         lookup_provider_user_id = user_info.get("union_id") or user_info.get("unionId") or provider_user_id
         existing = await sso_service.resolve_user_identity(
@@ -263,6 +278,12 @@ class RegistrationService:
             phone=user_info.get("mobile") or user_info.get("phone"),
             username=username,
         )
+
+        existing_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
+        for candidate in existing_users:
+            if getattr(candidate, "role", None) == "platform_admin":
+                continue
+            return candidate, False
 
         user = await self.create_user_with_identity(
             identity=identity,
@@ -344,21 +365,24 @@ class RegistrationService:
         email: str | None = None,
         invitation_code: str | None = None,
     ) -> tuple[TenantRecord | None, str | None]:
-        """Determine tenant for new user registration."""
-        if invitation_code:
-            inv = await invitation_code_dao.get_active_by_code(invitation_code)
-            if inv and inv.used_count < inv.max_uses:
-                t = await tenant_dao.get(inv.tenant_id)
-                if t and t.is_active:
-                    return t, None
-                return None, "Invitation code tenant is inactive"
+        """Determine tenant for new user registration.
 
-        if email:
-            tenant = await self.detect_tenant_by_email(email)
-            if tenant:
-                return tenant, None
+        Invite codes attach immediately. Claimed email domains are returned as a
+        match for the caller to confirm. Unmatched emails fall back to OpenClaw.
+        """
+        from app.services.org_membership import DefaultOrgUnavailableError, InvitationError, resolve_registration_org
 
-        return None, None
+        try:
+            resolution = await resolve_registration_org(email=email, invitation_code=invitation_code)
+        except InvitationError as exc:
+            return None, str(exc)
+        except DefaultOrgUnavailableError as exc:
+            return None, str(exc)
+        if resolution.source == "invite":
+            return resolution.matched, None
+        if resolution.source == "domain":
+            return resolution.matched, None
+        return resolution.fallback, None
 
     # ── OrgMember binding ────────────────────────────────────────────────────
 

@@ -315,6 +315,15 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 {"id": member_id},
             )
 
+    async def unbind_user_from_tenant(self, user_id: Any, tenant_id: Any) -> None:
+        """Drop directory links when a member leaves this organization."""
+        async with self.session() as db:
+            await db.execute(
+                "UPDATE org_members SET user_id = NULL "
+                "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s",
+                {"user_id": user_id, "tenant_id": tenant_id},
+            )
+
     async def get_active_by_user_and_tenant(self, user_id: Any, tenant_id: Any) -> OrgMemberRecord | None:
         async with self.session() as db:
             row = await db.fetchone(

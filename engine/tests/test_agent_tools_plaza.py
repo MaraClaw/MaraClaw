@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from app import database
 from app.services import agent_tools, notification_service
 from app.services.sandbox import registry as sandbox_registry
 
@@ -22,7 +21,6 @@ def _unexpected_external(*_args, **_kwargs):
 
 @pytest.fixture(autouse=True)
 def no_external_calls(monkeypatch):
-    monkeypatch.setattr(database, "async_session", _unexpected_external)
     monkeypatch.setattr(socket, "create_connection", _unexpected_external)
     monkeypatch.setattr(socket.socket, "connect", _unexpected_external)
     monkeypatch.setattr(subprocess, "run", _unexpected_external)

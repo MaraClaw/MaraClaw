@@ -14,7 +14,7 @@ Security rules:
 - Existing identity: only elevate after verifying PLATFORM_ADMIN_PASSWORD, then force
   password change. Never elevate a disabled identity or an email whose password does
   not match the env secret.
-- Membership is null-tenant so disabling a company cannot lock out the platform admin.
+- Genesis membership belongs to the MaraClaw system org so default agents can seed.
 """
 
 from __future__ import annotations
@@ -24,10 +24,12 @@ import secrets
 from app.config import get_settings
 from app.core.logging import logger
 from app.core.security import hash_password_async, verify_password_async
-from app.dao import identity_dao, participant_dao, user_dao
+from app.dao import identity_dao, participant_dao, tenant_dao, user_dao
 from app.db.session import connection_ctx
 from app.records.identity import IdentityRecord
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.system_org_seeder import MARACLAW_SLUG
 
 
 class PlatformAdminSeedError(RuntimeError):
@@ -51,39 +53,58 @@ async def _unique_username(email: str) -> str:
     return f"{base}_{secrets.token_hex(8)}"[:100]
 
 
+async def _require_maraclaw() -> TenantRecord:
+    tenant = await tenant_dao.get_by_slug(MARACLAW_SLUG)
+    if tenant is None or not tenant.is_active:
+        raise PlatformAdminSeedError("MaraClaw organization is not available")
+    return tenant
+
+
+async def _bind_directory(user: UserRecord) -> None:
+    from app.services.registration_service import registration_service
+
+    await registration_service.bind_org_member(user)
+
+
 async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
-    """Ensure a null-tenant platform_admin membership for the identity."""
+    """Ensure a MaraClaw platform_admin membership for the identity."""
+    maraclaw = await _require_maraclaw()
     users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
     platform_user = next((u for u in users if u.role == "platform_admin"), None)
     if platform_user:
+        updates: dict[str, object] = {}
         if not platform_user.is_active:
-            platform_user = await user_dao.update(db_obj=platform_user, obj_in={"is_active": True}) or platform_user
-        # Prefer null tenant so company disable cannot lock out the platform admin.
-        if platform_user.tenant_id is not None:
-            platform_user = await user_dao.update(db_obj=platform_user, obj_in={"tenant_id": None}) or platform_user
+            updates["is_active"] = True
+        if platform_user.tenant_id != maraclaw.id:
+            updates["tenant_id"] = maraclaw.id
+        if updates:
+            platform_user = await user_dao.update(db_obj=platform_user, obj_in=updates) or platform_user
         platform_user.identity = identity
+        await _bind_directory(platform_user)
         return platform_user
 
-    null_tenant_user = next((u for u in users if u.tenant_id is None), None)
-    if null_tenant_user:
+    reusable = next((u for u in users if u.tenant_id in {None, maraclaw.id}), None)
+    if reusable:
         updated = await user_dao.update(
-            db_obj=null_tenant_user,
+            db_obj=reusable,
             obj_in={
                 "role": "platform_admin",
+                "tenant_id": maraclaw.id,
                 "is_active": True,
                 "registration_source": "bootstrap",
                 "is_genesis": True,
             },
         )
-        user = updated or null_tenant_user
+        user = updated or reusable
         user.identity = identity
+        await _bind_directory(user)
         return user
 
     user = await user_dao.create(
         obj_in={
             "identity_id": identity.id,
-            "tenant_id": None,
-            "display_name": identity.username or "Platform Admin",
+            "tenant_id": maraclaw.id,
+            "display_name": "GPA",
             "role": "platform_admin",
             "registration_source": "bootstrap",
             "is_active": True,
@@ -96,6 +117,7 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
         avatar_url=user.avatar_url,
     )
     user.identity = identity
+    await _bind_directory(user)
     return user
 
 
@@ -186,10 +208,25 @@ async def ensure_platform_admin() -> UserRecord:
     """
     existing = await _load_genesis_with_credentials()
     if existing is not None:
-        logger.info(
-            "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
-            existing.id,
-        )
+        settings = get_settings()
+        env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
+        actual = (getattr(getattr(existing, "identity", None), "email", None) or "").strip().lower()
+        if env_email and actual and env_email != actual:
+            logger.warning(
+                "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
+                "env seed skipped because the database already has usable credentials. "
+                "Sign in with the genesis email (admin console).",
+                env_email,
+                actual,
+            )
+        else:
+            logger.info(
+                "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
+                existing.id,
+            )
+        identity = getattr(existing, "identity", None)
+        if identity is not None:
+            return await _ensure_platform_user(identity)
         return existing
 
     settings = get_settings()

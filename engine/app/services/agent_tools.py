@@ -147,7 +147,6 @@ def _set_cached_tool_config(agent_id: uuid.UUID | None, tool_name: str, config: 
 
 async def _get_tool_config(agent_id: uuid.UUID | None, tool_name: str) -> JsonObject | None:
     dependencies = _tool_runtime_tool_config.ToolConfigDependencies(
-        session_factory=lambda: None,  # ignored; tool_config uses DAOs
         decrypt_sensitive_fields=_decrypt_sensitive_fields,
         get_cached_tool_config=_get_cached_tool_config,
         set_cached_tool_config=_set_cached_tool_config,
@@ -180,11 +179,11 @@ def _patch_computer_tool_descriptions(tools: list[ToolDefinition], os_type: str)
 
 
 async def _agent_has_feishu(agent_id: uuid.UUID) -> bool:
-    return await _tool_runtime_catalog.agent_has_feishu(agent_id, session_factory=None)
+    return await _tool_runtime_catalog.agent_has_feishu(agent_id)
 
 
 async def _agent_has_any_channel(agent_id: uuid.UUID) -> bool:
-    return await _tool_runtime_catalog.agent_has_any_channel(agent_id, session_factory=None)
+    return await _tool_runtime_catalog.agent_has_any_channel(agent_id)
 
 
 _agent_has_feishu._uses_catalog_channel_presence = True
@@ -248,7 +247,6 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
     ):
         raise ValueError("Agent tool catalog contains an invalid function definition")
     dependencies = _tool_runtime_catalog.CatalogDependencies(
-        session_factory=lambda: None,  # ignored; catalog uses DAOs
         agent_has_feishu=_agent_has_feishu,
         agent_has_any_channel=_agent_has_any_channel,
         get_computer_os_type=_get_computer_os_type,

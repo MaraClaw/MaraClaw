@@ -4,9 +4,12 @@ import { AdminShell } from '@/components/layout/admin-shell'
 import { AccountPage } from '@/pages/account'
 import { ForgotPasswordPage } from '@/pages/forgot-password'
 import { LoginPage } from '@/pages/login'
+import { CompaniesPage } from '@/pages/companies'
+import { CompanyDetailPage } from '@/pages/company-detail'
 import { OverviewPage } from '@/pages/overview'
 import { PlaceholderPage } from '@/pages/placeholder'
 import { ResetPasswordPage } from '@/pages/reset-password'
+import { SettingsPage } from '@/pages/settings'
 import { ProtectedRoute } from '@/routes/protected'
 
 export function AppRouter() {
@@ -21,16 +24,8 @@ export function AppRouter() {
           <Route element={<AdminShell />}>
             <Route index element={<OverviewPage />} />
             <Route path="account" element={<AccountPage />} />
-            <Route
-              path="companies"
-              element={
-                <PlaceholderPage
-                  title="Companies"
-                  description="Platform-wide company management and stats."
-                  apiHint="/api/admin/companies"
-                />
-              }
-            />
+            <Route path="companies" element={<CompaniesPage />} />
+            <Route path="companies/:companyId" element={<CompanyDetailPage />} />
             <Route
               path="users"
               element={
@@ -51,16 +46,7 @@ export function AppRouter() {
                 />
               }
             />
-            <Route
-              path="settings"
-              element={
-                <PlaceholderPage
-                  title="Settings"
-                  description="Platform flags, enterprise LLM/SSO, and tenant defaults."
-                  apiHint="/api/admin/platform-settings · /api/enterprise/*"
-                />
-              }
-            />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

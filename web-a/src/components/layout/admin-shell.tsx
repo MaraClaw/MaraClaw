@@ -3,7 +3,6 @@ import {
   Building2,
   KeyRound,
   LayoutDashboard,
-  LogOut,
   Menu,
   Settings2,
   Shield,
@@ -12,11 +11,9 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 
 import { MaraClawMark } from '@/components/brand/maraclaw-mark'
-import { ThemeToggle } from '@/components/theme-toggle'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useAuth } from '@/hooks/use-auth'
@@ -43,41 +40,58 @@ function roleLabel(role: string | undefined): string {
 }
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+  const { mustChangePassword } = useAuth()
+
   return (
     <nav className="flex flex-col gap-1 px-2" aria-label="Admin">
-      {navItems.map(({ to, label, icon: Icon, end }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={end}
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            cn(
-              'flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-              isActive
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-            )
-          }
-        >
-          <Icon className="size-4 shrink-0 opacity-80" aria-hidden />
-          {label}
-        </NavLink>
-      ))}
+      {navItems.map(({ to, label, icon: Icon, end }) => {
+        const locked = mustChangePassword && to !== '/account' && to !== '/settings'
+        if (locked) {
+          return (
+            <span
+              key={to}
+              className="flex cursor-not-allowed items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/40"
+              title="Change your password to open the rest of the console"
+              aria-disabled="true"
+            >
+              <Icon className="size-4 shrink-0 opacity-70" aria-hidden />
+              {label}
+            </span>
+          )
+        }
+        return (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
+                isActive
+                  ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                  : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+              )
+            }
+          >
+            <Icon className="size-4 shrink-0 opacity-80" aria-hidden />
+            {label}
+          </NavLink>
+        )
+      })}
+      {mustChangePassword ? (
+        <p className="px-3 pt-2 text-xs leading-relaxed text-muted-foreground">
+          Change your password on Account to unlock Overview, Companies, and the rest of the console.
+        </p>
+      ) : null}
     </nav>
   )
 }
 
 export function AdminShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { user, logout } = useAuth()
-  const navigate = useNavigate()
+  const { user } = useAuth()
   const reduceMotion = useReducedMotion()
-
-  function handleLogout() {
-    logout()
-    navigate('/login', { replace: true })
-  }
 
   return (
     <div className="flex min-h-svh bg-background">
@@ -104,16 +118,6 @@ export function AdminShell() {
               <p className="truncate text-xs text-muted-foreground">{roleLabel(user?.role)}</p>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start"
-            onClick={handleLogout}
-          >
-            <LogOut className="size-4" aria-hidden />
-            Sign out
-          </Button>
         </div>
       </aside>
 
@@ -155,55 +159,21 @@ export function AdminShell() {
             <div className="flex-1 py-4">
               <NavItems onNavigate={() => setMobileOpen(false)} />
             </div>
-            <div className="border-t border-sidebar-border p-3">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start"
-                onClick={handleLogout}
-              >
-                <LogOut className="size-4" aria-hidden />
-                Sign out
-              </Button>
-            </div>
           </motion.aside>
         </div>
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border/80 bg-background/90 px-4 backdrop-blur-md md:px-6">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="md:hidden"
-            onClick={() => setMobileOpen(true)}
-            aria-label="Open navigation"
-          >
-            <Menu className="size-4" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-muted-foreground">
-              Operator console
-            </p>
-          </div>
-          <Badge variant="secondary" className="hidden sm:inline-flex">
-            {roleLabel(user?.role)}
-          </Badge>
-          <ThemeToggle />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="hidden sm:inline-flex"
-            onClick={handleLogout}
-          >
-            <LogOut className="size-4" aria-hidden />
-            Sign out
-          </Button>
-        </header>
-
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="fixed top-3 left-3 z-30 md:hidden"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open navigation"
+        >
+          <Menu className="size-4" />
+        </Button>
         <main id="main" className="flex-1 px-4 py-6 md:px-6 md:py-8">
           <Outlet />
         </main>

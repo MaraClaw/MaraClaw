@@ -26,6 +26,7 @@ from app.records.system_setting import SystemSettingRecord
 from app.records.task import TaskLogRecord, TaskRecord
 from app.records.template import AgentTemplateRecord
 from app.records.tenant import TenantRecord
+from app.records.tenant_email_domain import TenantEmailDomainRecord
 from app.records.tool import AgentToolRecord, ToolRecord
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 from app.records.user import UserRecord
@@ -64,6 +65,7 @@ __all__ = [
     "SystemSettingRecord",
     "TaskLogRecord",
     "TaskRecord",
+    "TenantEmailDomainRecord",
     "TenantRecord",
     "ToolRecord",
     "TriggerExecutionRecord",

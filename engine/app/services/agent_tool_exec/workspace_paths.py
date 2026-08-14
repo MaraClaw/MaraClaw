@@ -6,15 +6,8 @@ import uuid
 from pathlib import Path
 
 
-async def _get_agent_tenant_id(
-    agent_id: uuid.UUID,
-    *,
-    async_session_factory=None,
-    select_fn=None,
-    agent_model=None,
-) -> str | None:
-    """Resolve agent tenant id via DAO. Legacy kwargs accepted and ignored."""
-    del async_session_factory, select_fn, agent_model
+async def _get_agent_tenant_id(agent_id: uuid.UUID) -> str | None:
+    """Resolve agent tenant id via DAO."""
     try:
         from app.dao.agent_dao import agent_dao
 

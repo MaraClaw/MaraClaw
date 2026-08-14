@@ -122,7 +122,6 @@ async def test_facade_builds_fresh_catalog_dependencies_from_current_globals(mon
     monkeypatch.setattr(catalog, "get_agent_tools_for_llm", get_agent_tools)
 
     # When: facade callbacks are replaced between calls.
-    # session_factory is a fixed DAO-era no-op (async_session removed).
     monkeypatch.setattr(agent_tools, "_agent_has_feishu", first_feishu)
     await agent_tools.get_agent_tools_for_llm(uuid.uuid4())
     monkeypatch.setattr(agent_tools, "_agent_has_feishu", second_feishu)

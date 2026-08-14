@@ -7,46 +7,6 @@ from app.services import agent_tools
 from app.services.tool_runtime import tool_config
 
 
-class _Result:
-    def __init__(self, *, scalar_value=None, row=None):
-        self._scalar_value = scalar_value
-        self._row = row
-
-    def scalar_one_or_none(self):
-        return self._scalar_value
-
-    def first(self):
-        return self._row
-
-
-class _Session:
-    def __init__(self, responses):
-        self._responses = list(responses)
-
-    async def execute(self, _statement):
-        if not self._responses:
-            raise AssertionError("unexpected execute call")
-        return self._responses.pop(0)
-
-
-class _SessionFactory:
-    def __init__(self, *sessions):
-        self._sessions = list(sessions)
-        self._active_session = None
-
-    def __call__(self):
-        if not self._sessions:
-            raise AssertionError("unexpected async_session call")
-        self._active_session = self._sessions.pop(0)
-        return self
-
-    async def __aenter__(self):
-        return self._active_session
-
-    async def __aexit__(self, _exc_type, _exc, _traceback):
-        return False
-
-
 def test_tool_config_cache_normalizes_uuid_and_expires_entries():
     # Given: an isolated runtime cache and a fixed clock.
     agent_id = uuid.uuid4()
@@ -102,7 +62,6 @@ async def test_tool_config_merges_global_tenant_and_agent_values_in_precedence_o
         AsyncMock(return_value=(assignment, tool_fields)),
     )
     dependencies = tool_config.ToolConfigDependencies(
-        session_factory=_SessionFactory(_Session(())),
         decrypt_sensitive_fields=lambda config, _schema: dict(config),
         get_cached_tool_config=lambda _agent_id, _tool_name: None,
         set_cached_tool_config=lambda _agent_id, _tool_name, config: cached.append(config),
@@ -130,7 +89,6 @@ async def test_tool_config_does_not_cache_an_empty_result(monkeypatch):
     monkeypatch.setattr(tool_config.agent_tool_dao, "get_assignment_with_tool_by_name", AsyncMock(return_value=None))
     monkeypatch.setattr(tool_config.tool_dao, "get_by_name", AsyncMock(return_value=None))
     dependencies = tool_config.ToolConfigDependencies(
-        session_factory=_SessionFactory(_Session(())),
         decrypt_sensitive_fields=lambda config, _schema: dict(config),
         get_cached_tool_config=lambda _agent_id, _tool_name: None,
         set_cached_tool_config=lambda _agent_id, _tool_name, config: cache_sets.append(config),

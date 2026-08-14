@@ -12,6 +12,7 @@ from pathlib import Path
 
 from psycopg import errors as pg_errors
 
+from app.db.errors import DbError, UniqueViolationError
 from app.db.pool import close_pool, init_pool
 from app.db.session import connection_ctx
 
@@ -127,7 +128,45 @@ PATCHES = [
     CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
     ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin'
     """,
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
+    ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tenant_email_domains (
+        id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+        domain VARCHAR(255) NOT NULL,
+        is_default BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (id),
+        FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_domain ON tenant_email_domains (domain)",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_default
+    ON tenant_email_domains (tenant_id) WHERE is_default IS TRUE
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_tenant_email_domains_tenant_id ON tenant_email_domains (tenant_id)",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
+    ON users (identity_id) WHERE tenant_id IS NOT NULL
+    """,
 ]
+
+
+def _unwrap_pg_error(exc: BaseException) -> BaseException:
+    """Return the underlying psycopg error when ``conn.execute`` wrapped it."""
+    if isinstance(exc, DbError) and isinstance(exc.orig, BaseException):
+        return exc.orig
+    return exc
+
+
+def _is_ignorable_error(exc: BaseException, kinds: tuple[type[BaseException], ...]) -> bool:
+    return isinstance(_unwrap_pg_error(exc), kinds)
 
 
 def _clean_statement(stmt: str) -> str:
@@ -261,8 +300,6 @@ async def _apply_sql_script(path: Path) -> None:
         for body in _statement_bodies(sql):
             try:
                 await conn.execute(body)
-            except _IGNORABLE as exc:
-                print(f"[bootstrap] already present: {body[:80]!r} ({exc})", flush=True)
             except Exception:
                 print(f"[bootstrap] statement failed: {body[:80]!r}", flush=True)
                 raise
@@ -285,8 +322,26 @@ async def main() -> None:
                     await conn.execute("SET lock_timeout = '2000ms'")
                     await conn.execute(sql)
                 print(f"[bootstrap] Patch applied: {sql.strip()[:80]}", flush=True)
-            except _IGNORABLE as exc:
-                print(f"[bootstrap] Patch already present: {sql.strip()[:80]} ({exc})", flush=True)
+            except Exception as exc:
+                if _is_ignorable_error(exc, _IGNORABLE):
+                    print(
+                        f"[bootstrap] Patch already present: {sql.strip()[:80]} "
+                        f"({_unwrap_pg_error(exc)})",
+                        flush=True,
+                    )
+                    continue
+                # Dirty DBs may already have two tenant memberships per identity.
+                if "ux_users_identity_single_tenant" in sql and (
+                    isinstance(exc, UniqueViolationError)
+                    or isinstance(_unwrap_pg_error(exc), pg_errors.UniqueViolation)
+                ):
+                    print(
+                        "[bootstrap] Skipping ux_users_identity_single_tenant; "
+                        "duplicate identity memberships already exist",
+                        flush=True,
+                    )
+                    continue
+                raise
         print("[bootstrap] Done", flush=True)
     finally:
         await close_pool()

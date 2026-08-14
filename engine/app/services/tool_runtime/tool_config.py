@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager, suppress
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from app.config import get_settings
 from app.core.json_types import JsonObject
@@ -26,7 +25,6 @@ _TOOL_CONFIG_CACHE_TTL_SECONDS = 60
 class ToolConfigDependencies:
     """Facade-provided collaborators captured for one configuration lookup."""
 
-    session_factory: Callable[[], AbstractAsyncContextManager[Any]]
     decrypt_sensitive_fields: Callable[[JsonObject, ToolConfigSchema | None], JsonObject]
     get_cached_tool_config: Callable[[uuid.UUID | None, str], JsonObject | None]
     set_cached_tool_config: Callable[[uuid.UUID | None, str, JsonObject], None]
@@ -114,9 +112,6 @@ async def get_tool_config(
     cached = dependencies.get_cached_tool_config(agent_id, tool_name)
     if cached is not None:
         return cached
-
-    # Dual-stack: session_factory is accepted for call-site compatibility; lookups use DAOs.
-    _ = dependencies.session_factory
 
     agent_tenant_id = None
     if agent_id:

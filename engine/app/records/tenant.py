@@ -34,6 +34,8 @@ class TenantRecord:
     max_webhook_rate_ceiling: int = 5
     a2a_async_enabled: bool = True
     default_model_id: UUID | None = None
+    is_system: bool = False
+    is_default_end_user_org: bool = False
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> TenantRecord:
@@ -63,6 +65,8 @@ class TenantRecord:
             max_webhook_rate_ceiling=int(row.get("max_webhook_rate_ceiling") or 5),
             a2a_async_enabled=bool(row.get("a2a_async_enabled", True)),
             default_model_id=row.get("default_model_id"),
+            is_system=bool(row.get("is_system", False)),
+            is_default_end_user_org=bool(row.get("is_default_end_user_org", False)),
         )
 
     @property

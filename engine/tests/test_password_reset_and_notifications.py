@@ -8,14 +8,8 @@ from fastapi import BackgroundTasks, HTTPException
 from app.api import auth as auth_api
 from app.api.notification import BroadcastRequest, broadcast_notification
 from app.core.security import hash_password, verify_password
-from app.database import transaction
 from app.schemas.schemas import ForgotPasswordRequest, ResetPasswordRequest
 from app.services import password_reset_service, system_email_service
-
-
-async def run_with_db(db, func, *args, **kwargs):
-    async with transaction(db):
-        return await func(*args, **kwargs)
 
 
 class DummyScalars:

@@ -1,4 +1,4 @@
-"""Psycopg3 database access layer (foundation for SQLAlchemy migration)."""
+"""Psycopg3 database access layer."""
 
 from app.db.connection import DbConnection
 from app.db.errors import DbError, UniqueViolationError, map_psycopg_error

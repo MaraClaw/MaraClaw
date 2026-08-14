@@ -33,12 +33,16 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
 
     async def get_by_login_identifier(self, identifier: str) -> IdentityRecord | None:
         """Find identity by email, phone, or username."""
+        value = (identifier or "").strip()
+        if not value:
+            return None
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM identities "
-                "WHERE email = %(identifier)s OR phone = %(identifier)s OR username = %(identifier)s "
+                "WHERE lower(email) = lower(%(identifier)s) "
+                "OR phone = %(identifier)s OR username = %(identifier)s "
                 "LIMIT 1",
-                {"identifier": identifier},
+                {"identifier": value},
             )
             return IdentityRecord.from_row(row) if row else None
 

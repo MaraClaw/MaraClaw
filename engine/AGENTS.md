@@ -19,7 +19,6 @@ MaraClaw-r2/
 │   ├── db/                      # live psycopg pool/session/errors
 │   ├── dao/                     # parameterized SQL repositories
 │   ├── records/                 # dataclasses + from_row (not ORM)
-│   ├── database.py              # raise-shim; async_session is gone
 │   ├── schemas/                 # schemas.py grab-bag + agent_credential
 │   ├── scripts/                 # bootstrap_db + one-off modules
 │   └── services/                # mixed flat files + runtime packages
@@ -49,7 +48,7 @@ No `alembic/`, no `app/models/`.
 | Admin APIs / RBAC inventory | `docs/admin-apis.md` | Platform vs org admin; genesis + `must_change_password` |
 | Auth deps | `app/core/security.py` | JWT, bcrypt, `get_current_user` / force-change gate |
 | Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
-| DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs. `app/database.py` raises |
+| DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
@@ -102,7 +101,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - Do not add SQLAlchemy, `app/models/`, or Alembic. Schema changes go in `schema_baseline.sql` + `PATCHES`.
-- Do not call `app.database.async_session` (raises). Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
+- Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
 - Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `llm/client.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`.
 - Do not start process-wide connector/`start_all`/trigger loops from request handlers (one `start_client` after save is the existing exception). Do not start them before `init_pool`.
 - Do not inject sandbox guest proxy from process `HTTP_PROXY`. Do not put authenticated proxy URLs on bwrap `--setenv`.
@@ -138,11 +137,12 @@ uv run python -m app.scripts.bootstrap_db
 ## NOTES
 
 - No `.github/workflows` in this checkout. Documented local gates: ruff, both freeze scripts, ty, pytest. No Docker/schema job. Local `scripts/lint.sh` does **not** run the freeze scripts.
-- Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. Needs `--cap-add=ALL` + `seccomp=unconfined` for setuid bwrap.
+- Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
 - `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. Source start always bootstraps unless `SKIP_MIGRATIONS=1`.
 - `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
-- Platform admin seed runs **before** agent seeders. Membership is null-tenant (`tenant_id=None`) so disabling a company cannot lock out the operator.
+- Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
+- Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down).
 - Image may setuid `bwrap` (`BWRAP_SETUID=1`). Local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; the live pool is psycopg3. Do not add new asyncpg callers.

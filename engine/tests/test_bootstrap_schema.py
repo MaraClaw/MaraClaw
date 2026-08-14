@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.scripts.bootstrap_db import _statement_bodies
+from psycopg import errors as pg_errors
+
+from app.db.errors import DbError
+from app.scripts.bootstrap_db import _IGNORABLE, _is_ignorable_error, _statement_bodies
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "schema_baseline.sql"
@@ -33,6 +36,19 @@ def test_users_persist_genesis_flag() -> None:
     end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
     block = sql[start:end]
     assert "is_genesis BOOLEAN NOT NULL DEFAULT false" in block
+    alter_at = sql.find("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis")
+    idx_at = sql.find("ux_users_genesis_platform_admin")
+    assert 0 <= alter_at < idx_at
+
+
+def test_bootstrap_ignores_wrapped_duplicate_errors() -> None:
+    wrapped = DbError("already exists", orig=pg_errors.DuplicateTable("already exists"))
+    assert _is_ignorable_error(wrapped, _IGNORABLE)
+    missing = DbError(
+        'column "is_genesis" does not exist',
+        orig=pg_errors.UndefinedColumn('column "is_genesis" does not exist'),
+    )
+    assert not _is_ignorable_error(missing, _IGNORABLE)
 
 
 def test_tenant_not_null_columns_have_defaults() -> None:
@@ -45,8 +61,15 @@ def test_tenant_not_null_columns_have_defaults() -> None:
         "default_message_limit INTEGER NOT NULL DEFAULT 50",
         "sso_enabled BOOLEAN NOT NULL DEFAULT false",
         "a2a_async_enabled BOOLEAN NOT NULL DEFAULT true",
+        "is_system BOOLEAN NOT NULL DEFAULT false",
+        "is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
     ):
         assert column in block, column
+    assert "CREATE TABLE IF NOT EXISTS tenant_email_domains" in sql
+    assert "ux_tenants_default_end_user_org" in sql
+    assert "ux_tenant_email_domains_domain" in sql
+    assert "ux_users_identity_single_tenant" in sql
+    assert "WHEN unique_violation THEN" in sql
 
 
 def test_hot_path_indexes_are_declared() -> None:
@@ -62,6 +85,7 @@ def test_hot_path_indexes_are_declared() -> None:
         "ix_users_tenant_id",
         "ux_users_genesis_platform_admin",
         "ux_users_genesis_org_admin",
+        "ux_users_identity_single_tenant",
         "ix_tools_tenant_source",
         "ix_chat_messages_conv_created",
         "ix_chat_sessions_last_message",

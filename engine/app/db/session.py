@@ -1,8 +1,5 @@
 """Request-scoped psycopg connection helpers.
 
-These mirror the behavioral contracts of ``app.database.get_db`` /
-``transaction`` for the new data layer:
-
 - request-scoped connection via ContextVar
 - commit on success, rollback on exception for top-level scopes
 - nested ``transaction()`` joins the existing connection

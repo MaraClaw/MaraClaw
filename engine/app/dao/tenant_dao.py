@@ -31,6 +31,8 @@ _TENANT_COLUMNS = (
     "max_webhook_rate_ceiling",
     "a2a_async_enabled",
     "default_model_id",
+    "is_system",
+    "is_default_end_user_org",
 )
 
 
@@ -40,6 +42,14 @@ class TenantDAO(BaseDAO[TenantRecord]):
     table = "tenants"
     columns = _TENANT_COLUMNS
     record_factory = staticmethod(TenantRecord.from_row)
+
+    async def get_default_end_user_org(self) -> TenantRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM tenants "
+                "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
+            )
+            return TenantRecord.from_row(row) if row else None
 
     async def get_by_slug(self, slug: str) -> TenantRecord | None:
         async with self.session() as db:
