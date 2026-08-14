@@ -137,7 +137,7 @@ uv run python -m app.scripts.bootstrap_db
 ## NOTES
 
 - No `.github/workflows` in this checkout. Documented local gates: ruff, both freeze scripts, ty, pytest. No Docker/schema job. Local `scripts/lint.sh` does **not** run the freeze scripts.
-- Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. Needs `--cap-add=ALL` + `seccomp=unconfined` for setuid bwrap.
+- Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
 - `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. Source start always bootstraps unless `SKIP_MIGRATIONS=1`.
 - `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
