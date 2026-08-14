@@ -52,9 +52,9 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
-| `GET` | `/api/admin/companies` | — | `CompanyStats[]`: `id`, `name`, `slug`, `is_active`, `sso_enabled`, `sso_domain`, `created_at`, `user_count`, `agent_count`, `agent_running_count`, `total_tokens`, `cache_read_tokens_total`, `org_admin_email` |
-| `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin (initial password must be changed on first login) |
-| `PUT` | `/api/admin/companies/{company_id}/toggle` | — | `{ ok, is_active }` — disables company and pauses running agents when turning off |
+| `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
+| `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
+| `PUT` | `/api/admin/companies/{company_id}/toggle` | — | `{ ok, is_active }` — **400** for MaraClaw/OpenClaw (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
 | `GET` | `/api/admin/metrics/leaderboards` | — | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |
 | `GET` | `/api/admin/metrics/enhanced` | — | avg tokens/session 30d, 7d retention, channel distribution, tool category top10, churn warnings |
@@ -91,7 +91,7 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/tenants/{tenant_id}` | platform / org | — | Org: own tenant only. **Res:** `TenantOut` |
-| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. Cannot disable the default end-user org. |
+| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. **`is_active` is platform_admin only** (403 otherwise). Cannot disable system or default end-user orgs (MaraClaw / OpenClaw). Setting `is_active=false` uses the same member/agent/automation cascade as company toggle. |
 | `GET` | `/api/tenants/{tenant_id}/email-domains` | platform / org | — | Claimed email domains for the company |
 | `POST` | `/api/tenants/{tenant_id}/email-domains` | platform / org | `{ domain, is_default? }` | **201**. **409** if another company already claims the domain |
 | `PATCH` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | `{ is_default: true }` | Make this the default invite domain |
@@ -105,7 +105,7 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 ```text
 id, name, slug, im_provider, timezone, country_region, is_active,
 sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_at,
-is_system, is_default_end_user_org
+is_system, is_default_end_user_org, can_disable
 ```
 
 #### Related non-admin tenant routes (context only)

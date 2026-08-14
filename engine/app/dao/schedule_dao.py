@@ -62,5 +62,16 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
 
+    async def disable_for_tenant(self, tenant_id: UUID) -> int:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL "
+                "WHERE is_enabled IS TRUE AND agent_id IN ("
+                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                ") RETURNING id",
+                {"tenant_id": tenant_id},
+            )
+            return len(rows)
+
 
 agent_schedule_dao = AgentScheduleDAO()

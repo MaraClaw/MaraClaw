@@ -12,7 +12,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - New document conversion belongs in `document_conversion/`, not in `agent_tools.py`.
 - New OKR behavior should use focused `okr_*.py` modules.
 - New org-sync adapter/coordinator behavior belongs in `org_sync/`; keep `org_sync_adapter.py` as compatibility/facade glue when possible.
-- New tool execution handlers belong in `agent_tool_exec/`; seed catalog rows in `tool_definitions/`; runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces.
+- New tool execution handlers belong in `agent_tool_exec/`; seed catalog rows in `tool_definitions/`; runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Web search / page-read live in `agent_tool_exec/{web_search,search_providers,web_read}.py` — do not add provider branches back to `agent_tools.py`.
 
 ## God Files
 
@@ -29,7 +29,8 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - **Exception — genesis platform admin:** `platform_admin_seeder.ensure_platform_admin()` is **required** on bootstrap. It first requires usable genesis credentials in the database; only then falls back to `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`. Raises `PlatformAdminSeedError` when neither source is present. `app.main` re-raises (fail-closed). Do not demote this to warn-only.
 - Platform admin rules: create path sets `must_change_password=True`; existing identity only elevates if env password verifies (never elevate by email alone; never re-enable a disabled identity; never overwrite password when genesis credentials already exist); genesis membership is the **MaraClaw** system org.
 - Agent seeders (`agent_seeder`) look up `first_by_role("platform_admin")` and run **after** platform admin seed.
-- New companies: `tenant_provisioning.create_tenant_with_org_admin` (slug + identity + `org_admin` + participant + `bind_org_member`). Used by `POST /api/tenants/` and `POST /api/admin/companies`. Duplicate admin email → `AdminEmailTakenError`.
+- New companies: `tenant_provisioning.create_tenant_with_org_admin` (slug + identity + `org_admin` + participant + `bind_org_member`). Used by `POST /api/tenants/` and `POST /api/admin/companies`. Duplicate admin email → `AdminEmailTakenError`. The genesis admin email host is claimed as the tenant's default email domain (`techadmin@marathon.vn` → `marathon.vn`). Domain already claimed → `DomainClaimedError`.
+- Disable/enable a company: `tenant_lifecycle.set_tenant_active`. MaraClaw/OpenClaw (`is_system` / `is_default_end_user_org`) cannot be disabled. Disable deactivates members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members only.
 - Additional admins: `admin_provisioning.py`. Genesis is `users.is_genesis`. Only those callers may create another of the same role, or activate/deactivate the other admins of that role.
 - Admin trail: `admin_audit.py` → `admin_audit_logs` (actor, action, time, `changes` before/after). Distinct from agent-scoped `audit_logs`. Never raise on write failure.
 - New default tools/templates/agents should preserve tenant/global visibility assumptions already encoded in the current seeders.

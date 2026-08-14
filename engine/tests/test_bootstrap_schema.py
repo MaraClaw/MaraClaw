@@ -89,6 +89,7 @@ def test_hot_path_indexes_are_declared() -> None:
         "ix_tools_tenant_source",
         "ix_chat_messages_conv_created",
         "ix_chat_sessions_last_message",
+        "ix_tenants_name_tsv",
     ):
         assert name in sql, name
 

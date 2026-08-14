@@ -269,6 +269,29 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_company_rejects_claimed_admin_domain(monkeypatch):
+    from app.services.org_membership import DomainClaimedError
+
+    monkeypatch.setattr(
+        "app.api.admin.create_tenant_with_org_admin",
+        AsyncMock(side_effect=DomainClaimedError("Email domain is already claimed")),
+    )
+    platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_api.create_company(
+            admin_api.CompanyCreateRequest(
+                name="Marathon",
+                admin_email="techadmin@marathon.vn",
+                admin_password="temp-password",
+            ),
+            current_user=platform_user,
+        )
+    assert exc.value.status_code == 409
+    assert "domain" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
 async def test_create_company_rejects_existing_admin_email(monkeypatch):
     from app.services.tenant_provisioning import AdminEmailTakenError
 

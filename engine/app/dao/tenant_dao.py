@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
 from app.dao.base import BaseDAO
 from app.records.tenant import TenantRecord
+
+_SEARCH_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_MAX_SEARCH_TOKENS = 8
+_DEFAULT_SEARCH_LIMIT = 50
+
+
+def tenant_name_tsquery(raw: str) -> str | None:
+    """Build a prefix ``simple`` tsquery so ``mara`` matches ``MaraClaw``."""
+    tokens = _SEARCH_TOKEN.findall((raw or "").strip().lower())
+    if not tokens:
+        return None
+    return " & ".join(f"{token}:*" for token in tokens[:_MAX_SEARCH_TOKENS])
 
 _TENANT_COLUMNS = (
     "id",
@@ -106,6 +119,21 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants ORDER BY created_at {order} NULLS LAST"
+            )
+            return [TenantRecord.from_row(row) for row in rows]
+
+    async def search_by_name(self, raw: str, *, limit: int = _DEFAULT_SEARCH_LIMIT) -> Sequence[TenantRecord]:
+        query = tenant_name_tsquery(raw)
+        if query is None:
+            return await self.list_ordered_by_created_at(desc=True)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM tenants "
+                "WHERE name_tsv @@ to_tsquery('simple', %(query)s) "
+                "ORDER BY ts_rank_cd(name_tsv, to_tsquery('simple', %(query)s)) DESC, "
+                "created_at DESC NULLS LAST "
+                "LIMIT %(limit)s",
+                {"query": query, "limit": limit},
             )
             return [TenantRecord.from_row(row) for row in rows]
 

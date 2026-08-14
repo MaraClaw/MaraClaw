@@ -97,22 +97,65 @@ async def test_list_companies(monkeypatch):
     monkeypatch.setattr(admin_api.agent_dao, "count_for_tenant", AsyncMock(return_value=2))
     monkeypatch.setattr(admin_api.agent_dao, "sum_tokens_for_tenant", AsyncMock(return_value=(10, 1)))
     monkeypatch.setattr(admin_api.user_dao, "first_org_admin_email", AsyncMock(return_value="oa@acme.com"))
-    result = await admin_api.list_companies(_user())
+    result = await admin_api.list_companies(current_user=_user())
     assert len(result) == 1
     assert result[0].org_admin_email == "oa@acme.com"
     assert result[0].user_count == 3
+    assert result[0].can_disable is True
+
+
+@pytest.mark.asyncio
+async def test_list_companies_uses_name_search(monkeypatch):
+    tenant = _tenant()
+    search = AsyncMock(return_value=[tenant])
+    monkeypatch.setattr(admin_api.tenant_dao, "search_by_name", search)
+    monkeypatch.setattr(admin_api.user_dao, "count_for_tenant", AsyncMock(return_value=1))
+    monkeypatch.setattr(admin_api.agent_dao, "count_for_tenant", AsyncMock(return_value=0))
+    monkeypatch.setattr(admin_api.agent_dao, "sum_tokens_for_tenant", AsyncMock(return_value=(0, 0)))
+    monkeypatch.setattr(admin_api.user_dao, "first_org_admin_email", AsyncMock(return_value=None))
+    result = await admin_api.list_companies(q="  mara  ", current_user=_user())
+    assert len(result) == 1
+    search.assert_awaited_once_with("mara")
 
 
 @pytest.mark.asyncio
 async def test_toggle_company_pauses_when_disabling(monkeypatch):
     tenant = _tenant(is_active=True)
     monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=tenant))
-    monkeypatch.setattr(admin_api.tenant_dao, "update", AsyncMock(return_value=tenant))
-    pause = AsyncMock()
-    monkeypatch.setattr(admin_api.agent_dao, "pause_running_for_tenant", pause)
+    set_active = AsyncMock(return_value=tenant)
+    monkeypatch.setattr(admin_api, "set_tenant_active", set_active)
+    monkeypatch.setattr(admin_api, "write_admin_audit", AsyncMock())
     result = await admin_api.toggle_company(tenant.id, _user())
     assert result["is_active"] is False
-    pause.assert_awaited_once()
+    set_active.assert_awaited_once()
+    assert set_active.await_args.kwargs["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_company_rejects_system_and_default_orgs(monkeypatch):
+    from app.services.org_membership import DefaultOrgUnavailableError
+
+    system = _tenant(is_system=True)
+    monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=system))
+    monkeypatch.setattr(
+        admin_api,
+        "set_tenant_active",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("Cannot disable a system organization")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin_api.toggle_company(system.id, _user())
+    assert exc.value.status_code == 400
+
+    default = _tenant(is_default_end_user_org=True)
+    monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=default))
+    monkeypatch.setattr(
+        admin_api,
+        "set_tenant_active",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("Cannot disable the default end-user organization")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin_api.toggle_company(default.id, _user())
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -464,6 +507,9 @@ async def test_tenants_get_update_assign_delete(monkeypatch):
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     got = await tenants_api.get_tenant(tenant.id, pa)
     assert got.name == "Acme"
+    assert got.can_disable is True
+    assert tenants_api.TenantOut.model_validate(_tenant(is_system=True)).can_disable is False
+    assert tenants_api.TenantOut.model_validate(_tenant(is_default_end_user_org=True)).can_disable is False
 
     monkeypatch.setattr(tenants_api.tenant_dao, "update", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
@@ -685,6 +731,12 @@ async def test_seeder_unique_username_and_existing_platform_user(monkeypatch):
     identity = SimpleNamespace(id=uuid.uuid4(), username="admin")
     existing = _user(role="platform_admin", is_active=False, tenant_id=uuid.uuid4())
     existing.identity = None
+    monkeypatch.setattr(
+        seeder.tenant_dao,
+        "get_by_slug",
+        AsyncMock(return_value=_tenant(is_active=True, slug="maraclaw")),
+    )
+    monkeypatch.setattr(seeder, "_bind_directory", AsyncMock())
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[existing]))
     monkeypatch.setattr(
         seeder.user_dao,

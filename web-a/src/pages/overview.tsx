@@ -3,12 +3,15 @@ import { Building2, LineChart, Settings2, Users } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useAuth } from '@/hooks/use-auth'
+import { isPlatformAdminUser } from '@/lib/types/auth'
 
 const placeholders = [
   {
     title: 'Companies',
     description: 'Platform company list, create, enable/disable — /api/admin/companies',
     icon: Building2,
+    platformAdminOnly: true,
   },
   {
     title: 'Users & roles',
@@ -28,6 +31,11 @@ const placeholders = [
 ] as const
 
 export function OverviewPage() {
+  const { user } = useAuth()
+  const cards = placeholders.filter(
+    (item) => !('platformAdminOnly' in item && item.platformAdminOnly) || isPlatformAdminUser(user),
+  )
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
       <motion.div
@@ -52,7 +60,7 @@ export function OverviewPage() {
       </motion.div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {placeholders.map((item, i) => (
+        {cards.map((item, i) => (
           <motion.div
             key={item.title}
             initial={{ opacity: 0, y: 10 }}

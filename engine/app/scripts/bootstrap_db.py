@@ -155,6 +155,13 @@ PATCHES = [
     CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
     ON users (identity_id) WHERE tenant_id IS NOT NULL
     """,
+    """
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS name_tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
+    ) STORED
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv)",
 ]
 
 

@@ -25,6 +25,16 @@ class AdminEmailTakenError(Exception):
     """The requested org-admin email already belongs to an identity."""
 
 
+async def _claim_genesis_admin_email_domain(tenant_id, email: str) -> None:
+    """Claim the genesis admin host as this company's default email domain."""
+    from app.services.org_membership import add_email_domain, email_domain
+
+    domain = email_domain(email)
+    if domain is None:
+        return
+    await add_email_domain(tenant_id, domain, is_default=True)
+
+
 @dataclass(slots=True, frozen=True)
 class ProvisionedTenant:
     tenant: TenantRecord
@@ -140,6 +150,7 @@ async def create_tenant_with_org_admin(
             from app.services.registration_service import registration_service
 
             await registration_service.bind_org_member(org_admin)
+            await _claim_genesis_admin_email_domain(tenant.id, email)
     except UniqueViolationError as exc:
         raise AdminEmailTakenError(email) from exc
 

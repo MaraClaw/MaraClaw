@@ -21,7 +21,7 @@ export function CompanyDetailPage() {
   const queryClient = useQueryClient()
   const [domain, setDomain] = useState('')
 
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: listCompanies })
+  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: () => listCompanies() })
   const company = companies.data?.find((item) => item.id === companyId)
   const domains = useQuery({
     queryKey: ['email-domains', companyId],

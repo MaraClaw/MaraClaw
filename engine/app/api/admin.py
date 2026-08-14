@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 
 from app.core.security import require_role
 from app.dao.activity_log_dao import agent_activity_log_dao
@@ -28,6 +28,8 @@ from app.services.admin_provisioning import (
     is_genesis_platform_admin,
     set_peer_admin_active,
 )
+from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
+from app.services.tenant_lifecycle import set_tenant_active, tenant_can_be_disabled
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
 
 
@@ -59,6 +61,11 @@ class CompanyStats(BaseModel):
     total_tokens: int = 0
     cache_read_tokens_total: int = 0
     org_admin_email: str | None = None
+
+    @computed_field
+    @property
+    def can_disable(self) -> bool:
+        return tenant_can_be_disabled(self)
 
 
 class CompanyCreateRequest(BaseModel):
@@ -133,9 +140,18 @@ class PlatformSettingsUpdate(BaseModel):
 
 
 @router.get("/companies", response_model=list[CompanyStats])
-async def list_companies(current_user: UserRecord = Depends(require_role("platform_admin"))):
-    """List all companies with stats."""
-    tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
+async def list_companies(
+    q: str | None = None,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+):
+    """List companies with stats. ``q`` is prefix full-text search on name and slug."""
+    query = (q or "").strip()
+    if len(query) > 200:
+        raise HTTPException(status_code=400, detail="Search is too long")
+    if query:
+        tenants = await tenant_dao.search_by_name(query)
+    else:
+        tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
     result = []
 
     for tenant in tenants:
@@ -189,6 +205,8 @@ async def create_company(
         )
     except AdminEmailTakenError as exc:
         raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
+    except DomainClaimedError as exc:
+        raise HTTPException(status_code=409, detail="Email domain is already claimed") from exc
 
     tenant = provisioned.tenant
     await write_admin_audit(
@@ -341,17 +359,10 @@ async def toggle_company(
         raise HTTPException(status_code=404, detail="Company not found")
 
     new_state = not tenant.is_active
-    if not new_state:
-        from app.services.org_membership import DefaultOrgUnavailableError, assert_may_deactivate_tenant
-
-        try:
-            assert_may_deactivate_tenant(tenant, making_active=False)
-        except DefaultOrgUnavailableError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await tenant_dao.update(db_obj=tenant, obj_in={"is_active": new_state})
-
-    if not new_state:
-        await agent_dao.pause_running_for_tenant(company_id)
+    try:
+        await set_tenant_active(tenant, is_active=new_state)
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     await write_admin_audit(
         actor=current_user,

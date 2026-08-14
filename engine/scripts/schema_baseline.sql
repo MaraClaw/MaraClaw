@@ -173,6 +173,13 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
 	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;
 
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS name_tsv tsvector
+	GENERATED ALWAYS AS (
+		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
+	) STORED;
+
+CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv);
+
 CREATE TABLE IF NOT EXISTS tenant_email_domains (
 	id UUID NOT NULL,
 	tenant_id UUID NOT NULL,

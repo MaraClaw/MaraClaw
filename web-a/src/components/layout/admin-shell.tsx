@@ -17,6 +17,7 @@ import { MaraClawMark } from '@/components/brand/maraclaw-mark'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useAuth } from '@/hooks/use-auth'
+import { isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 const navItems: {
@@ -24,9 +25,10 @@ const navItems: {
   label: string
   icon: typeof LayoutDashboard
   end?: boolean
+  platformAdminOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/companies', label: 'Companies', icon: Building2 },
+  { to: '/companies', label: 'Companies', icon: Building2, platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: Users },
   { to: '/tools', label: 'Tools', icon: Wrench },
   { to: '/settings', label: 'Settings', icon: Settings2 },
@@ -40,11 +42,13 @@ function roleLabel(role: string | undefined): string {
 }
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
-  const { mustChangePassword } = useAuth()
+  const { mustChangePassword, user } = useAuth()
+  const platformAdmin = isPlatformAdminUser(user)
 
   return (
     <nav className="flex flex-col gap-1 px-2" aria-label="Admin">
-      {navItems.map(({ to, label, icon: Icon, end }) => {
+      {navItems.map(({ to, label, icon: Icon, end, platformAdminOnly }) => {
+        if (platformAdminOnly && !platformAdmin) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
           return (
@@ -81,7 +85,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
       })}
       {mustChangePassword ? (
         <p className="px-3 pt-2 text-xs leading-relaxed text-muted-foreground">
-          Change your password on Account to unlock Overview, Companies, and the rest of the console.
+          Change your password on Account to unlock the rest of the console.
         </p>
       ) : null}
     </nav>
