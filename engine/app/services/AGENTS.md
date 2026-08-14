@@ -26,11 +26,11 @@ This is the main business layer. It is intentionally mixed: flat service modules
 
 - Seeders are startup-path code and must be idempotent. `app.main.lifespan` can run them repeatedly.
 - Keep optional seed/bootstrap failures scoped and logged; do not make optional seeders bring down unrelated roles unless the caller explicitly requires that.
-- **Exception — genesis platform admin:** `platform_admin_seeder.ensure_platform_admin()` is **required** on bootstrap. Raises `PlatformAdminSeedError` when no platform admin exists and env credentials are missing/invalid. `app.main` re-raises (fail-closed). Do not demote this to warn-only.
-- Platform admin rules: credentials from `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`; create path sets `must_change_password=True`; existing identity only elevates if env password verifies (never elevate by email alone; never re-enable a disabled identity; never overwrite password when an admin already exists); membership is **null-tenant**.
+- **Exception — genesis platform admin:** `platform_admin_seeder.ensure_platform_admin()` is **required** on bootstrap. It first requires usable genesis credentials in the database; only then falls back to `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`. Raises `PlatformAdminSeedError` when neither source is present. `app.main` re-raises (fail-closed). Do not demote this to warn-only.
+- Platform admin rules: create path sets `must_change_password=True`; existing identity only elevates if env password verifies (never elevate by email alone; never re-enable a disabled identity; never overwrite password when genesis credentials already exist); membership is **null-tenant**.
 - Agent seeders (`agent_seeder`) look up `first_by_role("platform_admin")` and run **after** platform admin seed.
 - New companies: `tenant_provisioning.create_tenant_with_org_admin` (slug + identity + `org_admin` + participant + `bind_org_member`). Used by `POST /api/tenants/` and `POST /api/admin/companies`. Duplicate admin email → `AdminEmailTakenError`.
-- Additional admins: `admin_provisioning.py`. Genesis platform admin = earliest `platform_admin` (`created_at`). Genesis org admin = earliest `org_admin` in that tenant. Only those callers may create another of the same role, or activate/deactivate the other admins of that role.
+- Additional admins: `admin_provisioning.py`. Genesis is `users.is_genesis`. Only those callers may create another of the same role, or activate/deactivate the other admins of that role.
 - Admin trail: `admin_audit.py` → `admin_audit_logs` (actor, action, time, `changes` before/after). Distinct from agent-scoped `audit_logs`. Never raise on write failure.
 - New default tools/templates/agents should preserve tenant/global visibility assumptions already encoded in the current seeders.
 

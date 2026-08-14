@@ -87,7 +87,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 
 - Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Python **≥3.14.5** (lock 3.14.6). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
 - Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
-- Genesis platform admin: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars). Required when no `platform_admin` exists; bootstrap **fails closed**. Open registration never elevates to platform admin.
+- Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
 - Log with `from app.core.logging import logger`. Freeze: `scripts/check_no_direct_loguru.py` (exception: `skill_creator_files/`).
 - Pydantic v2: `model_config`, `Field(default_factory=...)`.

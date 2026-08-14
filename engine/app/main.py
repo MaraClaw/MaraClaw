@@ -260,8 +260,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"[startup] Default company seed or A2A enable failed: {e}")
 
-        # Genesis platform admin is required for a usable bootstrap. Fail closed so
-        # fresh installs do not serve API without an operator account.
+        # Genesis platform admin credentials must exist in the database, or
+        # PLATFORM_ADMIN_* env vars seed them. Fail closed otherwise.
         from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
 
         try:

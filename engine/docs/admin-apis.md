@@ -28,7 +28,7 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 
 | Account | How created | First-login rule |
 |---------|-------------|------------------|
-| **Platform admin** | Env vars `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (seeded at bootstrap; fail-closed if missing on empty DB) | Must change password after first successful login (`identity.must_change_password`) |
+| **Platform admin** | Startup uses genesis PA credentials already in the database. If those are missing, env vars `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` seed or repair them. Fail-closed if the env vars are also missing. | Must change password after first successful login (`identity.must_change_password`) |
 | **Genesis org admin** | Platform admin only: `POST /api/tenants` or `POST /api/admin/companies` with `admin_email` + `admin_password` | Must change password after first successful login |
 | **Additional platform admin** | Genesis platform admin only: `POST /api/admin/platform-admins` | Must change password after first successful login |
 | **Additional org admin** | Genesis org admin only: `POST /api/users/org-admins` (or `PATCH /api/users/{id}/role`) | New accounts must change password after first login |

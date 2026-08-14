@@ -306,6 +306,7 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     )
 
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "is_username_taken", AsyncMock(return_value=False))
@@ -337,9 +338,10 @@ async def test_ensure_platform_admin_fails_without_env_when_missing(monkeypatch)
 
     settings = SimpleNamespace(PLATFORM_ADMIN_EMAIL="", PLATFORM_ADMIN_PASSWORD="")
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
 
-    with pytest.raises(seeder.PlatformAdminSeedError):
+    with pytest.raises(seeder.PlatformAdminSeedError, match="not found in the database"):
         await seeder.ensure_platform_admin()
 
 
@@ -358,6 +360,7 @@ async def test_ensure_platform_admin_existing_email_requires_password(monkeypatc
         must_change_password=False,
     )
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=identity))
 
@@ -398,6 +401,7 @@ async def test_ensure_platform_admin_elevates_when_password_matches(monkeypatch)
         return db_obj
 
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(seeder.identity_dao, "update", fake_identity_update)
@@ -425,13 +429,81 @@ async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     identity = _identity_record()
     admin = _user_record(identity)
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
-    monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock())
 
     result = await seeder.ensure_platform_admin()
     assert result is admin
     seeder.identity_dao.get_by_email.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_platform_admin_uses_db_credentials_without_env(monkeypatch):
+    from app.services import platform_admin_seeder as seeder
+
+    settings = SimpleNamespace(PLATFORM_ADMIN_EMAIL="", PLATFORM_ADMIN_PASSWORD="")
+    identity = _identity_record()
+    admin = _user_record(identity)
+    monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
+
+    result = await seeder.ensure_platform_admin()
+    assert result is admin
+
+
+@pytest.mark.asyncio
+async def test_ensure_platform_admin_fails_when_db_lacks_credentials_and_env_missing(monkeypatch):
+    from app.services import platform_admin_seeder as seeder
+
+    settings = SimpleNamespace(PLATFORM_ADMIN_EMAIL="", PLATFORM_ADMIN_PASSWORD="")
+    identity = _identity_record()
+    identity.password_hash = None
+    admin = _user_record(identity)
+    monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
+
+    with pytest.raises(seeder.PlatformAdminSeedError, match="not found in the database"):
+        await seeder.ensure_platform_admin()
+
+
+@pytest.mark.asyncio
+async def test_ensure_platform_admin_repairs_missing_password_from_env(monkeypatch):
+    from app.services import platform_admin_seeder as seeder
+
+    settings = SimpleNamespace(
+        PLATFORM_ADMIN_EMAIL="platform@example.com",
+        PLATFORM_ADMIN_PASSWORD="bootstrap-secret",
+    )
+    identity = _identity_record(email="platform@example.com", password="bootstrap-secret")
+    identity.password_hash = None
+    admin = _user_record(identity)
+    updates = []
+
+    async def fake_identity_update(*, db_obj, obj_in):
+        updates.append(obj_in)
+        for k, v in obj_in.items():
+            setattr(db_obj, k, v)
+        return db_obj
+
+    monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder, "hash_password_async", AsyncMock(return_value="hashed"))
+    monkeypatch.setattr(seeder.identity_dao, "update", fake_identity_update)
+    monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
+    monkeypatch.setattr(seeder.user_dao, "update", AsyncMock(return_value=admin))
+
+    with patch.object(seeder, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        result = await seeder.ensure_platform_admin()
+
+    assert result.role == "platform_admin"
+    assert updates[0]["password_hash"] == "hashed"
+    assert updates[0]["must_change_password"] is True
 
 
 @pytest.mark.asyncio
