@@ -33,7 +33,7 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 | **Additional platform admin** | Genesis platform admin only: `POST /api/admin/platform-admins` | Must change password after first successful login |
 | **Additional org admin** | Genesis org admin only: `POST /api/users/org-admins` (or `PATCH /api/users/{id}/role`) | New accounts must change password after first login |
 
-Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Platform admin membership is **null-tenant** so disabling a company cannot lock out the operator. Genesis is stored on `users.is_genesis` and cannot be moved by role change, assign-user, or join.
+Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Genesis platform admin membership is the **MaraClaw** system org. Genesis is stored on `users.is_genesis` and cannot be moved by role change, assign-user, or join.
 
 While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). The `allow_self_create_company` flag is retained on platform settings but does not create tenants.
 

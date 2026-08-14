@@ -18,6 +18,18 @@ from app.records.user import UserRecord
 
 _NOW = datetime.now(UTC)
 _DEFAULT_TEST_PASSWORD = "initial-password"
+_MARACLAW_ID = uuid.uuid4()
+
+
+def _patch_maraclaw(monkeypatch, seeder, *, tenant_id=None):
+    tid = tenant_id or _MARACLAW_ID
+    tenant = SimpleNamespace(id=tid, slug="maraclaw", name="MaraClaw", is_active=True)
+    monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        "app.services.registration_service.registration_service.bind_org_member",
+        AsyncMock(),
+    )
+    return tenant
 
 
 def _identity_record(
@@ -315,6 +327,7 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
     monkeypatch.setattr(seeder.user_dao, "create", AsyncMock(return_value=user))
     monkeypatch.setattr(seeder.participant_dao, "create_for_user", AsyncMock())
+    maraclaw = _patch_maraclaw(monkeypatch, seeder)
 
     with patch.object(seeder, "connection_ctx") as ctx:
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
@@ -327,7 +340,7 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     assert kwargs["is_platform_admin"] is True
     assert kwargs["must_change_password"] is True
     create_user_kwargs = seeder.user_dao.create.await_args.kwargs["obj_in"]
-    assert create_user_kwargs["tenant_id"] is None
+    assert create_user_kwargs["tenant_id"] == maraclaw.id
     assert create_user_kwargs["role"] == "platform_admin"
     assert create_user_kwargs["is_genesis"] is True
 
@@ -408,6 +421,7 @@ async def test_ensure_platform_admin_elevates_when_password_matches(monkeypatch)
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[user]))
     monkeypatch.setattr(seeder.user_dao, "update", fake_user_update)
     monkeypatch.setattr(seeder.identity_dao, "create_identity", AsyncMock())
+    _patch_maraclaw(monkeypatch, seeder)
 
     with patch.object(seeder, "connection_ctx") as ctx:
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
@@ -443,10 +457,20 @@ async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock())
+    monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
+
+    async def fake_update(*, db_obj, obj_in):
+        for k, v in obj_in.items():
+            setattr(db_obj, k, v)
+        return db_obj
+
+    monkeypatch.setattr(seeder.user_dao, "update", fake_update)
     monkeypatch.setattr(seeder.logger, "warning", lambda *args, **kwargs: warned.append(args))
+    _patch_maraclaw(monkeypatch, seeder)
 
     result = await seeder.ensure_platform_admin()
     assert result is admin
+    assert result.tenant_id == _MARACLAW_ID
     seeder.identity_dao.get_by_email.assert_not_awaited()
     assert warned
     assert "does not match genesis platform admin" in warned[0][0]
@@ -462,9 +486,19 @@ async def test_ensure_platform_admin_uses_db_credentials_without_env(monkeypatch
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
+
+    async def fake_update(*, db_obj, obj_in):
+        for k, v in obj_in.items():
+            setattr(db_obj, k, v)
+        return db_obj
+
+    monkeypatch.setattr(seeder.user_dao, "update", fake_update)
+    _patch_maraclaw(monkeypatch, seeder)
 
     result = await seeder.ensure_platform_admin()
     assert result is admin
+    assert result.tenant_id == _MARACLAW_ID
 
 
 @pytest.mark.asyncio
@@ -509,6 +543,7 @@ async def test_ensure_platform_admin_repairs_missing_password_from_env(monkeypat
     monkeypatch.setattr(seeder.identity_dao, "update", fake_identity_update)
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
     monkeypatch.setattr(seeder.user_dao, "update", AsyncMock(return_value=admin))
+    _patch_maraclaw(monkeypatch, seeder)
 
     with patch.object(seeder, "connection_ctx") as ctx:
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)

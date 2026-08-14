@@ -178,6 +178,12 @@ def test_cannot_disable_default_end_user_org():
         membership.assert_may_deactivate_tenant(tenant, making_active=False)
 
 
+def test_cannot_disable_system_org():
+    tenant = _tenant(is_system=True)
+    with pytest.raises(membership.DefaultOrgUnavailableError):
+        membership.assert_may_deactivate_tenant(tenant, making_active=False)
+
+
 @pytest.mark.asyncio
 async def test_consume_invitation_code_increments(monkeypatch):
     code = SimpleNamespace(used_count=1, max_uses=5)

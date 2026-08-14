@@ -280,6 +280,8 @@ def assert_may_deactivate_tenant(tenant: TenantRecord, *, making_active: bool) -
         return
     if tenant.is_default_end_user_org:
         raise DefaultOrgUnavailableError("Cannot disable the default end-user organization")
+    if getattr(tenant, "is_system", False):
+        raise DefaultOrgUnavailableError("Cannot disable a system organization")
 
 
 def assert_may_delete_tenant(tenant: TenantRecord) -> None:

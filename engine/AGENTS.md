@@ -141,7 +141,7 @@ uv run python -m app.scripts.bootstrap_db
 - `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. Source start always bootstraps unless `SKIP_MIGRATIONS=1`.
 - `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
-- Platform admin seed runs **before** agent seeders. Membership is null-tenant (`tenant_id=None`) so disabling a company cannot lock out the operator.
+- Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down).
 - Image may setuid `bwrap` (`BWRAP_SETUID=1`). Local sandbox uses `--unshare-user-try`.
