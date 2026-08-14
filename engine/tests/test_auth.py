@@ -1,6 +1,7 @@
 """Unit tests for the authentication API (app/api/auth.py)."""
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -271,3 +272,61 @@ async def test_oauth_callback_passes_redirect_uri():
 
     provider.exchange_code_for_token.assert_awaited_once_with("oauth-code", "https://example.com/oauth/callback/google")
     assert result.access_token == "jwt-token"
+
+
+@pytest.mark.asyncio
+async def test_handle_normal_register_returns_submitted_email(monkeypatch):
+    """Legacy /register must echo data.email even when user.email is missing."""
+    from app.schemas.schemas import UserRegister
+
+    data = UserRegister(username="ada", email="ada@example.com", password="secret1")
+    identity = SimpleNamespace(id=uuid.uuid4(), email=None, email_verified=True)
+    user = SimpleNamespace(
+        id=uuid.uuid4(),
+        identity_id=identity.id,
+        username="ada",
+        email=None,
+        display_name="ada",
+        avatar_url=None,
+        role="member",
+        is_platform_admin=False,
+        tenant_id=None,
+        title=None,
+        primary_mobile=None,
+        registration_source="web",
+        is_active=True,
+        email_verified=True,
+        must_change_password=False,
+        created_at=datetime.now(UTC),
+        identity=None,
+    )
+    placement = SimpleNamespace(tenant_id=None, needs_org_confirm=False, suggested=None)
+
+    monkeypatch.setattr(auth_api, "hash_password_async", AsyncMock(return_value="hashed"))
+    monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_api, "create_access_token", lambda *a, **k: "tok")
+
+    with (
+        patch("app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=None)),
+        patch("app.services.org_membership.place_new_registration", AsyncMock(return_value=placement)),
+        patch(
+            "app.services.registration_service.registration_service.find_or_create_identity",
+            AsyncMock(return_value=identity),
+        ),
+        patch(
+            "app.services.registration_service.registration_service.create_user_with_identity",
+            AsyncMock(return_value=user),
+        ),
+    ):
+        result = await auth_api._handle_normal_register(data, AsyncMock(), SimpleNamespace())
+
+    assert result.email == "ada@example.com"
+    assert result.user_id == user.id
+    assert result.access_token == "tok"
+
+
+def test_http_header_reads_present_value_and_default():
+    from app.core.json_types import http_header
+
+    assert http_header({"content-type": "application/json"}, "content-type") == "application/json"
+    assert http_header({}, "content-type", "image/png") == "image/png"

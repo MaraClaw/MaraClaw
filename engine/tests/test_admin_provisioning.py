@@ -374,3 +374,86 @@ def test_join_refuses_genesis_and_platform_admin_rewrite():
         provisioning.assert_join_may_rewrite_membership(_user(role="platform_admin"))
     assert exc.value.status_code == 403
     provisioning.assert_join_may_rewrite_membership(_user(role="member", tenant_id=None))
+
+
+@pytest.mark.asyncio
+async def test_create_additional_org_admin_unique_violation(monkeypatch):
+    from app.db.errors import UniqueViolationError
+
+    tenant = SimpleNamespace(
+        id=uuid.uuid4(),
+        default_message_limit=50,
+        default_message_period="permanent",
+        default_max_agents=2,
+        default_agent_ttl_hours=0,
+    )
+    monkeypatch.setattr(provisioning.identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(provisioning.identity_dao, "is_username_taken", AsyncMock(return_value=False))
+    monkeypatch.setattr(provisioning, "hash_password_async", AsyncMock(return_value="h"))
+    monkeypatch.setattr(provisioning.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        provisioning.identity_dao, "create_identity", AsyncMock(side_effect=UniqueViolationError("dup"))
+    )
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        with pytest.raises(AdminEmailTakenError):
+            await provisioning.create_additional_org_admin(
+                tenant_id=tenant.id, admin_email="oa@acme.com", admin_password="secret1"
+            )
+
+
+@pytest.mark.asyncio
+async def test_apply_user_assignment_blocks_last_active_org_admin(monkeypatch):
+    target = _user(role="org_admin", tenant_id=uuid.uuid4(), is_active=True)
+    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=1))
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_assignment(
+            actor=_user(role="platform_admin"),
+            target=target,
+            tenant_id=uuid.uuid4(),
+            role="member",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_peer_admin_active_rejects_genesis_platform_target(monkeypatch):
+    genesis = _user(role="platform_admin")
+    target = _user(role="platform_admin")
+    monkeypatch.setattr(provisioning, "is_genesis_platform_admin", AsyncMock(return_value=True))
+    with pytest.raises(provisioning.AdminActivationError) as exc:
+        await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_set_peer_admin_active_rejects_non_platform_target(monkeypatch):
+    genesis = _user(role="platform_admin")
+    monkeypatch.setattr(provisioning, "is_genesis_platform_admin", AsyncMock(return_value=True))
+    with pytest.raises(provisioning.AdminActivationError) as exc:
+        await provisioning.set_peer_admin_active(actor=genesis, target=_user(role="org_admin"), is_active=False)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_peer_admin_active_activates_inactive_platform_admin(monkeypatch):
+    genesis = _user(role="platform_admin")
+    target = _user(role="platform_admin", is_active=False)
+
+    async def _is_genesis(user):
+        return user.id == genesis.id
+
+    monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
+    monkeypatch.setattr(
+        provisioning.user_dao,
+        "update",
+        AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": True})),
+    )
+    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=True)
+    assert updated.is_active is True
+    assert provisioning.write_admin_audit.await_args.kwargs["action"] == "user_activate"

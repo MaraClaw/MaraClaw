@@ -106,6 +106,7 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
     absent_manager = discord_gateway.DiscordGatewayManager()
     await absent_manager.start_client(absent_agent_id, "token")
     absent_client = FakeClient.instances[-1]
+    assert absent_client.intents.message_content is True
     await absent_client.started.wait()
     absent_on_ready = absent_client.events[0]
     absent_log_count = len(test_logger.messages)

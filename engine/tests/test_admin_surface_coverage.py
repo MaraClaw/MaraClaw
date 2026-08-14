@@ -11,7 +11,13 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api import admin as admin_api, auth as auth_api, tenants as tenants_api, users as users_api
+from app.api import (
+    admin as admin_api,
+    auth as auth_api,
+    enterprise as enterprise_api,
+    tenants as tenants_api,
+    users as users_api,
+)
 from app.records.audit import AdminAuditLogRecord
 from app.records.tenant import TenantRecord
 from app.services import admin_provisioning as provisioning
@@ -223,11 +229,15 @@ async def test_platform_settings_get_and_update(monkeypatch):
     settings = await admin_api.get_platform_settings(_user())
     assert settings.allow_self_create_company is False
 
-    monkeypatch.setattr(admin_api.system_setting_dao, "set_flag", AsyncMock())
+    set_flag = AsyncMock()
+    monkeypatch.setattr(admin_api.system_setting_dao, "set_flag", set_flag)
+    monkeypatch.setattr(admin_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_api, "write_admin_audit", AsyncMock())
     updated = await admin_api.update_platform_settings(
         admin_api.PlatformSettingsUpdate(invitation_code_enabled=True), _user()
     )
-    assert updated.invitation_code_enabled is False  # get still mocked false
+    set_flag.assert_awaited()
+    assert updated.invitation_code_enabled is True
 
 
 @pytest.mark.asyncio
@@ -1654,3 +1664,26 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         with pytest.raises(RuntimeError):
             await tp.create_tenant_with_org_admin(name="Acme", admin_email="oa@acme.com", admin_password="secret1")
+
+
+@pytest.mark.asyncio
+async def test_enterprise_stats_org_admin_cannot_read_other_tenant(monkeypatch):
+    org = _user(role="org_admin", tenant_id=uuid.uuid4())
+    with pytest.raises(HTTPException) as exc:
+        await enterprise_api.get_enterprise_stats(tenant_id=str(uuid.uuid4()), current_user=org)
+    assert exc.value.status_code == 403
+
+    orphan = _user(role="org_admin", tenant_id=None)
+    with pytest.raises(HTTPException) as missing:
+        await enterprise_api.get_enterprise_stats(current_user=orphan)
+    assert missing.value.status_code == 403
+
+    own = uuid.uuid4()
+    scoped = _user(role="org_admin", tenant_id=own)
+    monkeypatch.setattr(enterprise_api.agent_dao, "count_for_tenant", AsyncMock(return_value=3))
+    monkeypatch.setattr(enterprise_api.user_dao, "count_active", AsyncMock(return_value=2))
+    monkeypatch.setattr(enterprise_api.approval_request_dao, "count_pending", AsyncMock(return_value=1))
+    stats = await enterprise_api.get_enterprise_stats(tenant_id=str(own), current_user=scoped)
+    assert stats["total_agents"] == 3
+    assert stats["total_users"] == 2
+    assert stats["pending_approvals"] == 1

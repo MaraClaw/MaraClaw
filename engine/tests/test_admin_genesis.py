@@ -579,6 +579,39 @@ async def test_ensure_platform_admin_repairs_missing_password_from_env(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_repair_genesis_from_env_rejects_taken_email_when_identity_missing(monkeypatch):
+    from app.services import platform_admin_seeder as seeder
+    from app.services.platform_admin_seeder import PlatformAdminSeedError
+
+    genesis = _user_record(_identity_record())
+    genesis.identity = None
+    genesis.identity_id = None
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=genesis))
+    monkeypatch.setattr(
+        seeder.identity_dao, "get_by_email", AsyncMock(return_value=_identity_record(email="taken@x.com"))
+    )
+    monkeypatch.setattr(seeder, "hash_password_async", AsyncMock(return_value="hashed"))
+    with pytest.raises(PlatformAdminSeedError, match="already belongs"):
+        await seeder._repair_genesis_from_env(genesis, email="taken@x.com", password="secret1")
+
+
+@pytest.mark.asyncio
+async def test_repair_genesis_from_env_rejects_email_collision_on_empty_identity_email(monkeypatch):
+    from app.services import platform_admin_seeder as seeder
+    from app.services.platform_admin_seeder import PlatformAdminSeedError
+
+    identity = _identity_record(email="")
+    identity.email = ""
+    genesis = _user_record(identity)
+    other = _identity_record(email="platform@example.com")
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=genesis))
+    monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=other))
+    monkeypatch.setattr(seeder, "hash_password_async", AsyncMock(return_value="hashed"))
+    with pytest.raises(PlatformAdminSeedError, match="already belongs"):
+        await seeder._repair_genesis_from_env(genesis, email="platform@example.com", password="secret1")
+
+
+@pytest.mark.asyncio
 async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
     captured = {}
 
