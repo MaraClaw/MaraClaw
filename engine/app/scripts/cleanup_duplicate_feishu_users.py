@@ -6,7 +6,7 @@ This script:
 3. Updates chat session conv_ids from feishu_p2p_{open_id} to feishu_p2p_{user_id}
 
 Usage:
-  Docker:  docker exec maraclaw-backend python3 -m app.scripts.cleanup_duplicate_feishu_users
+  Docker:  docker exec maraclaw-engine python3 -m app.scripts.cleanup_duplicate_feishu_users
   Source:  cd backend && python3 -m app.scripts.cleanup_duplicate_feishu_users
 """
 

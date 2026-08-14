@@ -17,8 +17,8 @@
 #   ./start-from-docker.sh -- <extra docker run args>
 #
 # Environment overrides (set in .env OR on the command line):
-#   IMAGE_NAME           image tag                       (default: maraclaw-backend:local)
-#   CONTAINER_NAME       container name                  (default: maraclaw-backend)
+#   IMAGE_NAME           image tag                       (default: maraclaw-engine:local)
+#   CONTAINER_NAME       container name                  (default: maraclaw-engine)
 #   PORT                 host port mapped to 8000        (default: 8000)
 #   DATA_DIR             host dir mounted at /data       (default: ./.docker-data)
 #   APT_MIRROR           build-time apt mirror           (e.g. mirrors.ustc.edu.cn)
@@ -55,8 +55,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # ---- Defaults (applied AFTER sourcing .env so .env can override) -----------
-IMAGE_NAME="${IMAGE_NAME:-maraclaw-backend:local}"
-CONTAINER_NAME="${CONTAINER_NAME:-maraclaw-backend}"
+IMAGE_NAME="${IMAGE_NAME:-maraclaw-engine:local}"
+CONTAINER_NAME="${CONTAINER_NAME:-maraclaw-engine}"
 PORT="${PORT:-8000}"
 DATA_DIR="${DATA_DIR:-$SCRIPT_DIR/.docker-data}"
 

@@ -1,7 +1,7 @@
 """Backfill department paths from the department tree and refresh member paths.
 
 Usage:
-  Docker: docker exec maraclaw-backend python3 -m app.scripts.backfill_department_paths
+  Docker: docker exec maraclaw-engine python3 -m app.scripts.backfill_department_paths
   Source: cd backend && python3 -m app.scripts.backfill_department_paths
 """
 
