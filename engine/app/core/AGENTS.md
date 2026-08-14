@@ -30,6 +30,9 @@
 - Prefer `list_visible_agents(...)` (DAO). There is no SQLAlchemy visibility query.
 - Use `check_agent_access(...)` at HTTP endpoint boundaries.
 - Access *decisions* (not agent rows) may be cached in Redis via `access_cache.py`. TTL `AGENT_ACCESS_CACHE_TTL_SECONDS` (0 disables). Policy writes bump `aclver:{agent_id}` **after** the top-level `connection_ctx` commit. `set_cached_level` is skipped if `aclver` changed since compute. Redis errors fail open to DAOs. Do not cache 403/404.
+- Auth snapshots (`session_cache.py`, `USER_SESSION_CACHE_TTL_SECONDS`) cache `get_with_identity` **without** `password_hash` or quota counters. User/identity writes bump `sessver:*` after commit and drop request memo. Sets carry `observed_ver`. Password verify/change/transfer must use `load_identity_for_password` (SQL), never the snapshot hash. Redis **read** errors fall back to SQL; version INCR/DELETE are not skipped by the fail-open circuit.
+- Tenant rows may be cached (`tenant_cache.py`). Agent PK reads use request-local `row_memo` only (full agent rows include `api_key_hash` and counters).
+- New fail-open caches go through `redis_cache.py` + `get_cache_redis()` (short socket timeout). Tokens, locks, pubsub, and webhooks keep `get_redis()`.
 - Agent tool config mutations that change sandbox egress (`allow_network`, proxy fields) are authorized in `app/api/tools.py` (admin roles), not here; keep permission policy for agent visibility separate from sandbox egress policy.
 - Use non-HTTP helpers such as `get_agent_access_level_for_user_id(...)` and `user_can_manage_agent_id(...)` in services/background jobs.
 - Keep relationship checks in `evaluate_agent_relationship_status(...)` and `evaluate_human_relationship_status(...)`.
@@ -37,8 +40,8 @@
 ## Events
 
 - Use `publish_event(channel, data)` for Redis Pub/Sub events.
-- Do not create ad hoc Redis clients for shared app events.
-- `close_redis()` is called during app shutdown; event users should not close the process-global client themselves.
+- Do not create ad hoc Redis clients for shared app events. Caches use `get_cache_redis()`; durable paths use `get_redis()`.
+- `close_redis()` closes both pools during app shutdown; event users should not close the process-global clients themselves.
 
 ## Existing Exceptions
 

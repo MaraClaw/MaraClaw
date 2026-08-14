@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.core.row_memo import clear_entity_memo
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
 from app.records.agent import AgentRecord
@@ -23,6 +24,7 @@ ToolCallCallback = Callable[[Any], Awaitable[None] | None]
 
 
 async def load_agent(agent_id: uuid.UUID) -> AgentRecord | None:
+    clear_entity_memo()
     return await agent_dao.get(agent_id)
 
 

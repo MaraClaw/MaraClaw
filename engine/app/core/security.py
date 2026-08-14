@@ -16,7 +16,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.config import get_settings
-from app.dao import user_dao
+from app.dao import identity_dao, user_dao
+from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
 settings = get_settings()
@@ -151,6 +152,13 @@ PASSWORD_CHANGE_REQUIRED_DETAIL: dict[str, object] = {
     "must_change_password": True,
     "message": "Password change required before continuing.",
 }
+
+
+async def load_identity_for_password(identity_id: uuid.UUID | None) -> IdentityRecord | None:
+    """Load identity from SQL. Never use a session-cache snapshot for password verify."""
+    if identity_id is None:
+        return None
+    return await identity_dao.get(identity_id)
 
 
 def raise_if_password_change_required(user: UserRecord) -> None:

@@ -409,8 +409,7 @@ async def transfer_organization(
     current_user: UserRecord = Depends(get_current_user),
 ):
     """Move a member from their current org to another after password confirmation."""
-    from app.core.security import create_access_token, verify_password_async
-    from app.dao.identity_dao import identity_dao
+    from app.core.security import create_access_token, load_identity_for_password, verify_password_async
     from app.services.org_membership import (
         AlreadyInOrgError,
         DefaultOrgUnavailableError,
@@ -426,7 +425,8 @@ async def transfer_organization(
         raise HTTPException(status_code=400, detail="Join an organization first, then transfer")
     _require_join_allowed(current_user)
 
-    identity = getattr(current_user, "identity", None) or await identity_dao.get(current_user.identity_id)
+    identity_id = current_user.identity_id or getattr(getattr(current_user, "identity", None), "id", None)
+    identity = await load_identity_for_password(identity_id)
     if identity is None or not identity.password_hash:
         raise HTTPException(status_code=400, detail="This account cannot confirm a password")
     if not await verify_password_async(data.password, identity.password_hash):

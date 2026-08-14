@@ -14,6 +14,7 @@ from app.core.security import (
     get_authenticated_user,
     get_current_user,
     hash_password_async,
+    load_identity_for_password,
     verify_password_async,
 )
 from app.dao import identity_dao, system_setting_dao, tenant_dao, user_dao
@@ -889,7 +890,8 @@ async def change_password(
     user = await user_dao.get_with_identity(current_user.id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    identity = user.identity
+    identity_id = user.identity_id or (user.identity.id if user.identity else None)
+    identity = await load_identity_for_password(identity_id)
 
     # Verify old password outside transaction (CPU intensive)
     if (

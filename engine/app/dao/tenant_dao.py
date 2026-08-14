@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
+from uuid import UUID
 
+from app.core.row_memo import memo_drop, memo_get, memo_set
+from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO
 from app.records.tenant import TenantRecord
 
@@ -20,6 +23,7 @@ def tenant_name_tsquery(raw: str) -> str | None:
     if not tokens:
         return None
     return " & ".join(f"{token}:*" for token in tokens[:_MAX_SEARCH_TOKENS])
+
 
 _TENANT_COLUMNS = (
     "id",
@@ -55,6 +59,40 @@ class TenantDAO(BaseDAO[TenantRecord]):
     table = "tenants"
     columns = _TENANT_COLUMNS
     record_factory = staticmethod(TenantRecord.from_row)
+
+    async def get(self, id: Any) -> TenantRecord | None:
+        cached = memo_get("tenant", id)
+        if cached is not None:
+            return cached
+        try:
+            tenant_id = id if isinstance(id, UUID) else UUID(str(id))
+        except TypeError, ValueError:
+            tenant_id = None
+        observed_ver = "0"
+        if tenant_id is not None:
+            redis_hit = await get_cached_tenant(tenant_id)
+            if redis_hit is not None:
+                memo_set("tenant", redis_hit.id, redis_hit)
+                return redis_hit
+            observed_ver = await peek_tenant_version(tenant_id)
+        tenant = await super().get(id)
+        if tenant is not None:
+            memo_set("tenant", tenant.id, tenant)
+            await set_cached_tenant(tenant, observed_ver=observed_ver)
+        return tenant
+
+    async def update(self, *, db_obj: TenantRecord, obj_in: Mapping[str, Any]) -> TenantRecord:
+        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+        memo_set("tenant", updated.id, updated)
+        await bump_tenant_cache(updated.id)
+        return updated
+
+    async def delete(self, *, id: Any) -> TenantRecord | None:
+        deleted = await super().delete(id=id)
+        if deleted is not None:
+            memo_drop("tenant", deleted.id)
+            await bump_tenant_cache(deleted.id)
+        return deleted
 
     async def get_default_end_user_org(self) -> TenantRecord | None:
         async with self.session() as db:
@@ -173,11 +211,16 @@ class TenantDAO(BaseDAO[TenantRecord]):
     async def clear_sso_domain_except(self, keep_tenant_id: Any) -> None:
         """IP-mode helper: clear sso_domain and disable SSO on all other tenants."""
         async with self.session() as db:
-            await db.execute(
+            rows = await db.fetchall(
                 "UPDATE tenants SET sso_domain = NULL, sso_enabled = FALSE "
-                "WHERE id IS DISTINCT FROM %(keep_tenant_id)s",
+                "WHERE id IS DISTINCT FROM %(keep_tenant_id)s AND "
+                "(sso_domain IS NOT NULL OR sso_enabled IS TRUE) RETURNING id",
                 {"keep_tenant_id": keep_tenant_id},
             )
+        for row in rows:
+            tenant_id = row["id"]
+            memo_drop("tenant", tenant_id)
+            await bump_tenant_cache(tenant_id)
 
     async def list_for_sso_regen(self) -> Sequence[TenantRecord]:
         """SSO-enabled tenants first, then by created_at (IP-mode domain assignment)."""
@@ -191,6 +234,8 @@ class TenantDAO(BaseDAO[TenantRecord]):
     async def delete_cascade(self, tenant_id: Any) -> None:
         """Delete a tenant and all dependent rows in FK-safe order."""
         params = {"tid": tenant_id}
+        user_ids: list[Any] = []
+        agent_ids: list[Any] = []
         statements = [
             "DELETE FROM approval_requests WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             "DELETE FROM notifications WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
@@ -241,8 +286,32 @@ class TenantDAO(BaseDAO[TenantRecord]):
             "DELETE FROM tenants WHERE id = %(tid)s",
         ]
         async with self.session() as db:
+            user_rows = await db.fetchall(
+                "SELECT id FROM users WHERE tenant_id = %(tid)s",
+                params,
+            )
+            agent_rows = await db.fetchall(
+                "SELECT id FROM agents WHERE tenant_id = %(tid)s",
+                params,
+            )
+            user_ids = [row["id"] for row in user_rows]
+            agent_ids = [row["id"] for row in agent_rows]
             for sql in statements:
                 await db.execute(sql, params)
+        from app.core.access_cache import drop_agent_acl_version
+        from app.core.session_cache import bump_user_sessions
+
+        await bump_user_sessions(user_ids)
+        for agent_id in agent_ids:
+            memo_drop("agent", agent_id)
+            await drop_agent_acl_version(agent_id)
+        memo_drop("tenant", tenant_id)
+        try:
+            tid = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
+        except TypeError, ValueError:
+            tid = None
+        if tid is not None:
+            await bump_tenant_cache(tid)
 
 
 tenant_dao = TenantDAO()

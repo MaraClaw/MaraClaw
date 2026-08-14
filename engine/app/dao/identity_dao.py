@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.core.session_cache import bump_identity_session
 from app.dao.base import BaseDAO
 from app.records.identity import IdentityRecord
 
@@ -30,6 +31,11 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     table = "identities"
     columns = _IDENTITY_COLUMNS
     record_factory = staticmethod(IdentityRecord.from_row)
+
+    async def update(self, *, db_obj: IdentityRecord, obj_in: Mapping[str, Any]) -> IdentityRecord:
+        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+        await bump_identity_session(updated.id)
+        return updated
 
     async def get_by_login_identifier(self, identifier: str) -> IdentityRecord | None:
         """Find identity by email, phone, or username."""
@@ -90,6 +96,8 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 ") RETURNING id",
                 {"ids": list(identity_ids)},
             )
+            for row in rows:
+                await bump_identity_session(row["id"])
             return len(rows)
 
     async def is_username_taken(self, username: str) -> bool:

@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
+from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.base import BaseDAO
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
@@ -93,8 +94,18 @@ class AgentDAO(BaseDAO[AgentRecord]):
     columns = _AGENT_COLUMNS
     record_factory = staticmethod(AgentRecord.from_row)
 
+    async def get(self, id: Any) -> AgentRecord | None:
+        cached = memo_get("agent", id)
+        if cached is not None:
+            return cached
+        agent = await super().get(id)
+        if agent is not None:
+            memo_set("agent", agent.id, agent)
+        return agent
+
     async def update(self, *, db_obj: AgentRecord, obj_in: Mapping[str, Any]) -> AgentRecord:
         updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+        memo_set("agent", updated.id, updated)
         if _AGENT_POLICY_COLUMNS.intersection(obj_in):
             await bump_agent_acl_version(updated.id)
         return updated
@@ -102,6 +113,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def delete(self, *, id: Any) -> AgentRecord | None:
         deleted = await super().delete(id=id)
         if deleted is not None:
+            memo_drop("agent", deleted.id)
             await drop_agent_acl_version(deleted.id)
         return deleted
 
@@ -519,7 +531,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     "cache_creation": cache_creation_tokens,
                 },
             )
-            return AgentRecord.from_row(row) if row else None
+            agent = AgentRecord.from_row(row) if row else None
+            if agent is not None:
+                memo_set("agent", agent.id, agent)
+            return agent
 
     async def count_for_tenant(self, tenant_id: UUID, *, status: str | None = None) -> int:
         params: dict[str, Any] = {"tenant_id": tenant_id}
@@ -553,7 +568,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
                 {"tenant_id": tenant_id},
             )
-            return len(rows)
+        for row in rows:
+            memo_drop("agent", row["id"])
+        return len(rows)
 
     async def disable_for_tenant(self, tenant_id: UUID) -> int:
         """Stop every agent in the tenant (``paused`` is not a valid agent_status)."""
@@ -563,7 +580,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "WHERE tenant_id = %(tenant_id)s AND status <> 'stopped' RETURNING id",
                 {"tenant_id": tenant_id},
             )
-            return len(rows)
+        for row in rows:
+            memo_drop("agent", row["id"])
+        return len(rows)
 
     async def token_usage_for_tenant(self, tenant_id: UUID) -> dict[str, int]:
         async with self.session() as db:
@@ -653,6 +672,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
             for sql in AGENT_DELETE_CLEANUP_SQL:
                 await db.execute(sql, params)
             await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)
+        memo_drop("agent", agent_id)
+        await drop_agent_acl_version(agent_id)
 
     async def names_referencing_model(self, model_id: UUID) -> list[str]:
         async with self.session() as db:

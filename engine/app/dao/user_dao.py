@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
+from uuid import UUID
 
+from app.core.session_cache import (
+    bump_user_session,
+    bump_user_sessions,
+    get_cached_user,
+    peek_identity_version,
+    peek_user_version,
+    set_cached_user,
+)
 from app.dao.base import BaseDAO
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -156,6 +165,16 @@ class UserDAO(BaseDAO[UserRecord]):
             return UserRecord.from_row(row) if row else None
 
     async def get_with_identity(self, user_id: Any) -> UserRecord | None:
+        try:
+            uid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+        except (TypeError, ValueError):
+            uid = None
+        observed_user_ver = "0"
+        if uid is not None:
+            cached = await get_cached_user(uid)
+            if cached is not None:
+                return cached
+            observed_user_ver = await peek_user_version(uid)
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
@@ -163,7 +182,26 @@ class UserDAO(BaseDAO[UserRecord]):
                 "WHERE u.id = %(user_id)s LIMIT 1",
                 {"user_id": user_id},
             )
-            return _user_from_joined_row(row) if row else None
+            user = _user_from_joined_row(row) if row else None
+            if user is not None:
+                observed_ident_ver = await peek_identity_version(user.identity_id)
+                await set_cached_user(
+                    user,
+                    observed_user_ver=observed_user_ver,
+                    observed_ident_ver=observed_ident_ver,
+                )
+            return user
+
+    async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, Any]) -> UserRecord:
+        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+        await bump_user_session(updated.id)
+        return updated
+
+    async def delete(self, *, id: Any) -> UserRecord | None:
+        deleted = await super().delete(id=id)
+        if deleted is not None:
+            await bump_user_session(deleted.id)
+        return deleted
 
     async def get_representative_user_for_identity(self, identity_id: Any) -> UserRecord | None:
         async with self.session() as db:
@@ -192,6 +230,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
+            await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
 
     async def reactivate_for_tenant(self, tenant_id: Any) -> int:
@@ -203,6 +242,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
+            await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
 
     async def list_active_for_tenant(
@@ -335,7 +375,10 @@ class UserDAO(BaseDAO[UserRecord]):
                 f") > 1 RETURNING {self._select_list()}",
                 params,
             )
-            return UserRecord.from_row(row) if row else None
+            user = UserRecord.from_row(row) if row else None
+            if user is not None:
+                await bump_user_session(user.id)
+            return user
 
     async def list_identity_ids_for_tenant(self, tenant_id: Any) -> list[Any]:
         async with self.session() as db:

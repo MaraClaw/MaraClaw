@@ -121,6 +121,23 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
     return user
 
 
+async def _rehydrate_identity_hash(user: UserRecord) -> UserRecord:
+    """Reload password_hash from SQL when a session snapshot stripped it."""
+    identity = getattr(user, "identity", None)
+    identity_id = getattr(user, "identity_id", None) or getattr(identity, "id", None)
+    if identity is not None and identity.password_hash:
+        return user
+    if identity_id is None:
+        return user
+    try:
+        fresh = await identity_dao.get(identity_id)
+    except RuntimeError:
+        return user
+    if fresh is not None:
+        user.identity = fresh
+    return user
+
+
 def _has_login_credentials(user: UserRecord) -> bool:
     identity = getattr(user, "identity", None)
     if identity is None:
@@ -149,6 +166,7 @@ async def _load_genesis_with_credentials() -> UserRecord | None:
     if genesis is None:
         return None
     loaded = await user_dao.get_with_identity(genesis.id) or genesis
+    loaded = await _rehydrate_identity_hash(loaded)
     if _has_login_credentials(loaded):
         return loaded
     return None
@@ -156,7 +174,7 @@ async def _load_genesis_with_credentials() -> UserRecord | None:
 
 async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password: str) -> UserRecord:
     """Attach missing email/password to an existing genesis PA from env."""
-    loaded = await user_dao.get_with_identity(genesis.id) or genesis
+    loaded = await _rehydrate_identity_hash(await user_dao.get_with_identity(genesis.id) or genesis)
     identity = loaded.identity
     if identity is None and loaded.identity_id:
         identity = await identity_dao.get(loaded.identity_id)
