@@ -131,6 +131,24 @@ async def test_rate_limit_member_uses_sha256(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_count_from_pipeline_fail_closed_on_short_result():
+    class ShortPipe:
+        async def execute(self):
+            return (None, None)
+
+    assert await webhooks_api._count_from_pipeline(ShortPipe()) == 60
+
+
+@pytest.mark.asyncio
+async def test_count_from_pipeline_fail_closed_on_non_sequence():
+    class BadPipe:
+        async def execute(self):
+            return None
+
+    assert await webhooks_api._count_from_pipeline(BadPipe()) == 60
+
+
+@pytest.mark.asyncio
 async def test_receive_webhook_success(monkeypatch, client):
     from unittest.mock import AsyncMock
 

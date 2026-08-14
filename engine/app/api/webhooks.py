@@ -35,7 +35,8 @@ class _RedisExecute(Protocol):
 async def _count_from_pipeline(pipe: _RedisExecute) -> int:
     executed: object = await pipe.execute()
     if not isinstance(executed, (list, tuple)) or len(executed) < 3:
-        return 0
+        # Fail closed: an unreadable pipeline result must not look like "no hits".
+        return 60
     return int_from_row(list[object](executed)[2])
 
 
