@@ -44,6 +44,8 @@ No `alembic/`, no `app/models/`.
 | Settings | `app/config.py`, `.env.example` | Case-sensitive; sandbox proxy is `SANDBOX_*_PROXY` only; genesis `PLATFORM_ADMIN_*` |
 | Genesis platform admin | `app/services/platform_admin_seeder.py` | Env seed at bootstrap; fail-closed if empty DB |
 | Tenant + genesis org admin | `app/services/tenant_provisioning.py` | `POST /api/tenants/` and `POST /api/admin/companies` |
+| Additional admins | `app/services/admin_provisioning.py` | Genesis PA → more PAs; genesis OA → more OAs; same genesis can activate/deactivate peers |
+| Admin action trail | `app/services/admin_audit.py` | `admin_audit_logs`: who / what / when / field changes |
 | Admin APIs / RBAC inventory | `docs/admin-apis.md` | Platform vs org admin; genesis + `must_change_password` |
 | Auth deps | `app/core/security.py` | JWT, bcrypt, `get_current_user` / force-change gate |
 | Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
@@ -93,6 +95,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
 - Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends paths (WS, file download) must call `load_user_from_access_token`.
 - New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone. `allow_self_create_company` does not create tenants.
+- Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis = earliest membership of that role (`created_at`).
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -125,7 +128,8 @@ uv run --extra dev ruff format --check .
 uv run --extra dev ty check .
 uv run python scripts/check_no_new_sqlalchemy.py
 uv run python scripts/check_no_direct_loguru.py
-uv run pytest
+uv run pytest                          # enforces 90% on admin/auth/tenant surface
+uv run pytest --cov=app --cov-fail-under=0   # full-app report (~39% today)
 uv run python -m app.scripts.bootstrap_db
 ```
 

@@ -1,4 +1,5 @@
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_credential_dao import agent_credential_dao
 from app.dao.agent_dao import agent_dao, agent_permission_dao
@@ -44,6 +45,7 @@ from app.dao.user_dao import user_dao
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
 
 __all__ = [
+    "admin_audit_log_dao",
     "agent_activity_log_dao",
     "agent_agent_relationship_dao",
     "agent_credential_dao",

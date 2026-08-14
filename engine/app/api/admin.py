@@ -8,11 +8,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.security import require_role
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_session_dao
 from app.dao.system_setting_dao import system_setting_dao
@@ -20,7 +21,21 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.services.admin_audit import field_change, write_admin_audit
+from app.services.admin_provisioning import (
+    AdminActivationError,
+    create_additional_platform_admin,
+    is_genesis_platform_admin,
+    set_peer_admin_active,
+)
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
+
+
+async def get_client_ip(request: Request) -> str | None:
+    if request.client is None:
+        return None
+    return request.client.host
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -55,6 +70,49 @@ class CompanyCreateResponse(BaseModel):
     company: CompanyStats
     org_admin_email: str
     must_change_password: bool = True
+
+
+class PlatformAdminCreateRequest(BaseModel):
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=200)
+
+
+class PlatformAdminCreateResponse(BaseModel):
+    user_id: uuid.UUID
+    admin_email: str
+    must_change_password: bool = True
+
+
+class AdminActiveUpdate(BaseModel):
+    is_active: bool
+
+
+class PlatformAdminOut(BaseModel):
+    id: uuid.UUID
+    email: str | None = None
+    display_name: str | None = None
+    role: str
+    is_active: bool
+    is_genesis: bool = False
+    created_at: datetime | None = None
+
+
+class AdminAuditLogOut(BaseModel):
+    id: uuid.UUID
+    actor_id: uuid.UUID | None = None
+    actor_role: str
+    actor_email: str | None = None
+    action: str
+    target_type: str
+    target_id: uuid.UUID | None = None
+    tenant_id: uuid.UUID | None = None
+    changes: dict[str, Any]
+    details: dict[str, Any]
+    ip_address: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class PlatformSettingsOut(BaseModel):
@@ -109,7 +167,9 @@ async def list_companies(current_user: UserRecord = Depends(require_role("platfo
 
 @router.post("/companies", response_model=CompanyCreateResponse, status_code=201)
 async def create_company(
-    data: CompanyCreateRequest, current_user: UserRecord = Depends(require_role("platform_admin"))
+    data: CompanyCreateRequest,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
 ):
     """Create a company and its genesis org admin (platform admin only).
 
@@ -127,6 +187,19 @@ async def create_company(
         raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
 
     tenant = provisioned.tenant
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_create",
+        target_type="tenant",
+        target_id=tenant.id,
+        tenant_id=tenant.id,
+        changes={
+            "name": field_change(None, tenant.name),
+            "org_admin_email": field_change(None, provisioned.admin_email),
+        },
+        details={"org_admin_user_id": str(provisioned.org_admin.id)},
+        ip_address=client_ip,
+    )
     return CompanyCreateResponse(
         company=CompanyStats(
             id=tenant.id,
@@ -140,6 +213,117 @@ async def create_company(
         org_admin_email=provisioned.admin_email,
         must_change_password=True,
     )
+
+
+@router.post("/platform-admins", response_model=PlatformAdminCreateResponse, status_code=201)
+async def create_platform_admin(
+    data: PlatformAdminCreateRequest,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Create another platform admin. Only the genesis platform admin may call this."""
+    if not await is_genesis_platform_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the genesis platform admin can create platform admins")
+
+    try:
+        provisioned = await create_additional_platform_admin(
+            admin_email=str(data.admin_email),
+            admin_password=data.admin_password,
+            admin_display_name=data.admin_display_name,
+        )
+    except AdminEmailTakenError as exc:
+        raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
+
+    await write_admin_audit(
+        actor=current_user,
+        action="platform_admin_create",
+        target_type="user",
+        target_id=provisioned.user.id,
+        changes={
+            "role": field_change(None, "platform_admin"),
+            "admin_email": field_change(None, provisioned.admin_email),
+        },
+        details={"must_change_password": True},
+        ip_address=client_ip,
+    )
+    return PlatformAdminCreateResponse(
+        user_id=provisioned.user.id,
+        admin_email=provisioned.admin_email,
+        must_change_password=True,
+    )
+
+
+@router.get("/platform-admins", response_model=list[PlatformAdminOut])
+async def list_platform_admins(current_user: UserRecord = Depends(require_role("platform_admin"))):
+    """List platform admins. Any platform admin may read; genesis is marked."""
+    _ = current_user
+    genesis = await user_dao.first_by_role("platform_admin")
+    genesis_id = genesis.id if genesis else None
+    users = await user_dao.list_by_role("platform_admin")
+    return [
+        PlatformAdminOut(
+            id=u.id,
+            email=u.email,
+            display_name=u.display_name,
+            role=u.role,
+            is_active=u.is_active,
+            is_genesis=u.id == genesis_id,
+            created_at=u.created_at,
+        )
+        for u in users
+    ]
+
+
+@router.patch("/platform-admins/{user_id}/active", response_model=PlatformAdminOut)
+async def set_platform_admin_active(
+    user_id: uuid.UUID,
+    data: AdminActiveUpdate,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Activate or deactivate another platform admin. Genesis platform admin only."""
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        updated = await set_peer_admin_active(
+            actor=current_user,
+            target=target,
+            is_active=data.is_active,
+            ip_address=client_ip,
+        )
+    except AdminActivationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    genesis = await user_dao.first_by_role("platform_admin")
+    return PlatformAdminOut(
+        id=updated.id,
+        email=updated.email if updated.identity else target.email,
+        display_name=updated.display_name,
+        role=updated.role,
+        is_active=updated.is_active,
+        is_genesis=updated.id == (genesis.id if genesis else None),
+        created_at=updated.created_at,
+    )
+
+
+@router.get("/audit-logs", response_model=list[AdminAuditLogOut])
+async def list_admin_audit_logs(
+    tenant_id: uuid.UUID | None = None,
+    actor_id: uuid.UUID | None = None,
+    action: str | None = None,
+    limit: int = 100,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+):
+    """List admin action logs (who / what / when / field changes)."""
+    _ = current_user
+    logs = await admin_audit_log_dao.list_recent(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        action=action,
+        limit=min(max(limit, 1), 500),
+    )
+    return [AdminAuditLogOut.model_validate(log) for log in logs]
 
 
 @router.put("/companies/{company_id}/toggle")

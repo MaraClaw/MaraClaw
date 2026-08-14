@@ -71,6 +71,29 @@ PATCHES = [
     "DO $$ BEGIN ALTER TYPE channel_type_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     "DO $$ BEGIN ALTER TYPE im_provider_enum ADD VALUE IF NOT EXISTS 'google_chat'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     "ALTER TABLE identities ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
+    """
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id UUID NOT NULL,
+        actor_id UUID,
+        actor_role VARCHAR(32) NOT NULL,
+        actor_email VARCHAR(255),
+        action VARCHAR(100) NOT NULL,
+        target_type VARCHAR(50) NOT NULL,
+        target_id UUID,
+        tenant_id UUID,
+        changes JSON NOT NULL DEFAULT '{}',
+        details JSON NOT NULL DEFAULT '{}',
+        ip_address VARCHAR(50),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (id),
+        FOREIGN KEY(actor_id) REFERENCES users (id) ON DELETE SET NULL,
+        FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE SET NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id)",
 ]
 
 

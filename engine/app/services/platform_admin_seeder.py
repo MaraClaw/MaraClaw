@@ -63,7 +63,7 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
     if null_tenant_user:
         updated = await user_dao.update(
             db_obj=null_tenant_user,
-            obj_in={"role": "platform_admin", "is_active": True},
+            obj_in={"role": "platform_admin", "is_active": True, "registration_source": "bootstrap"},
         )
         user = updated or null_tenant_user
         user.identity = identity

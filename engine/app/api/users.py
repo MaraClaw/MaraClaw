@@ -1,12 +1,31 @@
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr, Field
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
+from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
+from app.dao.identity_dao import identity_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.services.admin_audit import field_change, write_admin_audit
+from app.services.admin_provisioning import (
+    AdminActivationError,
+    create_additional_org_admin,
+    is_genesis_org_admin,
+    is_genesis_platform_admin,
+    set_peer_admin_active,
+)
+from app.services.tenant_provisioning import AdminEmailTakenError
+
+
+async def get_client_ip(request: Request) -> str | None:
+    if request.client is None:
+        return None
+    return request.client.host
+
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -123,48 +142,237 @@ class RoleUpdate(BaseModel):
     role: str
 
 
+class OrgAdminCreateRequest(BaseModel):
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=200)
+
+
+class OrgAdminCreateResponse(BaseModel):
+    user_id: uuid.UUID
+    tenant_id: uuid.UUID
+    admin_email: str
+    must_change_password: bool = True
+
+
+class AdminActiveUpdate(BaseModel):
+    is_active: bool
+
+
+class OrgAdminOut(BaseModel):
+    id: uuid.UUID
+    email: str | None = None
+    display_name: str | None = None
+    role: str
+    is_active: bool
+    is_genesis: bool = False
+    tenant_id: uuid.UUID | None = None
+    created_at: datetime | None = None
+
+
+class AdminAuditLogOut(BaseModel):
+    id: uuid.UUID
+    actor_id: uuid.UUID | None = None
+    actor_role: str
+    actor_email: str | None = None
+    action: str
+    target_type: str
+    target_id: uuid.UUID | None = None
+    tenant_id: uuid.UUID | None = None
+    changes: dict
+    details: dict
+    ip_address: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+@router.post("/org-admins", response_model=OrgAdminCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_org_admin(
+    data: OrgAdminCreateRequest,
+    current_user: UserRecord = Depends(require_role("org_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Create another org admin in the caller's company. Genesis org admin only."""
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+    if not await is_genesis_org_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the genesis organization admin can create org admins")
+
+    try:
+        provisioned = await create_additional_org_admin(
+            tenant_id=current_user.tenant_id,
+            admin_email=str(data.admin_email),
+            admin_password=data.admin_password,
+            admin_display_name=data.admin_display_name,
+        )
+    except AdminEmailTakenError as exc:
+        raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
+
+    tenant_id = provisioned.user.tenant_id
+    if tenant_id is None:
+        raise HTTPException(status_code=500, detail="Org admin was created without a company")
+    await write_admin_audit(
+        actor=current_user,
+        action="org_admin_create",
+        target_type="user",
+        target_id=provisioned.user.id,
+        tenant_id=tenant_id,
+        changes={"role": field_change(None, "org_admin"), "admin_email": field_change(None, provisioned.admin_email)},
+        details={"must_change_password": True},
+        ip_address=client_ip,
+    )
+    return OrgAdminCreateResponse(
+        user_id=provisioned.user.id,
+        tenant_id=tenant_id,
+        admin_email=provisioned.admin_email,
+        must_change_password=True,
+    )
+
+
+@router.get("/org-admins", response_model=list[OrgAdminOut])
+async def list_org_admins(current_user: UserRecord = Depends(require_role("org_admin"))):
+    """List org admins in the caller's company."""
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+    genesis = await user_dao.first_org_admin_for_tenant(current_user.tenant_id)
+    genesis_id = genesis.id if genesis else None
+    users = await user_dao.list_org_admins_for_tenant(current_user.tenant_id)
+    return [
+        OrgAdminOut(
+            id=u.id,
+            email=u.email,
+            display_name=u.display_name,
+            role=u.role,
+            is_active=u.is_active,
+            is_genesis=u.id == genesis_id,
+            tenant_id=u.tenant_id,
+            created_at=u.created_at,
+        )
+        for u in users
+    ]
+
+
+@router.patch("/org-admins/{user_id}/active", response_model=OrgAdminOut)
+async def set_org_admin_active(
+    user_id: uuid.UUID,
+    data: AdminActiveUpdate,
+    current_user: UserRecord = Depends(require_role("org_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Activate or deactivate another org admin. Genesis org admin only."""
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        updated = await set_peer_admin_active(
+            actor=current_user,
+            target=target,
+            is_active=data.is_active,
+            ip_address=client_ip,
+        )
+    except AdminActivationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    genesis = await user_dao.first_org_admin_for_tenant(current_user.tenant_id) if current_user.tenant_id else None
+    return OrgAdminOut(
+        id=updated.id,
+        email=updated.email if updated.identity else target.email,
+        display_name=updated.display_name,
+        role=updated.role,
+        is_active=updated.is_active,
+        is_genesis=updated.id == (genesis.id if genesis else None),
+        tenant_id=updated.tenant_id,
+        created_at=updated.created_at,
+    )
+
+
+@router.get("/admin-audit-logs", response_model=list[AdminAuditLogOut])
+async def list_org_admin_audit_logs(
+    action: str | None = None,
+    limit: int = 100,
+    current_user: UserRecord = Depends(require_role("org_admin")),
+):
+    """List admin action logs for the caller's company."""
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+    logs = await admin_audit_log_dao.list_recent(
+        tenant_id=current_user.tenant_id,
+        action=action,
+        limit=min(max(limit, 1), 500),
+    )
+    return [AdminAuditLogOut.model_validate(log) for log in logs]
+
+
 @router.patch("/{user_id}/role")
 async def update_user_role(user_id: uuid.UUID, data: RoleUpdate, current_user: UserRecord = Depends(get_current_user)):
     """Change a user's role within the same company.
 
     Permissions:
-    - org_admin: can set roles to org_admin / member within own tenant.
-      Cannot assign platform_admin.
-    - platform_admin: can set any valid role.
+    - Genesis org admin: may set ``org_admin`` / ``member`` in own tenant.
+    - Other org admins: may set ``member`` only (cannot mint org admins).
+    - Genesis platform admin: may set ``platform_admin`` / ``member``.
+    - Other platform admins: may set ``member`` only.
+    - Nobody may assign the other admin type.
 
     Safety:
     - If the target is the ONLY remaining org_admin in the company,
       demoting them is blocked to prevent orphaned companies.
+    - The last platform_admin cannot be demoted.
     """
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    # Validate target role value
-    allowed_roles = ("org_admin", "member")
-    if current_user.role == "platform_admin":
-        allowed_roles = ("platform_admin", "org_admin", "member")
-    if data.role not in allowed_roles:
-        raise HTTPException(status_code=400, detail=f"Invalid role. Allowed: {', '.join(allowed_roles)}")
+    if data.role not in ("platform_admin", "org_admin", "member"):
+        raise HTTPException(status_code=400, detail="Invalid role. Allowed: platform_admin, org_admin, member")
 
     target_user = await user_dao.get_with_identity(user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # org_admin can only modify users in the same tenant
     if current_user.role == "org_admin" and target_user.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot modify users outside your organization")
 
-    # No-op shortcut
     if target_user.role == data.role:
         return {"status": "ok", "user_id": str(user_id), "role": data.role}
 
-    # Last-admin protection: if demoting an org_admin, check they are not the only one
-    if target_user.role in ("org_admin", "platform_admin") and data.role not in ("org_admin", "platform_admin"):
+    if data.role == "platform_admin":
+        if not await is_genesis_platform_admin(current_user):
+            raise HTTPException(status_code=403, detail="Only the genesis platform admin can create platform admins")
+    elif data.role == "org_admin":
+        if current_user.role != "org_admin" or not await is_genesis_org_admin(current_user):
+            raise HTTPException(status_code=403, detail="Only the genesis organization admin can create org admins")
+        if target_user.tenant_id != current_user.tenant_id:
+            raise HTTPException(status_code=403, detail="Cannot modify users outside your organization")
+
+    if target_user.role == "platform_admin" and data.role != "platform_admin":
+        if await user_dao.count_by_role("platform_admin") <= 1:
+            raise HTTPException(
+                status_code=400, detail="Cannot demote the only platform administrator. Create another first."
+            )
+    elif target_user.role == "org_admin" and data.role != "org_admin":
         admin_count = await user_dao.count_admins_for_tenant(target_user.tenant_id)
         if admin_count <= 1:
             raise HTTPException(
                 status_code=400, detail="Cannot demote the only administrator. Promote another user first."
             )
 
-    await user_dao.update(db_obj=target_user, obj_in={"role": data.role})
+    user_updates: dict[str, object] = {"role": data.role}
+    if data.role == "platform_admin":
+        user_updates["tenant_id"] = None
+        if target_user.identity is not None:
+            await identity_dao.update(db_obj=target_user.identity, obj_in={"is_platform_admin": True})
+    elif target_user.role == "platform_admin" and target_user.identity is not None:
+        await identity_dao.update(db_obj=target_user.identity, obj_in={"is_platform_admin": False})
+
+    await user_dao.update(db_obj=target_user, obj_in=user_updates)
+    await write_admin_audit(
+        actor=current_user,
+        action="role_assign",
+        target_type="user",
+        target_id=target_user.id,
+        tenant_id=target_user.tenant_id if data.role != "platform_admin" else None,
+        changes={"role": field_change(target_user.role, data.role)},
+        details={"target_email": getattr(target_user, "email", None)},
+    )
     return {"status": "ok", "user_id": str(user_id), "role": data.role}

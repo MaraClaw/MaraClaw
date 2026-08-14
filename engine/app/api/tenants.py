@@ -25,6 +25,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.admin_audit import field_change, write_admin_audit
 from app.services.storage import ensure_local_path, get_storage_backend, normalize_storage_key
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
 
@@ -143,6 +144,18 @@ async def create_tenant(
     except AdminEmailTakenError as exc:
         raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
 
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_create",
+        target_type="tenant",
+        target_id=provisioned.tenant.id,
+        tenant_id=provisioned.tenant.id,
+        changes={
+            "name": field_change(None, provisioned.tenant.name),
+            "org_admin_email": field_change(None, provisioned.admin_email),
+        },
+        details={"org_admin_user_id": str(provisioned.org_admin.id)},
+    )
     return TenantCreateResponse(
         tenant=TenantOut.model_validate(provisioned.tenant),
         org_admin_email=provisioned.admin_email,
@@ -196,8 +209,7 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
     if existing_membership:
         raise HTTPException(status_code=400, detail="You already belong to this company")
 
-    has_admin = (await user_dao.count_admins_for_tenant(tenant.id)) > 0
-    assigned_role = "member" if has_admin else "org_admin"
+    assigned_role = "member"
 
     access_token = None
     final_role = assigned_role
@@ -232,7 +244,7 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
         access_token = create_access_token(str(new_user.id), new_user.role)
         final_role = new_user.role
     else:
-        role = assigned_role if current_user.role == "member" else current_user.role
+        role = assigned_role
         await user_dao.update(
             db_obj=current_user,
             obj_in={
@@ -495,15 +507,15 @@ async def assign_user_to_tenant(
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ):
     """Assign a user to a tenant with a specific role."""
+    if role not in ("agent_admin", "member"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+
     if not await tenant_dao.get(tenant_id):
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     user = await user_dao.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    if role not in ("org_admin", "agent_admin", "member"):
-        raise HTTPException(status_code=400, detail="Invalid role")
 
     await user_dao.update(db_obj=user, obj_in={"tenant_id": tenant_id, "role": role})
     return {"status": "ok", "user_id": str(user_id), "tenant_id": str(tenant_id), "role": role}

@@ -803,6 +803,29 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at);
 
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+	id UUID NOT NULL,
+	actor_id UUID,
+	actor_role VARCHAR(32) NOT NULL,
+	actor_email VARCHAR(255),
+	action VARCHAR(100) NOT NULL,
+	target_type VARCHAR(50) NOT NULL,
+	target_id UUID,
+	tenant_id UUID,
+	changes JSON NOT NULL DEFAULT '{}',
+	details JSON NOT NULL DEFAULT '{}',
+	ip_address VARCHAR(50),
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(actor_id) REFERENCES users (id) ON DELETE SET NULL,
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id);
+
 CREATE TABLE IF NOT EXISTS channel_configs (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
