@@ -11,7 +11,7 @@ from typing import TypedDict
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -29,31 +29,6 @@ router = APIRouter(tags=["whatsapp"])
 WHATSAPP_TEXT_LIMIT = 4096
 DEFAULT_WHATSAPP_API_VERSION = "v23.0"
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
-_processed_whatsapp_messages: set[str] = set()
-
-
-class WhatsAppText(TypedDict, total=False):
-    body: str
-
-
-class WhatsAppButton(TypedDict, total=False):
-    text: str
-
-
-class WhatsAppReply(TypedDict, total=False):
-    title: str
-
-
-class WhatsAppInteractive(TypedDict, total=False):
-    button_reply: WhatsAppReply
-    list_reply: WhatsAppReply
-
-
-class WhatsAppMessage(TypedDict, total=False):
-    type: str
-    text: WhatsAppText
-    button: WhatsAppButton
-    interactive: WhatsAppInteractive
 
 
 class WhatsAppChannelPayload(TypedDict, total=False):
@@ -87,23 +62,19 @@ def _verify_signature(app_secret: str, body: bytes, signature: str | None) -> bo
     return hmac.compare_digest(expected, signature)
 
 
-def _extract_message_text(message: WhatsAppMessage) -> str:
-    msg_type = message.get("type")
+def _extract_message_text(message: JsonObject) -> str:
+    msg_type = json_as_str_or(message.get("type"))
     if msg_type == "text":
-        text = message.get("text")
-        return ((text.get("body") if text else "") or "").strip()
+        return json_as_str_or(json_object_from(message.get("text")).get("body")).strip()
     if msg_type == "button":
-        button = message.get("button")
-        return ((button.get("text") if button else "") or "").strip()
+        return json_as_str_or(json_object_from(message.get("button")).get("text")).strip()
     if msg_type == "interactive":
-        interactive = message.get("interactive")
+        interactive = json_object_from(message.get("interactive"))
         if not interactive:
             return ""
-        button_reply = interactive.get("button_reply")
-        list_reply = interactive.get("list_reply")
-        return (
-            (button_reply.get("title") if button_reply else "") or (list_reply.get("title") if list_reply else "") or ""
-        ).strip()
+        button_reply = json_object_from(interactive.get("button_reply"))
+        list_reply = json_object_from(interactive.get("list_reply"))
+        return (json_as_str_or(button_reply.get("title")) or json_as_str_or(list_reply.get("title"))).strip()
     return ""
 
 
@@ -186,7 +157,7 @@ async def configure_whatsapp_channel(
 
 @router.get("/agents/{agent_id}/whatsapp-channel", response_model=ChannelConfigOut)
 async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
@@ -194,7 +165,7 @@ async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel/webhook-url")
-async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request, db=None):
+async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(db, request)
@@ -210,7 +181,7 @@ async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 @router.get("/channel/whatsapp/{agent_id}/webhook")
@@ -245,27 +216,35 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
     if app_secret and not _verify_signature(app_secret, body, signature):
         return Response(status_code=401)
 
-    payload = await request.json()
-    for entry in payload.get("entry", []) or []:
-        for change in entry.get("changes", []) or []:
-            value = change.get("value") or {}
-            messages = value.get("messages") or []
-            contacts = value.get("contacts") or []
+    payload = json_loads_object(body)
+    entries = payload.get("entry")
+    for entry_raw in entries if isinstance(entries, list) else []:
+        entry = json_object_from(entry_raw)
+        changes = entry.get("changes")
+        for change_raw in changes if isinstance(changes, list) else []:
+            change = json_object_from(change_raw)
+            value = json_object_from(change.get("value"))
+            messages = value.get("messages")
+            contacts = value.get("contacts")
             contact_name = ""
-            if contacts:
-                contact_name = str((contacts[0].get("profile") or {}).get("name") or "").strip()
+            contact_items = contacts if isinstance(contacts, list) else []
+            message_items = messages if isinstance(messages, list) else []
+            if contact_items:
+                profile = json_object_from(json_object_from(contact_items[0]).get("profile"))
+                contact_name = json_as_str_or(profile.get("name")).strip()
 
-            for message in messages:
-                message_id = str(message.get("id") or "").strip()
-                if message_id and message_id in _processed_whatsapp_messages:
+            for message_raw in message_items:
+                message = json_object_from(message_raw)
+                message_id = json_as_str_or(message.get("id")).strip()
+                from app.services.channels import dedup as channel_dedup
+
+                if message_id and await channel_dedup.already_processed_shared("whatsapp", message_id):
                     continue
                 if message_id:
-                    _processed_whatsapp_messages.add(message_id)
-                    if len(_processed_whatsapp_messages) > 2000:
-                        _processed_whatsapp_messages.clear()
+                    await channel_dedup.mark_processed_shared("whatsapp", message_id)
 
                 user_text = _extract_message_text(message)
-                sender_phone = str(message.get("from") or "").strip()
+                sender_phone = json_as_str_or(message.get("from")).strip()
                 if not user_text or not sender_phone:
                     continue
 
@@ -302,14 +281,14 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 )
                 history = _conv(history_msgs)
 
-                await chat_message_dao.insert_message(
+                _ = await chat_message_dao.insert_message(
                     agent_id=agent_id,
                     user_id=platform_user_id,
                     role="user",
                     content=user_text,
                     conversation_id=session_conv_id,
                 )
-                await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+                _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
                 _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
@@ -330,7 +309,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
 
                 try:
                     await _send_whatsapp_messages(config, sender_phone, reply_text)
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=platform_user_id,
                         role="assistant",
@@ -340,7 +319,9 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     try:
                         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                         if fresh:
-                            await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+                            _ = await chat_session_dao.update(
+                                db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)}
+                            )
                     except ValueError, TypeError:
                         pass
                 except Exception as exc:

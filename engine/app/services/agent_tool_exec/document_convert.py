@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 from pathlib import Path
 
 from app.core.logging import logger
 from app.services.agent_tool_exec.registry import ToolArguments
-
-csv_conversion = importlib.import_module("app.services.document_conversion.csv")
-markdown_conversion = importlib.import_module("app.services.document_conversion.markdown")
+from app.services.document_conversion import markdown as markdown_conversion
+from app.services.document_conversion.csv import _convert_csv_to_xlsx as _csv_to_xlsx
 
 
 def _resolve_paths(ws: Path, source_path: str, target_path: str) -> tuple[Path, Path] | str:
@@ -38,7 +36,7 @@ async def _convert_csv_to_xlsx(agent_id: uuid.UUID, ws: Path, arguments: ToolArg
     if not src_file.exists():
         return f"❌ Source file not found: {source_path}"
     try:
-        return csv_conversion._convert_csv_to_xlsx(src_file, tgt_file, target_path)
+        return _csv_to_xlsx(src_file, tgt_file, target_path)
     except Exception as exc:
         logger.exception(f"Convert CSV to XLSX failed: {exc}")
         return f"❌ Conversion failed: {exc}"

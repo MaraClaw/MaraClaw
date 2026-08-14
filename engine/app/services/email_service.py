@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from email import encoders
 from email.header import decode_header
+from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -22,6 +23,7 @@ from typing import NotRequired, TypedDict
 import aiofiles
 
 from app.core.email import force_ipv4, send_smtp_email
+from app.core.json_types import json_as_bool, json_as_str_or
 from app.core.logging import logger
 
 
@@ -129,17 +131,25 @@ EMAIL_PROVIDERS: dict[str, EmailProviderPreset] = {
 }
 
 
+def _as_port(value: object, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return default
+
+
 def resolve_config(config: EmailConfig) -> ResolvedEmailConfig:
     """Resolve a user config into full IMAP/SMTP settings using provider presets."""
-    provider = config.get("email_provider", "custom")
+    provider = json_as_str_or(config.get("email_provider"), "custom") or "custom"
     result: ResolvedEmailConfig = {
-        "email_address": config.get("email_address", ""),
-        "auth_code": config.get("auth_code", ""),
-        "imap_host": config.get("imap_host", ""),
-        "imap_port": int(config.get("imap_port", 993)),
-        "smtp_host": config.get("smtp_host", ""),
-        "smtp_port": int(config.get("smtp_port", 465)),
-        "smtp_ssl": config.get("smtp_ssl", True),
+        "email_address": json_as_str_or(config.get("email_address")),
+        "auth_code": json_as_str_or(config.get("auth_code")),
+        "imap_host": json_as_str_or(config.get("imap_host")),
+        "imap_port": _as_port(config.get("imap_port"), 993),
+        "smtp_host": json_as_str_or(config.get("smtp_host")),
+        "smtp_port": _as_port(config.get("smtp_port"), 465),
+        "smtp_ssl": json_as_bool(config.get("smtp_ssl"), True),
     }
 
     if provider != "custom" and provider in EMAIL_PROVIDERS:
@@ -153,21 +163,32 @@ def resolve_config(config: EmailConfig) -> ResolvedEmailConfig:
     return result
 
 
+def _message_header(msg: Message, key: str, default: str = "") -> str:
+    value = msg.get(key, default)
+    return value if isinstance(value, str) else default
+
+
 def _decode_header_value(value: str) -> str:
     """Decode an email header value (handles encoded words)."""
     if not value:
         return ""
-    decoded_parts = decode_header(value)
-    result = []
-    for part, charset in decoded_parts:
+    decoded_parts: object = decode_header(value)
+    result: list[str] = []
+    items = list[object](decoded_parts) if isinstance(decoded_parts, list) else []
+    for item in items:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        part = item[0]
+        charset = item[1]
+        encoding = charset if isinstance(charset, str) else "utf-8"
         if isinstance(part, bytes):
-            result.append(part.decode(charset or "utf-8", errors="replace"))
-        else:
+            result.append(part.decode(encoding, errors="replace"))
+        elif isinstance(part, str):
             result.append(part)
     return "".join(result)
 
 
-def _extract_body(msg) -> str:
+def _extract_body(msg: Message) -> str:
     """Extract the plain text body from an email message."""
     if msg.is_multipart():
         for part in msg.walk():
@@ -175,7 +196,7 @@ def _extract_body(msg) -> str:
             content_disposition = str(part.get("Content-Disposition", ""))
             if content_type == "text/plain" and "attachment" not in content_disposition:
                 payload = part.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     return payload.decode(charset, errors="replace")
         # Fallback to HTML if no plain text
@@ -183,12 +204,12 @@ def _extract_body(msg) -> str:
             content_type = part.get_content_type()
             if content_type == "text/html":
                 payload = part.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     return f"[HTML content]\n{payload.decode(charset, errors='replace')[:2000]}"
     else:
         payload = msg.get_payload(decode=True)
-        if payload:
+        if isinstance(payload, bytes):
             charset = msg.get_content_charset() or "utf-8"
             return payload.decode(charset, errors="replace")
     return ""
@@ -322,8 +343,8 @@ async def read_emails(
         with force_ipv4():
             context = ssl.create_default_context()
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select(folder, readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select(folder, readonly=True)
 
                 # Search
                 if search:
@@ -331,7 +352,10 @@ async def read_emails(
                 else:
                     _, msg_nums = mail.search(None, "ALL")
 
-                msg_ids = msg_nums[0].split()
+                raw_ids = msg_nums[0] if msg_nums else None
+                if not isinstance(raw_ids, (bytes, bytearray)):
+                    return "📭 No emails found."
+                msg_ids = raw_ids.decode().split()
                 if not msg_ids:
                     return "📭 No emails found."
 
@@ -339,32 +363,33 @@ async def read_emails(
                 latest_ids = msg_ids[-limit:]
                 latest_ids.reverse()  # Newest first
 
-                results = []
+                results: list[str] = []
                 for mid in latest_ids:
                     _, msg_data = mail.fetch(mid, "(RFC822)")
-                    if not msg_data or not msg_data[0]:
+                    first = msg_data[0] if msg_data else None
+                    if not isinstance(first, tuple) or len(first) < 2:
                         continue
-                    raw = msg_data[0][1]
+                    raw = first[1]
                     if not isinstance(raw, bytes):
                         raise TypeError("IMAP message payload must be bytes")
                     msg = email_lib.message_from_bytes(raw)
 
-                    from_addr = _decode_header_value(msg.get("From", ""))
-                    subject = _decode_header_value(msg.get("Subject", "(No subject)"))
-                    date_str = msg.get("Date", "")
-                    message_id = msg.get("Message-ID", "")
+                    from_addr = _decode_header_value(_message_header(msg, "From"))
+                    subject = _decode_header_value(_message_header(msg, "Subject", "(No subject)"))
+                    date_str = _message_header(msg, "Date")
+                    message_id = _message_header(msg, "Message-ID")
                     body = _extract_body(msg)
                     # Truncate body for readability
                     if len(body) > 500:
                         body = body[:500] + "..."
 
                     results.append(
-                        f"---\n"
-                        f"**From:** {from_addr}\n"
-                        f"**Subject:** {subject}\n"
-                        f"**Date:** {date_str}\n"
-                        f"**Message-ID:** {message_id}\n"
-                        f"**Body:**\n{body}"
+                        "---\n"
+                        + f"**From:** {from_addr}\n"
+                        + f"**Subject:** {subject}\n"
+                        + f"**Date:** {date_str}\n"
+                        + f"**Message-ID:** {message_id}\n"
+                        + f"**Body:**\n{body}"
                     )
 
                 header = f"📬 {len(results)} email(s) from {folder}:\n\n"
@@ -408,22 +433,26 @@ async def reply_email(
             original_subject = ""
 
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select(folder, readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select(folder, readonly=True)
                 _, msg_nums = mail.search(None, f'HEADER Message-ID "{message_id}"')
-                msg_ids = msg_nums[0].split()
+                raw_ids = msg_nums[0] if msg_nums else None
+                if not isinstance(raw_ids, (bytes, bytearray)):
+                    return f"❌ Original email not found with Message-ID: {message_id}"
+                msg_ids = raw_ids.decode().split()
                 if not msg_ids:
                     return f"❌ Original email not found with Message-ID: {message_id}"
 
                 _, msg_data = mail.fetch(msg_ids[0], "(RFC822)")
-                if not msg_data or not msg_data[0]:
+                first = msg_data[0] if msg_data else None
+                if not isinstance(first, tuple) or len(first) < 2:
                     raise TypeError("IMAP message payload is missing")
-                raw = msg_data[0][1]
+                raw = first[1]
                 if not isinstance(raw, bytes):
                     raise TypeError("IMAP message payload must be bytes")
                 original = email_lib.message_from_bytes(raw)
-                original_from = original.get("From", "")
-                original_subject = _decode_header_value(original.get("Subject", ""))
+                original_from = _message_header(original, "From")
+                original_subject = _decode_header_value(_message_header(original, "Subject"))
 
             # Build reply
             reply_subject = (
@@ -432,7 +461,8 @@ async def reply_email(
 
             reply_msg = MIMEMultipart()
             reply_msg["From"] = addr
-            reply_msg["To"] = parseaddr(original_from)[1] or original_from
+            reply_to = parseaddr(original_from)[1] or original_from
+            reply_msg["To"] = reply_to
             reply_msg["Subject"] = reply_subject
             reply_msg["In-Reply-To"] = message_id
             reply_msg["References"] = message_id
@@ -447,13 +477,13 @@ async def reply_email(
                 user=addr,
                 password=password,
                 from_addr=addr,
-                to_addrs=[reply_msg["To"]],
+                to_addrs=[reply_to],
                 msg_string=reply_msg.as_string(),
                 use_ssl=cfg.get("smtp_ssl", True),
                 timeout=15,
             )
 
-            return f"✅ Reply sent to {reply_msg['To']} (Subject: {reply_subject})"
+            return f"✅ Reply sent to {reply_to} (Subject: {reply_subject})"
 
     except Exception as e:
         return f"❌ Failed to reply: {str(e)[:200]}"
@@ -478,10 +508,11 @@ async def test_connection(config: EmailConfig) -> EmailConnectionResult:
         with force_ipv4():
             context = ssl.create_default_context()
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select("INBOX", readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select("INBOX", readonly=True)
                 _, msg_nums = mail.search(None, "ALL")
-                count = len(msg_nums[0].split()) if msg_nums[0] else 0
+                inbox_ids = msg_nums[0] if msg_nums else None
+                count = len(inbox_ids.decode().split()) if isinstance(inbox_ids, (bytes, bytearray)) else 0
                 result["imap"] = f"✅ IMAP connected ({count} emails in INBOX)"
     except imaplib.IMAP4.error as e:
         result["ok"] = False

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from app.core.permissions import get_agent_accessible_user_ids
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.user_dao import user_dao
+from app.records.agent import AgentRecord
 from app.services.registration_service import registration_service
 
 
 async def ensure_access_granted_platform_relationships(
-    db: Any,
-    agent: Any,
+    db: object | None,
+    agent: AgentRecord,
     *,
     created_by_user_id: uuid.UUID | None = None,
 ) -> bool:
@@ -52,7 +52,7 @@ async def ensure_access_granted_platform_relationships(
         member = await registration_service.ensure_web_org_member(user)
         if not member or member.status != "active":
             continue
-        await agent_relationship_dao.create(
+        _ = await agent_relationship_dao.create(
             obj_in={
                 "agent_id": agent.id,
                 "member_id": member.id,

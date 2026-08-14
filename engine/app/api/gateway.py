@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -36,7 +37,7 @@ from app.schemas.schemas import (
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 
-async def _get_agent_by_key(api_key: str, db=None) -> AgentRecord:
+async def _get_agent_by_key(api_key: str, db: object | None = None) -> AgentRecord:
     """Authenticate an OpenClaw agent by its API key."""
     agent = await agent_dao.get_openclaw_by_api_key(api_key)
     if not agent:
@@ -48,7 +49,7 @@ async def _get_agent_by_key(api_key: str, db=None) -> AgentRecord:
 
 
 @router.get("/poll", response_model=GatewayPollResponse)
-async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None):
     """OpenClaw agent polls for pending messages.
 
     Returns all pending messages and marks them as delivered.
@@ -73,7 +74,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db=None
     now = datetime.now(UTC)
     out = []
     for msg in messages:
-        await gateway_message_dao.update(
+        _ = await gateway_message_dao.update(
             db_obj=msg,
             obj_in={"status": "delivered", "delivered_at": now},
         )
@@ -165,7 +166,9 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db=None
 
 
 @router.post("/report")
-async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db=None):
+async def report_result(
+    body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db: object | None = None
+):
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
@@ -176,7 +179,7 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    await gateway_message_dao.update(
+    _ = await gateway_message_dao.update(
         db_obj=msg,
         obj_in={
             "status": "completed",
@@ -186,14 +189,14 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
     )
 
     # Update last seen
-    await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
+    _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
 
     # Save result as assistant chat message and push via WebSocket
     # (works for both user-originated and agent-to-agent messages)
     if body.result and msg.conversation_id:
         participant = await participant_dao.get_by_type_ref("agent", agent.id)
 
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent.id,
             user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
             role="assistant",
@@ -222,7 +225,7 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
     # write the reply back as a gateway_message for the sender agent to poll
     if body.result and msg.sender_agent_id:
         conv_id = msg.conversation_id or f"gw_agent_{msg.sender_agent_id}_{agent.id}"
-        await gateway_message_dao.create(
+        _ = await gateway_message_dao.create(
             obj_in={
                 "agent_id": msg.sender_agent_id,
                 "sender_agent_id": agent.id,
@@ -240,10 +243,10 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
 
 
 @router.post("/heartbeat")
-async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None):
     """Pure heartbeat ping - keeps the OpenClaw agent marked as online."""
     agent = await _get_agent_by_key(x_api_key, db)
-    await agent_dao.update(
+    _ = await agent_dao.update(
         db_obj=agent,
         obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
     )
@@ -316,21 +319,21 @@ async def _send_to_agent_background(
 
             # Migrate any existing messages from old gw_agent_ format
             old_conv_id = f"gw_agent_{source_agent_id}_{target_agent_id}"
-            await chat_message_dao.reassign_conversation_id(
+            _ = await chat_message_dao.reassign_conversation_id(
                 old_conversation_id=old_conv_id,
                 new_conversation_id=conv_id,
             )
 
-        await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
+        _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
 
         # Agent-to-agent communication context (injected as prefix to user message
         # since call_llm builds the full system prompt internally)
         agent_comm_alert = (
             "--- Agent-to-Agent Communication Alert ---\n"
-            f"You are receiving a direct message from another digital employee ({source_agent_name}). "
-            "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
-            "DO NOT use the `send_message_to_agent` tool to reply to this conversation. Just reply naturally in text.\n"
-            "If they are asking you to create or analyze a file, deliver the file using `send_file_to_agent` after writing it."
+            + f"You are receiving a direct message from another digital employee ({source_agent_name}). "
+            + "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
+            + "DO NOT use the `send_message_to_agent` tool to reply to this conversation. Just reply naturally in text.\n"
+            + "If they are asking you to create or analyze a file, deliver the file using `send_file_to_agent` after writing it."
         )
 
         hist_msgs = await chat_message_dao.list_for_session(conversation_id=conv_id, limit=10)
@@ -347,7 +350,7 @@ async def _send_to_agent_background(
         tgt_participant = await participant_dao.get_by_type_ref("agent", uuid.UUID(target_agent_id))
 
         # Save user message to conversation
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=uuid.UUID(target_agent_id),
             user_id=target_creator_uuid,
             role="user",
@@ -359,7 +362,7 @@ async def _send_to_agent_background(
         # Call LLM
         collected = []
 
-        async def on_chunk(text):
+        async def on_chunk(text: str) -> None:
             collected.append(text)
 
         target_agent_uuid = uuid.UUID(target_agent_id)
@@ -369,14 +372,14 @@ async def _send_to_agent_background(
             agent_name=target_agent_name,
             role_description=target_role_description,
             agent_id=target_agent_uuid,
-            user_id=target_creator_id,
+            user_id=target_creator_uuid,
             session_id=conv_id,
             on_chunk=on_chunk,
         )
         final_reply = reply or "".join(collected)
 
         # Save assistant reply to conversation
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=uuid.UUID(target_agent_id),
             user_id=target_creator_uuid,
             role="assistant",
@@ -386,7 +389,7 @@ async def _send_to_agent_background(
         )
 
         # Write reply to gateway_messages for source (OpenClaw) to poll
-        await gateway_message_dao.create(
+        _ = await gateway_message_dao.create(
             obj_in={
                 "agent_id": uuid.UUID(source_agent_id),
                 "sender_agent_id": uuid.UUID(target_agent_id),
@@ -406,7 +409,9 @@ async def _send_to_agent_background(
 
 
 @router.post("/send-message")
-async def send_message(body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+async def send_message(
+    body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None
+) -> dict[str, Any]:
     """OpenClaw agent sends a message to a person or another agent.
 
     Routes automatically based on target type:
@@ -414,7 +419,7 @@ async def send_message(body: GatewaySendMessageRequest, x_api_key: str = Header(
     - Human target: sends via available channel (feishu, etc.)
     """
     agent = await _get_agent_by_key(x_api_key, db)
-    await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
+    _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
 
     target_name = body.target.strip()
     content = body.content.strip()
@@ -442,7 +447,7 @@ async def send_message(body: GatewaySendMessageRequest, x_api_key: str = Header(
 
         if getattr(target_agent, "agent_type", None) == "openclaw":
             # OpenClaw-to-OpenClaw: write to gateway_messages directly
-            await gateway_message_dao.create(
+            _ = await gateway_message_dao.create(
                 obj_in={
                     "agent_id": target_agent.id,
                     "sender_agent_id": agent.id,
@@ -578,7 +583,9 @@ async def send_message(body: GatewaySendMessageRequest, x_api_key: str = Header(
 
 
 @router.get("/setup-guide/{agent_id}")
-async def get_setup_guide(agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key"), db=None):
+async def get_setup_guide(
+    agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None
+):
     """Return the pre-filled Skill file and Heartbeat instruction for this agent."""
     agent = await _get_agent_by_key(x_api_key, db)
     if agent.id != agent_id:

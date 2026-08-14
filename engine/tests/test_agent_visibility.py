@@ -1,7 +1,10 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from app.core import permissions
 
@@ -146,3 +149,46 @@ async def test_agent_relationship_status_active_when_original_creator_still_mana
 
     assert status["access_allowed"] is True
     assert status["access_status"] == "active"
+
+
+def test_is_agent_expired_handles_missing_attrs_flag_and_past_date():
+    assert permissions.is_agent_expired(SimpleNamespace()) is False
+    assert permissions.is_agent_expired(SimpleNamespace(is_expired=True)) is True
+    past = datetime.now(UTC) - timedelta(hours=1)
+    assert permissions.is_agent_expired(SimpleNamespace(is_expired=False, expires_at=past)) is True
+    future = datetime.now(UTC) + timedelta(hours=1)
+    assert permissions.is_agent_expired(SimpleNamespace(is_expired=False, expires_at=future)) is False
+
+
+@pytest.mark.asyncio
+async def test_check_agent_access_blocks_expired_use_but_allows_manage(monkeypatch):
+    from app.core import access_cache
+
+    access_cache.clear_request_memo()
+    tenant = uuid.uuid4()
+    member = make_user(role="member", tenant_id=tenant)
+    creator = make_user(role="member", tenant_id=tenant)
+    expired = SimpleNamespace(
+        id=uuid.uuid4(),
+        creator_id=creator.id,
+        tenant_id=tenant,
+        access_mode="company",
+        company_access_level="use",
+        is_expired=True,
+        expires_at=None,
+        status="ready",
+    )
+    monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=expired))
+    monkeypatch.setattr(permissions.access_cache, "get_cached_level", AsyncMock(return_value=None))
+    monkeypatch.setattr(permissions.access_cache, "read_acl_version", AsyncMock(return_value=0))
+    monkeypatch.setattr(permissions.access_cache, "set_cached_level", AsyncMock())
+
+    with pytest.raises(HTTPException) as blocked:
+        await permissions.check_agent_access(member, expired.id)
+    assert blocked.value.status_code == 403
+    assert "expired" in str(blocked.value.detail).lower()
+
+    agent, level = await permissions.check_agent_access(creator, expired.id)
+    assert agent is expired
+    assert level == "manage"
+    access_cache.clear_request_memo()

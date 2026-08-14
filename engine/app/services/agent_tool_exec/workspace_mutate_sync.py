@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+
+type EnterpriseInfoPathCheck = Callable[[str], bool]
 
 
 def _write_file(
@@ -11,7 +14,7 @@ def _write_file(
     tenant_id: str | None = None,
     *,
     workspace_root: Path,
-    is_enterprise_info_path,
+    is_enterprise_info_path: EnterpriseInfoPathCheck,
 ) -> str:
     if rel_path.strip("/") == "tasks.json":
         return "tasks.json is a legacy read-only snapshot. Use the task APIs/UI to manage tasks."
@@ -37,13 +40,13 @@ def _write_file(
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content, encoding="utf-8")
+        _ = file_path.write_text(content, encoding="utf-8")
         return f"✅ Written to {rel_path} ({len(content)} chars)"
     except Exception as error:
         return f"Write failed: {error}"
 
 
-def _delete_file(ws: Path, rel_path: str, *, is_enterprise_info_path) -> str:
+def _delete_file(ws: Path, rel_path: str, *, is_enterprise_info_path: EnterpriseInfoPathCheck) -> str:
     protected = {"tasks.json", "soul.md"}
     if rel_path.strip("/") in protected:
         return f"{rel_path} cannot be deleted (protected)"
@@ -75,7 +78,7 @@ def _edit_file(
     tenant_id: str | None = None,
     *,
     workspace_root: Path,
-    is_enterprise_info_path,
+    is_enterprise_info_path: EnterpriseInfoPathCheck,
 ) -> str:
     if is_enterprise_info_path(rel_path):
         return "enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
@@ -115,7 +118,7 @@ def _edit_file(
             new_content = content.replace(old_string, new_string, 1)
             count = 1
 
-        file_path.write_text(new_content, encoding="utf-8")
+        _ = file_path.write_text(new_content, encoding="utf-8")
         return f"✅ Replaced {count} occurrence(s) in {rel_path}"
     except Exception as error:
         return f"Edit failed: {error}"

@@ -2,12 +2,68 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from typing import Protocol, TypeIs
 
 from . import workspace_read
 from .registry import ToolArguments, ToolOutputCallback, current_execution_context, register
 
-_web_search_module = importlib.import_module("app.services.agent_tool_exec.web_search")
-_web_read_module = importlib.import_module("app.services.agent_tool_exec.web_read")
+
+class _WebSearchModule(Protocol):
+    async def _web_search(self, arguments: ToolArguments, agent_id: uuid.UUID | None = None) -> str: ...
+
+    async def _jina_search(self, arguments: ToolArguments) -> str: ...
+
+    async def _exa_search(self, arguments: ToolArguments, agent_id: uuid.UUID | None = None) -> str: ...
+
+    async def _duckduckgo_search_tool(self, arguments: ToolArguments) -> str: ...
+
+    async def _tavily_search_tool(self, arguments: ToolArguments, agent_id: uuid.UUID | None = None) -> str: ...
+
+    async def _google_search_tool(self, arguments: ToolArguments, agent_id: uuid.UUID | None = None) -> str: ...
+
+    async def _bing_search_tool(self, arguments: ToolArguments, agent_id: uuid.UUID | None = None) -> str: ...
+
+
+class _WebReadModule(Protocol):
+    async def _jina_read(self, arguments: ToolArguments) -> str: ...
+
+    async def _read_webpage(self, arguments: ToolArguments) -> str: ...
+
+
+def _has_callables(value: object, *names: str) -> bool:
+    return all(callable(getattr(value, name, None)) for name in names)
+
+
+def _is_web_search_module(value: object) -> TypeIs[_WebSearchModule]:
+    return _has_callables(
+        value,
+        "_web_search",
+        "_jina_search",
+        "_exa_search",
+        "_duckduckgo_search_tool",
+        "_tavily_search_tool",
+        "_google_search_tool",
+        "_bing_search_tool",
+    )
+
+
+def _is_web_read_module(value: object) -> TypeIs[_WebReadModule]:
+    return _has_callables(value, "_jina_read", "_read_webpage")
+
+
+def _load_search_module(name: str) -> object:
+    return importlib.import_module(name)
+
+
+_loaded_web_search = _load_search_module("app.services.agent_tool_exec.web_search")
+if not _is_web_search_module(_loaded_web_search):
+    raise TypeError("web_search module is missing required handlers")
+_web_search_module = _loaded_web_search
+
+_loaded_web_read = _load_search_module("app.services.agent_tool_exec.web_read")
+if not _is_web_read_module(_loaded_web_read):
+    raise TypeError("web_read module is missing required handlers")
+_web_read_module = _loaded_web_read
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str) -> str:

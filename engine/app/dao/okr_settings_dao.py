@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -23,12 +24,13 @@ _COLUMNS = (
 )
 
 
+@final
 class OKRSettingsDAO(BaseDAO[OKRSettingsRecord]):
     """Minimal DAO for per-tenant OKR configuration."""
 
-    table = "okr_settings"
-    pk = "tenant_id"
-    columns = _COLUMNS
+    table: ClassVar[str] = "okr_settings"
+    pk: ClassVar[str] = "tenant_id"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(OKRSettingsRecord.from_row)
 
     async def get_by_tenant(self, tenant_id: UUID) -> OKRSettingsRecord | None:

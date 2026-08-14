@@ -195,7 +195,7 @@ async def test_on_message_set_trigger_snapshots_latest_message_timestamp(monkeyp
     async def snapshot(_facade, _agent_id, config):
         config["_since_ts"] = latest.isoformat()
 
-    monkeypatch.setattr(triggers._TRIGGER_HELPERS, "_snapshot_latest_message", snapshot)
+    monkeypatch.setattr(triggers.trigger_helpers, "_snapshot_latest_message", snapshot)
 
     result = await agent_tools._handle_set_trigger(
         agent_id,
@@ -222,7 +222,7 @@ async def test_on_message_set_trigger_keeps_fallback_when_snapshot_fails(monkeyp
         # Real helper swallows DB errors; model that as a no-op with no _since_ts.
         return
 
-    monkeypatch.setattr(triggers._TRIGGER_HELPERS, "_snapshot_latest_message", snapshot)
+    monkeypatch.setattr(triggers.trigger_helpers, "_snapshot_latest_message", snapshot)
 
     result = await agent_tools._handle_set_trigger(
         uuid.uuid4(),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from app.core.logging import logger
 from app.dao.notification_dao import notification_dao
@@ -11,7 +10,7 @@ from app.records.notification import NotificationRecord
 
 
 async def send_notification(
-    db: Any = None,
+    db: object | None = None,
     user_id: uuid.UUID | None = None,
     *,
     agent_id: uuid.UUID | None = None,

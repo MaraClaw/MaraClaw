@@ -5,13 +5,13 @@ import io
 import uuid as _uuid
 import zipfile
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, http_header, json_as_str, mapping_from_row
 from app.core.logging import logger
 from app.core.security import get_current_admin, get_current_user, require_role
 from app.dao.skill_dao import skill_dao, skill_file_dao
@@ -67,9 +67,9 @@ async def _get_tenant_setting(tenant_id: str | None, key: str) -> str:
                     "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                     {"tenant_id": _uuid.UUID(tenant_id), "key": key},
                 )
-                if row and isinstance(row.get("value"), dict):
-                    token = row["value"].get("token")
-                    if isinstance(token, str):
+                if row:
+                    token = json_as_str(mapping_from_row(row.get("value")).get("token"))
+                    if token:
                         return token
         except Exception as error:
             logger.warning(f"[Skills] Failed to retrieve tenant setting: {error}")
@@ -154,7 +154,7 @@ async def _fetch_clawhub_skill_archive(
                     params=params,
                     headers=_clawhub_headers_for_base(api_key, base_url),
                 )
-            content_type = resp.headers.get("content-type", "")
+            content_type = http_header(resp.headers, "content-type")
             if resp.status_code == 404:
                 last_error = f"Skill '{slug}' not found on ClawHub at {base_url}"
                 continue
@@ -279,7 +279,7 @@ async def _save_skill_to_db(
 
     for f in files:
         content = f["content"].replace("\x00", "")
-        await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f["path"], "content": content})
+        _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f["path"], "content": content})
 
     return {"id": str(skill.id), "name": skill.name, "folder_name": skill.folder_name}
 
@@ -288,7 +288,7 @@ async def _save_skill_to_db(
 
 
 @router.get("/clawhub/search")
-async def search_clawhub(q: str, current_user: UserRecord = Depends(get_current_user)):
+async def search_clawhub(q: str, current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """Proxy search requests to the ClawHub API."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     api_key = await _get_clawhub_key(tenant_id)
@@ -455,7 +455,7 @@ async def import_from_url(body: UrlImportIn, current_user: UserRecord = Depends(
 
 
 @router.post("/import-from-url/preview")
-async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)):
+async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Preview what will be imported from a GitHub URL without saving."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     token = await _get_github_token(tenant_id)
@@ -490,7 +490,7 @@ async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depen
 
 
 @router.get("/")
-async def list_skills(current_user: UserRecord = Depends(get_current_user)):
+async def list_skills(current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """List global skills scoped by tenant (builtin + tenant-specific)."""
     skills = await skill_dao.list_for_tenant_scope(current_user.tenant_id)
     return [
@@ -510,7 +510,7 @@ async def list_skills(current_user: UserRecord = Depends(get_current_user)):
 
 
 @router.get("/{skill_id}")
-async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_current_user)):
+async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Get a skill with its files."""
     skill = await skill_dao.get_for_tenant_scope(
         skill_id,
@@ -548,19 +548,19 @@ async def create_skill(body: SkillCreateIn, current_user: UserRecord = Depends(g
     )
 
     if not body.files:
-        await skill_file_dao.create(
+        _ = await skill_file_dao.create(
             obj_in={
                 "skill_id": skill.id,
                 "path": "SKILL.md",
                 "content": (
                     f"---\nname: {body.name}\ndescription: {body.description}\n---\n\n"
-                    f"# {body.name}\n\n## Overview\n{body.description}\n"
+                    + f"# {body.name}\n\n## Overview\n{body.description}\n"
                 ),
             }
         )
     else:
         for f in body.files:
-            await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f.path, "content": f.content})
+            _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f.path, "content": f.content})
 
     return {"id": str(skill.id), "name": skill.name}
 
@@ -627,7 +627,7 @@ class SkillSettingsIn(BaseModel):
     clawhub_key: str | None = None
 
 
-async def _upsert_tenant_setting(tenant_id, key: str, value: str):
+async def _upsert_tenant_setting(tenant_id: _uuid.UUID, key: str, value: str) -> None:
     """Helper to upsert a tenant setting."""
     token_payload: TenantTokenPayload = {"token": value}
     setting_value: JsonObject = {"token": token_payload["token"]}
@@ -640,7 +640,7 @@ async def _upsert_tenant_setting(tenant_id, key: str, value: str):
         if existing:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
-                "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
+                + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                 {"tenant_id": tenant_id, "key": key, "value": as_jsonb(setting_value)},
             )
         else:
@@ -658,8 +658,8 @@ def _mask_token(token: str) -> str:
 
 @router.get("/settings/token")
 async def get_skill_token_status(
-    current_user=Depends(require_role("org_admin", "platform_admin")),
-):
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+) -> dict[str, Any]:
     """Check if GitHub token and ClawHub key are configured for this tenant."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     gh_token = await _get_github_token(tenant_id)
@@ -676,7 +676,7 @@ async def get_skill_token_status(
 @router.put("/settings/token")
 async def set_skill_token(
     body: SkillSettingsIn,
-    current_user=Depends(require_role("org_admin", "platform_admin")),
+    current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
 ):
     """Save GitHub token and/or ClawHub key for this tenant.
 
@@ -698,7 +698,7 @@ async def set_skill_token(
 
 
 @router.get("/browse/list")
-async def browse_list(path: str = "", current_user: UserRecord = Depends(get_current_user)):
+async def browse_list(path: str = "", current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """List skill folders (root) or files/subdirs within a skill folder."""
     if not path or path == "/":
         skills = await skill_dao.list_for_tenant_scope(current_user.tenant_id)
@@ -717,7 +717,7 @@ async def browse_list(path: str = "", current_user: UserRecord = Depends(get_cur
 
     sub = clean[len(folder) :].strip("/")
 
-    items = []
+    items: list[dict[str, Any]] = []
     seen_dirs: set[str] = set()
     for f in skill.files:
         if sub:
@@ -801,9 +801,9 @@ async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(g
             existing = f
             break
     if existing:
-        await skill_file_dao.update(db_obj=existing, obj_in={"content": body.content})
+        _ = await skill_file_dao.update(db_obj=existing, obj_in={"content": body.content})
     else:
-        await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": file_path, "content": body.content})
+        _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": file_path, "content": body.content})
     return {"ok": True}
 
 

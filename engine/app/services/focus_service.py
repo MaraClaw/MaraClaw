@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from app.config import get_settings
 from app.core.json_types import JsonObject
@@ -221,7 +221,7 @@ def _serialize_focus_item(item: AgentFocusItemRecord) -> SerializedFocusItem:
     }
 
 
-async def migrate_legacy_focus_file(agent_id: uuid.UUID, db=None) -> int:
+async def migrate_legacy_focus_file(agent_id: uuid.UUID, db: object | None = None) -> int:
     """Import legacy focus.md once when the DB has no focus rows.
 
     ``db`` is accepted for dual-stack call-site compatibility and ignored;
@@ -240,7 +240,7 @@ async def migrate_legacy_focus_file(agent_id: uuid.UUID, db=None) -> int:
     except Exception:
         return 0
 
-    rows: list[FocusMigrationRow] = []
+    rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for order, legacy in enumerate(parse_focus_items(content)):
         key = legacy.key[:200]
@@ -268,9 +268,9 @@ async def migrate_legacy_focus_file(agent_id: uuid.UUID, db=None) -> int:
 
 
 async def list_focus_items(
-    agent_id: uuid.UUID, *, include_completed: bool = True, db=None
+    agent_id: uuid.UUID, *, include_completed: bool = True, db: object | None = None
 ) -> list[SerializedFocusItem]:
-    await migrate_legacy_focus_file(agent_id, db=db)
+    _ = await migrate_legacy_focus_file(agent_id, db=db)
     items = await agent_focus_item_dao.list_for_agent(agent_id, include_completed=include_completed)
     return [_serialize_focus_item(item) for item in items]
 
@@ -285,9 +285,9 @@ async def upsert_focus_item(
     kind: str = "normal",
     source: str = "user",
     metadata: JsonObject | None = None,
-    db=None,
+    db: object | None = None,
 ) -> SerializedFocusItem:
-    await migrate_legacy_focus_file(agent_id, db=db)
+    _ = await migrate_legacy_focus_file(agent_id, db=db)
     desc = (description or "").strip()
     item_key = (key or "").strip() or slugify_focus_key(desc)
     item_key = item_key[:200]
@@ -300,7 +300,7 @@ async def upsert_focus_item(
 
     item = await agent_focus_item_dao.get_by_key(agent_id, item_key)
     if item:
-        updates: dict = {
+        updates: dict[str, Any] = {
             "description": desc or item.description or item_key,
             "status": status,
             "kind": kind,
@@ -340,7 +340,7 @@ async def ensure_focus_item(
     description: str,
     system: bool = False,
     source: str = "trigger",
-    db=None,
+    db: object | None = None,
 ) -> str:
     item = await upsert_focus_item(
         agent_id,
@@ -356,7 +356,7 @@ async def ensure_focus_item(
 
 
 async def complete_focus_item(agent_id: uuid.UUID, *, key: str) -> SerializedFocusItem | None:
-    await migrate_legacy_focus_file(agent_id)
+    _ = await migrate_legacy_focus_file(agent_id)
     item = await agent_focus_item_dao.get_by_key(agent_id, key)
     if not item:
         return None

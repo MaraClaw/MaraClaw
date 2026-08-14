@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Final, Protocol
+from typing import ClassVar, Final, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -28,7 +28,7 @@ _EMAIL_RE: Final[re.Pattern[str]] = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.
 class GogcliAuthStatus(BaseModel):
     """Safe gogcli authentication status for API/runtime callers."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     authenticated: bool
     account_hint: str | None
@@ -78,9 +78,9 @@ def write_gogcli_keyring_secret(agent_id: UUID | str, password: str) -> Path:
     secret_file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     secret_file.parent.chmod(0o700)
     tmp_file = secret_file.with_name(f"{_SECRET_FILE_NAME}.tmp")
-    tmp_file.write_text(password, encoding="utf-8")
+    _ = tmp_file.write_text(password, encoding="utf-8")
     tmp_file.chmod(0o600)
-    tmp_file.replace(secret_file)
+    _ = tmp_file.replace(secret_file)
     secret_file.chmod(0o600)
     return secret_file
 
@@ -139,7 +139,7 @@ async def seed_gogcli_skill(db: object | None = None) -> None:
         content = skill_path.read_text(encoding="utf-8")
         name = _frontmatter_value(content, "name", folder_name)
         description = _frontmatter_value(content, "description", f"gogcli skill: {folder_name}")
-        await skill_dao.upsert_skill_package(
+        _ = await skill_dao.upsert_skill_package(
             name=name,
             description=description,
             category="integration",

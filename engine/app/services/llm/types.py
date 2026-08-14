@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Literal, NotRequired, TypedDict
+
+from app.core.json_types import json_loads_object, json_object_from
 
 # ============================================================================
 # Data Models
@@ -199,12 +200,14 @@ class LLMMessage:
         if self.tool_calls:
             for tc in self.tool_calls:
                 function_call = tc.get("function", LLMToolFunction())
-                args = function_call.get("arguments", "{}")
-                if isinstance(args, str):
+                args_raw = function_call.get("arguments", "{}")
+                if isinstance(args_raw, str):
                     try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
+                        args = json_loads_object(args_raw)
+                    except ValueError:
                         args = {}
+                else:
+                    args = json_object_from(args_raw)
 
                 content_blocks.append(
                     {"type": "tool_use", "id": tc.get("id", ""), "name": function_call.get("name", ""), "input": args}
@@ -224,7 +227,7 @@ class LLMResponse:
     """Unified response format."""
 
     content: str
-    tool_calls: list[LLMToolCall] = field(default_factory=list)
+    tool_calls: list[LLMToolCall] = field(default_factory=list[LLMToolCall])
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
     finish_reason: str | None = None

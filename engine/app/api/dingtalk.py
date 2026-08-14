@@ -80,12 +80,12 @@ async def configure_dingtalk_channel(
         from app.services.dingtalk_stream import dingtalk_stream_manager
 
         if conn_mode == "websocket":
-            schedule_background_task(
+            _ = schedule_background_task(
                 dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
                 "start DingTalk stream client",
             )
         else:
-            schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+            _ = schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
         return ChannelConfigOut.model_validate(config)
 
@@ -104,7 +104,7 @@ async def configure_dingtalk_channel(
         from app.api.background_tasks import schedule_background_task
         from app.services.dingtalk_stream import dingtalk_stream_manager
 
-        schedule_background_task(
+        _ = schedule_background_task(
             dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
             "start DingTalk stream client",
         )
@@ -114,7 +114,7 @@ async def configure_dingtalk_channel(
 
 @router.get("/agents/{agent_id}/dingtalk-channel", response_model=ChannelConfigOut)
 async def get_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
@@ -129,12 +129,12 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
     from app.api.background_tasks import schedule_background_task
     from app.services.dingtalk_stream import dingtalk_stream_manager
 
-    schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+    _ = schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
 
 # ─── Message Processing (called by Stream callback) ────
@@ -211,14 +211,14 @@ async def process_dingtalk_message(
     else:
         saved_content = _clean_text or user_text
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="user",
         content=saved_content,
         conversation_id=session_conv_id,
     )
-    await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     _dt_cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
     _dt_app_key = _dt_cfg.app_id if _dt_cfg else None
@@ -273,7 +273,7 @@ async def process_dingtalk_message(
                     if msg:
                         try:
                             async with httpx.AsyncClient(timeout=10) as _cl:
-                                await _cl.post(
+                                _ = await _cl.post(
                                     session_webhook,
                                     json={
                                         "msgtype": "text",
@@ -292,7 +292,7 @@ async def process_dingtalk_message(
             _fallback_parts.append(f"[File: {_fp.name}]")
             try:
                 async with httpx.AsyncClient(timeout=10) as _cl:
-                    await _cl.post(
+                    _ = await _cl.post(
                         session_webhook,
                         json={
                             "msgtype": "text",
@@ -335,7 +335,7 @@ async def process_dingtalk_message(
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
+            _ = await client.post(
                 session_webhook,
                 json={
                     "msgtype": "markdown",
@@ -349,7 +349,7 @@ async def process_dingtalk_message(
         logger.error(f"[DingTalk] Failed to reply via webhook: {e}")
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(
+                _ = await client.post(
                     session_webhook,
                     json={
                         "msgtype": "text",
@@ -359,7 +359,7 @@ async def process_dingtalk_message(
         except Exception as e2:
             logger.error(f"[DingTalk] Fallback text reply also failed: {e2}")
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="assistant",
@@ -369,7 +369,7 @@ async def process_dingtalk_message(
     try:
         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
         if fresh:
-            await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
     except ValueError, TypeError:
         pass
 
@@ -435,7 +435,7 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
             if session:
-                await sso_scan_session_dao.update(
+                _ = await sso_scan_session_dao.update(
                     db_obj=session,
                     obj_in={
                         "status": "authorized",

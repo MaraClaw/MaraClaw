@@ -1,20 +1,22 @@
 """OKR builtin tool definitions."""
 
+from typing import Any
+
 # ── OKR Tools ────────────────────────────────────────────────────────────────
 # These three tools are global builtins available to ALL agents.
 # OKR Agent-exclusive management tools (create_objective, create_key_result, etc.)
 # are injected separately via agent_seeder when the OKR Agent is created.
 
-OKR_BUILTIN_TOOLS = [
+OKR_BUILTIN_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_okr",
         "display_name": "Get OKR",
         "description": (
             "Read the full OKR board for the current period: company-level Objectives and "
-            "Key Results, plus every member's (human and agent) individual O and KRs with "
-            "current progress values. Includes objective_id for each Objective and kr_id for "
-            "each Key Result. Use this to understand company direction, update existing OKRs, "
-            "and see how others are tracking before planning your own work."
+            + "Key Results, plus every member's (human and agent) individual O and KRs with "
+            + "current progress values. Includes objective_id for each Objective and kr_id for "
+            + "each Key Result. Use this to understand company direction, update existing OKRs, "
+            + "and see how others are tracking before planning your own work."
         ),
         "category": "okr",
         "icon": "🎯",
@@ -40,8 +42,8 @@ OKR_BUILTIN_TOOLS = [
         "display_name": "Get My OKR",
         "description": (
             "Read your own Objectives and Key Results for the current period, including "
-            "kr_id values needed to update progress. Call this before update_kr_progress "
-            "to get the correct kr_id."
+            + "kr_id values needed to update progress. Call this before update_kr_progress "
+            + "to get the correct kr_id."
         ),
         "category": "okr",
         "icon": "🎯",
@@ -58,8 +60,8 @@ OKR_BUILTIN_TOOLS = [
         "display_name": "Update KR Progress",
         "description": (
             "Update the current progress value of one of YOUR OWN Key Results. "
-            "Call get_my_okr first to obtain the kr_id. "
-            "A progress log entry is created automatically for history tracking."
+            + "Call get_my_okr first to obtain the kr_id. "
+            + "A progress log entry is created automatically for history tracking."
         ),
         "category": "okr",
         "icon": "📈",

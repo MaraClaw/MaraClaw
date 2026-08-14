@@ -3,23 +3,52 @@
 import asyncio
 import base64
 import json
-import socket
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
+from app.core.json_types import JsonObject, json_as_str, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import chrome_executable
 from app.services.document_conversion.chrome_runtime import (
     chrome_arguments,
     create_cdp_target,
+    local_ephemeral_port,
     terminate_process,
     validate_debugger_websocket_url,
     wait_for_cdp,
 )
 
 
-async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, arguments: dict[str, Any]) -> str:
+def _cdp_payload(raw: object) -> JsonObject:
+    if isinstance(raw, str | bytes | bytearray):
+        return json_loads_object(raw)
+    return json_object_from(raw)
+
+
+def _json_float(value: object, default: float) -> float:
+    raw: object = value if value else default
+    if isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, int | float):
+        return float(raw)
+    if isinstance(raw, str):
+        return float(raw)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(raw).__name__}'")
+
+
+def _json_int(value: object, default: int) -> int:
+    return int(_json_float(value, float(default)))
+
+
+def _cdp_nested(message: JsonObject, *keys: str) -> object:
+    current: object = message
+    for key in keys:
+        current = json_object_from(current).get(key)
+    return current
+
+
+async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, arguments: Mapping[str, object]) -> str:
     try:
         await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
         chrome_pdf_error: Exception | None = None
@@ -31,9 +60,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
             if not chrome:
                 return False
 
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.bind(("127.0.0.1", 0))
-                port = sock.getsockname()[1]
+            port = local_ephemeral_port()
 
             profile_dir = tempfile.TemporaryDirectory(prefix="maraclaw-html-pdf-")
             proc = await asyncio.create_subprocess_exec(
@@ -54,21 +81,21 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                 msg_id = 0
                 async with websockets.connect(ws_url, max_size=20_000_000) as ws_conn:
 
-                    async def send(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+                    async def send(method: str, params: JsonObject | None = None) -> JsonObject:
                         nonlocal msg_id
                         msg_id += 1
                         await ws_conn.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
                         while True:
                             raw = await asyncio.wait_for(ws_conn.recv(), timeout=10)
-                            message = json.loads(raw)
+                            message = _cdp_payload(raw)
                             if message.get("id") == msg_id:
                                 return message
 
-                    design_w_px = int(arguments.get("design_width") or 1280)
-                    design_h_px = int(arguments.get("design_height") or 720)
-                    await send("Page.enable")
-                    await send("Runtime.enable")
-                    await send(
+                    design_w_px = _json_int(arguments.get("design_width"), 1280)
+                    design_h_px = _json_int(arguments.get("design_height"), 720)
+                    _ = await send("Page.enable")
+                    _ = await send("Runtime.enable")
+                    _ = await send(
                         "Emulation.setDeviceMetricsOverride",
                         {
                             "width": design_w_px,
@@ -77,12 +104,12 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                             "mobile": False,
                         },
                     )
-                    await send("Emulation.setEmulatedMedia", {"media": "screen"})
-                    await send("Page.navigate", {"url": file_url})
+                    _ = await send("Emulation.setEmulatedMedia", {"media": "screen"})
+                    _ = await send("Page.navigate", {"url": file_url})
                     load_deadline = asyncio.get_running_loop().time() + 8
                     while asyncio.get_running_loop().time() < load_deadline:
                         raw = await asyncio.wait_for(ws_conn.recv(), timeout=10)
-                        message = json.loads(raw)
+                        message = _cdp_payload(raw)
                         if message.get("method") == "Page.loadEventFired":
                             break
                     await asyncio.sleep(0.25)
@@ -94,18 +121,18 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                             "returnByValue": True,
                         },
                     )
-                    dims = page_info.get("result", {}).get("result", {}).get("value") or {}
-                    scroll_w = max(1, float(dims.get("w") or design_w_px))
-                    scroll_h = max(1, float(dims.get("h") or design_h_px))
+                    dims = json_object_from(_cdp_nested(page_info, "result", "result", "value"))
+                    scroll_w = max(1.0, _json_float(dims.get("w"), float(design_w_px)))
+                    scroll_h = max(1.0, _json_float(dims.get("h"), float(design_h_px)))
 
                     mode = str(arguments.get("pdf_mode") or "pages").lower()
-                    pdf_params: dict[str, Any] = {
+                    pdf_params: JsonObject = {
                         "printBackground": bool(arguments.get("print_background", True)),
                         "preferCSSPageSize": bool(arguments.get("prefer_css_page_size", False)),
-                        "marginTop": float(arguments.get("margin_top", 0)),
-                        "marginBottom": float(arguments.get("margin_bottom", 0)),
-                        "marginLeft": float(arguments.get("margin_left", 0)),
-                        "marginRight": float(arguments.get("margin_right", 0)),
+                        "marginTop": _json_float(arguments.get("margin_top"), 0.0),
+                        "marginBottom": _json_float(arguments.get("margin_bottom"), 0.0),
+                        "marginLeft": _json_float(arguments.get("margin_left"), 0.0),
+                        "marginRight": _json_float(arguments.get("margin_right"), 0.0),
                     }
                     if mode in ("single", "long", "fullpage"):
                         pdf_params.update(
@@ -118,17 +145,17 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                     else:
                         pdf_params.update(
                             {
-                                "paperWidth": float(arguments.get("paper_width") or 8.27),
-                                "paperHeight": float(arguments.get("paper_height") or 11.69),
-                                "scale": float(arguments.get("scale") or 0.64),
+                                "paperWidth": _json_float(arguments.get("paper_width"), 8.27),
+                                "paperHeight": _json_float(arguments.get("paper_height"), 11.69),
+                                "scale": _json_float(arguments.get("scale"), 0.64),
                             }
                         )
 
                     pdf_result = await send("Page.printToPDF", pdf_params)
-                    data = pdf_result.get("result", {}).get("data")
+                    data = json_as_str(_cdp_nested(pdf_result, "result", "data"))
                     if not data:
                         return False
-                    await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
+                    _ = await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
                     return True
             finally:
                 await terminate_process(proc)
@@ -146,7 +173,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
         from weasyprint import HTML
 
-        await asyncio.to_thread(HTML(filename=str(src_file)).write_pdf, str(tgt_file))
+        _ = await asyncio.to_thread(HTML(filename=str(src_file)).write_pdf, str(tgt_file))
         note = f" Chrome fallback reason: {chrome_pdf_error}" if chrome_pdf_error else ""
         return f"✅ Successfully converted HTML to PDF with WeasyPrint: {target_path}.{note}"
     except Exception as e:

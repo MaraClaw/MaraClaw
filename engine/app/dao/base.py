@@ -9,9 +9,10 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import MISSING, fields, is_dataclass
-from typing import Any
+from typing import ClassVar
 from uuid import UUID, uuid4
 
+from app.core.json_types import object_attr, object_call
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.db.types import as_jsonb
@@ -20,10 +21,10 @@ from app.db.types import as_jsonb
 class BaseDAO[RecordT]:
     """Shared CRUD helpers over a single table of plain records."""
 
-    table: str
-    pk: str = "id"
-    columns: tuple[str, ...] = ()
-    record_factory: Callable[[dict[str, Any]], RecordT]
+    table: ClassVar[str]
+    pk: ClassVar[str] = "id"
+    columns: ClassVar[tuple[str, ...]] = ()
+    record_factory: Callable[[Mapping[str, object]], RecordT]
 
     def __init__(self) -> None:
         if not self.table or not self.columns or not getattr(self, "record_factory", None):
@@ -40,7 +41,7 @@ class BaseDAO[RecordT]:
             return ", ".join(f"{alias}.{col}" for col in self.columns)
         return ", ".join(self.columns)
 
-    async def get(self, id: Any) -> RecordT | None:
+    async def get(self, id: UUID) -> RecordT | None:
         """Fetch one row by primary key."""
         async with self.session() as db:
             row = await db.fetchone(
@@ -49,7 +50,7 @@ class BaseDAO[RecordT]:
             )
             return self.record_factory(row) if row else None
 
-    async def get_many(self, ids: Sequence[Any]) -> list[RecordT]:
+    async def get_many(self, ids: Sequence[UUID]) -> list[RecordT]:
         """Fetch rows whose primary keys are in ``ids`` (order not preserved)."""
         if not ids:
             return []
@@ -75,22 +76,25 @@ class BaseDAO[RecordT]:
             )
             return [self.record_factory(row) for row in rows]
 
-    def _record_defaults(self) -> dict[str, Any]:
+    def _record_defaults(self) -> dict[str, object]:
         """Return dataclass field defaults for columns this DAO owns."""
-        record_cls = getattr(self.record_factory, "__self__", None)
+        record_cls = object_attr(self.record_factory, "__self__", None)
         if record_cls is None or not is_dataclass(record_cls):
             return {}
-        defaults: dict[str, Any] = {}
+        defaults: dict[str, object] = {}
         for item in fields(record_cls):
             if item.name not in self.columns:
                 continue
-            if item.default is not MISSING:
-                defaults[item.name] = item.default
-            elif item.default_factory is not MISSING:  # type: ignore[misc]
-                defaults[item.name] = item.default_factory()
+            default_value = object_attr(item, "default", MISSING)
+            if default_value is not MISSING:
+                defaults[item.name] = default_value
+                continue
+            factory = object_attr(item, "default_factory", MISSING)
+            if factory is not MISSING:
+                defaults[item.name] = object_call(factory)
         return defaults
 
-    async def create(self, *, obj_in: Mapping[str, Any]) -> RecordT:
+    async def create(self, *, obj_in: Mapping[str, object]) -> RecordT:
         """Insert a row and return the created record."""
         data = dict(obj_in)
         for column, value in self._record_defaults().items():
@@ -101,9 +105,9 @@ class BaseDAO[RecordT]:
         cols = list(dict.fromkeys([c for c in data if c in self.columns or c == self.pk]))
         if not cols:
             raise ValueError("create() requires at least one column value")
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         for col in cols:
-            value = data[col]
+            value: object = data[col]
             if isinstance(value, (dict, list)):
                 params[col] = as_jsonb(value)
             else:
@@ -119,15 +123,16 @@ class BaseDAO[RecordT]:
                 raise RuntimeError(f"INSERT into {self.table} returned no row")
             return self.record_factory(row)
 
-    async def update(self, *, db_obj: RecordT, obj_in: Mapping[str, Any]) -> RecordT:
+    async def update(self, *, db_obj: RecordT, obj_in: Mapping[str, object]) -> RecordT:
         """Update columns on an existing record and return the refreshed row."""
         data = {k: v for k, v in obj_in.items() if k in self.columns and k != self.pk}
         if not data:
             return db_obj
-        pk_value = getattr(db_obj, self.pk)
-        params: dict[str, Any] = {self.pk: pk_value}
+        pk_value = object_attr(db_obj, self.pk)
+        params: dict[str, object] = {self.pk: pk_value}
         assignments: list[str] = []
-        for col, value in data.items():
+        for col, raw_value in data.items():
+            value: object = raw_value
             params[col] = as_jsonb(value) if isinstance(value, (dict, list)) else value
             assignments.append(f"{col} = %({col})s")
         if "updated_at" in self.columns and "updated_at" not in data:
@@ -135,14 +140,14 @@ class BaseDAO[RecordT]:
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE {self.table} SET {', '.join(assignments)} "
-                f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
+                + f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
                 params,
             )
             if row is None:
                 return db_obj
             return self.record_factory(row)
 
-    async def delete(self, *, id: Any) -> RecordT | None:
+    async def delete(self, *, id: UUID) -> RecordT | None:
         """Delete by primary key and return the deleted row when present."""
         async with self.session() as db:
             row = await db.fetchone(
@@ -152,7 +157,7 @@ class BaseDAO[RecordT]:
             return self.record_factory(row) if row else None
 
 
-def as_uuid(value: Any) -> UUID | None:
+def as_uuid(value: object) -> UUID | None:
     """Normalize optional UUID-ish values."""
     if value is None:
         return None

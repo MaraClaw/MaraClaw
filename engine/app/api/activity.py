@@ -2,9 +2,13 @@
 
 import re
 import uuid
+from datetime import datetime
+from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.json_types import int_from_row
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.activity_log_dao import agent_activity_log_dao
@@ -17,12 +21,26 @@ from app.records.user import UserRecord
 router = APIRouter(tags=["activity"])
 
 
+def _group_key(row: dict[str, object]) -> str:
+    value = row.get("group_key")
+    return str(value) if value is not None else ""
+
+
+def _group_last_iso(row: dict[str, object]) -> str | None:
+    last_at = row.get("last_at")
+    return last_at.isoformat() if isinstance(last_at, datetime) else None
+
+
+def _group_count(row: dict[str, object]) -> int:
+    return int_from_row(row.get("cnt"))
+
+
 @router.get("/agents/{agent_id}/activity")
 async def get_agent_activity(
     agent_id: uuid.UUID, limit: int = Query(50, le=200), current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[dict[str, Any]]:
     """Get recent activity logs for an agent."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     logs = await agent_activity_log_dao.list_for_agent(agent_id, limit=limit)
 
@@ -43,38 +61,39 @@ async def get_agent_activity(
 
 
 @router.get("/agents/{agent_id}/chat-history/conversations")
-async def list_conversations(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def list_conversations(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """List all conversation partners for this agent (web users + other agents)."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
-    conversations = []
+    conversations: list[dict[str, Any]] = []
 
     # 1. Web chat conversations (from ChatMessage table, grouped by user)
     web_groups = await chat_message_dao.conversation_groups_for_agent(agent_id, group_by_user=True)
-    web_user_ids = [row["group_key"] for row in web_groups]
+    web_user_ids = [key for key in (row["group_key"] for row in web_groups) if isinstance(key, UUID)]
     web_names = await user_dao.display_names_for_ids(web_user_ids)
     web_latest = await chat_message_dao.latest_contents(agent_id=agent_id, user_ids=web_user_ids)
     for row in web_groups:
-        user_id = row["group_key"]
-        last_at = row.get("last_at")
-        cnt = int(row.get("cnt") or 0)
-        name = web_names.get(user_id) or web_names.get(str(user_id)) or "Unknown user"
+        user_id = row.get("group_key")
+        name = web_names.get(user_id) if isinstance(user_id, UUID) else None
+        name = name or "Unknown user"
         last_content = web_latest.get(str(user_id), "")
         conversations.append(
             {
                 "conv_id": f"web_{user_id}",
                 "partner_type": "user",
-                "partner_id": str(user_id),
+                "partner_id": str(user_id) if user_id is not None else "",
                 "partner_name": f"👤 {name}",
                 "last_message": last_content[:80],
-                "message_count": cnt,
-                "last_at": last_at.isoformat() if last_at else None,
+                "message_count": _group_count(row),
+                "last_at": _group_last_iso(row),
             }
         )
 
     # 1b. Feishu conversations (P2P and group)
     feishu_groups = await chat_message_dao.conversation_groups_for_agent(agent_id, conversation_prefix="feishu_")
-    feishu_ids = [str(row["group_key"]) for row in feishu_groups]
+    feishu_ids = [_group_key(row) for row in feishu_groups]
     feishu_latest = await chat_message_dao.latest_contents(agent_id=agent_id, conversation_ids=feishu_ids)
     p2p_ids = [cid for cid in feishu_ids if cid.startswith("feishu_p2p_")]
     feishu_first = await chat_message_dao.latest_contents(
@@ -84,9 +103,7 @@ async def list_conversations(agent_id: uuid.UUID, current_user: UserRecord = Dep
         ascending=True,
     )
     for row in feishu_groups:
-        conv_id = str(row["group_key"])
-        last_at = row.get("last_at")
-        cnt = int(row.get("cnt") or 0)
+        conv_id = _group_key(row)
         last_content = feishu_latest.get(conv_id, "")
 
         if conv_id.startswith("feishu_p2p_"):
@@ -103,20 +120,18 @@ async def list_conversations(agent_id: uuid.UUID, current_user: UserRecord = Dep
                 "partner_id": conv_id,
                 "partner_name": display_name,
                 "last_message": last_content[:80],
-                "message_count": cnt,
-                "last_at": last_at.isoformat() if last_at else None,
+                "message_count": _group_count(row),
+                "last_at": _group_last_iso(row),
             }
         )
 
     # 1c. Slack / Discord conversations
     for prefix, icon, label in [("slack_", "💬", "Slack"), ("discord_", "🎮", "Discord")]:
         ch_groups = await chat_message_dao.conversation_groups_for_agent(agent_id, conversation_prefix=prefix)
-        ch_ids = [str(row["group_key"]) for row in ch_groups]
+        ch_ids = [_group_key(row) for row in ch_groups]
         ch_latest = await chat_message_dao.latest_contents(agent_id=agent_id, conversation_ids=ch_ids)
         for row in ch_groups:
-            conv_id = str(row["group_key"])
-            last_at = row.get("last_at")
-            cnt = int(row.get("cnt") or 0)
+            conv_id = _group_key(row)
             last_content = ch_latest.get(conv_id, "")
             parts = conv_id.split("_", 2)
             channel_part = parts[1] if len(parts) > 1 else conv_id
@@ -128,8 +143,8 @@ async def list_conversations(agent_id: uuid.UUID, current_user: UserRecord = Dep
                     "partner_id": conv_id,
                     "partner_name": display_name,
                     "last_message": last_content[:80],
-                    "message_count": cnt,
-                    "last_at": last_at.isoformat() if last_at else None,
+                    "message_count": _group_count(row),
+                    "last_at": _group_last_iso(row),
                 }
             )
 
@@ -179,11 +194,11 @@ async def get_conversation_messages(
     conv_id: str,
     limit: int = Query(100, le=500),
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[dict[str, Any]]:
     """Get messages for a specific conversation."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
-    messages = []
+    messages: list[dict[str, Any]] = []
 
     if conv_id.startswith(("web_", "feishu_", "slack_", "discord_")):
         rows = await chat_message_dao.list_for_agent_conversation(

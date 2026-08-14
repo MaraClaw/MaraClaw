@@ -44,7 +44,7 @@ class FocusUpsertBody(BaseModel):
 async def list_agent_focus(
     agent_id: uuid.UUID, include_completed: bool = True, current_user: UserRecord = Depends(get_current_user)
 ):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     return await list_focus_items(agent_id, include_completed=include_completed)
 
 
@@ -52,7 +52,7 @@ async def list_agent_focus(
 async def upsert_agent_focus(
     agent_id: uuid.UUID, body: FocusUpsertBody, current_user: UserRecord = Depends(get_current_user)
 ):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     if body.status not in {"in_progress", "completed"}:
         raise HTTPException(400, "Invalid focus status")
     if body.kind not in {"normal", "system"}:
@@ -71,7 +71,7 @@ async def upsert_agent_focus(
 
 @router.post("/{key}/complete", response_model=FocusItemResponse)
 async def complete_agent_focus(agent_id: uuid.UUID, key: str, current_user: UserRecord = Depends(get_current_user)):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     item = await complete_focus_item(agent_id, key=key)
     if not item:
         raise HTTPException(404, "Focus item not found")

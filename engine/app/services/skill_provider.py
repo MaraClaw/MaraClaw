@@ -5,10 +5,15 @@ from collections.abc import Callable
 from typing import NotRequired, TypedDict
 
 import httpx
-import yaml
 from fastapi import HTTPException
 
-from app.core.json_types import JsonValue
+from app.core.json_types import (
+    JsonValue,
+    json_object_from,
+    json_value_from_response,
+    mapping_from_row,
+    yaml_load_object,
+)
 
 CLAWHUB_BASE = os.getenv("CLAWHUB_BASE", "https://clawhub.ai/api").rstrip("/")
 CLAWHUB_MIRROR_BASE = os.getenv("CLAWHUB_MIRROR_BASE", "https://cn.clawhub-mirror.com/api").rstrip("/")
@@ -164,7 +169,11 @@ async def fetch_clawhub_json(
             elif response.status_code == 429:
                 last_error = f"ClawHub rate limit exceeded at {base_url}"
             elif response.status_code == 200 and "json" in response.headers.get("content-type", ""):
-                payload = _parse_clawhub_payload(response.json())
+                raw = json_value_from_response(response)
+                if not isinstance(raw, dict):
+                    last_error = f"ClawHub API returned invalid JSON payload from {base_url}"
+                    continue
+                payload = _parse_clawhub_payload(json_object_from(raw))
                 if payload is not None:
                     return payload, base_url
                 last_error = f"ClawHub API returned invalid JSON payload from {base_url}"
@@ -192,16 +201,17 @@ def parse_skill_md_frontmatter(content: str) -> SkillFrontmatter:
     if not match:
         return {}
     try:
-        loaded = yaml.safe_load(match.group(1))
+        loaded = yaml_load_object(match.group(1))
     except Exception:
         return {}
     if not isinstance(loaded, dict):
         return {}
     frontmatter: SkillFrontmatter = {}
-    name = loaded.get("name")
+    loaded_map = mapping_from_row(loaded)
+    name = loaded_map.get("name")
     if isinstance(name, str):
         frontmatter["name"] = name
-    description = loaded.get("description")
+    description = loaded_map.get("description")
     if isinstance(description, str):
         frontmatter["description"] = description
     return frontmatter
@@ -235,13 +245,21 @@ async def fetch_github_directory(
             raise HTTPException(429, "GitHub API rate limit exceeded. Try again later.")
         if response.status_code != 200:
             raise HTTPException(502, f"GitHub API error: {response.status_code}")
-        items = [raw_items] if isinstance(raw_items := response.json(), dict) else raw_items
-        if not isinstance(items, list):
+        raw_items = json_value_from_response(response)
+        items: list[object] = (
+            [raw_items]
+            if isinstance(raw_items, dict)
+            else list[object](raw_items)
+            if isinstance(raw_items, list)
+            else []
+        )
+        if not isinstance(raw_items, (dict, list)):
             raise HTTPException(502, "GitHub API returned invalid payload")
         parsed_items: list[GitHubDirectoryItem] = []
-        for item in items:
-            if not isinstance(item, dict):
+        for item_raw in items:
+            if not isinstance(item_raw, dict):
                 raise HTTPException(502, "GitHub API returned invalid payload")
+            item = json_object_from(item_raw)
             name, item_type, item_path, item_url = item.get("name"), item.get("type"), item.get("path"), item.get("url")
             if (
                 not isinstance(name, str)
@@ -278,8 +296,10 @@ async def fetch_github_directory(
                 async with httpx.AsyncClient(timeout=30, headers=headers) as client:
                     download = await client.get(item["url"])
                 if download.status_code == 200:
-                    if not isinstance(raw_file := download.json(), dict):
+                    raw_file_obj = json_value_from_response(download)
+                    if not isinstance(raw_file_obj, dict):
                         raise HTTPException(502, "GitHub API returned invalid payload")
+                    raw_file = json_object_from(raw_file_obj)
                     encoded = raw_file.get("content", "")
                     if not isinstance(encoded, str):
                         raise HTTPException(502, "GitHub API returned invalid payload")

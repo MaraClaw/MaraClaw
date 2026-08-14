@@ -9,12 +9,13 @@ from fastapi import HTTPException
 
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.dao.channel_config_dao import channel_config_dao
+from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.services.channels.types import normalize_channel_type
 
 
-async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID) -> Any:
+async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID) -> AgentRecord:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure channel")
@@ -57,6 +58,11 @@ async def upsert_channel_config(
     if extra_config is not None:
         payload["extra_config"] = extra_config
 
+    await _drop_im_tokens_for_config(
+        stored, existing.app_id if existing else None, existing.app_secret if existing else None
+    )
+    await _drop_im_tokens_for_config(stored, app_id, app_secret)
+
     if existing:
         updated = await channel_config_dao.update(db_obj=existing, obj_in=payload)
         return updated or existing
@@ -72,4 +78,25 @@ async def upsert_channel_config(
 
 async def delete_channel_config(agent_id: uuid.UUID, channel_type: str) -> None:
     config = await require_channel_config(agent_id, channel_type)
-    await channel_config_dao.delete(id=config.id)
+    await _drop_im_tokens_for_config(config.channel_type, config.app_id, config.app_secret)
+    _ = await channel_config_dao.delete(id=config.id)
+
+
+async def _drop_im_tokens_for_config(
+    channel_type: str,
+    app_id: str | None,
+    app_secret: str | None,
+) -> None:
+    if not app_id:
+        return
+    from app.services.im_token_cache import drop_cached_im_token
+
+    secret = app_secret or ""
+    kind = (normalize_channel_type(channel_type) or channel_type or "").lower()
+    if kind == "feishu":
+        await drop_cached_im_token("feishu", app_id, secret=secret)
+    elif kind == "wecom":
+        await drop_cached_im_token("wecom", app_id, secret=secret)
+    elif kind == "dingtalk":
+        await drop_cached_im_token("dingtalk", app_id, secret=secret)
+        await drop_cached_im_token("dingtalk_oapi", app_id, secret=secret)

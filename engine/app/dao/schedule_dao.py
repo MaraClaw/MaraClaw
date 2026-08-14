@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -24,16 +25,17 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
-    table = "agent_schedules"
-    columns = _COLUMNS
+    table: ClassVar[str] = "agent_schedules"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(AgentScheduleRecord.from_row)
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[AgentScheduleRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
@@ -50,7 +52,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s",
+                + "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s",
                 {"now": now},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
@@ -66,9 +68,9 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL "
-                "WHERE is_enabled IS TRUE AND agent_id IN ("
-                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
-                ") RETURNING id",
+                + "WHERE is_enabled IS TRUE AND agent_id IN ("
+                + "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                + ") RETURNING id",
                 {"tenant_id": tenant_id},
             )
             return len(rows)

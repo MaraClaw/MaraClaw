@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -25,17 +27,17 @@ class NotificationRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> NotificationRecord:
+    def from_row(cls, row: Mapping[str, object]) -> NotificationRecord:
         return cls(
-            id=row["id"],
-            type=row["type"],
-            title=row["title"],
-            user_id=row.get("user_id"),
-            agent_id=row.get("agent_id"),
-            body=row.get("body") or "",
-            link=row.get("link"),
-            ref_id=row.get("ref_id"),
-            sender_name=row.get("sender_name"),
+            id=uuid_from_row(row["id"]),
+            type=str_from_row(row["type"]),
+            title=str_from_row(row["title"]),
+            user_id=uuid_from_row_opt(row.get("user_id")),
+            agent_id=uuid_from_row_opt(row.get("agent_id")),
+            body=str_from_row(row.get("body")),
+            link=str_from_row(row["link"]) or None,
+            ref_id=uuid_from_row_opt(row.get("ref_id")),
+            sender_name=str_from_row(row["sender_name"]) or None,
             is_read=bool(row.get("is_read", False)),
-            created_at=row.get("created_at"),
+            created_at=datetime_from_row(row.get("created_at")),
         )

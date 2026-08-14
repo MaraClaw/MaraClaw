@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import ClassVar
 
+from app.core.json_types import mapping_from_row
 from app.dao import identity_dao, org_member_dao, user_dao
 from app.dao.org_department_dao import org_department_dao
+from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.org_sync.types import ExternalUser
@@ -16,16 +18,16 @@ from app.services.org_sync.utils import Style, _anyascii, _normalize_contact, _u
 class OrgSyncMemberMixin:
     """Shared member persistence behavior for organization sync adapters."""
 
-    provider_type: str
+    provider_type: ClassVar[str]
     tenant_id: uuid.UUID | None
 
     async def _upsert_member(
         self,
-        db: Any,
-        provider: Any,
+        db: object | None,
+        provider: IdentityProviderRecord,
         user: ExternalUser,
         department_external_id: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, bool]:
         """Insert or update a member, platform user, and identity."""
         del db
         stats = {"user_created": False, "profile_synced": False}
@@ -70,7 +72,7 @@ class OrgSyncMemberMixin:
         translit_initial = "".join([i[0] for i in pinyin(user.name, style=Style.FIRST_LETTER)])
 
         if existing_member:
-            updates: dict[str, Any] = {
+            updates: dict[str, object] = {
                 "name": user.name,
                 "name_translit_full": translit_full,
                 "name_translit_initial": translit_initial,
@@ -91,29 +93,31 @@ class OrgSyncMemberMixin:
                 updates["phone"] = mobile
             if user_id and not existing_member.user_id:
                 updates["user_id"] = user_id
-            existing_member = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
+            existing_member = await org_member_dao.update(db_obj=existing_member, obj_in=mapping_from_row(updates))
             stats["profile_synced"] = True
         else:
             existing_member = await org_member_dao.create(
-                obj_in={
-                    "external_id": user.external_id,
-                    "open_id": user.open_id,
-                    "unionid": user.unionid,
-                    "provider_id": provider.id,
-                    "user_id": user_id,
-                    "name": user.name,
-                    "name_translit_full": translit_full,
-                    "name_translit_initial": translit_initial,
-                    "email": email,
-                    "avatar_url": user.avatar_url,
-                    "title": user.title,
-                    "department_id": department.id if department else None,
-                    "department_path": department.path if department else user.department_path,
-                    "phone": mobile,
-                    "status": user.status,
-                    "tenant_id": self.tenant_id,
-                    "synced_at": now,
-                }
+                obj_in=mapping_from_row(
+                    {
+                        "external_id": user.external_id,
+                        "open_id": user.open_id,
+                        "unionid": user.unionid,
+                        "provider_id": provider.id,
+                        "user_id": user_id,
+                        "name": user.name,
+                        "name_translit_full": translit_full,
+                        "name_translit_initial": translit_initial,
+                        "email": email,
+                        "avatar_url": user.avatar_url,
+                        "title": user.title,
+                        "department_id": department.id if department else None,
+                        "department_path": department.path if department else user.department_path,
+                        "phone": mobile,
+                        "status": user.status,
+                        "tenant_id": self.tenant_id,
+                        "synced_at": now,
+                    }
+                )
             )
             stats["profile_synced"] = True
 
@@ -127,21 +131,21 @@ class OrgSyncMemberMixin:
         if target_user and target_user.identity_id:
             identity = await identity_dao.get(target_user.identity_id)
             if identity:
-                id_updates: dict[str, Any] = {}
+                id_updates: dict[str, object] = {}
                 if email and identity.email != email:
                     id_updates["email"] = email
                 if mobile and identity.phone != mobile:
                     id_updates["phone"] = mobile
                 if id_updates:
-                    await identity_dao.update(db_obj=identity, obj_in=id_updates)
+                    _ = await identity_dao.update(db_obj=identity, obj_in=mapping_from_row(id_updates))
 
         return stats
 
-    def _provider_requires_unionid(self, provider: Any) -> bool:
+    def _provider_requires_unionid(self, provider: IdentityProviderRecord) -> bool:
         provider_type = (provider.provider_type or self.provider_type or "").lower()
         return provider_type in {"feishu", "dingtalk"}
 
-    def _validate_member_identifiers(self, provider: Any, user: ExternalUser) -> None:
+    def _validate_member_identifiers(self, provider: IdentityProviderRecord, user: ExternalUser) -> None:
         user.unionid = (user.unionid or "").strip()
         user.external_id = (user.external_id or "").strip()
         user.open_id = (user.open_id or "").strip()
@@ -158,8 +162,8 @@ class OrgSyncMemberMixin:
 
     async def _find_existing_member(
         self,
-        db: Any,
-        provider: Any,
+        db: object | None,
+        provider: IdentityProviderRecord,
         user: ExternalUser,
     ) -> OrgMemberRecord | None:
         del db
@@ -176,7 +180,7 @@ class OrgSyncMemberMixin:
             unionid=user.unionid or None,
         )
 
-    async def _resolve_platform_user(self, db: Any, user: ExternalUser) -> UserRecord | None:
+    async def _resolve_platform_user(self, db: object | None, user: ExternalUser) -> UserRecord | None:
         """Resolve platform user from external user info."""
         del db
         email = _normalize_contact(user.email)

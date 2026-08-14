@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_str_dict, json_as_str_or, mapping_from_row, object_from_literal
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.approval_dao import approval_request_dao
@@ -20,7 +19,9 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
+from app.records.agent import AgentRecord
 from app.records.audit import ApprovalRequestRecord
+from app.records.user import UserRecord
 from app.services.audit_logger import write_audit_log
 from app.services.feishu_service import feishu_service
 
@@ -30,8 +31,8 @@ class AutonomyService:
 
     async def check_and_enforce(
         self,
-        db: Any = None,
-        agent: Any = None,
+        db: object | None = None,
+        agent: AgentRecord | None = None,
         action_type: str = "",
         details: JsonObject | None = None,
     ) -> JsonObject:
@@ -51,8 +52,8 @@ class AutonomyService:
         if agent is None:
             return {"allowed": False, "level": "unknown", "message": "Agent required"}
         details = details or {}
-        policy = agent.autonomy_policy or {}
-        level = policy.get(action_type, "L2")  # Default to L2
+        policy = mapping_from_row(agent.autonomy_policy)
+        level = json_as_str_or(dict[str, object](policy).get(action_type), "L2") or "L2"
 
         await write_audit_log(
             action=f"autonomy_check:{action_type}",
@@ -98,9 +99,9 @@ class AutonomyService:
 
     async def resolve_approval(
         self,
-        db: Any = None,
+        db: object | None = None,
         approval_id: uuid.UUID | None = None,
-        user: Any = None,
+        user: UserRecord | None = None,
         action: str = "",
     ) -> ApprovalRequestRecord:
         """Approve or reject a pending approval request.
@@ -149,7 +150,7 @@ class AutonomyService:
             body_text = json.dumps(approval.details, ensure_ascii=False)[:200]
             if execution_result:
                 body_text = f"Result: {execution_result}"
-            await send_notification(
+            _ = await send_notification(
                 None,
                 user_id=agent.creator_id,
                 type="approval_resolved",
@@ -164,7 +165,7 @@ class AutonomyService:
                 try:
                     requester_id = uuid.UUID(requested_by)
                     if requester_id != agent.creator_id:
-                        await send_notification(
+                        _ = await send_notification(
                             None,
                             user_id=requester_id,
                             type="approval_resolved",
@@ -191,20 +192,15 @@ class AutonomyService:
             return None
 
         try:
-            import ast
-
             if isinstance(args_raw, str):
                 try:
-                    arguments = ast.literal_eval(args_raw)
-                except ValueError, SyntaxError:
-                    try:
-                        arguments = json.loads(args_raw)
-                    except json.JSONDecodeError:
-                        return "Execution failed: approved action arguments must be a JSON object"
+                    arguments = object_from_literal(args_raw)
+                except ValueError, SyntaxError, json.JSONDecodeError:
+                    return "Execution failed: approved action arguments must be a JSON object"
             else:
                 arguments = args_raw
 
-            if not isinstance(arguments, dict):
+            if not is_str_dict(arguments):
                 return "Execution failed: approved action arguments must be a JSON object"
 
             from app.services.agent_tool_exec.dispatcher import _execute_tool_direct
@@ -214,11 +210,11 @@ class AutonomyService:
             logger.error(f"Failed to execute approved action {tool_name}: {e}")
             return f"Execution failed: {e}"
 
-    async def _notify_creator(self, agent: Any, action_type: str, details: JsonObject) -> None:
+    async def _notify_creator(self, agent: AgentRecord, action_type: str, details: JsonObject) -> None:
         """Send L2 notification to agent creator via Feishu + web."""
         from app.services.notification_service import send_notification
 
-        await send_notification(
+        _ = await send_notification(
             None,
             user_id=agent.creator_id,
             type="autonomy_l2",
@@ -254,7 +250,7 @@ class AutonomyService:
             id_type = "open_id"
         else:
             return
-        await feishu_service.send_message(
+        _ = await feishu_service.send_message(
             channel.app_id,
             channel.app_secret,
             receive_id,
@@ -263,11 +259,11 @@ class AutonomyService:
             receive_id_type=id_type,
         )
 
-    async def _request_approval(self, agent: Any, approval: ApprovalRequestRecord) -> None:
+    async def _request_approval(self, agent: AgentRecord, approval: ApprovalRequestRecord) -> None:
         """Send L3 approval request to creator via Feishu card + web notification."""
         from app.services.notification_service import send_notification
 
-        await send_notification(
+        _ = await send_notification(
             None,
             user_id=agent.creator_id,
             type="approval_pending",
@@ -302,7 +298,7 @@ class AutonomyService:
             receive_id = open_id
         else:
             return
-        await feishu_service.send_approval_card(
+        _ = await feishu_service.send_approval_card(
             channel.app_id,
             channel.app_secret,
             receive_id,

@@ -109,10 +109,10 @@ async def chat_complete(
     tools: list[ToolDefinition] | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-    timeout: float = 120.0,  # noqa: ASYNC109
+    request_timeout: float = 120.0,
 ) -> ChatCompletion:
     """High-level function for non-streaming chat completion."""
-    client = create_llm_client(provider, api_key, model, base_url, timeout)
+    client = create_llm_client(provider, api_key, model, base_url, request_timeout)
 
     try:
         llm_messages = [
@@ -159,12 +159,12 @@ async def chat_stream(
     tools: list[ToolDefinition] | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-    timeout: float = 120.0,  # noqa: ASYNC109
+    request_timeout: float = 120.0,
     on_chunk: ChunkCallback | None = None,
     on_thinking: ThinkingCallback | None = None,
 ) -> ChatCompletion:
     """High-level function for streaming chat completion."""
-    client = create_llm_client(provider, api_key, model, base_url, timeout)
+    client = create_llm_client(provider, api_key, model, base_url, request_timeout)
 
     try:
         llm_messages = [

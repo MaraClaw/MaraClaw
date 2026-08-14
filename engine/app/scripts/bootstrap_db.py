@@ -313,7 +313,7 @@ async def _apply_sql_script(path: Path) -> None:
 
 
 async def main() -> None:
-    await init_pool()
+    _ = await init_pool()
     try:
         if SCHEMA_BASELINE.is_file():
             print(f"[bootstrap] Applying baseline schema from {SCHEMA_BASELINE}", flush=True)
@@ -332,8 +332,7 @@ async def main() -> None:
             except Exception as exc:
                 if _is_ignorable_error(exc, _IGNORABLE):
                     print(
-                        f"[bootstrap] Patch already present: {sql.strip()[:80]} "
-                        f"({_unwrap_pg_error(exc)})",
+                        f"[bootstrap] Patch already present: {sql.strip()[:80]} " + f"({_unwrap_pg_error(exc)})",
                         flush=True,
                     )
                     continue
@@ -344,7 +343,7 @@ async def main() -> None:
                 ):
                     print(
                         "[bootstrap] Skipping ux_users_identity_single_tenant; "
-                        "duplicate identity memberships already exist",
+                        + "duplicate identity memberships already exist",
                         flush=True,
                     )
                     continue

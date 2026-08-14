@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import uuid
 from datetime import date
-from types import ModuleType
+from typing import Protocol, TypeIs
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -11,6 +11,7 @@ from app.dao.okr_dao import okr_key_result_dao, okr_objective_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
 
+from ._agent_tool_exec_okr_access import _OKRRequestContext
 from .registry import ToolArguments
 
 
@@ -26,8 +27,32 @@ def _float_argument(arguments: ToolArguments, name: str, default: float) -> floa
     return float(value)
 
 
-def _okr_access_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_access")
+class _OkrAccessModule(Protocol):
+    async def _load_okr_request_context(
+        self, db: object | None, agent_id: uuid.UUID, user_id: uuid.UUID | None
+    ) -> _OKRRequestContext: ...
+
+    def _can_create_okr_target(
+        self, ctx: _OKRRequestContext, owner_type: str, owner_id: uuid.UUID | None
+    ) -> str | None: ...
+
+    def _can_access_existing_okr_target(
+        self, ctx: _OKRRequestContext, owner_type: str, owner_id: uuid.UUID | None
+    ) -> str | None: ...
+
+
+def _is_okr_access_module(value: object) -> TypeIs[_OkrAccessModule]:
+    return all(
+        callable(getattr(value, name, None))
+        for name in ("_load_okr_request_context", "_can_create_okr_target", "_can_access_existing_okr_target")
+    )
+
+
+def _okr_access_module() -> _OkrAccessModule:
+    module: object = importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_access")
+    if not _is_okr_access_module(module):
+        raise TypeError("okr_access module is missing required helpers")
+    return module
 
 
 async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments) -> str:
@@ -72,7 +97,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                                 owner_id = member.user_id
                                 logger.info(
                                     f"[OKR] _create_objective: resolved OrgMember.id {owner_id_str} "
-                                    f"→ user_id {owner_id}"
+                                    + f"→ user_id {owner_id}"
                                 )
 
                 if not owner_exists:
@@ -80,7 +105,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                     if not owner_name_hint:
                         return (
                             f"owner_id '{owner_id_str}' was not found. Provide a valid UUID, "
-                            "or pass owner_name instead."
+                            + "or pass owner_name instead."
                         )
 
         if owner_type != "company" and not owner_id and owner_name_hint:

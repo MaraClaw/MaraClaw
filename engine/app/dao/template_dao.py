@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.template import AgentTemplateRecord
 
@@ -26,18 +28,19 @@ _TEMPLATE_COLUMNS = (
 )
 
 
+@final
 class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
     """DAO for agent template catalog rows."""
 
-    table = "agent_templates"
-    columns = _TEMPLATE_COLUMNS
+    table: ClassVar[str] = "agent_templates"
+    columns: ClassVar[tuple[str, ...]] = _TEMPLATE_COLUMNS
     record_factory = staticmethod(AgentTemplateRecord.from_row)
 
     async def list_builtins(self) -> Sequence[AgentTemplateRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_templates "
-                "WHERE is_builtin IS TRUE ORDER BY created_at ASC NULLS LAST"
+                + "WHERE is_builtin IS TRUE ORDER BY created_at ASC NULLS LAST"
             )
             return [AgentTemplateRecord.from_row(row) for row in rows]
 
@@ -45,7 +48,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_templates "
-                "WHERE name = %(name)s AND is_builtin IS TRUE LIMIT 1",
+                + "WHERE name = %(name)s AND is_builtin IS TRUE LIMIT 1",
                 {"name": name},
             )
             return AgentTemplateRecord.from_row(row) if row else None
@@ -56,7 +59,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
                 "SELECT COUNT(*) FROM agents WHERE template_id = %(template_id)s",
                 {"template_id": template_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_all_ordered(self) -> Sequence[AgentTemplateRecord]:
         async with self.session() as db:
@@ -66,7 +69,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
             return [AgentTemplateRecord.from_row(row) for row in rows]
 
     async def list_ordered_by_name(self, *, category: str | None = None) -> Sequence[AgentTemplateRecord]:
-        params: dict = {}
+        params: dict[str, Any] = {}
         category_sql = ""
         if category:
             category_sql = " WHERE category = %(category)s"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -13,9 +12,10 @@ from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue, ToolOutputCallback, register
 from app.services.focus_service import ensure_focus_item
 
+from . import trigger_helpers
+
 MAX_TRIGGERS_PER_AGENT = 20
 VALID_TRIGGER_TYPES: Final = {"cron", "once", "interval", "poll", "on_message", "webhook"}
-_TRIGGER_HELPERS: Final = importlib.import_module("app.services.agent_tool_exec.trigger_helpers")
 
 
 def _string_argument(arguments: ToolArguments, name: str) -> str:
@@ -55,17 +55,15 @@ async def _handle_set_trigger(
         logger.warning(f"[Trigger] Failed to ensure Focus item for trigger {name}: {error}")
         focus_ref = focus_ref or name
 
-    validation_error = _TRIGGER_HELPERS._validate_trigger_config(ttype, config)
+    validation_error = trigger_helpers._validate_trigger_config(ttype, config)
     if validation_error:
         return validation_error
     if ttype == "on_message":
-        await _TRIGGER_HELPERS._snapshot_latest_message(agent_tools, agent_id, config)
+        await trigger_helpers._snapshot_latest_message(agent_tools, agent_id, config)
     elif ttype == "webhook":
         config["token"] = secrets.token_urlsafe(8)
 
-    await _TRIGGER_HELPERS._record_origin_metadata(
-        agent_tools, agent_id, config, session_id=session_id, user_id=user_id
-    )
+    await trigger_helpers._record_origin_metadata(agent_tools, agent_id, config, session_id=session_id, user_id=user_id)
 
     try:
         agent = await agent_dao.get(agent_id)
@@ -80,13 +78,13 @@ async def _handle_set_trigger(
             if existing.is_enabled:
                 return (
                     f"❌ Trigger '{name}' already exists and is active. "
-                    "Use update_trigger to modify it, or cancel_trigger first."
+                    + "Use update_trigger to modify it, or cancel_trigger first."
                 )
             if ttype == "webhook":
                 old_token = (existing.config or {}).get("token")
                 if old_token:
                     config["token"] = old_token
-            updates: dict = {
+            updates: dict[str, object] = {
                 "type": ttype,
                 "config": config,
                 "reason": reason,
@@ -98,10 +96,10 @@ async def _handle_set_trigger(
             existing = await agent_trigger_dao.update(db_obj=existing, obj_in=updates) or existing
             return (
                 f"✅ Trigger '{name}' re-enabled with new configuration "
-                f"({ttype}, fired {existing.fire_count} times so far)"
+                + f"({ttype}, fired {existing.fire_count} times so far)"
             )
 
-        obj_in: dict = {
+        obj_in: dict[str, object] = {
             "agent_id": agent_id,
             "name": name,
             "type": ttype,
@@ -112,9 +110,9 @@ async def _handle_set_trigger(
         if ttype == "on_message":
             obj_in["max_fires"] = 100
             obj_in["expires_at"] = datetime.now(UTC) + timedelta(days=7)
-        await agent_trigger_dao.create(obj_in=obj_in)
+        _ = await agent_trigger_dao.create(obj_in=obj_in)
 
-        await _TRIGGER_HELPERS._write_trigger_audit(
+        await trigger_helpers._write_trigger_audit(
             "trigger_created",
             {"name": name, "type": ttype, "reason": reason[:100]},
             agent_id=agent_id,
@@ -126,12 +124,12 @@ async def _handle_set_trigger(
             webhook_url = f"{base.rstrip('/')}/api/webhooks/t/{config['token']}"
             return (
                 f"✅ Webhook trigger '{name}' created.\n\nWebhook URL: {webhook_url}\n\n"
-                "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
-                "When the service sends a POST to this URL, you will be woken up with the payload as context."
+                + "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
+                + "When the service sends a POST to this URL, you will be woken up with the payload as context."
             )
         return (
             f"✅ Trigger '{name}' created ({ttype}). "
-            "It will fire according to your config and wake you up with the reason as context."
+            + "It will fire according to your config and wake you up with the reason as context."
         )
     except Exception as error:
         return f"❌ Failed to create trigger: {error}"
@@ -153,7 +151,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
             return f"❌ Trigger '{name}' not found"
 
         changes = []
-        updates: dict = {}
+        updates: dict[str, object] = {}
         if new_config is not None:
             old_config = trigger.config
             updates["config"] = new_config
@@ -161,9 +159,9 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
         if new_reason is not None:
             updates["reason"] = new_reason
             changes.append("reason updated")
-        await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+        _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
 
-        await _TRIGGER_HELPERS._write_trigger_audit(
+        await trigger_helpers._write_trigger_audit(
             "trigger_updated",
             {"name": name, "changes": "; ".join(changes)},
             agent_id=agent_id,
@@ -185,9 +183,9 @@ async def _handle_cancel_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
         if not trigger.is_enabled:
             return f"\u2139\ufe0f Trigger '{name}' is already disabled"
 
-        await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
+        _ = await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
 
-        await _TRIGGER_HELPERS._write_trigger_audit("trigger_cancelled", {"name": name}, agent_id=agent_id)
+        await trigger_helpers._write_trigger_audit("trigger_cancelled", {"name": name}, agent_id=agent_id)
         return f"✅ Trigger '{name}' cancelled. It will no longer fire."
     except Exception as error:
         return f"❌ Failed to cancel trigger: {error}"

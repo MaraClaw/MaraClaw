@@ -11,31 +11,23 @@ Reference: https://modelcontextprotocol.io/docs
 import json
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import TypeIs
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    http_header,
+    is_json_object,
+    json_loads_value,
+    json_value_from_response,
+)
 from app.core.logging import logger
 
 
-def _is_json_object(value: object) -> TypeIs[JsonObject]:
-    if not isinstance(value, dict):
-        return False
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
-
-
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
-    return _is_json_object(value)
-
-
 def _require_json_object(value: object) -> JsonObject:
-    if not _is_json_object(value):
+    if not is_json_object(value):
         raise TypeError("MCP response must be a JSON object")
     return value
 
@@ -51,13 +43,13 @@ class MCPClient:
         parsed = urlparse(server_url)
         qs = parse_qs(parsed.query, keep_blank_values=True)
 
-        self.api_key = api_key
+        self.api_key: str | None = api_key
         if not self.api_key and "apiKey" in qs:
             self.api_key = qs.pop("apiKey")[0]
 
         # Rebuild URL without apiKey in query string
         remaining_qs = urlencode({k: v[0] for k, v in qs.items()}) if qs else ""
-        self.server_url = urlunparse(parsed._replace(query=remaining_qs)).rstrip("/")
+        self.server_url: str = urlunparse(parsed._replace(query=remaining_qs)).rstrip("/")
 
         # Transport state
         self._transport: str | None = None  # "streamable" or "sse"
@@ -78,16 +70,15 @@ class MCPClient:
 
     def _parse_response(self, resp: httpx.Response) -> JsonObject:
         """Parse response - handles both JSON and SSE (text/event-stream) formats."""
-        content_type = resp.headers.get("content-type", "")
+        content_type = http_header(resp.headers, "content-type")
 
         # Save session ID if the server returns one
-        session_id = resp.headers.get("mcp-session-id")
-        if session_id:
-            self._session_id = session_id
+        if "mcp-session-id" in resp.headers:
+            self._session_id = resp.headers["mcp-session-id"]
 
         if "text/event-stream" in content_type:
             return self._parse_sse_response(resp.text)
-        return _require_json_object(resp.json())
+        return _require_json_object(json_value_from_response(resp))
 
     def _parse_sse_response(self, text: str) -> JsonObject:
         """Extract the last JSON-RPC result from an SSE stream."""
@@ -97,8 +88,8 @@ class MCPClient:
                 raw = line[5:].strip()
                 if raw and raw != "[DONE]":
                     with suppress(json.JSONDecodeError):
-                        data = json.loads(raw)
-                        if _is_json_object(data):
+                        data = json_loads_value(raw)
+                        if is_json_object(data):
                             last_data = data
         if last_data is None:
             raise Exception("No valid JSON found in SSE response")
@@ -124,9 +115,9 @@ class MCPClient:
                 headers=self._headers(),
             )
             if resp.status_code == 200:
-                self._parse_response(resp)  # captures Mcp-Session-Id if present
+                _ = self._parse_response(resp)  # captures Mcp-Session-Id if present
             # Send initialized notification (required by MCP spec before other requests)
-            await client.post(
+            _ = await client.post(
                 self.server_url,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=self._headers(),
@@ -251,9 +242,9 @@ class MCPClient:
                     "clientInfo": {"name": "maraclaw", "version": "1.0"},
                 },
             }
-            await client.post(messages_url, json=init_body, headers=headers_post)
+            _ = await client.post(messages_url, json=init_body, headers=headers_post)
             # Send initialized notification (required before other requests)
-            await client.post(
+            _ = await client.post(
                 messages_url,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=headers_post,
@@ -264,9 +255,9 @@ class MCPClient:
 
             # Phase 3: Read the response - either from POST response or from SSE stream
             if post_resp.status_code == 200:
-                ct = post_resp.headers.get("content-type", "")
+                ct = http_header(post_resp.headers, "content-type")
                 if "application/json" in ct:
-                    return _require_json_object(post_resp.json())
+                    return _require_json_object(json_value_from_response(post_resp))
 
             # Read response from SSE stream
             result: JsonObject | None = None
@@ -278,9 +269,9 @@ class MCPClient:
                     data = line[5:].strip()
                     if event_type == "message" and data:
                         with suppress(json.JSONDecodeError):
-                            parsed_data = json.loads(data)
+                            parsed_data = json_loads_value(data)
                             # Match our request ID
-                            if _is_json_object(parsed_data) and parsed_data.get("id") in (0, 1):
+                            if is_json_object(parsed_data) and parsed_data.get("id") in (0, 1):
                                 result = parsed_data
                                 if parsed_data.get("id") == 1:
                                     break  # Got our actual request response
@@ -333,12 +324,12 @@ class MCPClient:
 
             if "error" in data:
                 err = data["error"]
-                error_message = err.get("message", str(err)) if _is_json_object(err) else str(err)
+                error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
                 msg = error_message if isinstance(error_message, str) else str(error_message)
                 raise Exception(f"MCP error: {msg}")
 
             result = data.get("result", {})
-            if not _is_json_object(result):
+            if not is_json_object(result):
                 return []
             tools = result.get("tools", [])
             if not isinstance(tools, list):
@@ -350,7 +341,7 @@ class MCPClient:
                     "inputSchema": tool.get("inputSchema", {}),
                 }
                 for tool in tools
-                if _is_json_object(tool)
+                if is_json_object(tool)
             ]
         except httpx.HTTPError as e:
             raise Exception(f"Connection failed: {str(e)[:200]}") from e
@@ -365,7 +356,7 @@ class MCPClient:
 
             if "error" in data:
                 err = data["error"]
-                error_message = err.get("message", str(err)) if _is_json_object(err) else str(err)
+                error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
                 msg = error_message if isinstance(error_message, str) else str(error_message)
                 return f"❌ MCP tool execution error: {msg[:200]}"
 
@@ -374,14 +365,15 @@ class MCPClient:
                 return result
 
             # MCP returns content as list of content blocks
-            content_blocks = result.get("content", []) if _is_json_object(result) else []
-            if not isinstance(content_blocks, list):
+            raw_blocks = result.get("content") if is_json_object(result) else None
+            if not isinstance(raw_blocks, list):
                 return str(result)
-            texts = []
+            content_blocks: list[object] = list(raw_blocks)
+            texts: list[str] = []
             for block in content_blocks:
                 if isinstance(block, str):
                     texts.append(block)
-                elif _is_json_object(block):
+                elif is_json_object(block):
                     if block.get("type") == "text":
                         text = block.get("text", "")
                         texts.append(text if isinstance(text, str) else str(text))

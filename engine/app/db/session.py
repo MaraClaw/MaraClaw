@@ -35,17 +35,21 @@ async def connection_ctx() -> AsyncIterator[DbConnection]:
         db = DbConnection(raw)
         token = _conn_ctx.set(db)
         from app.core.access_cache import begin_deferred_acl, end_deferred_acl, flush_deferred_acl
+        from app.core.redis_cache import begin_deferred_versions, end_deferred_versions, flush_deferred_versions
 
         acl_token = begin_deferred_acl()
+        ver_token = begin_deferred_versions()
         try:
             yield db
             await db.commit()
             await flush_deferred_acl()
+            await flush_deferred_versions()
         except Exception:
             await db.rollback()
             raise
         finally:
             end_deferred_acl(acl_token)
+            end_deferred_versions(ver_token)
             _conn_ctx.reset(token)
 
 
@@ -67,7 +71,7 @@ async def bind_crud_connection() -> AsyncIterator[None]:
     a no-op so ASGI tests keep working.
     """
     try:
-        get_pool()
+        _ = get_pool()
     except RuntimeError:
         yield
         return
@@ -86,7 +90,7 @@ async def optional_connection_ctx() -> AsyncIterator[DbConnection | None]:
             yield db
         return
     try:
-        get_pool()
+        _ = get_pool()
     except RuntimeError:
         yield None
         return

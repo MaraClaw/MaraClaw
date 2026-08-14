@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.logging import logger
 
 from .agentbay_apps import _agentbay_normalize_text
 from .registry import ToolArguments
+
+if TYPE_CHECKING:
+    from app.services.agentbay_client import AgentBayClient
 
 
 def _string_argument(arguments: ToolArguments, name: str, *, remove: bool = False) -> str:
@@ -19,7 +23,7 @@ def _integer_argument(arguments: ToolArguments, name: str, default: int = 0) -> 
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
-async def _client(agent_id: uuid.UUID, arguments: ToolArguments):
+async def _client(agent_id: uuid.UUID, arguments: ToolArguments) -> AgentBayClient:
     from app.services.agentbay_client import get_agentbay_client_for_agent
 
     return await get_agentbay_client_for_agent(
@@ -74,7 +78,7 @@ async def _agentbay_computer_list_windows(agent_id: uuid.UUID | None, ws: Path, 
             import json
 
             windows = result.get("windows", [])
-            if not windows:
+            if not isinstance(windows, list) or not windows:
                 return "No root windows found."
             return f"OS-level root desktop windows ({len(windows)}). These window_id values refer to whole application windows. Use them for activation, or for closing only when the user explicitly asked to close/quit an entire desktop window or app. Do NOT use these IDs for in-app popups, modals, embedded marketplace/store panels, browser/app tabs, document tabs, or software-internal dialogs; close those with the app UI, Escape, Ctrl+W, or agentbay_computer_dismiss_dialog.\n\n{json.dumps(windows, ensure_ascii=False, indent=2)[:5000]}"
         return f"Failed to list windows: {result.get('error_message', 'Unknown error')}"
@@ -124,7 +128,9 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
             from difflib import SequenceMatcher
 
             title_norm, candidates = _agentbay_normalize_text(title), []
-            for window in windows_result.get("windows", []):
+            raw_windows = windows_result.get("windows", [])
+            windows = list[object](raw_windows) if isinstance(raw_windows, list) else []
+            for window in windows:
                 if not isinstance(window, dict):
                     continue
                 candidate = str(window.get("title") or window.get("window_title") or "")
@@ -137,7 +143,7 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
                     else SequenceMatcher(None, title_norm, candidate_norm).ratio()
                 )
                 if score >= 0.35:
-                    item = dict(window)
+                    item = dict[str, object](window)
                     item["match_score"] = round(score, 3)
                     candidates.append(item)
             candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)

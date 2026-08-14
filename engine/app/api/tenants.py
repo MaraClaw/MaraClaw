@@ -8,14 +8,14 @@ import io
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, ClassVar, TypedDict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, int_from_row, json_as_bool, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.agent_dao import agent_dao
 from app.dao.system_setting_dao import system_setting_dao
@@ -84,7 +84,7 @@ class TenantOut(BaseModel):
     is_system: bool = False
     is_default_end_user_org: bool = False
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     @computed_field
     @property
@@ -99,7 +99,7 @@ class EmailDomainOut(BaseModel):
     is_default: bool
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class EmailDomainCreate(BaseModel):
@@ -293,6 +293,8 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
             status_code=403, detail="This invitation code does not belong to the required organization."
         )
 
+    if code_obj.tenant_id is None:
+        raise HTTPException(status_code=400, detail="Invitation code has no organization")
     tenant = await tenant_dao.get(code_obj.tenant_id)
     if not tenant or not tenant.is_active:
         raise HTTPException(status_code=400, detail="Company not found or is disabled")
@@ -318,12 +320,12 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 
 
 @router.get("/registration-config")
-async def get_registration_config():
+async def get_registration_config() -> dict[str, Any]:
     """Public - tenant creation is platform-admin only; self-create is gone."""
     return {"allow_self_create_company": False, "tenant_creation": "platform_admin_only"}
 
 
-def _org_summary(tenant) -> OrgSummary:
+def _org_summary(tenant: TenantRecord) -> OrgSummary:
     return OrgSummary(id=tenant.id, name=tenant.name, slug=tenant.slug)
 
 
@@ -409,8 +411,7 @@ async def transfer_organization(
     current_user: UserRecord = Depends(get_current_user),
 ):
     """Move a member from their current org to another after password confirmation."""
-    from app.core.security import create_access_token, verify_password_async
-    from app.dao.identity_dao import identity_dao
+    from app.core.security import create_access_token, load_identity_for_password, verify_password_async
     from app.services.org_membership import (
         AlreadyInOrgError,
         DefaultOrgUnavailableError,
@@ -426,7 +427,8 @@ async def transfer_organization(
         raise HTTPException(status_code=400, detail="Join an organization first, then transfer")
     _require_join_allowed(current_user)
 
-    identity = getattr(current_user, "identity", None) or await identity_dao.get(current_user.identity_id)
+    identity_id = current_user.identity_id or getattr(getattr(current_user, "identity", None), "id", None)
+    identity = await load_identity_for_password(identity_id)
     if identity is None or not identity.password_hash:
         raise HTTPException(status_code=400, detail="This account cannot confirm a password")
     if not await verify_password_async(data.password, identity.password_hash):
@@ -439,7 +441,11 @@ async def transfer_organization(
         except InvitationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if data.tenant_id and str(code_obj.tenant_id) != str(data.tenant_id):
-            raise HTTPException(status_code=403, detail="This invitation code does not belong to the required organization.")
+            raise HTTPException(
+                status_code=403, detail="This invitation code does not belong to the required organization."
+            )
+        if code_obj.tenant_id is None:
+            raise HTTPException(status_code=400, detail="Invitation code has no organization")
         target = await tenant_dao.get(code_obj.tenant_id)
         if not target or not target.is_active:
             raise HTTPException(status_code=400, detail="Company not found or is disabled")
@@ -485,7 +491,7 @@ async def transfer_organization(
 
 
 @router.get("/resolve-by-domain")
-async def resolve_tenant_by_domain(domain: str):
+async def resolve_tenant_by_domain(domain: str) -> dict[str, Any]:
     """Resolve a tenant by its sso_domain or subdomain slug.
 
     sso_domain is stored as a full URL (e.g. "https://acme.maraclaw.ai" or "http://1.2.3.4:3009").
@@ -568,12 +574,12 @@ async def get_my_tenant_token_usage(current_user: UserRecord = Depends(get_curre
     row = await agent_dao.token_usage_for_tenant(current_user.tenant_id)
 
     def bucket(total: int, cache_read: int, cache_creation: int) -> TokenUsageBucket:
-        total = int(total or 0)
-        cache_read = int(cache_read or 0)
+        total = int_from_row(total)
+        cache_read = int_from_row(cache_read)
         return {
             "total_tokens": total,
             "cache_read_tokens": cache_read,
-            "cache_creation_tokens": int(cache_creation or 0),
+            "cache_creation_tokens": int_from_row(cache_creation),
             "cache_hit_rate": round(cache_read / total, 4) if total > 0 else 0.0,
         }
 
@@ -607,7 +613,7 @@ async def list_email_domains(
 ):
     from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     rows = await tenant_email_domain_dao.list_for_tenant(tenant_id)
     return [EmailDomainOut.model_validate(row) for row in rows]
 
@@ -621,7 +627,7 @@ async def create_email_domain(
 ):
     from app.services.org_membership import DomainClaimedError, InvalidEmailDomainError, add_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     try:
         row = await add_email_domain(tenant_id, data.domain, is_default=data.is_default)
     except InvalidEmailDomainError as exc:
@@ -650,7 +656,7 @@ async def patch_email_domain(
 ):
     from app.services.org_membership import set_default_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     if not data.is_default:
         raise HTTPException(status_code=400, detail="Clearing the default requires choosing another domain")
     try:
@@ -678,7 +684,7 @@ async def remove_email_domain(
 ):
     from app.services.org_membership import delete_email_domain
 
-    await _get_updateable_tenant(tenant_id, current_user)
+    _ = await _get_updateable_tenant(tenant_id, current_user)
     try:
         await delete_email_domain(tenant_id, domain_id)
     except KeyError as exc:
@@ -712,7 +718,7 @@ async def update_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
     # SSO configuration is managed exclusively by the company's own org_admin
     # via the Enterprise Settings page. Platform admins should not override it here.
@@ -720,20 +726,16 @@ async def update_tenant(
         update_data.pop("sso_enabled", None)
         update_data.pop("sso_domain", None)
 
-    audit_changes = {}
+    audit_changes: dict[str, dict[str, object]] = {}
     if "is_active" in update_data:
-        identity_is_platform_admin = bool(
-            getattr(current_user, "is_platform_admin", False)
-            or getattr(getattr(current_user, "identity", None), "is_platform_admin", False)
-        )
-        if current_user.role != "platform_admin" and not identity_is_platform_admin:
+        if current_user.role != "platform_admin" and not current_user.is_platform_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Only a platform admin can disable or enable a company",
             )
-        new_active = bool(update_data.pop("is_active"))
+        new_active = json_as_bool(update_data.pop("is_active"))
         try:
-            await set_tenant_active(tenant, is_active=new_active)
+            _ = await set_tenant_active(tenant, is_active=new_active)
         except DefaultOrgUnavailableError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_changes["is_active"] = field_change(tenant.is_active, new_active)
@@ -785,7 +787,7 @@ async def upload_tenant_logo(
         raise HTTPException(status_code=400, detail="Logo image must be 1 MB or smaller")
     try:
         image = Image.open(io.BytesIO(data))
-        image.load()
+        _ = image.load()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid image file") from exc
     if image.width != image.height:
@@ -910,7 +912,7 @@ async def repair_genesis_org_admin(
 
 
 @router.delete("/{tenant_id}")
-async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Permanently delete a company and ALL its data.
 
     Only the org_admin of the specified tenant (or a platform_admin) may call
@@ -922,10 +924,8 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
     agent-level data → agents → OKR/org data → users → tenant.
     """
     # ── Auth check ──────────────────────────────────────────────────────────
-    is_platform_admin = getattr(current_user, "role", None) == "platform_admin"
-    is_own_org_admin = getattr(current_user, "role", None) == "org_admin" and str(current_user.tenant_id) == str(
-        tenant_id
-    )
+    is_platform_admin = current_user.role == "platform_admin"
+    is_own_org_admin = current_user.role == "org_admin" and str(current_user.tenant_id) == str(tenant_id)
     if not is_platform_admin and not is_own_org_admin:
         raise HTTPException(
             status_code=403, detail="Only the org admin of this company (or a platform admin) can delete it"
@@ -943,6 +943,8 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     identity_id = current_user.identity_id
+    if identity_id is None:
+        raise HTTPException(status_code=400, detail="Account has no identity")
 
     await delete_tenant_and_release_identities(tenant_id)
     await write_admin_audit(

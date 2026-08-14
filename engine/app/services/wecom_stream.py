@@ -6,33 +6,40 @@ No callback URL or domain verification needed.
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC
-from typing import Protocol, runtime_checkable
+from typing import TypeIs
 from unittest.mock import patch
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 
 _WECOM_SDK_PROXY_DISABLED = False
 
+# SDK WsFrame is too narrow for tests/mocks; keep these names for call sites.
+type _WeComFrame = object
+type _WeComClient = object
 
-class _WeComFrame(Protocol):
-    body: JsonObject | None
+
+def _json_object(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        result[key] = item if _is_json_value(item) else None
+    return result
 
 
-@runtime_checkable
-class _WeComClient(Protocol):
-    def on(self, event: str, handler: Callable[[_WeComFrame], Awaitable[None]]) -> None: ...
-
-    async def connect_async(self) -> None: ...
-
-    async def disconnect(self) -> None: ...
-
-    async def reply_stream(self, frame: _WeComFrame, stream_id: str, content: str, *, finish: bool) -> None: ...
-
-    async def reply_welcome(self, frame: _WeComFrame, message: JsonObject) -> None: ...
+def _is_json_value(value: object) -> TypeIs[JsonValue]:
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
 
 
 def _disable_wecom_sdk_proxy() -> None:
@@ -46,12 +53,39 @@ def _disable_wecom_sdk_proxy() -> None:
 
     original_connect = sdk_ws.websockets.connect
 
-    def connect_no_proxy(*args, **kwargs):
-        kwargs.setdefault("proxy", None)
-        return original_connect(*args, **kwargs)
+    def connect_no_proxy(uri: str, *args: object, **kwargs: object) -> object:
+        _ = kwargs.setdefault("proxy", None)
+        return original_connect(uri, *args, **kwargs)
 
-    patch.object(sdk_ws.websockets, "connect", connect_no_proxy).start()
+    _ = patch.object(sdk_ws.websockets, "connect", connect_no_proxy).start()
     _WECOM_SDK_PROXY_DISABLED = True
+
+
+async def _await_maybe(value: object) -> object:
+    if not asyncio.iscoroutine(value):
+        return value
+    from collections.abc import Awaitable
+    from typing import cast
+
+    return await cast(Awaitable[object], value)
+
+
+async def _reply_stream(client: object, frame: object, stream_id: str, content: str) -> None:
+    reply = getattr(client, "reply_stream", None)
+    if callable(reply):
+        _ = await _await_maybe(reply(frame, stream_id, content, finish=True))
+
+
+async def _reply_welcome(client: object, frame: object, message: JsonObject) -> None:
+    reply = getattr(client, "reply_welcome", None)
+    if callable(reply):
+        _ = await _await_maybe(reply(frame, message))
+
+
+async def _disconnect_client(client: object) -> None:
+    disconnect = getattr(client, "disconnect", None)
+    if callable(disconnect):
+        _ = await _await_maybe(disconnect())
 
 
 def _extract_wecom_sender_id(body: JsonObject) -> str:
@@ -153,9 +187,6 @@ class WeComStreamManager:
                     heartbeat_interval=30000,
                 )
             )
-            if not isinstance(stream_client, _WeComClient):
-                logger.error(f"[WeCom Stream] SDK client does not implement the expected interface for {agent_id}")
-                return
             client = stream_client
             self._clients[agent_id] = stream_client
 
@@ -166,9 +197,9 @@ class WeComStreamManager:
             # ── Message handler: text ──
             async def on_text(frame: _WeComFrame) -> None:
                 try:
-                    body = frame.body or {}
-                    text_obj = body.get("text")
-                    if not isinstance(text_obj, dict):
+                    body = _json_object(getattr(frame, "body", None))
+                    text_obj = _json_object(body.get("text"))
+                    if not text_obj:
                         return
                     content = text_obj.get("content")
                     if not isinstance(content, str):
@@ -181,14 +212,14 @@ class WeComStreamManager:
                     if not sender_id:
                         logger.warning(
                             f"[WeCom Stream] Missing sender id in text payload for agent {agent_id}: "
-                            f"body_keys={list(body.keys())}"
+                            + f"body_keys={list(body.keys())}"
                         )
                         stream_id = generate_req_id("stream")
-                        await stream_client.reply_stream(
+                        await _reply_stream(
+                            stream_client,
                             frame,
                             stream_id,
                             "Unable to identify the sender for this WeCom message.",
-                            finish=True,
                         )
                         return
 
@@ -199,8 +230,8 @@ class WeComStreamManager:
                     # Debug: log full body to understand the data structure
                     logger.info(
                         f"[WeCom Stream] Text from {sender_id}, "
-                        f"chat_type={chat_type}, is_group={is_group_msg}, chat_id={chat_id or 'N/A'}, "
-                        f"body_keys={list(body.keys())}: {user_text[:80]}"
+                        + f"chat_type={chat_type}, is_group={is_group_msg}, chat_id={chat_id or 'N/A'}, "
+                        + f"body_keys={list(body.keys())}: {user_text[:80]}"
                     )
 
                     # Process message and get reply
@@ -214,7 +245,7 @@ class WeComStreamManager:
 
                     # Reply via streaming
                     stream_id = generate_req_id("stream")
-                    await stream_client.reply_stream(frame, stream_id, reply_text, finish=True)
+                    await _reply_stream(stream_client, frame, stream_id, reply_text)
                     logger.info(f"[WeCom Stream] Replied to {sender_id}: {reply_text[:80]}")
 
                 except Exception as e:
@@ -224,11 +255,11 @@ class WeComStreamManager:
                     traceback.print_exc()
                     try:
                         stream_id = generate_req_id("stream")
-                        await stream_client.reply_stream(
+                        await _reply_stream(
+                            stream_client,
                             frame,
                             stream_id,
                             f"Processing error: {str(e)[:100]}",
-                            finish=True,
                         )
                     except Exception as reply_error:
                         logger.warning(f"[WeCom Stream] Could not send error reply for {agent_id}: {reply_error}")
@@ -236,15 +267,15 @@ class WeComStreamManager:
             # ── Message handler: image ──
             async def on_image(frame: _WeComFrame) -> None:
                 try:
-                    body = frame.body or {}
+                    body = _json_object(getattr(frame, "body", None))
                     sender_id = _extract_wecom_sender_id(body)
                     logger.info(f"[WeCom Stream] Image message from {sender_id} (not yet handled)")
                     stream_id = generate_req_id("stream")
-                    await stream_client.reply_stream(
+                    await _reply_stream(
+                        stream_client,
                         frame,
                         stream_id,
                         "Received your image. Image processing is not yet supported.",
-                        finish=True,
                     )
                 except Exception as e:
                     logger.error(f"[WeCom Stream] Error handling image: {e}")
@@ -252,15 +283,15 @@ class WeComStreamManager:
             # ── Message handler: file ──
             async def on_file(frame: _WeComFrame) -> None:
                 try:
-                    body = frame.body or {}
+                    body = _json_object(getattr(frame, "body", None))
                     sender_id = _extract_wecom_sender_id(body)
                     logger.info(f"[WeCom Stream] File message from {sender_id} (not yet handled)")
                     stream_id = generate_req_id("stream")
-                    await stream_client.reply_stream(
+                    await _reply_stream(
+                        stream_client,
                         frame,
                         stream_id,
                         "Received your file. File processing is not yet supported.",
-                        finish=True,
                     )
                 except Exception as e:
                     logger.error(f"[WeCom Stream] Error handling file: {e}")
@@ -278,7 +309,7 @@ class WeComStreamManager:
                         "msgtype": "text",
                         "text": {"content": welcome},
                     }
-                    await stream_client.reply_welcome(frame, welcome_message)
+                    await _reply_welcome(stream_client, frame, welcome_message)
                     logger.info(f"[WeCom Stream] Sent welcome message for agent {agent_id}")
                 except Exception as e:
                     logger.error(f"[WeCom Stream] Error sending welcome: {e}")
@@ -317,7 +348,7 @@ class WeComStreamManager:
             logger.info(f"[WeCom Stream] Client task cancelled for agent {agent_id}")
             if client is not None:
                 try:
-                    await client.disconnect()
+                    await _disconnect_client(client)
                 except Exception as disconnect_error:
                     logger.warning(
                         f"[WeCom Stream] Disconnect during cancellation failed for {agent_id}: {disconnect_error}"
@@ -325,24 +356,24 @@ class WeComStreamManager:
             raise
         finally:
             if self._tasks.get(agent_id) is task:
-                self._tasks.pop(agent_id, None)
-                self._connected.pop(agent_id, None)
+                _ = self._tasks.pop(agent_id, None)
+                _ = self._connected.pop(agent_id, None)
             if self._clients.get(agent_id) is client:
-                self._clients.pop(agent_id, None)
+                _ = self._clients.pop(agent_id, None)
 
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stop a running WebSocket client for an agent."""
         task = self._tasks.pop(agent_id, None)
         client = self._clients.pop(agent_id, None)
-        self._connected.pop(agent_id, None)
+        _ = self._connected.pop(agent_id, None)
         if task and not task.done():
-            task.cancel()
+            _ = task.cancel()
             logger.info(f"[WeCom Stream] Stopped client for agent {agent_id}")
             with suppress(asyncio.CancelledError):
                 await task
         elif client:
             try:
-                await client.disconnect()
+                await _disconnect_client(client)
             except Exception as disconnect_error:
                 logger.warning(f"[WeCom Stream] Disconnect failed for {agent_id}: {disconnect_error}")
 
@@ -355,11 +386,11 @@ class WeComStreamManager:
 
         started = 0
         for config in configs:
-            extra = config.extra_config or {}
+            extra = _json_object(config.extra_config)
             bot_id = extra.get("bot_id", "")
             bot_secret = extra.get("bot_secret", "")
             if isinstance(bot_id, str) and isinstance(bot_secret, str) and bot_id and bot_secret:
-                await self.start_client(
+                _ = await self.start_client(
                     config.agent_id,
                     bot_id,
                     bot_secret,
@@ -433,14 +464,14 @@ async def _process_wecom_stream_message(
     )
     history = _conv(history_msgs)
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="user",
         content=user_text,
         conversation_id=session_conv_id,
     )
-    await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
@@ -456,7 +487,7 @@ async def _process_wecom_stream_message(
     )
     logger.info(f"[WeCom Stream] LLM reply: {reply_text[:100]}")
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="assistant",
@@ -468,7 +499,7 @@ async def _process_wecom_stream_message(
 
         _sess_fresh = await chat_session_dao.get(_uuid_ws.UUID(session_conv_id))
         if _sess_fresh:
-            await chat_session_dao.update(db_obj=_sess_fresh, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=_sess_fresh, obj_in={"last_message_at": datetime.now(UTC)})
     except ValueError, TypeError:
         pass
 

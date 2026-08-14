@@ -13,6 +13,8 @@ Architecture: "Ephemeral screenshots" pattern
   create workspace files.
 """
 
+from __future__ import annotations
+
 import base64
 import re
 import time
@@ -20,9 +22,12 @@ import uuid as _uuid_mod
 from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 from app.core.logging import logger
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 # ─── Memory Image Cache ────────────────────────────────────────────────────────
 # Maps a short UUID key -> (raw_bytes, created_at_timestamp, grid_options).
@@ -85,7 +90,7 @@ def _prune_expired_cache() -> None:
             continue
         if now - ts > _CACHE_TTL_SECONDS:
             expired_keys.append(key)
-    for k in expired_keys:
+    for k in list[str](expired_keys):
         del _memory_image_cache[k]
     if expired_keys:
         logger.debug(f"[VisionInject] Pruned {len(expired_keys)} expired cache entries")
@@ -135,7 +140,7 @@ _JPEG_QUALITY = 80
 
 
 def _draw_coordinate_grid(
-    img,
+    img: Image.Image,
     *,
     origin_x: int = 0,
     origin_y: int = 0,

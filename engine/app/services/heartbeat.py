@@ -11,9 +11,9 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.core.logging import logger, new_trace_id
-from app.services.llm.base import ToolDefinition as LLMToolDefinition
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.storage import agent_storage_key, get_storage_backend
@@ -170,8 +170,8 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
       Phase 2: LLM tool loop (no DB connection held)
       Phase 3: Write token usage → commit
     """
-    new_trace_id()
-    await _HEARTBEAT_SEMAPHORE.acquire()
+    _ = new_trace_id()
+    _ = await _HEARTBEAT_SEMAPHORE.acquire()
     try:
         from app.dao.activity_log_dao import agent_activity_log_dao
         from app.dao.agent_dao import agent_dao
@@ -306,7 +306,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
             return
 
         tool_catalog = await get_agent_tools_for_llm(agent_id)
-        tools_for_llm: list[LLMToolDefinition] = [dict(tool) for tool in tool_catalog]
+        tools_for_llm: list[Any] = list(tool_catalog)
 
         reply = ""
         plaza_posts_made = 0  # hard limit: 1 new post per heartbeat
@@ -421,14 +421,14 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     raw_args = function.get("arguments", "{}")
                     logger.info(
                         f"[Heartbeat] Raw arguments for {tool_name} (len={len(raw_args) if raw_args else 0}): "
-                        f"{_tool_argument_preview(raw_args, 300) if raw_args else 'None'}"
+                        + f"{_tool_argument_preview(raw_args, 300) if raw_args else 'None'}"
                     )
                     try:
                         args = parse_tool_arguments(raw_args)
                     except json.JSONDecodeError as je:
                         logger.warning(
                             f"[Heartbeat] JSON parse failed for {tool_name}: {je}. "
-                            f"Raw: {_tool_argument_preview(raw_args, 200)!r}"
+                            + f"Raw: {_tool_argument_preview(raw_args, 200)!r}"
                         )
                         args = {}
 
@@ -511,7 +511,7 @@ async def _heartbeat_tick():
     from app.services.audit_logger import write_audit_log
     from app.services.timezone_utils import get_agent_timezone_sync
 
-    new_trace_id()
+    _ = new_trace_id()
     now = datetime.now(UTC)
 
     try:
@@ -530,10 +530,11 @@ async def _heartbeat_tick():
             if agent.is_expired:
                 continue
             if agent.expires_at and now >= agent.expires_at:
-                await agent_dao.mark_expired_stopped(agent)
+                _ = await agent_dao.mark_expired_stopped(agent)
                 continue
 
-            tenant = tenants_by_id.get(agent.tenant_id)
+            tenant_id = agent.tenant_id
+            tenant = tenants_by_id.get(tenant_id) if tenant_id is not None else None
             tz_name = get_agent_timezone_sync(agent, tenant)
 
             if not _is_in_active_hours(agent.heartbeat_active_hours or "09:00-18:00", tz_name):
@@ -588,7 +589,7 @@ async def _notify_oneshot_error(
     try:
         from app.dao.notification_dao import notification_dao
 
-        await notification_dao.create(
+        _ = await notification_dao.create(
             obj_in={
                 "user_id": triggered_by_user_id,
                 "type": "system",
@@ -622,7 +623,7 @@ async def run_agent_oneshot(
 
     Returns the final reply string (for logging purposes).
     """
-    new_trace_id()
+    _ = new_trace_id()
     try:
         from app.dao.agent_dao import agent_dao
         from app.dao.llm_dao import llm_model_dao
@@ -704,7 +705,7 @@ async def run_agent_oneshot(
             return ""
 
         tool_catalog = await get_agent_tools_for_llm(agent_id)
-        tools_for_llm: list[LLMToolDefinition] = [dict(tool) for tool in tool_catalog]
+        tools_for_llm: list[Any] = list(tool_catalog)
         llm_messages = [
             LLMMessage(role="system", content=static_prompt, dynamic_content=dynamic_prompt),
             LLMMessage(role="user", content=prompt),

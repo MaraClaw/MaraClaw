@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -23,15 +25,15 @@ class PublishedPageRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> PublishedPageRecord:
+    def from_row(cls, row: Mapping[str, object]) -> PublishedPageRecord:
         return cls(
-            id=row["id"],
-            short_id=row["short_id"],
-            agent_id=row["agent_id"],
-            user_id=row["user_id"],
-            source_path=row["source_path"],
-            title=row.get("title") or "",
-            view_count=int(row.get("view_count") or 0),
-            tenant_id=row.get("tenant_id"),
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            short_id=str_from_row(row["short_id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            user_id=uuid_from_row(row["user_id"]),
+            source_path=str_from_row(row["source_path"]),
+            title=str_from_row(row.get("title")),
+            view_count=int_from_row(row.get("view_count")),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            created_at=datetime_from_row(row.get("created_at")),
         )

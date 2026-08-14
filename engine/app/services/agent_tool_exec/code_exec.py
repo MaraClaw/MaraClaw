@@ -5,10 +5,12 @@ import os
 import uuid
 from pathlib import Path
 
+from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
+from app.services.sandbox.config import SandboxConfigOverrides
 
-from .registry import ToolArguments
+from .registry import ToolArguments, ToolOutputCallback
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str) -> str:
@@ -25,6 +27,47 @@ def _prepare_work_dir(ws: Path) -> Path:
     work_dir = ws.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     return work_dir
+
+
+def _sandbox_overrides(config: JsonObject) -> SandboxConfigOverrides:
+    overrides: SandboxConfigOverrides = {}
+    sandbox_type = json_as_str(config.get("sandbox_type"))
+    if sandbox_type is not None:
+        overrides["sandbox_type"] = sandbox_type
+    api_key = json_as_str(config.get("api_key"))
+    if api_key is not None:
+        overrides["api_key"] = api_key
+    api_url = json_as_str(config.get("api_url"))
+    if api_url is not None:
+        overrides["api_url"] = api_url
+    cpu_limit = json_as_str(config.get("cpu_limit"))
+    if cpu_limit is not None:
+        overrides["cpu_limit"] = cpu_limit
+    memory_limit = json_as_str(config.get("memory_limit"))
+    if memory_limit is not None:
+        overrides["memory_limit"] = memory_limit
+    allow_network = config.get("allow_network")
+    if isinstance(allow_network, bool):
+        overrides["allow_network"] = allow_network
+    allow_unsafe = config.get("allow_unsafe_fallback_when_bwrap_missing")
+    if isinstance(allow_unsafe, bool):
+        overrides["allow_unsafe_fallback_when_bwrap_missing"] = allow_unsafe
+    default_timeout = config.get("default_timeout")
+    if isinstance(default_timeout, int) and not isinstance(default_timeout, bool):
+        overrides["default_timeout"] = default_timeout
+    max_timeout = config.get("max_timeout")
+    if isinstance(max_timeout, int) and not isinstance(max_timeout, bool):
+        overrides["max_timeout"] = max_timeout
+    http_proxy = json_as_str(config.get("http_proxy"))
+    if http_proxy is not None:
+        overrides["http_proxy"] = http_proxy
+    https_proxy = json_as_str(config.get("https_proxy"))
+    if https_proxy is not None:
+        overrides["https_proxy"] = https_proxy
+    no_proxy = json_as_str(config.get("no_proxy"))
+    if no_proxy is not None:
+        overrides["no_proxy"] = no_proxy
+    return overrides
 
 
 # Dangerous patterns to block (for legacy fallback)
@@ -82,7 +125,7 @@ async def _execute_code(
     arguments: ToolArguments,
     *,
     tool_name: str = "execute_code",
-    on_output=None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Execute code using the configured sandbox backend.
 
@@ -126,7 +169,7 @@ async def _execute_code(
         tool_config = await agent_tools._get_tool_config(agent_id, tool_name)
 
         if tool_config:
-            sandbox_config = SandboxConfig.from_dict(tool_config, fallback_config)
+            sandbox_config = SandboxConfig.from_dict(_sandbox_overrides(tool_config), fallback_config)
         else:
             sandbox_config = fallback_config
             logger.info(f"[Sandbox] No per-agent config found for '{tool_name}', using fallback")
@@ -141,7 +184,7 @@ async def _execute_code(
         result = await backend.execute(
             code=code,
             language=language,
-            timeout=timeout,
+            exec_timeout=timeout,
             work_dir=str(work_dir),
             on_output=on_output,
             agent_id=agent_id,
@@ -184,7 +227,11 @@ async def _execute_code(
 
 
 async def _execute_code_legacy(
-    ws: Path, arguments: ToolArguments, allow_network: bool = False, max_timeout: int = 60, on_output=None
+    ws: Path,
+    arguments: ToolArguments,
+    allow_network: bool = False,
+    max_timeout: int = 60,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Legacy subprocess-based code execution (fallback)."""
     import asyncio
@@ -223,7 +270,7 @@ async def _execute_code_legacy(
     # Write code to a temp file inside workspace
     script_path = work_dir / f"_exec_tmp{ext}"
     try:
-        script_path.write_text(code, encoding="utf-8")
+        _ = script_path.write_text(code, encoding="utf-8")
 
         # Inherit parent environment but override HOME to workspace
         safe_env = dict(os.environ)
@@ -242,14 +289,16 @@ async def _execute_code_legacy(
         stdout_data = bytearray()
         stderr_data = bytearray()
 
-        async def read_stream(stream, out, label="stdout"):
+        async def read_stream(stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout") -> None:
+            if stream is None:
+                return
             capture_limit = (
                 agent_tools.MAX_EXEC_STDERR_CAPTURE_BYTES
                 if label == "stderr"
                 else agent_tools.MAX_EXEC_STDOUT_CAPTURE_BYTES
             )
             while True:
-                chunk = await stream.read(4096)
+                chunk: bytes = await stream.read(4096)
                 if not chunk:
                     break
                 remaining = capture_limit - len(out)
@@ -259,19 +308,21 @@ async def _execute_code_legacy(
                 if on_output:
                     with contextlib.suppress(Exception):
                         text = chunk.decode("utf-8", errors="replace")
-                        await on_output(text, label)
+                        maybe_awaitable = on_output(text, label)
+                        if maybe_awaitable is not None:
+                            await maybe_awaitable
 
         task1 = asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout"))
         task2 = asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr"))
 
         is_timeout = False
         try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
+            _ = await asyncio.wait_for(proc.wait(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             is_timeout = True
 
-        await asyncio.gather(task1, task2)
+        _ = await asyncio.gather(task1, task2)
         stdout = bytes(stdout_data)
         stderr = bytes(stderr_data)
 

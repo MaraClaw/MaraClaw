@@ -1,12 +1,16 @@
 """Async, local-only Chrome DevTools helpers for document conversion."""
 
 import asyncio
+import socket
 import sys
 import tempfile
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
+
+from app.core.json_types import json_as_str, json_object_from_response
 
 
 def trusted_executable(candidate: str | Path | None) -> Path | None:
@@ -17,6 +21,22 @@ def trusted_executable(candidate: str | Path | None) -> Path | None:
     if not path.is_absolute() or not path.is_file() or not path.stat().st_mode & 0o111:
         return None
     return path
+
+
+class _InetSocket(Protocol):
+    def getsockname(self) -> tuple[str, int]: ...
+
+
+def _port_from_inet(sock: _InetSocket) -> int:
+    _host, port = sock.getsockname()
+    return port
+
+
+def local_ephemeral_port() -> int:
+    """Bind an unused localhost TCP port and return its number."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return _port_from_inet(sock)
 
 
 def chrome_arguments(executable: Path, port: int, profile_path: str) -> list[str]:
@@ -60,7 +80,7 @@ async def wait_for_cdp(port: int, deadline_seconds: float = 8) -> bool:
         while asyncio.get_running_loop().time() < deadline:
             try:
                 response = await client.get(endpoint)
-                response.raise_for_status()
+                _ = response.raise_for_status()
                 response.json()
                 return True
             except httpx.HTTPError:
@@ -76,9 +96,8 @@ async def create_cdp_target(port: int, file_url: str) -> str | None:
     endpoint = f"http://127.0.0.1:{port}/json/new?{file_url}"
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
         response = await client.put(endpoint)
-        response.raise_for_status()
-    value = response.json().get("webSocketDebuggerUrl")
-    return value if isinstance(value, str) else None
+        _ = response.raise_for_status()
+    return json_as_str(json_object_from_response(response).get("webSocketDebuggerUrl"))
 
 
 async def terminate_process(process: asyncio.subprocess.Process) -> None:
@@ -87,15 +106,15 @@ async def terminate_process(process: asyncio.subprocess.Process) -> None:
         return
     process.terminate()
     try:
-        await asyncio.wait_for(process.wait(), timeout=2)
+        _ = await asyncio.wait_for(process.wait(), timeout=2)
     except TimeoutError:
         process.kill()
-        await process.wait()
+        _ = await process.wait()
 
 
 async def cleanup_temporary_paths(paths: list[Path]) -> None:
     """Remove conversion artifacts after their consumer has finished."""
-    await asyncio.gather(*(asyncio.to_thread(path.unlink, missing_ok=True) for path in paths))
+    _ = await asyncio.gather(*(asyncio.to_thread(path.unlink, missing_ok=True) for path in paths))
 
 
 async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
@@ -103,7 +122,7 @@ async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
 
     def write() -> Path:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temporary_file:
-            temporary_file.write(data)
+            _ = temporary_file.write(data)
             return Path(temporary_file.name)
 
     return await asyncio.to_thread(write)

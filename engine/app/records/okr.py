@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import (
+    date_from_row,
+    datetime_from_row,
+    float_from_row,
+    int_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -25,19 +35,21 @@ class OKRSettingsRecord:
     okr_agent_id: UUID | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> OKRSettingsRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OKRSettingsRecord:
         return cls(
-            tenant_id=row["tenant_id"],
+            tenant_id=uuid_from_row(row["tenant_id"]),
             enabled=bool(row.get("enabled", False)),
-            first_enabled_at=row.get("first_enabled_at"),
+            first_enabled_at=datetime_from_row(row.get("first_enabled_at")),
             daily_report_enabled=bool(row.get("daily_report_enabled", False)),
-            daily_report_time=row.get("daily_report_time") or "18:00",
+            daily_report_time=str_from_row(row.get("daily_report_time"), "18:00") or "18:00",
             daily_report_skip_non_workdays=bool(row.get("daily_report_skip_non_workdays", True)),
             weekly_report_enabled=bool(row.get("weekly_report_enabled", False)),
-            weekly_report_day=int(row["weekly_report_day"] if row.get("weekly_report_day") is not None else 4),
-            period_frequency=row.get("period_frequency") or "quarterly",
-            period_length_days=row.get("period_length_days"),
-            okr_agent_id=row.get("okr_agent_id"),
+            weekly_report_day=int_from_row(row.get("weekly_report_day"), 4),
+            period_frequency=str_from_row(row.get("period_frequency"), "quarterly") or "quarterly",
+            period_length_days=(
+                None if row.get("period_length_days") is None else int_from_row(row.get("period_length_days"))
+            ),
+            okr_agent_id=uuid_from_row_opt(row.get("okr_agent_id")),
         )
 
 
@@ -58,19 +70,19 @@ class OKRObjectiveRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> OKRObjectiveRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OKRObjectiveRecord:
         return cls(
-            id=row["id"],
-            tenant_id=row["tenant_id"],
-            title=row["title"],
-            description=row.get("description"),
-            owner_type=row["owner_type"],
-            owner_id=row.get("owner_id"),
-            period_start=row["period_start"],
-            period_end=row["period_end"],
-            status=row.get("status") or "active",
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            id=uuid_from_row(row["id"]),
+            tenant_id=uuid_from_row(row["tenant_id"]),
+            title=str_from_row(row["title"]),
+            description=str_from_row(row["description"]) or None,
+            owner_type=str_from_row(row["owner_type"]),
+            owner_id=uuid_from_row_opt(row.get("owner_id")),
+            period_start=date_from_row(row["period_start"]),
+            period_end=date_from_row(row["period_end"]),
+            status=str_from_row(row.get("status"), "active") or "active",
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )
 
 
@@ -90,18 +102,18 @@ class OKRKeyResultRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> OKRKeyResultRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OKRKeyResultRecord:
         return cls(
-            id=row["id"],
-            objective_id=row["objective_id"],
-            title=row["title"],
-            target_value=float(row["target_value"] if row.get("target_value") is not None else 100.0),
-            current_value=float(row["current_value"] if row.get("current_value") is not None else 0.0),
-            unit=row.get("unit"),
-            focus_ref=row.get("focus_ref"),
-            status=row.get("status") or "on_track",
-            last_updated_at=row.get("last_updated_at"),
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            objective_id=uuid_from_row(row["objective_id"]),
+            title=str_from_row(row["title"]),
+            target_value=float_from_row(row.get("target_value"), 100.0),
+            current_value=float_from_row(row.get("current_value"), 0.0),
+            unit=str_from_row(row["unit"]) or None,
+            focus_ref=str_from_row(row["focus_ref"]) or None,
+            status=str_from_row(row.get("status"), "on_track") or "on_track",
+            last_updated_at=datetime_from_row(row.get("last_updated_at")),
+            created_at=datetime_from_row(row.get("created_at")),
         )
 
 
@@ -118,15 +130,15 @@ class OKRProgressLogRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> OKRProgressLogRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OKRProgressLogRecord:
         return cls(
-            id=row["id"],
-            kr_id=row["kr_id"],
-            previous_value=float(row["previous_value"]),
-            new_value=float(row["new_value"]),
-            source=row["source"],
-            note=row.get("note"),
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            kr_id=uuid_from_row(row["kr_id"]),
+            previous_value=float_from_row(row.get("previous_value")),
+            new_value=float_from_row(row.get("new_value")),
+            source=str_from_row(row["source"]),
+            note=str_from_row(row["note"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
         )
 
 
@@ -145,17 +157,17 @@ class WorkReportRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> WorkReportRecord:
+    def from_row(cls, row: Mapping[str, object]) -> WorkReportRecord:
         return cls(
-            id=row["id"],
-            tenant_id=row["tenant_id"],
-            author_type=row["author_type"],
-            author_id=row["author_id"],
-            report_type=row["report_type"],
-            period_date=row["period_date"],
-            content=row.get("content") or "",
-            source=row.get("source") or "okr_agent_collected",
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            tenant_id=uuid_from_row(row["tenant_id"]),
+            author_type=str_from_row(row["author_type"]),
+            author_id=uuid_from_row(row["author_id"]),
+            report_type=str_from_row(row["report_type"]),
+            period_date=date_from_row(row["period_date"]),
+            content=str_from_row(row.get("content")),
+            source=str_from_row(row.get("source"), "okr_agent_collected") or "okr_agent_collected",
+            created_at=datetime_from_row(row.get("created_at")),
         )
 
 
@@ -175,18 +187,18 @@ class MemberDailyReportRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> MemberDailyReportRecord:
+    def from_row(cls, row: Mapping[str, object]) -> MemberDailyReportRecord:
         return cls(
-            id=row["id"],
-            tenant_id=row["tenant_id"],
-            member_type=row["member_type"],
-            member_id=row["member_id"],
-            report_date=row["report_date"],
-            content=row.get("content") or "",
-            status=row.get("status") or "submitted",
-            source=row.get("source") or "okr_agent_assisted",
-            submitted_at=row.get("submitted_at"),
-            updated_at=row.get("updated_at"),
+            id=uuid_from_row(row["id"]),
+            tenant_id=uuid_from_row(row["tenant_id"]),
+            member_type=str_from_row(row["member_type"]),
+            member_id=uuid_from_row(row["member_id"]),
+            report_date=date_from_row(row["report_date"]),
+            content=str_from_row(row.get("content")),
+            status=str_from_row(row.get("status"), "submitted") or "submitted",
+            source=str_from_row(row.get("source"), "okr_agent_assisted") or "okr_agent_assisted",
+            submitted_at=datetime_from_row(row.get("submitted_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )
 
 
@@ -208,18 +220,18 @@ class CompanyReportRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> CompanyReportRecord:
+    def from_row(cls, row: Mapping[str, object]) -> CompanyReportRecord:
         return cls(
-            id=row["id"],
-            tenant_id=row["tenant_id"],
-            report_type=row["report_type"],
-            period_start=row["period_start"],
-            period_end=row["period_end"],
-            period_label=row.get("period_label") or "",
-            content=row.get("content") or "",
-            submitted_count=int(row["submitted_count"] if row.get("submitted_count") is not None else 0),
-            missing_count=int(row["missing_count"] if row.get("missing_count") is not None else 0),
+            id=uuid_from_row(row["id"]),
+            tenant_id=uuid_from_row(row["tenant_id"]),
+            report_type=str_from_row(row["report_type"]),
+            period_start=date_from_row(row["period_start"]),
+            period_end=date_from_row(row["period_end"]),
+            period_label=str_from_row(row.get("period_label")),
+            content=str_from_row(row.get("content")),
+            submitted_count=int_from_row(row.get("submitted_count")),
+            missing_count=int_from_row(row.get("missing_count")),
             needs_refresh=bool(row.get("needs_refresh", False)),
-            generated_at=row.get("generated_at"),
-            updated_at=row.get("updated_at"),
+            generated_at=datetime_from_row(row.get("generated_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -25,9 +25,10 @@ _COLUMNS = (
 )
 
 
+@final
 class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
-    table = "admin_audit_logs"
-    columns = _COLUMNS
+    table: ClassVar[str] = "admin_audit_logs"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(AdminAuditLogRecord.from_row)
 
     async def list_recent(
@@ -53,7 +54,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM admin_audit_logs {where} "
-                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 params,
             )
             return [AdminAuditLogRecord.from_row(row) for row in rows]

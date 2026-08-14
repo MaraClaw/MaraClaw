@@ -124,7 +124,7 @@ async def consume_invitation_code(code: str | None) -> None:
     inv = await invitation_code_dao.get_active_by_code(code)
     if inv is None:
         return
-    await invitation_code_dao.update(db_obj=inv, obj_in={"used_count": inv.used_count + 1})
+    _ = await invitation_code_dao.update(db_obj=inv, obj_in={"used_count": inv.used_count + 1})
 
 
 async def resolve_registration_org(
@@ -137,6 +137,8 @@ async def resolve_registration_org(
 
     if invitation_code:
         inv = await require_active_invitation(invitation_code)
+        if inv.tenant_id is None:
+            raise InvitationError("Invitation code tenant is inactive")
         invited = await tenant_dao.get(inv.tenant_id)
         if invited is None or not invited.is_active:
             raise InvitationError("Invitation code tenant is inactive")
@@ -271,8 +273,8 @@ async def delete_email_domain(tenant_id: UUID, domain_id: UUID, *, successor_id:
                 raise KeyError("successor email domain not found")
         else:
             successor = remaining[0]
-        await tenant_email_domain_dao.update(db_obj=successor, obj_in={"is_default": True})
-    await tenant_email_domain_dao.delete(id=domain_id)
+        _ = await tenant_email_domain_dao.update(db_obj=successor, obj_in={"is_default": True})
+    _ = await tenant_email_domain_dao.delete(id=domain_id)
 
 
 def assert_may_deactivate_tenant(tenant: TenantRecord, *, making_active: bool) -> None:

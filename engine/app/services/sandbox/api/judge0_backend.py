@@ -6,8 +6,9 @@ from typing import override
 import anyio
 import httpx
 
+from app.core.json_types import json_as_int, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 # Judge0 language IDs
@@ -37,8 +38,8 @@ class Judge0Backend(BaseSandboxBackend):
         return "judge0"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self.api_url = config.api_url or _DEFAULT_JUDGE0_URL
+        self.config: SandboxConfig = config
+        self.api_url: object = config.api_url or _DEFAULT_JUDGE0_URL
 
         if not config.api_key:
             # Judge0 has a free tier that doesn't require API key
@@ -70,11 +71,12 @@ class Judge0Backend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using Judge0 API."""
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Get language ID
@@ -113,8 +115,8 @@ class Judge0Backend(BaseSandboxBackend):
                         error=f"Failed to submit code: {submit_response.status_code}",
                     )
 
-                submission = submit_response.json()
-                token = submission.get("token")
+                submission = json_object_from_response(submit_response)
+                token = json_as_str(submission.get("token"))
 
                 if not token:
                     return ExecutionResult(
@@ -129,7 +131,7 @@ class Judge0Backend(BaseSandboxBackend):
                 # Step 2: Poll for result
                 max_retries = timeout * 2  # Poll every 0.5 seconds
                 for _ in range(max_retries):
-                    await client.get(f"{self.api_url}/submissions/{token}")
+                    _ = await client.get(f"{self.api_url}/submissions/{token}")
 
                     result_response = await client.get(
                         f"{self.api_url}/submissions/{token}",
@@ -138,32 +140,40 @@ class Judge0Backend(BaseSandboxBackend):
                     )
 
                     if result_response.status_code == 200:
-                        result = result_response.json()
+                        result = json_object_from_response(result_response)
 
-                        status = result.get("status", {})
+                        status = json_object_from(result.get("status"))
+                        status_id_raw: object = status.get("id")
+                        if not isinstance(status_id_raw, int) or isinstance(status_id_raw, bool):
+                            await anyio.sleep(0.5)
+                            continue
 
                         # Check if still processing
-                        if status.get("id") <= 2:  # In Queue or Processing
+                        if status_id_raw <= 2:  # In Queue or Processing
                             await anyio.sleep(0.5)
                             continue
 
                         # Completed
                         duration_ms = int((time.time() - start_time) * 1000)
-                        stdout = result.get("stdout", "") or ""
-                        stderr = result.get("stderr", "") or ""
-                        exit_code = result.get("exit_code", 1)
+                        stdout = json_as_str_or(result.get("stdout"))
+                        stderr = json_as_str_or(result.get("stderr"))
+                        exit_code = json_as_int(result.get("exit_code"), 1)
 
                         # Truncate output
                         stdout = stdout[:10000]
                         stderr = stderr[:5000]
 
                         return ExecutionResult(
-                            success=status.get("id") == 3,  # Accepted
+                            success=status_id_raw == 3,  # Accepted
                             stdout=stdout,
                             stderr=stderr,
                             exit_code=exit_code,
                             duration_ms=duration_ms,
-                            error=None if status.get("id") == 3 else status.get("description", "Execution failed"),
+                            error=(
+                                None
+                                if status_id_raw == 3
+                                else json_as_str_or(status.get("description"), "Execution failed")
+                            ),
                         )
 
                     await anyio.sleep(0.5)

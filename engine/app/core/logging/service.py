@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from typing import TextIO
+from typing import Any, ClassVar, TextIO
 
 from app.core.logging.agentbay import disable_agentbay_logger_override
 from app.core.logging.context import get_trace_id
@@ -103,7 +103,7 @@ def _build_formatter(fmt: str, *, color: bool) -> Formatter:
 class LoggingService:
     """Singleton-style process logger with a bounded async write queue."""
 
-    __slots__ = (
+    __slots__: ClassVar[tuple[str, ...]] = (
         "_color",
         "_dropped",
         "_enqueue",
@@ -127,17 +127,17 @@ class LoggingService:
         color: bool = False,
         sink: Sink | None = None,
     ) -> None:
-        self._min_level = coerce_level(level)
-        self._formatter = _build_formatter(fmt, color=color)
-        self._enqueue = enqueue
-        self._queue_size = max(1, queue_size)
-        self._color = color
-        self._sink = sink or sys.stdout.write
+        self._min_level: int = coerce_level(level)
+        self._formatter: Formatter = _build_formatter(fmt, color=color)
+        self._enqueue: bool = enqueue
+        self._queue_size: int = max(1, queue_size)
+        self._color: bool = color
+        self._sink: Sink | Any = sink or sys.stdout.write
         self._queue: queue.Queue[object] = queue.Queue(maxsize=self._queue_size)
         self._thread: threading.Thread | None = None
-        self._started = False
-        self._dropped = 0
-        self._write_lock = threading.Lock()
+        self._started: bool = False
+        self._dropped: int = 0
+        self._write_lock: threading.Lock = threading.Lock()
 
     @classmethod
     def from_env(cls) -> LoggingService:
@@ -327,7 +327,7 @@ class LoggingService:
         try:
             line = self._formatter.format(record)
             with self._write_lock:
-                self._sink(line)
+                _ = self._sink(line)
         except Exception as exc:
             _write_fallback(f"logging sink failed: {type(exc).__name__}: {exc}")
 
@@ -342,7 +342,7 @@ def _coerce_exc(exc_info: bool | BaseException | None) -> BaseException | None:
 
 def _write_fallback(message: str) -> None:
     try:
-        sys.stderr.write(message + "\n")
+        _ = sys.stderr.write(message + "\n")
     except Exception:
         return
 
@@ -361,7 +361,7 @@ def get_logging_service() -> LoggingService:
             _service = LoggingService.from_env()
             _service.start()
             disable_agentbay_logger_override()
-            atexit.register(_atexit_shutdown)
+            _ = atexit.register(_atexit_shutdown)
     return _service
 
 

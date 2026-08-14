@@ -2,8 +2,10 @@
 
 import shutil
 import subprocess
+from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 from aiofiles.ospath import isfile as async_isfile
@@ -12,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.core.events import close_redis
+from app.core.json_types import is_any_list, json_loads_value, object_list_from_row
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
 from app.core.middleware import TraceIdMiddleware
 from app.db.session import bind_crud_connection
@@ -54,7 +57,7 @@ def _log_bwrap_startup_status() -> None:
             setuid = bool(st.st_mode & 0o4000)
             logger.info(
                 f"[startup] bubblewrap detected at {bwrap_path} ({location}); "
-                f"mode={mode} setuid={setuid} owner_uid={st.st_uid}"
+                + f"mode={mode} setuid={setuid} owner_uid={st.st_uid}"
             )
         except OSError as exc:
             logger.warning(f"[startup] bubblewrap found at {bwrap_path} but stat failed: {exc}")
@@ -94,8 +97,8 @@ def _log_bwrap_startup_status() -> None:
                 stderr = (probe.stderr or b"").decode("utf-8", errors="replace")[:300]
                 logger.warning(
                     f"[startup] bubblewrap namespace probe failed (exit {probe.returncode}): {stderr}. "
-                    "execute_code may fail; check host userns (user.max_user_namespaces) or setuid bit "
-                    "and avoid no-new-privileges if relying on setuid bwrap."
+                    + "execute_code may fail; check host userns (user.max_user_namespaces) or setuid bit "
+                    + "and avoid no-new-privileges if relying on setuid bwrap."
                 )
         except (OSError, subprocess.TimeoutExpired) as exc:
             logger.warning(f"[startup] bubblewrap namespace probe could not run: {exc}")
@@ -104,20 +107,20 @@ def _log_bwrap_startup_status() -> None:
     if in_container:
         logger.warning(
             "[startup] bubblewrap (bwrap) is not installed in the backend container. "
-            "The service will still start, but execute_code will fail closed unless "
-            "SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING=true is explicitly set."
+            + "The service will still start, but execute_code will fail closed unless "
+            + "SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING=true is explicitly set."
         )
         return
 
     if settings.SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING:
         logger.warning(
             "[startup] bubblewrap (bwrap) is not installed on the host. "
-            "Local execute_code will use the reduced-isolation fallback."
+            + "Local execute_code will use the reduced-isolation fallback."
         )
     else:
         logger.warning(
             "[startup] bubblewrap (bwrap) is not installed on the host. "
-            "execute_code will fail closed unless SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING=true is set."
+            + "execute_code will fail closed unless SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING=true is set."
         )
 
 
@@ -134,6 +137,7 @@ async def _start_ss_local() -> None:
         return
     # Load proxy nodes from config file (gitignored, mounted as Docker volume)
     cfg_file = os.environ.get("SS_CONFIG_FILE", "/data/ss-nodes.json")
+    nodes: list[dict[str, Any]] = []
     if await async_isfile(cfg_file):
         # Guard against empty or malformed config file - both produce a clear
         # warning and a clean exit rather than an unhandled JSONDecodeError.
@@ -143,10 +147,14 @@ async def _start_ss_local() -> None:
             if not raw:
                 logger.warning(f"[Proxy] {cfg_file} exists but is empty - skipping proxy")
                 return
-            nodes = json.loads(raw)
+            parsed = json_loads_value(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(f"[Proxy] Failed to parse {cfg_file}: {exc} - skipping proxy")
             return
+        if not is_any_list(parsed):
+            logger.warning(f"[Proxy] {cfg_file} is not a node list - skipping proxy")
+            return
+        nodes = object_list_from_row(parsed)
         logger.info(f"[Proxy] Loaded {len(nodes)} node(s) from {cfg_file}")
     elif os.environ.get("SS_SERVER") and os.environ.get("SS_PASSWORD"):
         nodes = [
@@ -162,7 +170,7 @@ async def _start_ss_local() -> None:
         logger.info(f"[Proxy] {cfg_file} not found and SS_SERVER not set - skipping proxy")
         return
     for node in nodes:
-        cfg = {
+        cfg: dict[str, Any] = {
             "server": node["server"],
             "server_port": node["port"],
             "local_address": "127.0.0.1",
@@ -197,7 +205,7 @@ async def _start_ss_local() -> None:
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     # Configure logging first
-    configure_logging(
+    _ = configure_logging(
         level=settings.LOG_LEVEL,
         fmt=settings.LOG_FORMAT,
         queue_size=settings.LOG_QUEUE_SIZE,
@@ -211,7 +219,7 @@ async def lifespan(app: FastAPI):
     if "change-me" in settings.SECRET_KEY.lower() or "change-me" in settings.JWT_SECRET_KEY.lower():
         logger.warning(
             "[startup] WARNING: SECRET_KEY or JWT_SECRET_KEY contains default 'change-me' value. "
-            "This is insecure for production. Set unique secrets in your .env file."
+            + "This is insecure for production. Set unique secrets in your .env file."
         )
 
     import asyncio
@@ -241,7 +249,7 @@ async def lifespan(app: FastAPI):
     if _role_enabled("all", "bootstrap", "api", "worker", "connector"):
         from app.db.pool import init_pool
 
-        await init_pool()
+        _ = await init_pool()
         logger.info("[startup] psycopg pool ready")
 
     if _role_enabled("all", "bootstrap"):
@@ -249,10 +257,10 @@ async def lifespan(app: FastAPI):
         #
         logger.info("[startup] seeding...")
 
-        try:
-            from app.services.system_org_seeder import SystemOrgSeedError, ensure_system_orgs
+        from app.services.system_org_seeder import SystemOrgSeedError, ensure_system_orgs
 
-            await ensure_system_orgs()
+        try:
+            _ = await ensure_system_orgs()
         except SystemOrgSeedError:
             logger.error("[startup] System organization seed failed: no default end-user org")
             raise
@@ -264,7 +272,7 @@ async def lifespan(app: FastAPI):
         from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
 
         try:
-            await ensure_platform_admin()
+            _ = await ensure_platform_admin()
         except PlatformAdminSeedError:
             logger.error("[startup] Platform admin seed failed: configuration or credential policy error")
             raise
@@ -286,7 +294,7 @@ async def lifespan(app: FastAPI):
                 if _tenant:
                     _new_dir = _data_dir / f"enterprise_info_{_tenant.id}"
                     if not _new_dir.exists():
-                        shutil.copytree(str(_old_dir), str(_new_dir))
+                        _ = shutil.copytree(str(_old_dir), str(_new_dir))
                         logger.info(f"[startup] Migrated enterprise_info to enterprise_info_{_tenant.id}")
                     else:
                         logger.info(f"[startup] enterprise_info_{_tenant.id} already exists; skipping migration")
@@ -325,7 +333,7 @@ async def lifespan(app: FastAPI):
 
             await seed_skills()
             await seed_gogcli_skill(None)
-            await seed_clawsec_skills(None)
+            _ = await seed_clawsec_skills(None)
             await push_default_skills_to_existing_agents()
         except Exception as e:
             logger.warning(f"[startup] Skills seed failed: {e}")
@@ -368,7 +376,7 @@ async def lifespan(app: FastAPI):
 
         await write_audit_log("server_startup", {"pid": os.getpid()})
 
-        task_specs = []
+        task_specs: list[tuple[str, Coroutine[Any, Any, Any]]] = []
         if _role_enabled("all", "worker"):
             task_specs.append(("trigger_daemon", start_trigger_daemon()))
         if _role_enabled("all", "connector"):
@@ -383,7 +391,7 @@ async def lifespan(app: FastAPI):
             )
 
         for name, coro in task_specs:
-            task = asyncio.create_task(coro, name=name)
+            task: asyncio.Task[Any] = asyncio.create_task(coro, name=name)
             task.add_done_callback(_bg_task_error)
             logger.info(f"[startup] created bg task: {name}")
         logger.info("[startup] all background tasks created!")

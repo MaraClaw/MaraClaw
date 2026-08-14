@@ -3,7 +3,16 @@ from __future__ import annotations
 import fnmatch
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+from app.services.storage_runtime.base import StorageBackend, StorageEntry
+
+type StorageBackendFactory = Callable[[], StorageBackend]
+type ToolStorageKeyFn = Callable[[uuid.UUID, str, str | None], tuple[str, str, bool]]
+type DisplaySizeFn = Callable[[int], str]
+type StorageWalkFn = Callable[[StorageBackend, str], Awaitable[list[StorageEntry]]]
+type RelativeDisplayFn = Callable[[str, str, str], str]
 
 
 def _display_size(size_bytes: int) -> str:
@@ -15,9 +24,9 @@ async def _storage_list_dir(
     rel_path: str,
     tenant_id: str | None = None,
     *,
-    get_storage_backend,
-    tool_storage_key,
-    display_size,
+    get_storage_backend: StorageBackendFactory,
+    tool_storage_key: ToolStorageKeyFn,
+    display_size: DisplaySizeFn,
 ) -> str:
     storage = get_storage_backend()
     storage_key, normalized, _is_enterprise = tool_storage_key(agent_id, rel_path, tenant_id)
@@ -66,8 +75,8 @@ async def _storage_read_file(
     offset: int = 0,
     limit: int = 2000,
     *,
-    get_storage_backend,
-    tool_storage_key,
+    get_storage_backend: StorageBackendFactory,
+    tool_storage_key: ToolStorageKeyFn,
 ) -> str:
     storage = get_storage_backend()
     storage_key, normalized, _ = tool_storage_key(agent_id, rel_path, tenant_id)
@@ -93,8 +102,8 @@ async def _storage_read_file(
         return f"Read failed: {error}"
 
 
-async def _storage_walk_files(storage, root_key: str) -> list[object]:
-    out = []
+async def _storage_walk_files(storage: StorageBackend, root_key: str) -> list[StorageEntry]:
+    out: list[StorageEntry] = []
     for entry in await storage.list_dir(root_key):
         if entry.name.startswith("."):
             continue
@@ -117,10 +126,10 @@ async def _storage_search_files(
     ignore_case: bool = False,
     tenant_id: str | None = None,
     *,
-    get_storage_backend,
-    tool_storage_key,
-    storage_walk_files,
-    relative_storage_display,
+    get_storage_backend: StorageBackendFactory,
+    tool_storage_key: ToolStorageKeyFn,
+    storage_walk_files: StorageWalkFn,
+    relative_storage_display: RelativeDisplayFn,
 ) -> str:
     storage = get_storage_backend()
     rel_path = "" if path in ("", ".") else path
@@ -190,11 +199,11 @@ async def _storage_find_files(
     path: str = ".",
     tenant_id: str | None = None,
     *,
-    get_storage_backend,
-    tool_storage_key,
-    storage_walk_files,
-    relative_storage_display,
-    display_size,
+    get_storage_backend: StorageBackendFactory,
+    tool_storage_key: ToolStorageKeyFn,
+    storage_walk_files: StorageWalkFn,
+    relative_storage_display: RelativeDisplayFn,
+    display_size: DisplaySizeFn,
 ) -> str:
     storage = get_storage_backend()
     rel_path = "" if path in ("", ".") else path
@@ -202,14 +211,14 @@ async def _storage_find_files(
     if not await storage.is_dir(base_key) and normalized:
         return f"Directory not found: {path}"
     entries = await storage_walk_files(storage, base_key) if await storage.is_dir(base_key) else []
-    matches = []
+    matches: list[tuple[StorageEntry, str]] = []
     for entry in entries:
         rel_display = relative_storage_display(entry.key, base_key, normalized)
         if fnmatch.fnmatch(rel_display, pattern) or fnmatch.fnmatch(Path(rel_display).name, pattern):
             matches.append((entry, rel_display))
     if not matches:
         return f"No files matching pattern: {pattern}"
-    results = []
+    results: list[str] = []
     dir_count = 0
     file_count = 0
     for entry, rel_display in matches[:100]:

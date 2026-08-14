@@ -2,16 +2,36 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from app.core.json_types import JsonObject, json_as_str, json_object_from
 from app.core.logging import logger
 
-from .agentbay_response import _agentbay_response_list, _agentbay_response_text
-from .registry import ToolArguments, ToolArgumentValue
+from .registry import ToolArguments
 
-type _App = dict[str, ToolArgumentValue]
+if TYPE_CHECKING:
+    from app.services.agentbay_client import AgentBayClient
+
+type _App = JsonObject
 
 
-def _agentbay_normalize_text(value) -> str:
+def _apps_from_response(value: object) -> list[_App]:
+    if not isinstance(value, list):
+        return []
+    apps: list[_App] = []
+    for item in list[object](value):
+        if isinstance(item, dict):
+            apps.append(json_object_from(item))
+        elif item:
+            apps.append({"name": str(item)})
+    return apps
+
+
+def _response_error(value: object, fallback: str = "Unknown error") -> str:
+    return json_as_str(value) or fallback
+
+
+def _agentbay_normalize_text(value: object) -> str:
     import re
 
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
@@ -25,38 +45,34 @@ def _agentbay_app_field(app: _App, *keys: str) -> str:
     return ""
 
 
-def _agentbay_format_apps(apps: list[ToolArgumentValue], limit: int = 40) -> str:
+def _agentbay_format_apps(apps: list[_App], limit: int = 40) -> str:
     import json
 
     if not apps:
         return "[]"
-    compact_apps = []
+    compact_apps: list[JsonObject | str] = []
     for app in apps[:limit]:
-        if isinstance(app, dict):
-            compact_apps.append(
-                {
-                    key: app.get(key)
-                    for key in (
-                        "name",
-                        "start_cmd",
-                        "startCmd",
-                        "work_directory",
-                        "workDirectory",
-                        "stop_cmd",
-                        "stopCmd",
-                    )
-                    if app.get(key)
-                }
-            )
-        else:
-            compact_apps.append(str(app))
+        compact: JsonObject = {}
+        for key in (
+            "name",
+            "start_cmd",
+            "startCmd",
+            "work_directory",
+            "workDirectory",
+            "stop_cmd",
+            "stopCmd",
+        ):
+            value = app.get(key)
+            if value:
+                compact[key] = value
+        compact_apps.append(compact)
     rendered = json.dumps(compact_apps, ensure_ascii=False, indent=2)
     if len(apps) > limit:
         rendered += f"\n... {len(apps) - limit} more app(s) omitted"
     return rendered[:5000]
 
 
-def _agentbay_find_installed_app_match(query: str, apps: list[ToolArgumentValue]) -> tuple[_App | None, float]:
+def _agentbay_find_installed_app_match(query: str, apps: list[_App]) -> tuple[_App | None, float]:
     from difflib import SequenceMatcher
 
     query_norm = _agentbay_normalize_text(query.split()[0] if query else query)
@@ -64,8 +80,6 @@ def _agentbay_find_installed_app_match(query: str, apps: list[ToolArgumentValue]
         return None, 0.0
     best_app, best_score = None, 0.0
     for app in apps:
-        if not isinstance(app, dict):
-            continue
         for field in (
             _agentbay_app_field(app, "name"),
             _agentbay_app_field(app, "start_cmd", "startCmd"),
@@ -90,15 +104,15 @@ def _agentbay_uncertain_start_error(error_message: str) -> bool:
     return "may have launched" in text or "no processes found" in text
 
 
-async def _agentbay_visible_apps_note(client) -> str:
+async def _agentbay_visible_apps_note(client: AgentBayClient) -> str:
     try:
         visible = await client.computer_list_visible_apps()
         if visible.get("success"):
-            apps = _agentbay_response_list(visible.get("apps", []))
+            apps = _apps_from_response(visible.get("apps", []))
             return (
                 f"Visible applications after the launch attempt ({len(apps)}):\n{_agentbay_format_apps(apps, limit=20)}"
             )
-        error_message = _agentbay_response_text(visible.get("error_message"), "Unknown error")
+        error_message = _response_error(visible.get("error_message"))
         return f"Could not verify visible applications: {error_message}"
     except Exception as e:
         logger.debug(f"[AgentBay] Could not list visible apps after start_app: {e}")
@@ -122,7 +136,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
         client = await get_agentbay_client_for_agent(agent_id, "computer", session_id=session_id)
         result = await client.computer_start_app(cmd, work_dir=work_dir)
         if result.get("success"):
-            data = result.get("data")
+            data: object = result.get("data")
             if data is not None:
                 try:
                     import json
@@ -137,11 +151,11 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
             else:
                 data_str = ""
             return f"Application started: {cmd}" + (f"\n\n{data_str[:1000]}" if data_str else "")
-        direct_error, installed_note = _agentbay_response_text(result.get("error_message"), "Unknown error"), ""
+        direct_error, installed_note = _response_error(result.get("error_message")), ""
         try:
             installed_result = await client.computer_get_installed_apps()
             if installed_result.get("success"):
-                apps = _agentbay_response_list(installed_result.get("apps", []))
+                apps = _apps_from_response(installed_result.get("apps", []))
                 matched_app, score = _agentbay_find_installed_app_match(cmd, apps)
                 if matched_app and score >= 0.58:
                     matched_name = _agentbay_app_field(matched_app, "name") or "(unnamed app)"
@@ -156,15 +170,14 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
                                 f"Direct start command failed: {cmd}\nMatched installed app: {matched_name} (score={score:.2f})\nRetried with start_cmd: {matched_cmd}\nApplication started."
                                 + (f"\n\n{retry_data_str}" if retry_data_str else "")
                             )
-                        retry_error = _agentbay_response_text(retry.get("error_message"), "Unknown error")
+                        retry_error = _response_error(retry.get("error_message"))
                         if _agentbay_uncertain_start_error(retry_error):
                             return f"Direct start command failed: {cmd}\nMatched installed app: {matched_name} (score={score:.2f})\nRetried with start_cmd: {matched_cmd}\nRetry reported an uncertain launch result: {retry_error}\n\n{await _agentbay_visible_apps_note(client)}"
                         return f"Direct start command failed: {cmd}\nMatched installed app: {matched_name} (score={score:.2f})\nRetried with start_cmd: {matched_cmd}\nRetry failed: {retry_error}"
                 installed_note = f"\n\nInstalled apps were checked, but no confident match was found for `{cmd}`. Use agentbay_computer_get_installed_apps and then pass the returned start_cmd to this tool."
             else:
                 installed_note = (
-                    "\n\nCould not check installed apps: "
-                    f"{_agentbay_response_text(installed_result.get('error_message'), 'Unknown error')}"
+                    "\n\nCould not check installed apps: " + f"{_response_error(installed_result.get('error_message'))}"
                 )
         except Exception as e:
             logger.debug(f"[AgentBay] Installed app fallback failed: {e}")
@@ -194,11 +207,11 @@ async def _agentbay_computer_get_installed_apps(agent_id: uuid.UUID | None, ws: 
             ignore_system_apps=arguments.get("ignore_system_apps") is not False,
         )
         if result.get("success"):
-            apps = _agentbay_response_list(result.get("apps", []))
+            apps = _apps_from_response(result.get("apps", []))
             if not apps:
                 return "No installed applications found."
             return f"Installed applications ({len(apps)}). Use the returned start_cmd exactly with agentbay_computer_start_app; do not guess app launch commands.\n\n{_agentbay_format_apps(apps, limit=80)}"
-        error_message = _agentbay_response_text(result.get("error_message"), "Unknown error")
+        error_message = _response_error(result.get("error_message"))
         return f"Failed to get installed applications: {error_message}"
     except RuntimeError as e:
         return f"{e!s}"
@@ -220,13 +233,13 @@ async def _agentbay_computer_list_visible_apps(agent_id: uuid.UUID | None, ws: P
         if result.get("success"):
             import json
 
-            apps = _agentbay_response_list(result.get("apps", []))
+            apps = _apps_from_response(result.get("apps", []))
             return (
                 "No visible applications running."
                 if not apps
                 else f"Visible applications ({len(apps)}):\n\n{json.dumps(apps, ensure_ascii=False, indent=2)[:3000]}"
             )
-        error_message = _agentbay_response_text(result.get("error_message"), "Unknown error")
+        error_message = _response_error(result.get("error_message"))
         return f"Failed to list applications: {error_message}"
     except RuntimeError as e:
         return f"{e!s}"

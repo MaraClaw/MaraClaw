@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar, final
+from uuid import UUID
 
 from app.dao.base import BaseDAO
 from app.records.enterprise_info import EnterpriseInfoRecord
@@ -20,9 +21,10 @@ _COLUMNS = (
 )
 
 
+@final
 class EnterpriseInfoDAO(BaseDAO[EnterpriseInfoRecord]):
-    table = "enterprise_info"
-    columns = _COLUMNS
+    table: ClassVar[str] = "enterprise_info"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(EnterpriseInfoRecord.from_row)
 
     async def get_by_type(self, info_type: str) -> EnterpriseInfoRecord | None:
@@ -44,7 +46,7 @@ class EnterpriseInfoDAO(BaseDAO[EnterpriseInfoRecord]):
         info_type: str,
         content: dict[str, Any],
         visible_roles: list[str],
-        updated_by: Any,
+        updated_by: UUID | None,
     ) -> EnterpriseInfoRecord:
         existing = await self.get_by_type(info_type)
         if existing:

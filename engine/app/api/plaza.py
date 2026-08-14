@@ -3,11 +3,13 @@
 import re
 import uuid
 from datetime import datetime
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.auth import get_current_user
+from app.core.json_types import str_list_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
@@ -36,7 +38,7 @@ class CommentCreate(BaseModel):
 
 
 class PostOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     author_id: uuid.UUID
@@ -49,7 +51,7 @@ class PostOut(BaseModel):
 
 
 class CommentOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     post_id: uuid.UUID
@@ -69,11 +71,11 @@ class PostDetail(PostOut):
 
 async def _notify_mentions(
     content: str, author_id: uuid.UUID, author_name: str, post_id: uuid.UUID, tenant_id: uuid.UUID | None
-):
+) -> None:
     """Parse @mentions in content and send notifications to mentioned agents/users."""
     from app.services.notification_service import send_notification
 
-    mentions = re.findall(r"@(\S+)", content)
+    mentions = str_list_from_row(re.findall(r"@(\S+)", content))
     if not mentions:
         return
 
@@ -85,11 +87,11 @@ async def _notify_mentions(
         users = await user_dao.get_all(skip=0, limit=10_000)
 
     agent_map = {a.name.lower(): a for a in agents if a.id != author_id}
-    user_map: dict[str, object] = {}
+    user_map: dict[str, UserRecord] = {}
     for u in users:
-        if getattr(u, "id", None) == author_id:
+        if u.id == author_id:
             continue
-        name = (getattr(u, "display_name", None) or getattr(u, "username", None) or "").lower()
+        name = (u.display_name or u.username or "").lower()
         if name:
             user_map[name] = u
 
@@ -99,7 +101,7 @@ async def _notify_mentions(
         agent = agent_map.get(m_lower)
         if agent and agent.id not in notified_ids:
             notified_ids.add(agent.id)
-            await send_notification(
+            _ = await send_notification(
                 None,
                 agent_id=agent.id,
                 type="mention",
@@ -110,11 +112,11 @@ async def _notify_mentions(
                 sender_name=author_name,
             )
         user = user_map.get(m_lower)
-        if user and getattr(user, "id", None) not in notified_ids:
-            notified_ids.add(user.id)  # type: ignore[arg-type]
-            await send_notification(
+        if user and user.id not in notified_ids:
+            notified_ids.add(user.id)
+            _ = await send_notification(
                 None,
-                user_id=user.id,  # type: ignore[arg-type]
+                user_id=user.id,
                 type="mention",
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
@@ -141,12 +143,7 @@ async def _assert_company_agent_author(
     tenant_mismatch = False
     if effective_tenant_id and agent:
         tenant_mismatch = str(agent.tenant_id) != str(effective_tenant_id)
-    if (
-        not agent
-        or tenant_mismatch
-        or agent.is_system
-        or (getattr(agent, "access_mode", None) or "company") != "company"
-    ):
+    if not agent or tenant_mismatch or agent.is_system or (agent.access_mode or "company") != "company":
         raise HTTPException(403, f"Only company-wide agents can {action} Plaza")
 
 
@@ -235,9 +232,7 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
         for c in comments_raw
         if not (c.author_type == "agent" and c.author_id in private_or_system_comment_ids)
     ]
-    data = PostOut.model_validate(post).model_dump()
-    data["comments"] = comments
-    return PostDetail(**data)
+    return PostDetail.model_validate(post).model_copy(update={"comments": comments})
 
 
 @router.delete("/posts/{post_id}")
@@ -254,7 +249,7 @@ async def delete_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get
     if not is_admin and not is_author:
         raise HTTPException(403, "Not allowed to delete this post")
     logger.info(f"Plaza post {post_id} deleted by user {current_user.id} (admin={is_admin})")
-    await plaza_post_dao.delete(id=post_id)
+    _ = await plaza_post_dao.delete(id=post_id)
     return {"deleted": True}
 
 
@@ -282,14 +277,14 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
             "content": body.content[:300],
         }
     )
-    await plaza_post_dao.increment_comments_count(post_id)
+    _ = await plaza_post_dao.increment_comments_count(post_id)
 
     if post.author_id != body.author_id:
         try:
             from app.services.notification_service import send_notification
 
             if post.author_type == "agent":
-                await send_notification(
+                _ = await send_notification(
                     None,
                     agent_id=post.author_id,
                     type="plaza_reply",
@@ -301,7 +296,7 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
                 )
                 post_agent = await agent_dao.get(post.author_id)
                 if post_agent and post_agent.creator_id:
-                    await send_notification(
+                    _ = await send_notification(
                         None,
                         user_id=post_agent.creator_id,
                         type="plaza_comment",
@@ -312,7 +307,7 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
                         sender_name=body.author_name,
                     )
             elif post.author_type == "human":
-                await send_notification(
+                _ = await send_notification(
                     None,
                     user_id=post.author_id,
                     type="plaza_reply",
@@ -335,7 +330,7 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
                 continue
             notified.add(cid)
             if ctype == "agent":
-                await send_notification(
+                _ = await send_notification(
                     None,
                     agent_id=cid,
                     type="plaza_reply",
@@ -372,9 +367,9 @@ async def like_post(
         raise HTTPException(403, "No access to this post")
     existing = await plaza_like_dao.get_by_post_and_author(post_id, author_id)
     if existing:
-        await plaza_like_dao.delete_by_post_and_author(post_id, author_id)
-        await plaza_post_dao.adjust_likes_count(post_id, -1)
+        _ = await plaza_like_dao.delete_by_post_and_author(post_id, author_id)
+        _ = await plaza_post_dao.adjust_likes_count(post_id, -1)
         return {"liked": False}
-    await plaza_like_dao.create(obj_in={"post_id": post_id, "author_id": author_id, "author_type": author_type})
-    await plaza_post_dao.adjust_likes_count(post_id, 1)
+    _ = await plaza_like_dao.create(obj_in={"post_id": post_id, "author_id": author_id, "author_type": author_type})
+    _ = await plaza_post_dao.adjust_likes_count(post_id, 1)
     return {"liked": True}

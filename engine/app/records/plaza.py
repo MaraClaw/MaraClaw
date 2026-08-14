@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -23,17 +25,17 @@ class PlazaPostRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> PlazaPostRecord:
+    def from_row(cls, row: Mapping[str, object]) -> PlazaPostRecord:
         return cls(
-            id=row["id"],
-            author_id=row["author_id"],
-            author_type=row["author_type"],
-            author_name=row["author_name"],
-            content=row["content"],
-            tenant_id=row.get("tenant_id"),
-            likes_count=int(row.get("likes_count") or 0),
-            comments_count=int(row.get("comments_count") or 0),
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            author_id=uuid_from_row(row["author_id"]),
+            author_type=str_from_row(row["author_type"]),
+            author_name=str_from_row(row["author_name"]),
+            content=str_from_row(row["content"]),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            likes_count=int_from_row(row.get("likes_count")),
+            comments_count=int_from_row(row.get("comments_count")),
+            created_at=datetime_from_row(row.get("created_at")),
         )
 
 
@@ -50,15 +52,15 @@ class PlazaCommentRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> PlazaCommentRecord:
+    def from_row(cls, row: Mapping[str, object]) -> PlazaCommentRecord:
         return cls(
-            id=row["id"],
-            post_id=row["post_id"],
-            author_id=row["author_id"],
-            author_type=row["author_type"],
-            author_name=row["author_name"],
-            content=row["content"],
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            post_id=uuid_from_row(row["post_id"]),
+            author_id=uuid_from_row(row["author_id"]),
+            author_type=str_from_row(row["author_type"]),
+            author_name=str_from_row(row["author_name"]),
+            content=str_from_row(row["content"]),
+            created_at=datetime_from_row(row.get("created_at")),
         )
 
 
@@ -73,11 +75,11 @@ class PlazaLikeRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> PlazaLikeRecord:
+    def from_row(cls, row: Mapping[str, object]) -> PlazaLikeRecord:
         return cls(
-            id=row["id"],
-            post_id=row["post_id"],
-            author_id=row["author_id"],
-            author_type=row["author_type"],
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            post_id=uuid_from_row(row["post_id"]),
+            author_id=uuid_from_row(row["author_id"]),
+            author_type=str_from_row(row["author_type"]),
+            created_at=datetime_from_row(row.get("created_at")),
         )

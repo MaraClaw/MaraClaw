@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import assert_never
 
@@ -13,6 +14,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.core.events import get_redis
+from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
 
 settings = get_settings()
@@ -20,12 +22,14 @@ settings = get_settings()
 PRESENCE_TTL_SECONDS = 180
 PUBSUB_PREFIX = "realtime:ws"
 
+type LocalDeliverer = Callable[..., Awaitable[object]]
+
 
 class RealtimeRouter:
     def __init__(self) -> None:
-        self.instance_id = settings.INSTANCE_ID
+        self.instance_id: str = settings.INSTANCE_ID
         self._subscriber_task: asyncio.Task[None] | None = None
-        self._started = False
+        self._started: bool = False
 
     def _connection_key(self, connection_id: str) -> str:
         return f"{PUBSUB_PREFIX}:conn:{connection_id}"
@@ -53,25 +57,26 @@ class RealtimeRouter:
             "instance_id": self.instance_id,
         }
         async with redis_client.pipeline(transaction=True) as pipe:
-            pipe.sadd(self._agent_index_key(agent_id), connection_id)
+            _ = pipe.sadd(self._agent_index_key(agent_id), connection_id)
             connection_key = self._connection_key(connection_id)
             for field, value in payload.items():
-                pipe.hset(connection_key, field, value)
-            pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
-            pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
-            await pipe.execute()
+                _ = pipe.hset(connection_key, field, value)
+            _ = pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
+            _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
+            _ = await pipe.execute()
         websocket.state.realtime_connection_id = connection_id
         return connection_id
 
     async def unregister_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
-        connection_id = getattr(websocket.state, "realtime_connection_id", None)
-        if not connection_id:
+        connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
+        if not isinstance(connection_id_raw, str) or not connection_id_raw:
             return
+        connection_id = connection_id_raw
         redis = await get_redis()
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.srem(self._agent_index_key(agent_id), connection_id)
-            pipe.delete(self._connection_key(connection_id))
-            await pipe.execute()
+            _ = pipe.srem(self._agent_index_key(agent_id), connection_id)
+            _ = pipe.delete(self._connection_key(connection_id))
+            _ = await pipe.execute()
 
     async def is_user_viewing_session(self, *, agent_id: str, session_id: str, user_id: str) -> bool:
         for record in await self._list_presence(agent_id):
@@ -136,12 +141,12 @@ class RealtimeRouter:
         publish_tasks = [
             redis.publish(f"{PUBSUB_PREFIX}:instance:{instance_id}", envelope) for instance_id in remote_targets
         ]
-        await asyncio.gather(*publish_tasks, return_exceptions=True)
+        _ = await asyncio.gather(*publish_tasks, return_exceptions=True)
         logger.debug(
             f"[Realtime] Routed agent={agent_id} local={local_sent} remote_instances={list(remote_targets.keys())}"
         )
 
-    async def start(self, deliver_local) -> None:
+    async def start(self, deliver_local: LocalDeliverer) -> None:
         if self._started:
             return
         self._started = True
@@ -155,13 +160,13 @@ class RealtimeRouter:
                 if exc is not None:
                     logger.warning(f"[Realtime] Subscriber task failed before shutdown: {exc}")
             else:
-                task.cancel()
+                _ = task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
             self._subscriber_task = None
         self._started = False
 
-    async def _subscriber_loop(self, deliver_local) -> None:
+    async def _subscriber_loop(self, deliver_local: LocalDeliverer) -> None:
         redis = await get_redis()
         pubsub = redis.pubsub()
         subscribed = False
@@ -169,12 +174,19 @@ class RealtimeRouter:
             await pubsub.subscribe(self._instance_channel())
             subscribed = True
             while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if not message:
+                message_raw = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if not message_raw:
                     await asyncio.sleep(0.05)
                     continue
                 try:
-                    data = json.loads(message["data"])
+                    message = dict[str, object](message_raw)
+                    payload_raw = message.get("data")
+                    if isinstance(payload_raw, (bytes, bytearray)):
+                        data = json_loads_object(bytes(payload_raw))
+                    elif isinstance(payload_raw, str):
+                        data = json_loads_object(payload_raw)
+                    else:
+                        data = json_object_from(payload_raw)
                     await deliver_local(
                         agent_id=data["agent_id"],
                         payload=data["message"],
@@ -199,13 +211,19 @@ class RealtimeRouter:
         stale_ids: list[str] = []
         for connection_id in connection_ids:
             connection_id_text = _redis_text(connection_id)
-            data = await redis_client.hgetall(self._connection_key(connection_id_text))
-            if not data:
+            presence_raw: object = await redis_client.hgetall(self._connection_key(connection_id_text))
+            if not presence_raw or not isinstance(presence_raw, dict):
                 stale_ids.append(connection_id_text)
                 continue
-            records.append({_redis_text(key): _redis_text(value) for key, value in data.items()})
+            records.append(
+                {
+                    _redis_text(key): _redis_text(value)
+                    for key, value in presence_raw.items()
+                    if isinstance(key, (str, bytes)) and isinstance(value, (str, bytes))
+                }
+            )
         if stale_ids:
-            await redis_client.srem(self._agent_index_key(agent_id), *stale_ids)
+            _ = await redis_client.srem(self._agent_index_key(agent_id), *stale_ids)
         return records
 
 

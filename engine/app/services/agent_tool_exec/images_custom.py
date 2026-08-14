@@ -1,17 +1,43 @@
 import importlib
 import json
-from typing import Any
+from typing import Protocol, TypeIs
 
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    is_json_object,
+    is_json_value,
+    json_as_str,
+    json_loads_value,
+    json_object_from,
+    json_object_from_response,
+    json_value_from_response,
+)
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArgumentValue
 
 
-def _json_path_get(data: Any, path: str) -> Any:
+class _ImageHttpResponse(Protocol):
+    def raise_for_status(self) -> object: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+
+class _ImageHttpClient(Protocol):
+    async def get(self, url: str) -> _ImageHttpResponse: ...
+
+
+def _is_image_http_client(value: object) -> TypeIs[_ImageHttpClient]:
+    return callable(getattr(value, "get", None))
+
+
+def _json_path_get(data: JsonValue, path: str) -> JsonValue:
     """Read a simple dotted JSON path, with numeric list indexes."""
     if not path:
         return None
 
-    current: Any = data
+    current: JsonValue = data
     for raw_part in path.split("."):
         part = raw_part.strip()
         if not part:
@@ -50,13 +76,16 @@ def _render_json_template(template_json: str, variables: dict[str, str]) -> dict
 
     candidates.extend(text.replace('\\"', '"') for text in tuple(candidates) if '\\"' in text)
 
-    template = None
+    template: JsonValue | None = None
     for text in candidates:
         try:
-            parsed = json.loads(text)
-            if isinstance(parsed, str):
-                parsed = json.loads(parsed)
-            template = parsed
+            parsed_raw = json_loads_value(text)
+            if isinstance(parsed_raw, str):
+                parsed_raw = json_loads_value(parsed_raw)
+            if not is_json_value(parsed_raw):
+                parse_errors.append("Request body template is not valid JSON.")
+                continue
+            template = parsed_raw
             break
         except Exception as e:
             parse_errors.append(str(e))
@@ -65,7 +94,7 @@ def _render_json_template(template_json: str, variables: dict[str, str]) -> dict
         detail = parse_errors[-1] if parse_errors else "unknown parse error"
         raise ValueError(detail)
 
-    def render(value: Any) -> Any:
+    def render(value: JsonValue) -> JsonValue:
         if isinstance(value, str):
             rendered = value
             for key, replacement in variables.items():
@@ -77,19 +106,20 @@ def _render_json_template(template_json: str, variables: dict[str, str]) -> dict
             return {key: render(item) for key, item in value.items()}
         return value
 
-    rendered = render(template)
+    template_value: JsonValue = template
+    rendered = render(template_value)
     if not isinstance(rendered, dict):
         raise ValueError("Request body template must be a JSON object.")
     return rendered
 
 
-def _json_structure_preview(data: Any, depth: int = 0) -> Any:
+def _json_structure_preview(data: JsonValue, depth: int = 0) -> JsonValue:
     if depth > 4:
         return "..."
     if isinstance(data, dict):
         return {k: _json_structure_preview(v, depth + 1) for k, v in list(data.items())[:12]}
     if isinstance(data, list):
-        preview = [_json_structure_preview(item, depth + 1) for item in data[:2]]
+        preview: list[JsonValue] = [_json_structure_preview(item, depth + 1) for item in data[:2]]
         if len(data) > 2:
             preview.append(f"... {len(data)} items total")
         return preview
@@ -101,7 +131,7 @@ def _json_structure_preview(data: Any, depth: int = 0) -> Any:
     return data
 
 
-def _find_first_image_reference(data: Any) -> Any:
+def _find_first_image_reference(data: JsonValue) -> JsonValue:
     common_paths = [
         "choices.0.message.images.0.image_url.url",
         "choices.0.message.images.0.image_url",
@@ -110,13 +140,13 @@ def _find_first_image_reference(data: Any) -> Any:
         "output.0.content.0.image_url",
         "output.0.content.0.image_base64",
     ]
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     for path in common_paths:
         value = agent_tools._json_path_get(data, path)
         if value:
             return value
 
-    def walk(value: Any) -> Any:
+    def walk(value: JsonValue) -> JsonValue:
         if isinstance(value, dict):
             for key in ("url", "b64_json", "image_url", "image_base64"):
                 nested = value.get(key)
@@ -142,7 +172,7 @@ def _find_first_image_reference(data: Any) -> Any:
     return walk(data)
 
 
-async def _custom_image_reference_to_bytes(image_ref: Any, client: Any) -> bytes:
+async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: object) -> bytes:
     import base64
 
     if isinstance(image_ref, dict):
@@ -158,7 +188,9 @@ async def _custom_image_reference_to_bytes(image_ref: Any, client: Any) -> bytes
         return base64.b64decode(encoded)
 
     if image_ref.startswith(("http://", "https://")):
-        img_resp = await client.get(image_ref, timeout=60)
+        if not _is_image_http_client(client):
+            raise TypeError("HTTP client is unavailable")
+        img_resp = await client.get(image_ref)
         img_resp.raise_for_status()
         return img_resp.content
 
@@ -194,11 +226,11 @@ async def _generate_image_custom_api(
     endpoint = endpoint_path or "/chat/completions"
     url = endpoint if endpoint.startswith(("http://", "https://")) else f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     variables = {"prompt": prompt, "size": size, "model": model}
     if request_body_template_json.strip():
         try:
-            payload = agent_tools._render_json_template(request_body_template_json, variables)
+            payload: JsonObject = agent_tools._render_json_template(request_body_template_json, variables)
         except Exception as e:
             raise ValueError(f"Invalid request_body_template_json: {e}") from e
     else:
@@ -215,40 +247,41 @@ async def _generate_image_custom_api(
     }
     if extra_headers_json.strip():
         try:
-            extra_headers = json.loads(extra_headers_json)
+            extra_raw = json_loads_value(extra_headers_json)
         except Exception as e:
             raise ValueError(f"Invalid extra_headers_json: {e}") from e
-        if not isinstance(extra_headers, dict):
+        if not is_json_object(extra_raw):
             raise ValueError("extra_headers_json must be a JSON object.")
-        headers.update({str(k): str(v) for k, v in extra_headers.items() if v is not None})
+        headers.update({str(k): str(v) for k, v in extra_raw.items() if v is not None})
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
         if resp.status_code < 200 or resp.status_code >= 300:
             try:
-                err_body = resp.json()
+                err_body = json_object_from_response(resp)
                 err_msg = (
-                    err_body.get("error", {}).get("message")
-                    if isinstance(err_body.get("error"), dict)
-                    else err_body.get("message")
-                ) or resp.text[:300]
+                    json_as_str(json_object_from(err_body.get("error")).get("message"))
+                    or json_as_str(err_body.get("message"))
+                    or resp.text[:300]
+                )
             except Exception:
                 err_msg = resp.text[:300]
             raise ValueError(f"Custom image API error ({resp.status_code}): {err_msg}")
 
         try:
-            data = resp.json()
+            data_raw = json_value_from_response(resp)
+            data: JsonValue = data_raw if is_json_value(data_raw) else None
         except Exception as e:
             raise ValueError("Custom image API returned non-JSON response.") from e
 
-        image_ref = agent_tools._json_path_get(data, response_image_path) if response_image_path else None
+        image_ref: JsonValue = agent_tools._json_path_get(data, response_image_path) if response_image_path else None
         if not image_ref:
             image_ref = agent_tools._find_first_image_reference(data)
         if not image_ref:
             preview = json.dumps(agent_tools._json_structure_preview(data), ensure_ascii=False)
             raise ValueError(
                 "No image found in custom image API response. "
-                f"Check response_image_path. Response structure: {preview[:800]}"
+                + f"Check response_image_path. Response structure: {preview[:800]}"
             )
 
         return await agent_tools._custom_image_reference_to_bytes(image_ref, client)

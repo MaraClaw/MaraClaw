@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import str_from_row
 from app.dao.base import BaseDAO
 from app.records.channel_config import ChannelConfigRecord
 
@@ -25,11 +27,12 @@ _COLUMNS = (
 )
 
 
+@final
 class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
     """DAO for per-agent channel connector rows."""
 
-    table = "channel_configs"
-    columns = _COLUMNS
+    table: ClassVar[str] = "channel_configs"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(ChannelConfigRecord.from_row)
 
     async def get_for_agent(
@@ -41,8 +44,8 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM channel_configs "
-                "WHERE agent_id = %(agent_id)s AND channel_type = %(channel_type)s "
-                "LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND channel_type = %(channel_type)s "
+                + "LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type},
             )
             return ChannelConfigRecord.from_row(row) if row else None
@@ -60,7 +63,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM channel_configs "
-                "WHERE is_configured IS TRUE AND channel_type = %(channel_type)s",
+                + "WHERE is_configured IS TRUE AND channel_type = %(channel_type)s",
                 {"channel_type": channel_type},
             )
             return [ChannelConfigRecord.from_row(row) for row in rows]
@@ -75,9 +78,9 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('c')} FROM channel_configs c "
-                "JOIN agents a ON c.agent_id = a.id "
-                "WHERE c.channel_type = %(channel_type)s AND a.tenant_id = %(tenant_id)s "
-                "LIMIT 1",
+                + "JOIN agents a ON c.agent_id = a.id "
+                + "WHERE c.channel_type = %(channel_type)s AND a.tenant_id = %(tenant_id)s "
+                + "LIMIT 1",
                 {"channel_type": channel_type, "tenant_id": tenant_id},
             )
             return ChannelConfigRecord.from_row(row) if row else None
@@ -86,8 +89,8 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM channel_configs "
-                "WHERE agent_id = %(agent_id)s AND channel_type = %(channel_type)s "
-                "AND is_configured IS TRUE LIMIT 1",
+                + "WHERE agent_id = %(agent_id)s AND channel_type = %(channel_type)s "
+                + "AND is_configured IS TRUE LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type},
             )
             return ChannelConfigRecord.from_row(row) if row else None
@@ -98,11 +101,11 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT channel_type FROM channel_configs "
-                "WHERE agent_id = %(agent_id)s AND channel_type = ANY(%(types)s) "
-                "AND is_configured IS TRUE",
+                + "WHERE agent_id = %(agent_id)s AND channel_type = ANY(%(types)s) "
+                + "AND is_configured IS TRUE",
                 {"agent_id": agent_id, "types": list(channel_types)},
             )
-            return {row["channel_type"] for row in rows if row.get("channel_type")}
+            return {str_from_row(row["channel_type"]) for row in rows if row.get("channel_type")}
 
 
 channel_config_dao = ChannelConfigDAO()

@@ -1,6 +1,8 @@
 """Deployment builtin tool definitions."""
 
-DEPLOY_BUILTIN_TOOLS = [
+from typing import Any
+
+DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
     {
         "name": "vercel_deploy",
         "display_name": "Deploy to Vercel",

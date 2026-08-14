@@ -10,7 +10,7 @@ def normalize_storage_key(key: str) -> str:
             continue
         if part == "..":
             if parts:
-                parts.pop()
+                _ = parts.pop()
             continue
         parts.append(part)
     return "/".join(parts)

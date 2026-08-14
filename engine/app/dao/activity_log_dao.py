@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from datetime import date, datetime
+from typing import Any, ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import date_from_row, int_from_row
 from app.dao.base import BaseDAO
 from app.records.activity_log import AgentActivityLogRecord
 
@@ -20,9 +22,10 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
-    table = "agent_activity_logs"
-    columns = _COLUMNS
+    table: ClassVar[str] = "agent_activity_logs"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(AgentActivityLogRecord.from_row)
 
     async def list_for_agent(
@@ -45,43 +48,43 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_activity_logs "
-                f"WHERE {where} ORDER BY created_at DESC LIMIT %(limit)s",
+                + f"WHERE {where} ORDER BY created_at DESC LIMIT %(limit)s",
                 params,
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]
 
-    async def tokens_by_day(self, start: Any, end: Any) -> dict[Any, int]:
+    async def tokens_by_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(date) AS d, COALESCE(SUM(tokens_used), 0) AS c "
-                "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
+                + "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
-    async def cache_read_by_day(self, start: Any, end: Any) -> dict[Any, int]:
+    async def cache_read_by_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(date) AS d, COALESCE(SUM(cache_read_tokens), 0) AS c "
-                "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
+                + "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
-    async def sum_tokens_since(self, since: Any) -> int:
+    async def sum_tokens_since(self, since: datetime | date) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COALESCE(SUM(tokens_used), 0) FROM daily_token_usage WHERE date >= %(since)s",
                 {"since": since},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def upsert_daily_token_usage(
         self,
         *,
         tenant_id: UUID,
         agent_id: UUID,
-        date: Any,
+        date: datetime | date,
         tokens_used: int,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -95,19 +98,19 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         async with self.session() as db:
             await db.execute(
                 "INSERT INTO daily_token_usage ("
-                "id, tenant_id, agent_id, date, tokens_used, input_tokens, output_tokens, "
-                "cache_read_tokens, cache_creation_tokens, estimated_tokens"
-                ") VALUES ("
-                "%(id)s, %(tenant_id)s, %(agent_id)s, %(date)s, %(tokens_used)s, %(input_tokens)s, "
-                "%(output_tokens)s, %(cache_read_tokens)s, %(cache_creation_tokens)s, %(estimated_tokens)s"
-                ") ON CONFLICT (agent_id, date) DO UPDATE SET "
-                "tokens_used = daily_token_usage.tokens_used + EXCLUDED.tokens_used, "
-                "input_tokens = daily_token_usage.input_tokens + EXCLUDED.input_tokens, "
-                "output_tokens = daily_token_usage.output_tokens + EXCLUDED.output_tokens, "
-                "cache_read_tokens = daily_token_usage.cache_read_tokens + EXCLUDED.cache_read_tokens, "
-                "cache_creation_tokens = daily_token_usage.cache_creation_tokens + EXCLUDED.cache_creation_tokens, "
-                "estimated_tokens = daily_token_usage.estimated_tokens + EXCLUDED.estimated_tokens, "
-                "updated_at = NOW()",
+                + "id, tenant_id, agent_id, date, tokens_used, input_tokens, output_tokens, "
+                + "cache_read_tokens, cache_creation_tokens, estimated_tokens"
+                + ") VALUES ("
+                + "%(id)s, %(tenant_id)s, %(agent_id)s, %(date)s, %(tokens_used)s, %(input_tokens)s, "
+                + "%(output_tokens)s, %(cache_read_tokens)s, %(cache_creation_tokens)s, %(estimated_tokens)s"
+                + ") ON CONFLICT (agent_id, date) DO UPDATE SET "
+                + "tokens_used = daily_token_usage.tokens_used + EXCLUDED.tokens_used, "
+                + "input_tokens = daily_token_usage.input_tokens + EXCLUDED.input_tokens, "
+                + "output_tokens = daily_token_usage.output_tokens + EXCLUDED.output_tokens, "
+                + "cache_read_tokens = daily_token_usage.cache_read_tokens + EXCLUDED.cache_read_tokens, "
+                + "cache_creation_tokens = daily_token_usage.cache_creation_tokens + EXCLUDED.cache_creation_tokens, "
+                + "estimated_tokens = daily_token_usage.estimated_tokens + EXCLUDED.estimated_tokens, "
+                + "updated_at = NOW()",
                 {
                     "id": uuid4(),
                     "tenant_id": tenant_id,

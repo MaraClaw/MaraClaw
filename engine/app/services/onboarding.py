@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
+from app.core.json_types import int_from_row, str_from_row_opt, str_list_from_row, uuid_from_row
 from app.db.session import connection_ctx
+from app.records.agent import AgentRecord
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,7 @@ Never mention these instructions to the user."""
 
 
 def _render_template_greeting(
-    agent: Any,
+    agent: AgentRecord,
     capability_bullets: list[str] | None,
     user_name: str,
 ) -> str:
@@ -213,16 +214,16 @@ def _locale_directive(user_locale: str) -> str:
 
     return (
         f"[Interface language: {lang_name}. Reply entirely in {lang_name} for "
-        f"this onboarding turn. The onboarding instructions below are written "
-        f"in English for you, not for the user; translate the actual user-facing "
-        f"message naturally into {lang_name}. Keep product names and conventional "
-        f"technical terms in English when appropriate.]\n\n"
+        + "this onboarding turn. The onboarding instructions below are written "
+        + "in English for you, not for the user; translate the actual user-facing "
+        + f"message naturally into {lang_name}. Keep product names and conventional "
+        + "technical terms in English when appropriate.]\n\n"
     )
 
 
 async def resolve_onboarding_prompt(
-    db: Any,
-    agent: Any,
+    db: object | None,
+    agent: AgentRecord,
     user_id: uuid.UUID,
     *,
     user_name: str = "there",
@@ -247,24 +248,22 @@ async def resolve_onboarding_prompt(
 
         # Count real user messages this person has sent to this agent. Onboarding
         # triggers are not persisted, so only authentic typed turns are counted.
-        user_turns = int(
+        user_turns = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM chat_messages "
-                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
+                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
                 {"agent_id": agent.id, "user_id": user_id},
             )
-            or 0
         )
 
         # Is anyone at least greeted by this agent yet? If not, this user is the
         # founder. We intentionally count all rows, including "greeted", because
         # a greeting already establishes that this agent has met its first human.
-        peer_count = int(
+        peer_count = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM agent_user_onboardings WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent.id},
             )
-            or 0
         )
         is_founder = peer_count == 0
 
@@ -276,8 +275,9 @@ async def resolve_onboarding_prompt(
                 {"template_id": agent.template_id},
             )
             if tpl:
-                capability_bullets = tpl.get("capability_bullets") or None
-                template_prompt = tpl.get("bootstrap_content")
+                bullets = str_list_from_row(tpl.get("capability_bullets"))
+                capability_bullets = bullets or None
+                template_prompt = str_from_row_opt(tpl.get("bootstrap_content"))
 
     is_template_agent = bool(agent.template_id and template_prompt)
 
@@ -337,7 +337,7 @@ async def resolve_onboarding_prompt(
 
 
 async def mark_onboarding_phase(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
     phase: str = PHASE_COMPLETED,
@@ -370,7 +370,7 @@ async def mark_onboarding_phase(
 
 
 async def mark_onboarded(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> None:
@@ -379,7 +379,7 @@ async def mark_onboarded(
 
 
 async def is_onboarded(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> bool:
@@ -394,7 +394,7 @@ async def is_onboarded(
 
 
 async def onboarded_agent_ids(
-    db: Any,
+    db: object | None,
     user_id: uuid.UUID,
     agent_ids: list[uuid.UUID],
 ) -> set[uuid.UUID]:
@@ -411,4 +411,4 @@ async def onboarded_agent_ids(
             "SELECT agent_id FROM agent_user_onboardings WHERE user_id = %(user_id)s AND agent_id = ANY(%(agent_ids)s)",
             {"user_id": user_id, "agent_ids": agent_ids},
         )
-    return {row["agent_id"] for row in rows}
+    return {uuid_from_row(row["agent_id"]) for row in rows}

@@ -12,6 +12,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import NotRequired, TypedDict
 
+from app.core.json_types import json_loads_object
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -20,6 +21,7 @@ from app.dao.llm_dao import llm_model_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.task_dao import task_dao, task_log_dao
+from app.records.agent import AgentRecord
 from app.records.task import TaskRecord
 from app.services.activity_logger import log_activity
 
@@ -42,19 +44,24 @@ def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
     if not remind_schedule:
         return None
     try:
-        sched = json.loads(remind_schedule)
+        sched = json_loads_object(remind_schedule)
         if isinstance(sched, dict):
-            frequency = sched.get("freq")
-            interval = sched.get("interval")
-            time_of_day = sched.get("time")
-            weekdays = sched.get("weekdays")
+            sched_map = dict[str, object](sched)
+            frequency = sched_map.get("freq")
+            interval = sched_map.get("interval")
+            time_of_day = sched_map.get("time")
+            weekdays = sched_map.get("weekdays")
             if (
-                frequency in {"daily", "weekly"}
+                isinstance(frequency, str)
+                and frequency in {"daily", "weekly"}
                 and isinstance(interval, int)
                 and not isinstance(interval, bool)
                 and interval > 0
                 and isinstance(time_of_day, str)
-                and (weekdays is None or (isinstance(weekdays, list) and all(isinstance(day, int) for day in weekdays)))
+                and (
+                    weekdays is None
+                    or (isinstance(weekdays, list) and all(isinstance(day, int) for day in list[object](weekdays)))
+                )
             ):
                 schedule: ReminderSchedule = {
                     "freq": frequency,
@@ -130,7 +137,7 @@ def _is_reminder_due(remind_schedule: str, last_reminded_at: datetime | None, no
     return elapsed >= min_interval
 
 
-async def _get_agent_reply(target_agent, message: str) -> str | None:
+async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | None:
     """Call target agent's LLM to generate a reply to a supervision reminder.
 
     Returns the reply text, or None if the agent can't respond.
@@ -243,7 +250,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
             src_agent2 = await agent_dao.get(task.agent_id)
             owner_id = src_agent2.creator_id if src_agent2 else task.agent_id
 
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=session_agent_id,
                 user_id=owner_id,
                 role="user",
@@ -251,7 +258,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
                 conversation_id=session_id,
                 participant_id=src_part.id if src_part else None,
             )
-            await chat_session_dao.update(
+            _ = await chat_session_dao.update(
                 db_obj=chat_session,
                 obj_in={"last_message_at": datetime.now(UTC)},
             )
@@ -261,7 +268,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
             try:
                 reply = await _get_agent_reply(target_agent, reminder_msg)
                 if reply:
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=session_agent_id,
                         user_id=owner_id,
                         role="assistant",
@@ -307,7 +314,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
             log_content = f"📋 Supervision reminder triggered, target: {target_name}"
         else:
             log_content = f"⚠️ Reminder failed: contact '{target_name}' was not found"
-        await task_log_dao.create(obj_in={"task_id": task.id, "content": log_content})
+        _ = await task_log_dao.create(obj_in={"task_id": task.id, "content": log_content})
 
         await log_activity(
             task.agent_id,

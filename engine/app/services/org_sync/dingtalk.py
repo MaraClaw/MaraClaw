@@ -3,11 +3,20 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, override
+from typing import ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    json_as_bool,
+    json_as_int,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
+from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
 from .types import ExternalDepartment, ExternalUser
@@ -16,22 +25,22 @@ from .types import ExternalDepartment, ExternalUser
 class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
     """DingTalk organization sync adapter."""
 
-    provider_type = "dingtalk"
+    provider_type: ClassVar[str] = "dingtalk"
 
-    DINGTALK_API_URL = "https://oapi.dingtalk.com"
-    DINGTALK_TOKEN_URL = "https://oapi.dingtalk.com/gettoken"  # noqa: S105
-    DINGTALK_DEPT_LIST_URL = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
-    DINGTALK_USER_LIST_URL = "https://oapi.dingtalk.com/topapi/v2/user/list"
+    DINGTALK_API_URL: ClassVar[str] = "https://oapi.dingtalk.com"
+    DINGTALK_TOKEN_URL: ClassVar[str] = "https://oapi.dingtalk.com/gettoken"  # noqa: S105
+    DINGTALK_DEPT_LIST_URL: ClassVar[str] = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
+    DINGTALK_USER_LIST_URL: ClassVar[str] = "https://oapi.dingtalk.com/topapi/v2/user/list"
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
         super().__init__(provider, config, tenant_id)
-        self.app_key = self._config_string("app_key", "appkey", "app_id")
-        self.app_secret = self._config_string("app_secret", "appsecret", "app_secret_key")
+        self.app_key: str = self._config_string("app_key", "appkey", "app_id")
+        self.app_secret: str = self._config_string("app_secret", "appsecret", "app_secret_key")
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._dept_path_map: dict[str, str] = {}
@@ -54,11 +63,11 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                 self.DINGTALK_TOKEN_URL,
                 params={"appkey": self.app_key, "appsecret": self.app_secret},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if data.get("errcode") != 0:
-                raise RuntimeError(f"DingTalk token error: {data.get('errmsg') or data}")
-            token = data.get("access_token") or ""
-            expires_in = int(data.get("expires_in") or 7200)
+                raise RuntimeError(f"DingTalk token error: {json_as_str_or(data.get('errmsg')) or data}")
+            token = json_as_str_or(data.get("access_token"))
+            expires_in = json_as_int(data.get("expires_in"), 7200)
             self._access_token = token
             # refresh a bit earlier
             self._token_expires_at = datetime.now(UTC) + timedelta(seconds=max(expires_in - 60, 60))
@@ -93,27 +102,40 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     params={"access_token": token},
                     json={"dept_id": parent_id},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if data.get("errcode") != 0:
-                    raise RuntimeError(f"DingTalk department list error: {data.get('errmsg') or data}")
+                    raise RuntimeError(f"DingTalk department list error: {json_as_str_or(data.get('errmsg')) or data}")
 
                 result = data.get("result")
                 if isinstance(result, list):
-                    items = result
-                elif isinstance(result, dict):
-                    items = result.get("department", []) or []
+                    items = [json_object_from(item) for item in object_list_from_row(result)]
                 else:
-                    items = []
+                    result_obj = json_object_from(result)
+                    items = [json_object_from(item) for item in object_list_from_row(result_obj.get("department"))]
 
                 for item in items:
-                    dept_id = int(item.get("dept_id"))
-                    dept_name = item.get("name", "")
+                    raw_dept_id = item.get("dept_id")
+                    if raw_dept_id is None:
+                        continue
+                    if isinstance(raw_dept_id, int) and not isinstance(raw_dept_id, bool):
+                        dept_id = raw_dept_id
+                    elif isinstance(raw_dept_id, str) and raw_dept_id.strip():
+                        dept_id = int(raw_dept_id)
+                    else:
+                        continue
+                    dept_name = json_as_str_or(item.get("name"))
                     # Use actual parent_id from API response to preserve real hierarchy
                     raw_parent_id = item.get("parent_id")
-                    if dept_id == 1 or not raw_parent_id or int(raw_parent_id) == dept_id:
+                    if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool):
+                        parent_int: int | None = raw_parent_id
+                    elif isinstance(raw_parent_id, str) and raw_parent_id.strip():
+                        parent_int = int(raw_parent_id)
+                    else:
+                        parent_int = None
+                    if dept_id == 1 or not parent_int or parent_int == dept_id:
                         parent_external = None  # Root has no parent
                     else:
-                        parent_external = str(int(raw_parent_id))
+                        parent_external = str(parent_int)
                     external_id = str(dept_id)
                     dept_index[external_id] = (dept_name, parent_external)
                     all_depts.append(
@@ -121,7 +143,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                             external_id=external_id,
                             name=dept_name,
                             parent_external_id=parent_external,
-                            member_count=item.get("member_count", 0) or 0,
+                            member_count=json_as_int(item.get("member_count")),
                             raw_data=item,
                         )
                     )
@@ -161,40 +183,47 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     params={"access_token": token},
                     json={"dept_id": dept_id, "cursor": cursor, "size": 100},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if data.get("errcode") != 0:
-                    raise RuntimeError(f"DingTalk user list error: {data.get('errmsg') or data}")
+                    raise RuntimeError(f"DingTalk user list error: {json_as_str_or(data.get('errmsg')) or data}")
 
-                result = data.get("result", {}) or {}
-                items = result.get("list", []) or []
-                for item in items:
-                    external_id = item.get("userid") or item.get("user_id") or ""
+                result = json_object_from(data.get("result"))
+                for item_raw in object_list_from_row(result.get("list")):
+                    item = json_object_from(item_raw)
+                    external_id = json_as_str_or(item.get("userid")) or json_as_str_or(item.get("user_id"))
                     # Get user's actual department list from DingTalk data
-                    dept_id_list = item.get("dept_id_list", [])
-                    department_ids = [str(did) for did in dept_id_list] if dept_id_list else [department_external_id]
+                    dept_id_list = item.get("dept_id_list")
+                    department_ids = (
+                        [str(did) for did in list[object](dept_id_list)]
+                        if isinstance(dept_id_list, list) and dept_id_list
+                        else [department_external_id]
+                    )
                     # Use last level department (last item in list is most specific)
                     last_dept_id = department_ids[-1] if department_ids else department_external_id
                     last_dept_path = self._dept_path_map.get(last_dept_id, "")
                     user = ExternalUser(
                         external_id=external_id,
-                        unionid=item.get("unionid", "") or "",
-                        open_id=item.get("openid", "") or "",
-                        name=item.get("name", ""),
-                        email=item.get("email", "") or "",
-                        avatar_url=item.get("avatar", "") or "",
-                        title=item.get("title", "") or "",
+                        unionid=json_as_str_or(item.get("unionid")),
+                        open_id=json_as_str_or(item.get("openid")),
+                        name=json_as_str_or(item.get("name")),
+                        email=json_as_str_or(item.get("email")),
+                        avatar_url=json_as_str_or(item.get("avatar")),
+                        title=json_as_str_or(item.get("title")),
                         department_external_id=last_dept_id,
                         department_path=last_dept_path,
                         department_ids=department_ids,
-                        mobile=item.get("mobile", "") or "",
-                        status="active" if item.get("active", True) else "inactive",
+                        mobile=json_as_str_or(item.get("mobile")),
+                        status="active" if json_as_bool(item.get("active"), True) else "inactive",
                         raw_data=item,
                     )
                     users.append(user)
 
                 if not result.get("has_more"):
                     break
-                cursor = int(result.get("next_cursor") or 0)
+                next_cursor = result.get("next_cursor") or 0
+                cursor = (
+                    int(next_cursor) if isinstance(next_cursor, str | int) and not isinstance(next_cursor, bool) else 0
+                )
 
         return users
 
@@ -221,5 +250,5 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
             return full
 
         for did in list(dept_index.keys()):
-            compute_path(did)
+            _ = compute_path(did)
         return paths

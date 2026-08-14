@@ -101,7 +101,7 @@ async def _tenant_default_model_id(tenant_id: uuid.UUID | None) -> uuid.UUID | N
 
 
 async def _create_personal_assistant(
-    db: Any,
+    db: object | None,
     user: UserRecord,
     data: PersonalAssistantRequest,
 ):
@@ -114,7 +114,8 @@ async def _create_personal_assistant(
     boundaries = data.boundaries.strip()
     bio = (
         "A private assistant for daily coordination, notes, follow-ups, drafts, and light planning. "
-        f"{personality_note}" + (f" Boundaries: {boundaries}" if boundaries else "")
+        + f"{personality_note}"
+        + (f" Boundaries: {boundaries}" if boundaries else "")
     )
 
     obj_in: dict[str, Any] = {
@@ -135,7 +136,7 @@ async def _create_personal_assistant(
 
     agent = await agent_dao.create(obj_in=obj_in)
 
-    await participant_dao.create(
+    _ = await participant_dao.create(
         obj_in={
             "type": "agent",
             "ref_id": agent.id,
@@ -143,7 +144,7 @@ async def _create_personal_assistant(
             "avatar_url": agent.avatar_url,
         }
     )
-    await agent_permission_dao.create(
+    _ = await agent_permission_dao.create(
         obj_in={
             "agent_id": agent.id,
             "scope_type": "user",
@@ -151,7 +152,7 @@ async def _create_personal_assistant(
             "access_level": "manage",
         }
     )
-    await ensure_access_granted_platform_relationships(db, agent, created_by_user_id=user.id)
+    _ = await ensure_access_granted_platform_relationships(db, agent, created_by_user_id=user.id)
 
     from app.services.agent_manager import agent_manager
 
@@ -162,12 +163,12 @@ async def _create_personal_assistant(
     )
     from app.api.relationships import _regenerate_relationships_file
 
-    await _regenerate_relationships_file(db, agent.id)
+    await _regenerate_relationships_file(agent.id)
 
     try:
-        await agent_manager.start_container(db, agent)
+        _ = await agent_manager.start_container(db, agent)
     except Exception:
-        await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
+        _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
         raise
 
     refreshed = await agent_dao.get(agent.id)
@@ -189,8 +190,8 @@ async def start_onboarding(data: OnboardingStartRequest, current_user: UserRecor
 
 @router.post("/personal-assistant", status_code=status.HTTP_201_CREATED)
 async def create_personal_assistant(
-    data: PersonalAssistantRequest, current_user: UserRecord = Depends(get_current_user), db=None
-):
+    data: PersonalAssistantRequest, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+) -> dict[str, Any]:
     """Create the user's private assistant and advance onboarding."""
     row = await _ensure_row(current_user, "join")
     if row.personal_assistant_agent_id:

@@ -10,6 +10,7 @@ from typing import TypedDict
 
 from app.config import get_settings
 from app.core.events import get_redis
+from app.core.json_types import json_loads_value, json_object_from, str_from_row_opt
 
 # Key prefixes for Redis
 EMAIL_VERIFICATION_CODE_KEY_PREFIX = "email_verify:token:"
@@ -36,7 +37,7 @@ class EmailVerificationService:
         # Invalidate previous code for this user if exists
         old_code_hash = await redis.get(user_key)
         if old_code_hash:
-            await redis.delete(f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{old_code_hash}")
+            _ = await redis.delete(f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{old_code_hash}")
 
         # Generate a random 6-digit code
         raw_code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
@@ -56,9 +57,9 @@ class EmailVerificationService:
         token_data = json.dumps({"identity_id": str(identity_id), "email": email})
 
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.setex(token_key, ttl_seconds, token_data)
-            pipe.setex(user_key, ttl_seconds, code_hash)
-            await pipe.execute()
+            _ = pipe.setex(token_key, ttl_seconds, token_data)
+            _ = pipe.setex(user_key, ttl_seconds, code_hash)
+            _ = await pipe.execute()
 
         return raw_code, expires_at
 
@@ -80,9 +81,12 @@ class EmailVerificationService:
             return None
 
         try:
-            token_data = json.loads(token_data_str)
-            identity_id = uuid.UUID(token_data["identity_id"])
-            email = token_data["email"]
+            token_data = json_object_from(json_loads_value(token_data_str))
+            identity_raw = str_from_row_opt(token_data.get("identity_id"))
+            email = str_from_row_opt(token_data.get("email"))
+            if identity_raw is None or email is None:
+                return None
+            identity_id = uuid.UUID(identity_raw)
         except json.JSONDecodeError, KeyError, ValueError:
             return None
 
@@ -90,9 +94,9 @@ class EmailVerificationService:
 
         # Atomic delete to ensure single-use
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.delete(token_key)
-            pipe.delete(user_key)
-            await pipe.execute()
+            _ = pipe.delete(token_key)
+            _ = pipe.delete(user_key)
+            _ = await pipe.execute()
 
         return {"identity_id": identity_id, "email": email}
 

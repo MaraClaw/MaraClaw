@@ -14,7 +14,7 @@ from .a2a_context import A2AContext
 
 async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
     try:
-        await gateway_message_dao.create(
+        _ = await gateway_message_dao.create(
             obj_in={
                 "agent_id": ctx.target_agent.id,
                 "sender_agent_id": ctx.source_agent.id,
@@ -41,7 +41,7 @@ async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
         status_hint = "online" if online else "offline (message will be delivered on next heartbeat)"
         return (
             f"✅ Message sent to {ctx.target_agent.name} (OpenClaw agent, currently {status_hint}). "
-            f"The message has been queued and will be delivered when the agent polls for updates."
+            + "The message has been queued and will be delivered when the agent polls for updates."
         )
     except Exception as error:
         logger.exception(f"[A2A] _a2a_handle_openclaw failed: from={ctx.source_agent.id}, to={ctx.target_agent.id}")
@@ -90,17 +90,17 @@ async def _a2a_handle_task_delegate(ctx: A2AContext) -> str:
         trigger_name = f"a2a_wait_{ctx.target_agent.name.lower().replace(' ', '_')}"
         trigger_reason = (
             f"{ctx.target_agent.name} has replied with the result of a delegated task. "
-            f"Original task: {ctx.message_text[:200]}. "
-            f"Steps: 1) Process {ctx.target_agent.name}'s reply. "
-            f"2) Mark focus item '{focus_id}' as completed. "
-            f"3) Cancel this trigger. "
-            f"USER-FACING OUTPUT RULES: Your reply goes directly to the user's chat. "
-            f"Write in natural, conversational language as if talking to a colleague. "
-            f"NEVER use technical terms like: trigger name, focus item, a2a_wait, "
-            f"task_delegate, focus_ref, or any internal identifier. "
-            f"NEVER mention your internal operations (canceling triggers, updating focus, "
-            f"marking items complete, trigger status, etc.). "
-            f"Just summarize the task result in plain language."
+            + f"Original task: {ctx.message_text[:200]}. "
+            + f"Steps: 1) Process {ctx.target_agent.name}'s reply. "
+            + f"2) Mark focus item '{focus_id}' as completed. "
+            + "3) Cancel this trigger. "
+            + "USER-FACING OUTPUT RULES: Your reply goes directly to the user's chat. "
+            + "Write in natural, conversational language as if talking to a colleague. "
+            + "NEVER use technical terms like: trigger name, focus item, a2a_wait, "
+            + "task_delegate, focus_ref, or any internal identifier. "
+            + "NEVER mention your internal operations (canceling triggers, updating focus, "
+            + "marking items complete, trigger status, etc.). "
+            + "Just summarize the task result in plain language."
         )
         try:
             await agent_tools._create_on_message_trigger(
@@ -154,17 +154,17 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
     try:
         suffix = (
             "\n\n--- Agent-to-Agent Message ---\n"
-            "You are receiving a message from another digital employee. "
-            "Reply concisely and helpfully. Focus on the request and provide a clear answer.\n"
-            "\n🔴 **RESPONSE PROTOCOL - MANDATORY:**\n"
-            'You MUST call `finish(content="...")` with your complete answer. '
-            "Do NOT output plain text without calling `finish`. "
-            "Plain text responses will be REJECTED and you will be asked to redo.\n"
-            "\n** CRITICAL FILE DELIVERY RULE **\n"
-            f"After you write any file (report, document, analysis, etc.) that the requesting agent needs, "
-            f'you MUST call `send_file_to_agent(agent_name="{ctx.source_agent.name}", file_path="<path>")` '
-            f"to deliver it. The other agent CANNOT access your workspace. "
-            f"Never just tell them the path - always deliver explicitly.\n"
+            + "You are receiving a message from another digital employee. "
+            + "Reply concisely and helpfully. Focus on the request and provide a clear answer.\n"
+            + "\n🔴 **RESPONSE PROTOCOL - MANDATORY:**\n"
+            + 'You MUST call `finish(content="...")` with your complete answer. '
+            + "Do NOT output plain text without calling `finish`. "
+            + "Plain text responses will be REJECTED and you will be asked to redo.\n"
+            + "\n** CRITICAL FILE DELIVERY RULE **\n"
+            + "After you write any file (report, document, analysis, etc.) that the requesting agent needs, "
+            + f'you MUST call `send_file_to_agent(agent_name="{ctx.source_agent.name}", file_path="<path>")` '
+            + "to deliver it. The other agent CANNOT access your workspace. "
+            + "Never just tell them the path - always deliver explicitly.\n"
         )
 
         conversation_messages = list(ctx.conversation_history)
@@ -189,7 +189,7 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
             return target_reply or f"⚠️ {ctx.target_agent.name} did not respond (LLM returned empty)"
 
         tgt_part = await participant_dao.get_by_type_ref("agent", ctx.target_agent.id)
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=ctx.session_agent_id,
             user_id=ctx.owner_id,
             role="assistant",

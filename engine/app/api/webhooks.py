@@ -8,11 +8,14 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Awaitable
+from typing import Protocol
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.events import get_redis
+from app.core.json_types import int_from_row, json_loads_value
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
@@ -25,6 +28,18 @@ RATE_LIMIT = 5  # max hits per minute per token
 MAX_PAYLOAD_SIZE = 65536  # 64KB max payload
 
 
+class _RedisExecute(Protocol):
+    def execute(self) -> Awaitable[object]: ...
+
+
+async def _count_from_pipeline(pipe: _RedisExecute) -> int:
+    executed: object = await pipe.execute()
+    if not isinstance(executed, (list, tuple)) or len(executed) < 3:
+        # Fail closed: an unreadable pipeline result must not look like "no hits".
+        return 60
+    return int_from_row(list[object](executed)[2])
+
+
 async def _record_and_count_hits(token: str) -> int:
     """Record the current hit in Redis and return the rolling 60-second count."""
     redis = await get_redis()
@@ -32,12 +47,11 @@ async def _record_and_count_hits(token: str) -> int:
     key = f"webhook:rate:{token}"
     member = f"{now}:{hashlib.sha256(f'{token}:{now}'.encode()).hexdigest()[:8]}"
     async with redis.pipeline(transaction=True) as pipe:
-        pipe.zremrangebyscore(key, 0, now - 60)
-        pipe.zadd(key, {member: now})
-        pipe.zcard(key)
-        pipe.expire(key, 120)
-        _, _, count, _ = await pipe.execute()
-    return int(count)
+        _ = pipe.zremrangebyscore(key, 0, now - 60)
+        _ = pipe.zadd(key, {member: now})
+        _ = pipe.zcard(key)
+        _ = pipe.expire(key, 120)
+        return await _count_from_pipeline(pipe)
 
 
 @router.post("/t/{token}")
@@ -113,7 +127,7 @@ async def receive_webhook(token: str, request: Request):
         # Try to pretty-format JSON for readability
         payload_obj = None
         try:
-            payload_obj = json.loads(payload_str)
+            payload_obj = json_loads_value(payload_str)
             payload_str = json.dumps(payload_obj, ensure_ascii=False, indent=2)
         except json.JSONDecodeError:
             payload_obj = None

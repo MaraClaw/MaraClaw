@@ -57,12 +57,14 @@ def _gogcli_data_dir(agent_dir: Path) -> Path:
     return data_dir
 
 
-async def get_gogcli_credential_state(db: Any, agent_id: UUID) -> GogcliCredentialStateRecord | None:
+async def get_gogcli_credential_state(db: object | None, agent_id: UUID) -> GogcliCredentialStateRecord | None:
     """Return the persisted gogcli credential row for one agent."""
     return await gogcli_credential_state_dao.get_by_agent(agent_id)
 
 
-async def upsert_gogcli_keyring_password(db: Any, agent_id: UUID, password: str) -> GogcliCredentialStateRecord:
+async def upsert_gogcli_keyring_password(
+    db: object | None, agent_id: UUID, password: str
+) -> GogcliCredentialStateRecord:
     """Persist an encrypted gogcli file-keyring password for one agent."""
     now = datetime.now(UTC)
     encrypted_password = encrypt_data(password, settings.SECRET_KEY)
@@ -76,7 +78,7 @@ async def upsert_gogcli_keyring_password(db: Any, agent_id: UUID, password: str)
     return await gogcli_credential_state_dao.upsert_fields(agent_id, fields)
 
 
-async def restore_gogcli_state(db: Any, agent_id: UUID, agent_dir: Path) -> bool:
+async def restore_gogcli_state(db: object | None, agent_id: UUID, agent_dir: Path) -> bool:
     """Restore encrypted gogcli keyring and data snapshot into a materialized agent directory."""
     state = await gogcli_credential_state_dao.get_by_agent(agent_id)
     if state is None:
@@ -86,7 +88,7 @@ async def restore_gogcli_state(db: Any, agent_id: UUID, agent_dir: Path) -> bool
     try:
         if state.encrypted_keyring_password:
             password = decrypt_data(state.encrypted_keyring_password, settings.SECRET_KEY)
-            await run_sync(write_gogcli_keyring_secret, agent_id, password)
+            _ = await run_sync(write_gogcli_keyring_secret, agent_id, password)
             restored = True
 
         if state.encrypted_gog_data_archive:
@@ -94,7 +96,7 @@ async def restore_gogcli_state(db: Any, agent_id: UUID, agent_dir: Path) -> bool
             await run_sync(restore_gogcli_data_archive, agent_dir, archive_b64)
             restored = True
     except (ValueError, binascii.Error, zipfile.BadZipFile, OSError, GogcliArchivePathError) as error:
-        await gogcli_credential_state_dao.update(
+        _ = await gogcli_credential_state_dao.update(
             db_obj=state,
             obj_in={"status": "needs_reauth", "last_status_checked_at": datetime.now(UTC)},
         )
@@ -102,7 +104,7 @@ async def restore_gogcli_state(db: Any, agent_id: UUID, agent_dir: Path) -> bool
         return False
 
     if restored:
-        await gogcli_credential_state_dao.update(
+        _ = await gogcli_credential_state_dao.update(
             db_obj=state,
             obj_in={"last_restored_at": datetime.now(UTC)},
         )
@@ -110,7 +112,7 @@ async def restore_gogcli_state(db: Any, agent_id: UUID, agent_dir: Path) -> bool
 
 
 async def capture_authenticated_gogcli_state(
-    db: Any,
+    db: object | None,
     agent_id: UUID,
     agent_dir: Path,
     status: GogcliAuthStatus,
@@ -141,12 +143,12 @@ async def capture_authenticated_gogcli_state(
     )
 
 
-async def mark_gogcli_needs_reauth_if_snapshot_exists(db: Any, agent_id: UUID) -> bool:
+async def mark_gogcli_needs_reauth_if_snapshot_exists(db: object | None, agent_id: UUID) -> bool:
     """Mark a previously snapshotted gogcli state as requiring re-authentication."""
     state = await gogcli_credential_state_dao.get_by_agent(agent_id)
     if state is None or not state.encrypted_gog_data_archive:
         return False
-    await gogcli_credential_state_dao.update(
+    _ = await gogcli_credential_state_dao.update(
         db_obj=state,
         obj_in={"status": "needs_reauth", "last_status_checked_at": datetime.now(UTC)},
     )
@@ -159,7 +161,7 @@ def build_gogcli_data_archive(agent_dir: Path) -> str | None:
     if not data_dir.is_dir():
         return None
     data_root = data_dir.resolve()
-    files = []
+    files: list[Path] = []
     for path in sorted(data_dir.rglob("*")):
         if path.is_symlink() or not path.is_file():
             continue
@@ -171,7 +173,7 @@ def build_gogcli_data_archive(agent_dir: Path) -> str | None:
 
     archive_buffer = io.BytesIO()
     with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in files:
+        for path in list[Path](files):
             archive.write(path, path.relative_to(data_dir).as_posix())
     return base64.b64encode(archive_buffer.getvalue()).decode("ascii")
 

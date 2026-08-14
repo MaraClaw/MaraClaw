@@ -111,7 +111,7 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
             "is_genesis": True,
         }
     )
-    await participant_dao.create_for_user(
+    _ = await participant_dao.create_for_user(
         user.id,
         display_name=user.display_name,
         avatar_url=user.avatar_url,
@@ -121,12 +121,29 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
     return user
 
 
+async def _rehydrate_identity_hash(user: UserRecord) -> UserRecord:
+    """Reload password_hash from SQL when a session snapshot stripped it."""
+    identity = user.identity
+    identity_id = user.identity_id or (identity.id if identity is not None else None)
+    if identity is not None and identity.password_hash:
+        return user
+    if identity_id is None:
+        return user
+    try:
+        fresh = await identity_dao.get(identity_id)
+    except RuntimeError:
+        return user
+    if fresh is not None:
+        user.identity = fresh
+    return user
+
+
 def _has_login_credentials(user: UserRecord) -> bool:
-    identity = getattr(user, "identity", None)
+    identity = user.identity
     if identity is None:
         return False
-    email = (getattr(identity, "email", None) or "").strip()
-    return bool(email and getattr(identity, "password_hash", None))
+    email = (identity.email or "").strip()
+    return bool(email and identity.password_hash)
 
 
 async def _find_genesis_membership() -> UserRecord | None:
@@ -137,7 +154,7 @@ async def _find_genesis_membership() -> UserRecord | None:
     earliest = await user_dao.first_by_role("platform_admin")
     if earliest is None:
         return None
-    if not getattr(earliest, "is_genesis", False):
+    if not earliest.is_genesis:
         earliest = await user_dao.update(db_obj=earliest, obj_in={"is_genesis": True}) or earliest
         earliest.is_genesis = True
     return earliest
@@ -149,6 +166,7 @@ async def _load_genesis_with_credentials() -> UserRecord | None:
     if genesis is None:
         return None
     loaded = await user_dao.get_with_identity(genesis.id) or genesis
+    loaded = await _rehydrate_identity_hash(loaded)
     if _has_login_credentials(loaded):
         return loaded
     return None
@@ -156,7 +174,7 @@ async def _load_genesis_with_credentials() -> UserRecord | None:
 
 async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password: str) -> UserRecord:
     """Attach missing email/password to an existing genesis PA from env."""
-    loaded = await user_dao.get_with_identity(genesis.id) or genesis
+    loaded = await _rehydrate_identity_hash(await user_dao.get_with_identity(genesis.id) or genesis)
     identity = loaded.identity
     if identity is None and loaded.identity_id:
         identity = await identity_dao.get(loaded.identity_id)
@@ -167,7 +185,7 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
         if taken is not None:
             raise PlatformAdminSeedError(
                 f"Cannot attach PLATFORM_ADMIN_EMAIL {email} to the genesis platform admin; "
-                "that email already belongs to another identity."
+                + "that email already belongs to another identity."
             )
         username = await _unique_username(email)
         identity = await identity_dao.create_identity(
@@ -178,7 +196,7 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
             email_verified=True,
             must_change_password=True,
         )
-        await user_dao.update(db_obj=loaded, obj_in={"identity_id": identity.id, "is_genesis": True})
+        _ = await user_dao.update(db_obj=loaded, obj_in={"identity_id": identity.id, "is_genesis": True})
         return await _ensure_platform_user(identity)
 
     updates: dict[str, object] = {
@@ -193,7 +211,7 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
         if taken is not None and taken.id != identity.id:
             raise PlatformAdminSeedError(
                 f"Cannot attach PLATFORM_ADMIN_EMAIL {email} to the genesis platform admin; "
-                "that email already belongs to another identity."
+                + "that email already belongs to another identity."
             )
         updates["email"] = email
     identity = await identity_dao.update(db_obj=identity, obj_in=updates) or identity
@@ -210,12 +228,12 @@ async def ensure_platform_admin() -> UserRecord:
     if existing is not None:
         settings = get_settings()
         env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
-        actual = (getattr(getattr(existing, "identity", None), "email", None) or "").strip().lower()
+        actual = ((existing.identity.email if existing.identity is not None else None) or "").strip().lower()
         if env_email and actual and env_email != actual:
             logger.warning(
                 "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
-                "env seed skipped because the database already has usable credentials. "
-                "Sign in with the genesis email (admin console).",
+                + "env seed skipped because the database already has usable credentials. "
+                + "Sign in with the genesis email (admin console).",
                 env_email,
                 actual,
             )
@@ -224,7 +242,7 @@ async def ensure_platform_admin() -> UserRecord:
                 "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
                 existing.id,
             )
-        identity = getattr(existing, "identity", None)
+        identity = existing.identity
         if identity is not None:
             return await _ensure_platform_user(identity)
         return existing
@@ -236,8 +254,8 @@ async def ensure_platform_admin() -> UserRecord:
     if not email or not password:
         raise PlatformAdminSeedError(
             "Genesis platform admin credentials were not found in the database. "
-            "Set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to seed the "
-            "genesis platform admin."
+            + "Set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to seed the "
+            + "genesis platform admin."
         )
     if len(password) < 6:
         raise PlatformAdminSeedError("PLATFORM_ADMIN_PASSWORD must be at least 6 characters.")
@@ -249,7 +267,7 @@ async def ensure_platform_admin() -> UserRecord:
             user = await _repair_genesis_from_env(existing_genesis, email=email, password=password)
             logger.info(
                 "[startup] Repaired genesis platform admin credentials from env (user_id=%s); "
-                "password change required on next login",
+                + "password change required on next login",
                 user.id,
             )
             return user
@@ -259,12 +277,12 @@ async def ensure_platform_admin() -> UserRecord:
             if not identity.is_active:
                 raise PlatformAdminSeedError(
                     f"Identity {email} exists but is disabled; refusing to auto-elevate. "
-                    "Re-enable the account manually or use a different PLATFORM_ADMIN_EMAIL."
+                    + "Re-enable the account manually or use a different PLATFORM_ADMIN_EMAIL."
                 )
             if not identity.password_hash or not await verify_password_async(password, identity.password_hash):
                 raise PlatformAdminSeedError(
                     f"Identity {email} already exists but PLATFORM_ADMIN_PASSWORD does not match. "
-                    "Refusing to elevate without proving the bootstrap secret."
+                    + "Refusing to elevate without proving the bootstrap secret."
                 )
             identity = (
                 await identity_dao.update(
@@ -280,7 +298,7 @@ async def ensure_platform_admin() -> UserRecord:
             user = await _ensure_platform_user(identity)
             logger.info(
                 "[startup] Elevated existing identity %s to platform admin (id=%s); "
-                "password change required on next login",
+                + "password change required on next login",
                 email,
                 user.id,
             )

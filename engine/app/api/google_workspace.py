@@ -54,7 +54,7 @@ async def _handle_google_sso_callback(
     sid: uuid.UUID | None,
     provider_id: uuid.UUID | None,
     request: Request | None,
-    db,
+    db: object | None,
 ):
     tenant_id = None
     if sid:
@@ -110,7 +110,7 @@ async def _handle_google_sso_callback(
         try:
             session = await sso_scan_session_dao.get(sid)
             if session:
-                await sso_scan_session_dao.update(
+                _ = await sso_scan_session_dao.update(
                     db_obj=session,
                     obj_in={
                         "status": "authorized",
@@ -137,7 +137,7 @@ async def _handle_google_admin_sync_callback(
     code: str,
     provider_id: uuid.UUID,
     request: Request,
-    db,
+    db: object | None,
 ):
     provider = await get_google_provider(None, provider_id)
     redirect_uri = await get_google_redirect_uri(None, provider, request)
@@ -170,7 +170,7 @@ async def _handle_google_admin_sync_callback(
         new_config["google_admin_refresh_token_encrypted"] = encrypt_data(refresh_token, settings.SECRET_KEY)
         new_config["google_admin_authorized_email"] = profile_email
         new_config["google_admin_authorized_at"] = datetime.now(UTC).isoformat()
-        await identity_provider_dao.update(db_obj=provider, obj_in={"config": new_config})
+        _ = await identity_provider_dao.update(db_obj=provider, obj_in={"config": new_config})
     except Exception as e:
         logger.error(f"Google Workspace admin sync authorization failed: {e}")
         return HTMLResponse(
@@ -194,7 +194,7 @@ async def _handle_google_admin_sync_callback(
 
 
 @router.get(GOOGLE_CALLBACK_PATH)
-async def google_workspace_callback(code: str, request: Request, state: str | None = None, db=None):
+async def google_workspace_callback(code: str, request: Request, state: str | None = None, db: object | None = None):
     """Unified callback for Google Workspace SSO login and admin authorization."""
     parsed_state = parse_google_oauth_state(state) if state else None
     if parsed_state:

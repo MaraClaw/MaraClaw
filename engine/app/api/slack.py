@@ -11,6 +11,15 @@ from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.core.json_types import (
+    http_header,
+    json_as_str,
+    json_as_str_or,
+    json_loads_object,
+    json_object_from,
+    json_object_from_response,
+    mapping_from_row,
+)
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -81,11 +90,11 @@ async def get_slack_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-    db=None,
+    db: object | None = None,
 ):
     from app.services.platform_service import platform_service
 
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     public_base = await platform_service.get_public_base_url(db, request)
     return {"webhook_url": f"{public_base}/api/channel/slack/{agent_id}/webhook"}
 
@@ -99,6 +108,7 @@ async def delete_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 # ─── Event Webhook ──────────────────────────────────────
+
 
 def _verify_slack_signature(signing_secret: str, body: bytes, headers: Mapping[str, str]) -> bool:
     """Verify Slack's HMAC-SHA256 request signature."""
@@ -120,7 +130,7 @@ async def _send_slack_messages(bot_token: str, channel: str, text: str) -> None:
     chunks = [text[i : i + SLACK_MSG_LIMIT] for i in range(0, len(text), SLACK_MSG_LIMIT)]
     async with httpx.AsyncClient(timeout=10) as client:
         for chunk in chunks:
-            await client.post(
+            _ = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
                 json={"channel": channel, "text": chunk},
@@ -145,9 +155,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if not _verify_slack_signature(signing_secret, body_bytes, dict(request.headers)):
         return Response(status_code=401)
 
-    import json
-
-    body = json.loads(body_bytes)
+    body = json_loads_object(body_bytes)
     logger.info(f"[Slack] Webhook for {agent_id}: type={body.get('type')}")
 
     if body.get("type") == "url_verification":
@@ -156,12 +164,12 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if body.get("type") != "event_callback":
         return {"ok": True}
 
-    event = body.get("event", {})
-    event_id = body.get("event_id", "")
+    event = json_object_from(body.get("event"))
+    event_id = json_as_str_or(body.get("event_id"))
 
     from app.services.channels import dedup as channel_dedup
 
-    if event_id and channel_dedup.already_processed("slack", event_id, cap=2000):
+    if event_id and await channel_dedup.already_processed_shared("slack", event_id, cap=2000):
         return {"ok": True}
 
     if event.get("bot_id") or event.get("subtype"):
@@ -171,18 +179,19 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if event_type not in ("message", "app_mention"):
         return {"ok": True}
 
-    user_text = event.get("text", "").strip()
+    user_text = json_as_str_or(event.get("text")).strip()
     import re
 
     user_text = re.sub(r"^<@[A-Z0-9]+>\s*", "", user_text).strip()
 
-    slack_files = event.get("files", [])
+    files_raw = event.get("files")
+    slack_files = [json_object_from(item) for item in files_raw] if isinstance(files_raw, list) else []
 
     if not user_text and not slack_files:
         return {"ok": True}
 
-    channel_id = event.get("channel", "")
-    sender_id = event.get("user", "")
+    channel_id = json_as_str_or(event.get("channel"))
+    sender_id = json_as_str_or(event.get("user"))
     _is_group_slack = bool(channel_id) and not channel_id.startswith("D")
     conv_id = f"slack_{channel_id}" if channel_id else f"slack_dm_{sender_id}"
 
@@ -212,27 +221,33 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                     headers={"Authorization": f"Bearer {_bot_token_for_info}"},
                     params={"user": sender_id},
                 )
-                _info_data = _info_resp.json()
+                _info_data = json_object_from_response(_info_resp)
                 if _info_data.get("ok"):
-                    _profile = _info_data.get("user", {}).get("profile", {})
+                    _user = json_object_from(_info_data.get("user"))
+                    _profile = json_object_from(_user.get("profile"))
                     _slack_real_name = (
-                        _profile.get("display_name")
-                        or _profile.get("real_name")
-                        or _info_data.get("user", {}).get("real_name")
+                        json_as_str(_profile.get("display_name"))
+                        or json_as_str(_profile.get("real_name"))
+                        or json_as_str(_user.get("real_name"))
                         or ""
                     )
-                    _slack_email = _profile.get("email", "")
+                    _slack_email = json_as_str_or(_profile.get("email"))
                     _slack_avatar = (
-                        _profile.get("image_512") or _profile.get("image_original") or _profile.get("image_192") or ""
+                        json_as_str(_profile.get("image_512"))
+                        or json_as_str(_profile.get("image_original"))
+                        or json_as_str(_profile.get("image_192"))
+                        or ""
                     )
         except Exception as _e_info:
             logger.error(f"[Slack] Failed to fetch user info for {sender_id}: {_e_info}")
 
-    _extra_info = {
-        "name": _slack_real_name or f"Slack User {sender_id[:8]}",
-        "email": _slack_email,
-        "avatar_url": _slack_avatar,
-    }
+    _extra_info = mapping_from_row(
+        {
+            "name": _slack_real_name or f"Slack User {sender_id[:8]}",
+            "email": _slack_email,
+            "avatar_url": _slack_avatar,
+        }
+    )
     platform_user = await channel_user_service.resolve_channel_user(
         db=None,
         agent=agent_obj,
@@ -273,18 +288,22 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     from app.api.feishu import _FILE_ACK_MESSAGES
 
-    _file_user_messages = []
+    _file_user_messages: list[str] = []
     _bot_token = config.app_secret or ""
     for _sf in slack_files:
-        _fname = _sf.get("name") or _sf.get("title") or f"slack_file_{_sf.get('id', 'unk')}.bin"
-        _url = _sf.get("url_private_download") or _sf.get("url_private", "")
+        _fname = (
+            json_as_str(_sf.get("name"))
+            or json_as_str(_sf.get("title"))
+            or f"slack_file_{json_as_str_or(_sf.get('id'), 'unk')}.bin"
+        )
+        _url = json_as_str(_sf.get("url_private_download")) or json_as_str_or(_sf.get("url_private"))
         if not _url:
             continue
         try:
             async with _httpx.AsyncClient(timeout=30, follow_redirects=True) as _hc:
                 _r = await _hc.get(_url, headers={"Authorization": f"Bearer {_bot_token}"})
-                _r.raise_for_status()
-                _ct = _r.headers.get("content-type", "")
+                _ = _r.raise_for_status()
+                _ct = http_header(_r.headers, "content-type")
                 if "text/html" in _ct or _r.content[:15].lower().startswith(b"<!doctype html"):
                     raise ValueError(
                         f"Got HTML response (SSO redirect) - Slack App needs 'files:read' scope. Content-Type: {_ct}"
@@ -301,26 +320,26 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.error(f"[Slack] Failed to download file {_fname}: {_e}")
 
     if not user_text and not _file_user_messages and slack_files:
-        _file_names = ", ".join(_sf.get("name", "file") for _sf in slack_files)
+        _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in slack_files)
         _ack = (
             f"I received the file(s) {_file_names}, but I cannot download their content yet. "
-            "Please verify that the Slack app has the files:read permission."
+            + "Please verify that the Slack app has the files:read permission."
         )
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,
             role="assistant",
             content=_ack,
             conversation_id=session_conv_id,
         )
-        await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+        _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
         if _bot_token and channel_id:
             await _send_slack_messages(_bot_token, channel_id, _ack)
         return {"ok": True}
 
     if _file_user_messages and not user_text:
         _file_content = " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,
             role="user",
@@ -330,14 +349,14 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         _random_source = _random.SystemRandom()
         await _asyncio.sleep(_random_source.uniform(1.0, 2.0))
         _ack = _random_source.choice(_FILE_ACK_MESSAGES)
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,
             role="assistant",
             content=_ack,
             conversation_id=session_conv_id,
         )
-        await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+        _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
         if _bot_token and channel_id:
             await _send_slack_messages(_bot_token, channel_id, _ack)
         return {"ok": True}
@@ -345,21 +364,21 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if _file_user_messages and user_text:
         user_text += "\n" + " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="user",
         content=user_text,
         conversation_id=session_conv_id,
     )
-    await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
     _cfg_app_secret = config.app_secret or ""
 
     from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs_s
 
-    async def _slack_file_sender(file_path, msg: str = ""):
+    async def _slack_file_sender(file_path: str | Path, msg: str = "") -> None:
         _fp = Path(file_path)
         if not _bot_token or not channel_id:
             return
@@ -371,19 +390,22 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                 headers={"Authorization": f"Bearer {_bot_token}"},
                 data={"filename": _fp.name, "length": str(_file_stat.st_size)},
             )
-            _ud = _upload_url_resp.json()
+            _ud = json_object_from_response(_upload_url_resp)
             if not _ud.get("ok"):
                 raise RuntimeError(f"Slack upload URL error: {_ud}")
             _upload_url = _ud["upload_url"]
             _file_id = _ud["file_id"]
-            await _hc.post(_upload_url, content=_file_bytes, headers={"Content-Type": "application/octet-stream"})
+            if not isinstance(_upload_url, str) or not isinstance(_file_id, str):
+                raise RuntimeError(f"Slack upload URL error: {_ud}")
+            _ = await _hc.post(_upload_url, content=_file_bytes, headers={"Content-Type": "application/octet-stream"})
             _complete = await _hc.post(
                 "https://slack.com/api/files.completeUploadExternal",
                 headers={"Authorization": f"Bearer {_bot_token}"},
                 json={"files": [{"id": _file_id}], "channel_id": channel_id, "initial_comment": msg or ""},
             )
-            if not _complete.json().get("ok"):
-                raise RuntimeError(f"Slack upload complete error: {_complete.json()}")
+            _complete_data = json_object_from_response(_complete)
+            if not _complete_data.get("ok"):
+                raise RuntimeError(f"Slack upload complete error: {_complete_data}")
 
     _cfs_s_token = _cfs_s.set(_slack_file_sender)
 
@@ -400,7 +422,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     _cfs_s.reset(_cfs_s_token)
     logger.info(f"[Slack] LLM reply: {reply_text[:80]}")
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="assistant",
@@ -410,7 +432,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     try:
         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
         if fresh:
-            await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
     except ValueError, TypeError:
         pass
 
@@ -423,5 +445,5 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if event_id:
         from app.services.channels import dedup as channel_dedup
 
-        channel_dedup.mark_processed("slack", event_id, cap=2000)
+        await channel_dedup.mark_processed_shared("slack", event_id, cap=2000)
     return {"ok": True}

@@ -1,7 +1,7 @@
 """OAuth handoff helpers for gogcli inside OpenClaw containers."""
 
 from collections.abc import Iterable, Sequence
-from typing import Final, Protocol
+from typing import ClassVar, Final, Protocol
 
 from anyio.to_thread import run_sync
 from pydantic import BaseModel, ConfigDict
@@ -43,7 +43,7 @@ class GogcliContainerAgent(Protocol):
 class GogcliAuthStartResult(BaseModel):
     """Safe gogcli OAuth start result for API/runtime callers."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     started: bool
     auth_url: str | None

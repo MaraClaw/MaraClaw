@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 
 class DbError(Exception):
     """Base class for application database errors."""
 
     def __init__(self, message: str, *, orig: BaseException | None = None) -> None:
         super().__init__(message)
-        self.orig = orig
+        self.orig: BaseException | None = orig
 
 
 class UniqueViolationError(DbError):
@@ -24,7 +22,7 @@ class UniqueViolationError(DbError):
         orig: BaseException | None = None,
     ) -> None:
         super().__init__(message, orig=orig)
-        self.constraint = constraint
+        self.constraint: str | None = constraint
 
 
 class ForeignKeyViolationError(DbError):
@@ -38,7 +36,7 @@ class ForeignKeyViolationError(DbError):
         orig: BaseException | None = None,
     ) -> None:
         super().__init__(message, orig=orig)
-        self.constraint = constraint
+        self.constraint: str | None = constraint
 
 
 class CheckViolationError(DbError):
@@ -52,14 +50,16 @@ class CheckViolationError(DbError):
         orig: BaseException | None = None,
     ) -> None:
         super().__init__(message, orig=orig)
-        self.constraint = constraint
+        self.constraint: str | None = constraint
 
 
-def _constraint_name(exc: Any) -> str | None:
-    diag = getattr(exc, "diag", None)
+def _constraint_name(exc: object) -> str | None:
+    from app.core.json_types import object_attr
+
+    diag = object_attr(exc, "diag")
     if diag is None:
         return None
-    name = getattr(diag, "constraint_name", None)
+    name = object_attr(diag, "constraint_name")
     return str(name) if name else None
 
 

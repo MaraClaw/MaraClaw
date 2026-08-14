@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from app.config import get_settings
+from app.core.json_types import object_attr
 
 from . import workspace_paths
 from .registry import ToolArguments, ToolOutputCallback, current_execution_context, register
+
+type AgentbayHelper = Callable[[uuid.UUID, Path, ToolArguments], Awaitable[str]]
 
 _AGENTBAY_HELPERS: Final[tuple[tuple[str, str], ...]] = (
     ("agentbay_browser_navigate", "_agentbay_browser_navigate"),
@@ -82,6 +86,15 @@ _AGENTBAY_HELPER_MODULES: Final[dict[str, str]] = {
     "_agentbay_file_transfer": "app.services.agent_tool_exec.agentbay_files",
 }
 
+
+def _load_agentbay_helper(helper_name: str) -> AgentbayHelper:
+    module = importlib.import_module(_AGENTBAY_HELPER_MODULES[helper_name])
+    loaded = object_attr(module, helper_name)
+    if not callable(loaded):
+        raise TypeError(f"AgentBay helper {helper_name} is not callable")
+    return cast(AgentbayHelper, loaded)
+
+
 _settings = get_settings()
 _WORKSPACE_ROOT: Final[Path] = Path(_settings.STORAGE_LOCAL_ROOT or _settings.AGENT_DATA_DIR)
 
@@ -103,7 +116,7 @@ def _register_agentbay_handler(tool_name: str, helper_name: str) -> None:
             if context is not None and context.workspace_root is not None
             else workspace_paths._agent_workspace_root(agent_id, workspace_root=_WORKSPACE_ROOT)
         )
-        helper = getattr(importlib.import_module(_AGENTBAY_HELPER_MODULES[helper_name]), helper_name)
+        helper = _load_agentbay_helper(helper_name)
         return await helper(agent_id, ws, arguments)
 
 

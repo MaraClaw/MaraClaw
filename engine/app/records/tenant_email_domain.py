@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row
 
 
 @dataclass(slots=True)
@@ -19,11 +21,11 @@ class TenantEmailDomainRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> TenantEmailDomainRecord:
+    def from_row(cls, row: Mapping[str, object]) -> TenantEmailDomainRecord:
         return cls(
-            id=row["id"],
-            tenant_id=row["tenant_id"],
-            domain=row["domain"],
+            id=uuid_from_row(row["id"]),
+            tenant_id=uuid_from_row(row["tenant_id"]),
+            domain=str_from_row(row["domain"]),
             is_default=bool(row.get("is_default", False)),
-            created_at=row.get("created_at"),
+            created_at=datetime_from_row(row.get("created_at")),
         )

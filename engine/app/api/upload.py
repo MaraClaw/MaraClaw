@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -84,7 +85,7 @@ async def upload_file(
     file: UploadFile = File(...),
     agent_id: str = Form(""),
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Upload a file for chat context. Saves to agent workspace/uploads/ and returns extracted text."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename")
@@ -112,7 +113,7 @@ async def upload_file(
             key = normalize_storage_key(f"{agent_id}/{workspace_path}")
             counter += 1
         await storage.write_bytes(key, content, content_type=guess_content_type(filename))
-        await ensure_local_path(key)
+        _ = await ensure_local_path(key)
         saved_filename = filename
     else:
         # No agent workspace exists to retain this upload. Keep its bytes request-scoped.

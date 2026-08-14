@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -27,21 +29,21 @@ class WorkspaceFileRevisionRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> WorkspaceFileRevisionRecord:
+    def from_row(cls, row: Mapping[str, object]) -> WorkspaceFileRevisionRecord:
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            path=row["path"],
-            operation=row.get("operation") or "write",
-            actor_type=row.get("actor_type") or "user",
-            actor_id=row.get("actor_id"),
-            session_id=row.get("session_id"),
-            before_content=row.get("before_content"),
-            after_content=row.get("after_content"),
-            content_hash=row.get("content_hash") or "",
-            group_key=row.get("group_key"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            path=str_from_row(row["path"]),
+            operation=str_from_row(row.get("operation"), "write") or "write",
+            actor_type=str_from_row(row.get("actor_type"), "user") or "user",
+            actor_id=uuid_from_row_opt(row.get("actor_id")),
+            session_id=str_from_row(row["session_id"]) or None,
+            before_content=str_from_row(row["before_content"]) or None,
+            after_content=str_from_row(row["after_content"]) or None,
+            content_hash=str_from_row(row.get("content_hash")),
+            group_key=str_from_row(row["group_key"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )
 
 
@@ -60,15 +62,18 @@ class WorkspaceEditLockRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> WorkspaceEditLockRecord:
+    def from_row(cls, row: Mapping[str, object]) -> WorkspaceEditLockRecord:
+        expires_at = datetime_from_row(row.get("expires_at"))
+        if expires_at is None:
+            raise TypeError("workspace edit lock requires expires_at")
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            path=row["path"],
-            user_id=row["user_id"],
-            expires_at=row["expires_at"],
-            session_id=row.get("session_id"),
-            heartbeat_count=int(row.get("heartbeat_count") or 0),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            path=str_from_row(row["path"]),
+            user_id=uuid_from_row(row["user_id"]),
+            expires_at=expires_at,
+            session_id=str_from_row(row["session_id"]) or None,
+            heartbeat_count=int_from_row(row.get("heartbeat_count")),
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )

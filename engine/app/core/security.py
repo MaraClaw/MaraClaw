@@ -4,9 +4,10 @@ import asyncio
 import base64
 import os
 import uuid
+from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import bcrypt
 from Crypto.Cipher import AES
@@ -16,7 +17,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.config import get_settings
-from app.dao import user_dao
+from app.dao import identity_dao, user_dao
+from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
 settings = get_settings()
@@ -128,7 +130,7 @@ def decrypt_data(ciphertext: str, key: str) -> str:
 def create_access_token(user_id: str, role: str, expires_delta: timedelta | None = None) -> str:
     """Create a JWT access token."""
     expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode = {
+    to_encode: dict[str, Any] = {
         "sub": user_id,
         "role": role,
         "exp": expire,
@@ -139,18 +141,34 @@ def create_access_token(user_id: str, role: str, expires_delta: timedelta | None
 def decode_access_token(token: str) -> AccessTokenPayload:
     """Decode and validate a JWT access token."""
     try:
-        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        decoded = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         ) from None
+    sub = decoded.get("sub")
+    role = decoded.get("role")
+    exp = decoded.get("exp")
+    if not isinstance(sub, str) or not isinstance(role, str) or not isinstance(exp, int):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    return {"sub": sub, "role": role, "exp": exp}
 
 
 PASSWORD_CHANGE_REQUIRED_DETAIL: dict[str, object] = {
     "must_change_password": True,
     "message": "Password change required before continuing.",
 }
+
+
+async def load_identity_for_password(identity_id: uuid.UUID | None) -> IdentityRecord | None:
+    """Load identity from SQL. Never use a session-cache snapshot for password verify."""
+    if identity_id is None:
+        return None
+    return await identity_dao.get(identity_id)
 
 
 def raise_if_password_change_required(user: UserRecord) -> None:
@@ -227,7 +245,7 @@ async def get_current_admin(current_user: UserRecord = Depends(get_current_user)
 ROLE_HIERARCHY = ["member", "agent_admin", "org_admin", "platform_admin"]
 
 
-def require_role(*allowed_roles: str):
+def require_role(*allowed_roles: str) -> Callable[..., Coroutine[Any, Any, UserRecord]]:
     """Factory to create a dependency that checks if the user has one of the allowed roles.
 
     Usage:
@@ -235,7 +253,7 @@ def require_role(*allowed_roles: str):
         async def my_endpoint(...):
     """
 
-    async def _check(current_user=Depends(get_current_user)):
+    async def _check(current_user: UserRecord = Depends(get_current_user)) -> UserRecord:
         identity_is_platform_admin = bool(getattr(getattr(current_user, "identity", None), "is_platform_admin", False))
         if current_user.role not in allowed_roles and not (
             "platform_admin" in allowed_roles and identity_is_platform_admin

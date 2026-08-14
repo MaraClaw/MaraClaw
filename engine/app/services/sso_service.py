@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, tenant_dao, user_dao
+from app.dao.base import as_uuid
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.platform_service import platform_service
@@ -29,7 +30,7 @@ class SSOService:
         """
         if not email:
             return None
-        user = await user_dao.get_by_email_and_tenant(email, tenant_id)
+        user = await user_dao.get_by_email_and_tenant(email, as_uuid(tenant_id))
         if user and user.is_active:
             return await user_dao.get_with_identity(user.id)
 
@@ -57,7 +58,7 @@ class SSOService:
         normalized_mobile = re.sub(r"[\s\-\+]", "", mobile)
         if not normalized_mobile:
             return None
-        user = await user_dao.get_by_phone_and_tenant(normalized_mobile, tenant_id)
+        user = await user_dao.get_by_phone_and_tenant(normalized_mobile, as_uuid(tenant_id))
         if user and user.is_active:
             return await user_dao.get_with_identity(user.id)
 
@@ -93,13 +94,13 @@ class SSOService:
         provider_type: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> UserRecord | None:
         """Resolve user from external identity via OrgMember."""
         # Accept legacy `db=` kwarg for gradual call-site migration.
         _compat.pop("db", None)
 
-        provider = await identity_provider_dao.get_preferred(provider_type, tenant_id)
+        provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             return None
 
@@ -118,7 +119,7 @@ class SSOService:
             return {}
         raw_data = identity_data.get("raw_data")
         if isinstance(raw_data, dict):
-            return raw_data
+            return dict[str, Any](raw_data)
         return identity_data
 
     def _extract_identity_ids(
@@ -206,12 +207,12 @@ class SSOService:
         provider_user_id: str,
         identity_data: dict[str, Any] | None = None,
         tenant_id: str | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> OrgMemberRecord:
         """Link an external identity to an existing user via OrgMember."""
         _compat.pop("db", None)
 
-        provider = await identity_provider_dao.get_preferred(provider_type, tenant_id)
+        provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             raise ValueError(f"Provider {provider_type} not found for tenant {tenant_id}")
 
@@ -287,12 +288,12 @@ class SSOService:
         user_id: str,
         provider_type: str,
         tenant_id: str | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> bool:
         """Unlink an external identity (OrgMember) from a user."""
         _compat.pop("db", None)
 
-        provider = await identity_provider_dao.get_preferred(provider_type, tenant_id)
+        provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             return False
 
@@ -301,7 +302,7 @@ class SSOService:
         if not members:
             return False
         for member in members:
-            await org_member_dao.update_fields(member.id, {"user_id": None})
+            _ = await org_member_dao.update_fields(member.id, {"user_id": None})
         return True
 
     async def check_duplicate_identity(
@@ -310,7 +311,7 @@ class SSOService:
         provider_user_id: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> UserRecord | None:
         """Check if an external identity is already linked to another user."""
         _compat.pop("db", None)
@@ -321,7 +322,7 @@ class SSOService:
             identity_data=identity_data,
         )
 
-    async def validate_sso_enablement(self, tenant_id: uuid.UUID, **_compat: Any) -> bool:
+    async def validate_sso_enablement(self, tenant_id: uuid.UUID, **_compat: object) -> bool:
         """Check if SSO can be enabled for this tenant under IP restrictions."""
         _compat.pop("db", None)
 
@@ -347,7 +348,7 @@ class SSOService:
                 conflict_names.append(f"'{name}'")
             logger.warning(
                 f"[SSO] IP conflict: tenant_id={tenant_id} cannot enable SSO, "
-                f"other tenants already have SSO enabled on IP base: {', '.join(conflict_names)}"
+                + f"other tenants already have SSO enabled on IP base: {', '.join(conflict_names)}"
             )
         return len(other_providers) == 0
 

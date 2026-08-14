@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.core.logging import logger
 from app.dao.task_dao import task_dao
-from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
 
 
 async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path):
@@ -29,7 +29,7 @@ async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path):
             for t in tasks
         ]
 
-        tasks_path.write_text(
+        _ = tasks_path.write_text(
             json.dumps(task_list, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -45,7 +45,9 @@ async def _manage_tasks(
 ) -> str:
     """Create / update / delete tasks in DB and sync to workspace."""
     action = args["action"]
-    title = args["title"]
+    title = tool_arg_str(args["title"])
+    if title is None:
+        return "Missing required argument 'title'"
 
     if action == "create":
         task_type = args.get("task_type", "todo")
@@ -82,10 +84,10 @@ async def _manage_tasks(
         if not task:
             return f"No task found matching '{title}'"
         old = task.status
-        updates: dict = {"status": args["status"]}
+        updates: dict[str, object] = {"status": args["status"]}
         if args["status"] == "done":
             updates["completed_at"] = datetime.now(UTC)
-        await task_dao.update(db_obj=task, obj_in=updates)
+        _ = await task_dao.update(db_obj=task, obj_in=updates)
         await _sync_tasks_to_file(agent_id, ws)
         return f"✅ Updated '{task.title}' from {old} to {args['status']}"
 
@@ -94,7 +96,7 @@ async def _manage_tasks(
         if not task:
             return f"No task found matching '{title}'"
         task_title = task.title
-        await task_dao.delete_with_logs(task.id)
+        _ = await task_dao.delete_with_logs(task.id)
         await _sync_tasks_to_file(agent_id, ws)
         return f"✅ Task deleted: {task_title}"
 

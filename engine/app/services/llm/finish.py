@@ -6,18 +6,20 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.json_types import is_str_dict, json_loads_object
+from app.core.tool_types import ToolDefinition
 from app.services.llm.types import LLMToolCall
 
 FINISH_TOOL_NAME = "finish"
 
-FINISH_TOOL_DEFINITION: dict[str, Any] = {
+FINISH_TOOL_DEFINITION: ToolDefinition = {
     "type": "function",
     "function": {
         "name": FINISH_TOOL_NAME,
         "description": (
             "Finish the current turn and send the final user-facing response. "
-            "You MUST call this tool exactly when you are ready to stop. Put the full answer "
-            "the user should see in content. Do not call any other tools in the same response."
+            + "You MUST call this tool exactly when you are ready to stop. Put the full answer "
+            + "the user should see in content. Do not call any other tools in the same response."
         ),
         "parameters": {
             "type": "object",
@@ -46,8 +48,8 @@ FINISH_TOOL_SEED: dict[str, Any] = {
 
 FINISH_PROTOCOL_REMINDER = (
     "Your previous response did not call any tool, so this turn is not finished. "
-    "You must either call another available tool if more work is needed, or call "
-    "`finish` with the complete user-facing answer in `content`. Do not answer in plain text."
+    + "You must either call another available tool if more work is needed, or call "
+    + "`finish` with the complete user-facing answer in `content`. Do not answer in plain text."
 )
 
 
@@ -64,15 +66,14 @@ class FinishCall:
         return self.error is None
 
 
-def parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
+def parse_tool_arguments(raw_args: object) -> dict[str, Any]:
     """Parse OpenAI-style function arguments into a dict."""
     if raw_args is None or raw_args == "":
         return {}
-    if isinstance(raw_args, dict):
+    if is_str_dict(raw_args):
         return raw_args
     if isinstance(raw_args, str):
-        parsed = json.loads(raw_args)
-        return parsed if isinstance(parsed, dict) else {}
+        return json_loads_object(raw_args)
     return {}
 
 

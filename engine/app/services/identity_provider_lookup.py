@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 from app.core.logging import logger
 from app.dao import identity_provider_dao
+from app.dao.base import as_uuid
 from app.records.identity import IdentityProviderRecord
 
 
@@ -36,7 +36,7 @@ async def get_preferred_identity_provider(
     tenant_id: str | None = None,
     *,
     is_active: bool | None = True,
-    db: Any = None,
+    db: object | None = None,
 ) -> IdentityProviderRecord | None:
     """Fetch the preferred provider without raising on duplicate rows.
 
@@ -45,6 +45,6 @@ async def get_preferred_identity_provider(
     del db
     return await identity_provider_dao.get_preferred(
         str(provider_type),
-        tenant_id,
+        as_uuid(tenant_id),
         is_active=is_active,
     )

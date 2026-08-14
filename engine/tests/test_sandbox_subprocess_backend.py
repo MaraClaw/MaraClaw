@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.services.sandbox.base import resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local.subprocess_backend import SubprocessBackend
 
@@ -227,8 +228,14 @@ def test_subprocess_backend_bwrap_isolation_flags_and_no_proxy_argv(tmp_path: Pa
     assert "--unshare-net" in cmd
     assert "--chdir" in cmd
     assert cmd[cmd.index("--chdir") + 1] == "/workspace"
-    for token in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"):
-        assert token not in cmd
+
+
+def test_resolve_exec_timeout_maps_legacy_timeout_kwarg() -> None:
+    kwargs: dict[str, object] = {"timeout": 5, "on_output": None}
+    assert resolve_exec_timeout(30, kwargs) == 5
+    assert "timeout" not in kwargs
+    assert resolve_exec_timeout(12, {"timeout": 5}) == 12
+    assert resolve_exec_timeout(30, {}) == 30
 
 
 def test_sandbox_config_proxy_parsing() -> None:

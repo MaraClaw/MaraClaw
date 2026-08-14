@@ -6,7 +6,7 @@ from pathlib import Path
 from app.core.logging import logger
 
 
-def _agentbay_normalize_image_bytes(data) -> bytes | None:
+def _agentbay_normalize_image_bytes(data: object) -> bytes | None:
     """Normalize AgentBay image payloads to raw bytes."""
     import base64 as _base64
 
@@ -33,6 +33,6 @@ def _agentbay_save_image_to_workspace(
     rel_path = f"workspace/screenshots/{prefix}-{int(_time.time())}.png"
     screenshot_path = ws / rel_path
     screenshot_path.parent.mkdir(parents=True, exist_ok=True)
-    screenshot_path.write_bytes(raw_bytes)
+    _ = screenshot_path.write_bytes(raw_bytes)
     logger.info(f"[AgentBay] Explicit screenshot saved to workspace: {rel_path}")
     return f"Screenshot saved to `{rel_path}`.\n![{label}](/api/agents/{agent_id}/files/download?path={rel_path})"

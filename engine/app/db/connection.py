@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
+from typing import cast
 
 from psycopg import AsyncConnection, AsyncCursor
+from psycopg.abc import Params as PgParams, QueryNoTemplate
 from psycopg.rows import DictRow
 
 from app.db.errors import map_psycopg_error
 
-type Params = Mapping[str, Any] | Sequence[Any] | None
-type Row = dict[str, Any]
+type Params = Mapping[str, object] | Sequence[object] | None
+type Row = dict[str, object]
+
+
+def _mapping_row(raw: object) -> Row:
+    if not isinstance(raw, Mapping):
+        return {}
+    mapping = cast(Mapping[object, object], raw)
+    return {str(key): value for key, value in mapping.items()}
 
 
 class DbConnection:
@@ -22,7 +30,7 @@ class DbConnection:
     """
 
     def __init__(self, conn: AsyncConnection[DictRow]) -> None:
-        self._conn = conn
+        self._conn: AsyncConnection[DictRow] = conn
 
     @property
     def raw(self) -> AsyncConnection[DictRow]:
@@ -33,7 +41,7 @@ class DbConnection:
         """Execute a statement and discard any result rows."""
         try:
             async with self._conn.cursor() as cur:
-                await cur.execute(query, params)
+                _ = await cur.execute(cast(QueryNoTemplate, query), params)
         except Exception as exc:
             raise map_psycopg_error(exc) from exc
 
@@ -41,7 +49,7 @@ class DbConnection:
         """Execute a statement once per params mapping/sequence."""
         try:
             async with self._conn.cursor() as cur:
-                await cur.executemany(query, params_seq)
+                await cur.executemany(cast(QueryNoTemplate, query), cast(Iterable[PgParams], params_seq))
         except Exception as exc:
             raise map_psycopg_error(exc) from exc
 
@@ -49,9 +57,9 @@ class DbConnection:
         """Execute and return one row as a dict, or None."""
         try:
             async with self._conn.cursor() as cur:
-                await cur.execute(query, params)
+                _ = await cur.execute(cast(QueryNoTemplate, query), params)
                 row = await cur.fetchone()
-                return dict(row) if row is not None else None
+                return _mapping_row(row) if row is not None else None
         except Exception as exc:
             raise map_psycopg_error(exc) from exc
 
@@ -59,13 +67,13 @@ class DbConnection:
         """Execute and return all rows as dicts."""
         try:
             async with self._conn.cursor() as cur:
-                await cur.execute(query, params)
+                _ = await cur.execute(cast(QueryNoTemplate, query), params)
                 rows = await cur.fetchall()
-                return [dict(row) for row in rows]
+                return [_mapping_row(row) for row in rows]
         except Exception as exc:
             raise map_psycopg_error(exc) from exc
 
-    async def fetchval(self, query: str, params: Params = None, *, column: int | str = 0) -> Any:
+    async def fetchval(self, query: str, params: Params = None, *, column: int | str = 0) -> object:
         """Execute and return a single column value from the first row."""
         row = await self.fetchone(query, params)
         if row is None:

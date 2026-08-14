@@ -131,7 +131,7 @@ async def test_execute_code_uses_fake_sandbox_backend_and_runtime_facade_config(
         {
             "code": "print('ok')",
             "language": "python",
-            "timeout": 3,
+            "exec_timeout": 3,
             "work_dir": str(tmp_path.resolve()),
             "on_output": None,
             "agent_id": backend.calls[0]["agent_id"],

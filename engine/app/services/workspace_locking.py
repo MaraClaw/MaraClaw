@@ -26,7 +26,7 @@ def _normalize_workspace_path(path: str) -> str:
             continue
         if part == "..":
             if parts:
-                parts.pop()
+                _ = parts.pop()
             continue
         parts.append(part)
     return "/".join(parts)

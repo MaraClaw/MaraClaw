@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -25,17 +27,17 @@ class GatewayMessageRecord:
     completed_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> GatewayMessageRecord:
+    def from_row(cls, row: Mapping[str, object]) -> GatewayMessageRecord:
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            content=row.get("content") or "",
-            status=row.get("status") or "pending",
-            sender_agent_id=row.get("sender_agent_id"),
-            sender_user_id=row.get("sender_user_id"),
-            conversation_id=row.get("conversation_id"),
-            result=row.get("result"),
-            created_at=row.get("created_at"),
-            delivered_at=row.get("delivered_at"),
-            completed_at=row.get("completed_at"),
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            content=str_from_row(row.get("content")),
+            status=str_from_row(row.get("status"), "pending") or "pending",
+            sender_agent_id=uuid_from_row_opt(row.get("sender_agent_id")),
+            sender_user_id=uuid_from_row_opt(row.get("sender_user_id")),
+            conversation_id=str_from_row(row["conversation_id"]) or None,
+            result=str_from_row(row["result"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
+            delivered_at=datetime_from_row(row.get("delivered_at")),
+            completed_at=datetime_from_row(row.get("completed_at")),
         )

@@ -9,6 +9,7 @@ from typing import Any
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
+from app.records.agent import AgentRecord
 
 
 async def persist_chat_message(
@@ -24,12 +25,12 @@ async def persist_chat_message(
     title_if_default: str | None = None,
     touch_last_active: bool = False,
     skip_insert: bool = False,
-    agent: Any | None = None,
+    agent: AgentRecord | None = None,
 ) -> None:
     """Insert a chat message and optionally touch session / agent on one checkout."""
     async with connection_ctx():
         if not skip_insert:
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=user_id,
                 role=role,
@@ -53,8 +54,8 @@ async def persist_chat_message(
                 if title_if_default and str(getattr(session, "title", "") or "").startswith("Session "):
                     updates["title"] = title_if_default
                 if updates:
-                    await chat_session_dao.update(db_obj=session, obj_in=updates)
+                    _ = await chat_session_dao.update(db_obj=session, obj_in=updates)
         if touch_last_active:
             row = agent if agent is not None else await agent_dao.get(agent_id)
             if row is not None:
-                await agent_dao.update(db_obj=row, obj_in={"last_active_at": datetime.now(UTC)})
+                _ = await agent_dao.update(db_obj=row, obj_in={"last_active_at": datetime.now(UTC)})

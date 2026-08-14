@@ -4,15 +4,25 @@ import importlib
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Protocol, TypeIs
 
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
+from app.services.feishu_service import FeishuService, feishu_service
 
 
-def _feishu_service():
-    return importlib.import_module("app.services.feishu_service").feishu_service
+def _feishu_service() -> FeishuService:
+    return feishu_service
+
+
+class _DateUtilParser(Protocol):
+    def parse(self, timestr: str) -> datetime: ...
+
+
+def _is_dateutil_parser(value: object) -> TypeIs[_DateUtilParser]:
+    return callable(getattr(value, "parse", None))
 
 
 def _to_iso(value: str | None, default: datetime) -> str:
@@ -36,7 +46,9 @@ def _to_unix(value: str | None, default: datetime) -> str:
             return str(int(parsed.timestamp()))
         except ValueError:
             pass
-        date_parser = importlib.import_module("dateutil.parser")
+        date_parser: object = importlib.import_module("dateutil.parser")
+        if not _is_dateutil_parser(date_parser):
+            raise TypeError("dateutil.parser.parse is unavailable")
         return str(int(date_parser.parse(value).timestamp()))
     except Exception:
         return str(int(default.timestamp()))
@@ -50,7 +62,7 @@ def _nested_string(value: ToolArgumentValue | None, name: str) -> str:
 
 
 def _format_calendar_items(items: list[dict[str, ToolArgumentValue]]) -> list[str]:
-    lines = []
+    lines: list[str] = []
     if items:
         lines.append(f"📅 Bot 日历共 {len(items)} 个日程：\n")
     for event in items:
@@ -71,7 +83,7 @@ def _format_calendar_items(items: list[dict[str, ToolArgumentValue]]) -> list[st
     return lines
 
 
-async def _calendar_write_context(agent_id: uuid.UUID, user_email: str):
+async def _calendar_write_context(agent_id: uuid.UUID, user_email: str) -> tuple[object, str, str, str]:
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     if not app_id or not app_secret:
         return agent_tools, "", "", "❌ Agent has no Feishu channel configured."

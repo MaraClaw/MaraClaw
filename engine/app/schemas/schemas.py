@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import datetime
+from typing import ClassVar
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.json_types import JsonObject
 
@@ -113,7 +114,7 @@ class NeedsVerificationResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"  # noqa: S105 - OAuth 2.0 token-type discriminator, not a credential
-    user: UserOut
+    user: UserOut | None = None
     identity: IdentityOut | None = None
     needs_company_setup: bool = False
     tenant_name: str | None = None
@@ -167,7 +168,7 @@ class IdentityOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class UserOut(BaseModel):
@@ -188,7 +189,7 @@ class UserOut(BaseModel):
     must_change_password: bool = False
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class IdentityProviderOut(BaseModel):
@@ -203,7 +204,7 @@ class IdentityProviderOut(BaseModel):
     created_at: datetime
     sso_domain: str | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class OAuthAuthorizeResponse(BaseModel):
@@ -327,7 +328,7 @@ class AgentOut(BaseModel):
     created_at: datetime
     last_active_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class AgentUpdate(BaseModel):
@@ -399,7 +400,7 @@ class TaskOut(BaseModel):
     updated_at: datetime
     completed_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class TaskUpdate(BaseModel):
@@ -422,7 +423,7 @@ class TaskLogOut(BaseModel):
     content: str
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # ─── LLM ────────────────────────────────────────────────
@@ -471,7 +472,7 @@ class LLMModelOut(BaseModel):
     request_timeout: int | None = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # ─── Channel Config ─────────────────────────────────────
@@ -501,7 +502,7 @@ class ChannelConfigOut(BaseModel):
     extra_config: JsonObject | None = None
     created_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # ─── Approval ───────────────────────────────────────────
@@ -518,7 +519,7 @@ class ApprovalRequestOut(BaseModel):
     resolved_at: datetime | None = None
     resolved_by: uuid.UUID | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ApprovalAction(BaseModel):
@@ -545,7 +546,7 @@ class EnterpriseInfoOut(BaseModel):
     visible_roles: list[str]
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # ─── Chat ───────────────────────────────────────────────
@@ -560,7 +561,7 @@ class ChatMessageOut(BaseModel):
     thinking: str | None = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ChatSend(BaseModel):
@@ -579,7 +580,7 @@ class AuditLogOut(BaseModel):
     ip_address: str | None = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # ─── Generic ────────────────────────────────────────────
@@ -604,7 +605,7 @@ class GatewayHistoryItem(BaseModel):
     role: str  # "user" or "assistant"
     content: str
     sender_name: str | None = None
-    created_at: datetime
+    created_at: datetime | None = None
 
 
 class GatewayRelationshipItem(BaseModel):
@@ -622,7 +623,7 @@ class GatewayMessageOut(BaseModel):
     sender_user_name: str | None = None
     sender_user_id: str | None = None
     content: str
-    created_at: datetime
+    created_at: datetime | None = None
     history: list[GatewayHistoryItem] = []
 
 

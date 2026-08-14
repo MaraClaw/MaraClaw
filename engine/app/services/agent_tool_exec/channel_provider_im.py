@@ -1,24 +1,20 @@
 from __future__ import annotations
 
-import importlib
 import uuid
-from types import ModuleType
-from typing import Any
 
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
+from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 
-
-def _channel_provider_common() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.channel_provider_common")
+from . import channel_provider_common
 
 
 async def _send_dingtalk_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send message via DingTalk channel using Open API."""
     from app.services.dingtalk_service import send_dingtalk_message
@@ -35,10 +31,14 @@ async def _send_dingtalk_message(
                 return f"❌ {member_name} has no DingTalk user_id"
 
         logger.info(f"[DingTalk] Sending to user_id: {user_id}")
+        app_id = config.app_id
+        app_secret = config.app_secret
+        if not app_id or not app_secret:
+            return "❌ This agent has no DingTalk channel configured"
         dingtalk_agent_id = (config.extra_config or {}).get("agent_id")
         result = await send_dingtalk_message(
-            app_id=config.app_id,
-            app_secret=config.app_secret,
+            app_id=app_id,
+            app_secret=app_secret,
             user_id=user_id,
             message=message_text,
             agent_id=dingtalk_agent_id or "",
@@ -46,7 +46,7 @@ async def _send_dingtalk_message(
 
         if result.get("errcode") == 0:
             try:
-                await _channel_provider_common()._save_channel_message(
+                await channel_provider_common._save_channel_message(
                     agent_tools,
                     db=None,
                     agent_id=agent_id,
@@ -71,7 +71,7 @@ async def _send_wecom_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send message via WeCom channel using Open API."""
     from app.services.wecom_service import send_wecom_message
@@ -88,11 +88,15 @@ async def _send_wecom_message(
                 return f"❌ {member_name} has no WeCom user_id"
 
         logger.info(f"[WeCom] Sending to user_id: {user_id}")
-        result = await send_wecom_message(config.app_id, config.app_secret, user_id, message_text)
+        app_id = config.app_id
+        app_secret = config.app_secret
+        if not app_id or not app_secret:
+            return "❌ This agent has no WeCom channel configured"
+        result = await send_wecom_message(app_id, app_secret, user_id, message_text)
 
         if result.get("errcode") == 0:
             try:
-                await _channel_provider_common()._save_channel_message(
+                await channel_provider_common._save_channel_message(
                     agent_tools,
                     db=None,
                     agent_id=agent_id,

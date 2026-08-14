@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -23,19 +24,20 @@ _COLUMNS = (
 )
 
 
+@final
 class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
     """DAO for OpenClaw gateway message queue rows."""
 
-    table = "gateway_messages"
-    columns = _COLUMNS
+    table: ClassVar[str] = "gateway_messages"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(GatewayMessageRecord.from_row)
 
     async def list_pending(self, agent_id: UUID) -> Sequence[GatewayMessageRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                "WHERE agent_id = %(agent_id)s AND status = 'pending' "
-                "ORDER BY created_at ASC",
+                + "WHERE agent_id = %(agent_id)s AND status = 'pending' "
+                + "ORDER BY created_at ASC",
                 {"agent_id": agent_id},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
@@ -44,7 +46,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                "WHERE id = %(id)s AND agent_id = %(agent_id)s LIMIT 1",
+                + "WHERE id = %(id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"id": message_id, "agent_id": agent_id},
             )
             return GatewayMessageRecord.from_row(row) if row else None
@@ -53,8 +55,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                "WHERE agent_id = %(agent_id)s "
-                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                + "WHERE agent_id = %(agent_id)s "
+                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 {"agent_id": agent_id, "limit": limit},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]

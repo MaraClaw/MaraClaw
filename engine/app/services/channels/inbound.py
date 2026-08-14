@@ -3,26 +3,26 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.core.row_memo import clear_entity_memo
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
+from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
 from app.services.chat_persist import persist_chat_message
+from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
-ChunkCallback = Callable[[str], Awaitable[None] | None]
-ToolCallCallback = Callable[[Any], Awaitable[None] | None]
-
 
 async def load_agent(agent_id: uuid.UUID) -> AgentRecord | None:
+    clear_entity_memo()
     return await agent_dao.get(agent_id)
 
 
@@ -135,12 +135,12 @@ async def generate_channel_reply(
     history: list[Any],
     user_id: uuid.UUID,
     session_id: str,
-    agent_model: Any | None = None,
-    llm_model: Any | None = None,
-    fallback_model: Any | None = None,
+    agent_model: AgentRecord | None = None,
+    llm_model: LLMModelRecord | None = None,
+    fallback_model: LLMModelRecord | None = None,
     on_chunk: ChunkCallback | None = None,
-    on_thinking: ChunkCallback | None = None,
-    on_tool_call: ToolCallCallback | None = None,
+    on_thinking: ThinkingCallback | None = None,
+    on_tool_call: ToolCallback | None = None,
 ) -> str:
     """Run the shared channel LLM path used by Feishu / Slack / Teams / Google Chat.
 
@@ -176,11 +176,11 @@ async def run_text_turn(
     user_text: str,
     llm_user_text: str | None = None,
     on_chunk: ChunkCallback | None = None,
-    on_thinking: ChunkCallback | None = None,
-    on_tool_call: ToolCallCallback | None = None,
-    agent_model: Any | None = None,
-    llm_model: Any | None = None,
-    fallback_model: Any | None = None,
+    on_thinking: ThinkingCallback | None = None,
+    on_tool_call: ToolCallback | None = None,
+    agent_model: AgentRecord | None = None,
+    llm_model: LLMModelRecord | None = None,
+    fallback_model: LLMModelRecord | None = None,
     persist_user: bool = True,
     touch_last_active_on_reply: bool = True,
 ) -> str:

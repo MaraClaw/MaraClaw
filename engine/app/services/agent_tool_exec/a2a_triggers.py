@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
+from app.core.json_types import datetime_from_row
 from app.core.logging import logger
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
@@ -46,18 +47,19 @@ async def _create_on_message_trigger(
         async with connection_ctx() as db:
             value = await db.fetchval(
                 "SELECT m.created_at FROM chat_messages m "
-                "JOIN chat_sessions s ON m.conversation_id = s.id::text "
-                "WHERE s.agent_id = %(agent_id)s AND m.created_at IS NOT NULL "
-                "ORDER BY m.created_at DESC LIMIT 1",
+                + "JOIN chat_sessions s ON m.conversation_id = s.id::text "
+                + "WHERE s.agent_id = %(agent_id)s AND m.created_at IS NOT NULL "
+                + "ORDER BY m.created_at DESC LIMIT 1",
                 {"agent_id": agent_id},
             )
-            if value:
-                config["_since_ts"] = value.isoformat()
+            created = datetime_from_row(value)
+            if created:
+                config["_since_ts"] = created.isoformat()
 
     existing = await agent_trigger_dao.get_by_agent_and_name(agent_id, trigger_name)
     if existing:
         if existing.is_enabled:
-            await agent_trigger_dao.update(
+            _ = await agent_trigger_dao.update(
                 db_obj=existing,
                 obj_in={
                     "config": {**(existing.config or {}), **config},
@@ -67,7 +69,7 @@ async def _create_on_message_trigger(
                 },
             )
             return
-        await agent_trigger_dao.update(
+        _ = await agent_trigger_dao.update(
             db_obj=existing,
             obj_in={
                 "type": "on_message",
@@ -80,7 +82,7 @@ async def _create_on_message_trigger(
         )
         return
 
-    await agent_trigger_dao.create(
+    _ = await agent_trigger_dao.create(
         obj_in={
             "agent_id": agent_id,
             "name": trigger_name,
@@ -97,7 +99,7 @@ async def _create_on_message_trigger(
 async def _append_focus_item(agent_id: uuid.UUID, identifier: str, description: str) -> None:
     """Create or update an in-progress Focus item."""
     try:
-        await ensure_focus_item(agent_id, focus_ref=identifier, description=description)
+        _ = await ensure_focus_item(agent_id, focus_ref=identifier, description=description)
     except Exception as error:
         logger.warning(f"[A2A] Failed to update Focus for agent {agent_id}: {error}")
 

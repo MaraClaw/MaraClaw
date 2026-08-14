@@ -25,6 +25,7 @@ Cascade gaps vs baseline (will 23503 on real data): `skill_files` before `skills
 
 - Auth-critical fields on `identities` include `is_platform_admin`, `email_verified`, and `must_change_password`.
 - Any `LEFT JOIN identities` that builds `IdentityRecord` must select **all** identity columns used by `IdentityRecord.from_row` (see `_IDENTITY_COLUMNS` in `identity_dao.py` and `user_dao.py`). Dropping `must_change_password` from the join fails the force-change gate open.
+- `UserDAO.get_with_identity` may serve a Redis session snapshot (no `password_hash`, no quota counters). Updates / tenant deactivate / `delete_cascade` must bump session/tenant versions. Password verify uses SQL via `load_identity_for_password`. Redis errors fall back to this join.
 
 ## Avoid
 

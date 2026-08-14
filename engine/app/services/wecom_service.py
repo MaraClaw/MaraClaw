@@ -2,7 +2,7 @@
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_int, json_object_from_response
 from app.core.logging import logger
 
 
@@ -11,6 +11,13 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     API: https://developer.work.weixin.qq.com/document/14403
     """
+    from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
+
+    if corp_id:
+        cached = await get_cached_im_token("wecom", corp_id, secret=secret)
+        if cached:
+            return {"access_token": cached, "expires_in": 7200}
+
     url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
     params = {
         "corpid": corp_id,
@@ -19,11 +26,20 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params=params)
-        data = resp.json()
+        data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
+            token = data.get("access_token")
+            if isinstance(token, str) and token and corp_id:
+                await set_cached_im_token(
+                    "wecom",
+                    corp_id,
+                    token,
+                    secret=secret,
+                    ttl=refresh_ttl(json_as_int(data.get("expires_in"))),
+                )
             return {
-                "access_token": data.get("access_token"),
+                "access_token": token,
                 "expires_in": data.get("expires_in"),
             }
         logger.error(f"[WeCom] Failed to get access_token: {data}")
@@ -67,7 +83,7 @@ async def send_wecom_message(
     if not agent_id:
         return {"errcode": -1, "errmsg": "agent_id is required for WeCom messages"}
 
-    payload = {
+    payload: JsonObject = {
         "touser": user_id,
         "msgtype": "text",
         "agentid": agent_id,
@@ -78,10 +94,14 @@ async def send_wecom_message(
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, params=params, json=payload)
-        data = resp.json()
+        data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
             logger.info(f"[WeCom] Message sent to {user_id}")
             return data
+        if data.get("errcode") in {40001, 40014, 42001}:
+            from app.services.im_token_cache import drop_cached_im_token
+
+            await drop_cached_im_token("wecom", corp_id, secret=secret)
         logger.error(f"[WeCom] Failed to send message: {data}")
         return data

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
 from app.records.focus import AgentFocusItemRecord
@@ -27,9 +28,10 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
-    table = "agent_focus_items"
-    columns = _COLUMNS
+    table: ClassVar[str] = "agent_focus_items"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(AgentFocusItemRecord.from_row)
 
     def _select_list(self, alias: str | None = None) -> str:
@@ -46,7 +48,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 "SELECT COUNT(*) FROM agent_focus_items WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_for_agent(self, agent_id: UUID, *, include_completed: bool = True) -> Sequence[AgentFocusItemRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
@@ -54,8 +56,8 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_focus_items "
-                f"WHERE agent_id = %(agent_id)s{completed_sql} "
-                "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
+                + f"WHERE agent_id = %(agent_id)s{completed_sql} "
+                + "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
                 params,
             )
             return [AgentFocusItemRecord.from_row(row) for row in rows]
@@ -74,9 +76,9 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 "SELECT MAX(sort_order) FROM agent_focus_items WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
-    async def bulk_insert_ignore(self, rows: list[dict[str, Any]]) -> int:
+    async def bulk_insert_ignore(self, rows: list[dict[str, object]]) -> int:
         if not rows:
             return 0
         inserted = 0
@@ -95,27 +97,27 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                         data[col] = uuid4()
                     if col not in data:
                         continue
-                    val = data[col]
+                    val: object = data[col]
                     params[col] = as_jsonb(val) if isinstance(val, (dict, list)) else val
                 cols = [c for c in self.columns if c in params]
                 col_sql = ", ".join(cols)
                 val_sql = ", ".join(f"%({c})s" for c in cols)
                 result = await db.fetchone(
                     f"INSERT INTO agent_focus_items ({col_sql}) VALUES ({val_sql}) "
-                    "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
+                    + "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
                     params,
                 )
                 if result:
                     inserted += 1
         return inserted
 
-    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: dict[str, Any]) -> AgentFocusItemRecord:
+    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")
         return await super().update(db_obj=db_obj, obj_in=data)
 
-    async def create(self, *, obj_in: dict[str, Any]) -> AgentFocusItemRecord:
+    async def create(self, *, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")

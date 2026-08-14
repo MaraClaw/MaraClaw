@@ -4,17 +4,25 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any, NotRequired, TypedDict
+from typing import ClassVar, NotRequired, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from app.core.json_types import JsonValue
+from app.core.json_types import (
+    JsonValue,
+    is_json_value,
+    json_as_str_or,
+    json_loads_object,
+    json_loads_value,
+    str_from_row,
+)
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
+from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
@@ -34,13 +42,13 @@ class ChatMessageEntry(TypedDict):
     participant_id: NotRequired[str]
 
 
-def _can_view_all_agent_chat_sessions(user: Any, agent: Any) -> bool:
+def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
     """Admins and the agent creator may list/view/delete other users' chat sessions."""
     return user.role in ("platform_admin", "org_admin", "agent_admin") or str(agent.creator_id) == str(user.id)
 
 
 class SessionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     id: str
     agent_id: str
@@ -74,20 +82,20 @@ class PatchSessionIn(BaseModel):
 async def list_sessions(
     agent_id: uuid.UUID,
     scope: str = Query("mine", description="'mine' or 'all'"),
-    current_user: UserRecord | Any = Depends(get_current_user),
-):
+    current_user: UserRecord = Depends(get_current_user),
+) -> list[SessionOut]:
     """List chat sessions for an agent. scope=all for org/platform admins and agent_admin."""
     agent = await agent_dao.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     if scope == "all":
         if not _can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
 
         sessions = list(await chat_session_dao.list_all_for_agent(agent_id))
-        out = []
+        out: list[SessionOut] = []
 
         session_ids = [str(s.id) for s in sessions]
         session_uuid_ids = [s.id for s in sessions]
@@ -104,12 +112,12 @@ async def list_sessions(
             async with connection_ctx() as conn:
                 rows = await conn.fetchall(
                     "SELECT u.id, COALESCE(u.display_name, i.username) AS display "
-                    "FROM users u JOIN identities i ON u.identity_id = i.id "
-                    "WHERE u.id = ANY(%(ids)s)",
+                    + "FROM users u JOIN identities i ON u.identity_id = i.id "
+                    + "WHERE u.id = ANY(%(ids)s)",
                     {"ids": user_ids},
                 )
             for row in rows:
-                user_names[str(row["id"])] = row["display"] or "Unknown"
+                user_names[str(row["id"])] = str_from_row(row.get("display"), "Unknown") or "Unknown"
 
         agent_ids_to_fetch: set[uuid.UUID] = set()
         for s in sessions:
@@ -124,7 +132,7 @@ async def list_sessions(
                     {"ids": list(agent_ids_to_fetch)},
                 )
             for row in rows:
-                agent_names[str(row["id"])] = row["name"] or "Agent"
+                agent_names[str(row["id"])] = str_from_row(row.get("name"), "Agent") or "Agent"
 
         for session in sessions:
             count = message_counts.get(str(session.id), 0)
@@ -205,10 +213,10 @@ async def list_sessions(
 
 @router.post("/{agent_id}/sessions", status_code=201)
 async def create_session(
-    agent_id: uuid.UUID, body: CreateSessionIn = CreateSessionIn(), current_user: Any = Depends(get_current_user)
+    agent_id: uuid.UUID, body: CreateSessionIn = CreateSessionIn(), current_user: UserRecord = Depends(get_current_user)
 ):
     """Create a new chat session for the current user."""
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     now = datetime.now(UTC)
     session = await chat_session_dao.create(
@@ -240,7 +248,10 @@ async def create_session(
 
 @router.patch("/{agent_id}/sessions/{session_id}")
 async def rename_session(
-    agent_id: uuid.UUID, session_id: uuid.UUID, body: PatchSessionIn, current_user: Any = Depends(get_current_user)
+    agent_id: uuid.UUID,
+    session_id: uuid.UUID,
+    body: PatchSessionIn,
+    current_user: UserRecord = Depends(get_current_user),
 ):
     """Rename a session. Owner, agent creator, or admin may rename others' sessions."""
     agent, _ = await check_agent_access(current_user, agent_id)
@@ -256,7 +267,9 @@ async def rename_session(
 
 
 @router.delete("/{agent_id}/sessions/{session_id}", status_code=204)
-async def delete_session(agent_id: uuid.UUID, session_id: uuid.UUID, current_user: Any = Depends(get_current_user)):
+async def delete_session(
+    agent_id: uuid.UUID, session_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+):
     """Delete a chat session and its messages. Owner, agent creator, or admin may delete others' sessions."""
     agent, _ = await check_agent_access(current_user, agent_id)
     session = await chat_session_dao.get_for_agent(session_id, agent_id)
@@ -267,7 +280,7 @@ async def delete_session(agent_id: uuid.UUID, session_id: uuid.UUID, current_use
         raise HTTPException(status_code=403, detail="Not authorized")
 
     await chat_message_dao.delete_for_conversation(str(session_id))
-    await chat_session_dao.delete(id=session_id)
+    _ = await chat_session_dao.delete(id=session_id)
     return
 
 
@@ -277,8 +290,8 @@ async def get_session_messages(
     session_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=500, description="Number of messages to return"),
     before: str = Query(None, description="Cursor: return messages created before this timestamp (ISO format)"),
-    current_user: Any = Depends(get_current_user),
-):
+    current_user: UserRecord = Depends(get_current_user),
+) -> list[ChatMessageEntry]:
     """Get chat messages for a specific session."""
     agent, _ = await check_agent_access(current_user, agent_id)
     session = await chat_session_dao.get_for_agent_or_peer(session_id, agent_id)
@@ -308,7 +321,7 @@ async def get_session_messages(
         and not session.is_group
         and session.source_channel not in ("agent", "trigger")
     ):
-        await chat_session_dao.update(
+        _ = await chat_session_dao.update(
             db_obj=session,
             obj_in={"last_read_at_by_user": datetime.now(UTC)},
         )
@@ -323,9 +336,9 @@ async def get_session_messages(
                     {"ids": participant_ids},
                 )
             for row in rows:
-                sender_cache[str(row["id"])] = row["display_name"] or "Unknown"
+                sender_cache[str(row["id"])] = str_from_row(row.get("display_name"), "Unknown") or "Unknown"
 
-    out = []
+    out: list[ChatMessageEntry] = []
     for m in messages:
         sender_name = sender_cache.get(str(m.participant_id)) if m.participant_id else None
 
@@ -336,13 +349,13 @@ async def get_session_messages(
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             try:
-                data = json.loads(m.content)
+                data = json_loads_object(m.content)
                 entry["content"] = ""
-                entry["toolName"] = data.get("name") or data.get("tool_name") or ""
-                entry["toolArgs"] = data.get("args") or data.get("arguments")
-                entry["toolStatus"] = data.get("status", "done")
-                entry["toolResult"] = data.get("result", "")
-                entry["toolThinking"] = data.get("reasoning_content", "")
+                entry["toolName"] = json_as_str_or(data.get("name")) or json_as_str_or(data.get("tool_name"))
+                entry["toolArgs"] = data.get("args") if data.get("args") is not None else data.get("arguments")
+                entry["toolStatus"] = json_as_str_or(data.get("status"), "done")
+                entry["toolResult"] = json_as_str_or(data.get("result"))
+                entry["toolThinking"] = json_as_str_or(data.get("reasoning_content"))
             except json.JSONDecodeError, TypeError, AttributeError:
                 entry["content"] = m.content
             if sender_name:
@@ -384,7 +397,7 @@ def _split_inline_tools(content: str) -> list[ChatMessageEntry]:
     # Pattern: ```tool_code\n<name>\n``` optionally followed by ```json\n<args>\n```
     pattern = re.compile(
         r"```tool_code\s*\n\s*(\w+)\s*\n```"  # tool name
-        r"(?:\s*```json\s*\n(.*?)\n```)?",  # optional JSON args
+        + r"(?:\s*```json\s*\n(.*?)\n```)?",  # optional JSON args
         re.DOTALL,
     )
 
@@ -399,12 +412,11 @@ def _split_inline_tools(content: str) -> list[ChatMessageEntry]:
 
         tool_name = match.group(1)
         args_str = match.group(2)
-        tool_args = None
+        tool_args: JsonValue | None = None
         if args_str:
             try:
-                import json
-
-                tool_args = json.loads(args_str.strip())
+                loaded = json_loads_value(args_str.strip())
+                tool_args = loaded if is_json_value(loaded) else {"raw": args_str.strip()}
             except Exception:
                 tool_args = {"raw": args_str.strip()}
 

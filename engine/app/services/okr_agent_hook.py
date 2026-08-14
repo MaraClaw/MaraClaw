@@ -1,7 +1,6 @@
 """Hook to automatically bind new users and company-visible agents to the OKR Agent."""
 
 import uuid
-from typing import Any
 
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
@@ -11,7 +10,7 @@ from app.dao.org_member_dao import org_member_dao
 from app.records.agent import AgentRecord
 
 
-async def hook_new_org_member(db: Any, member_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+async def hook_new_org_member(db: object | None, member_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     """When a new OrgMember is created or bound, bind them to the system OKR Agent if it exists."""
     okr_agent = await _get_okr_agent(tenant_id)
     if not okr_agent:
@@ -19,7 +18,7 @@ async def hook_new_org_member(db: Any, member_id: uuid.UUID, tenant_id: uuid.UUI
 
     existing = await agent_relationship_dao.get_for_agent_and_member(okr_agent.id, member_id)
     if not existing:
-        await agent_relationship_dao.create(
+        _ = await agent_relationship_dao.create(
             obj_in={
                 "agent_id": okr_agent.id,
                 "member_id": member_id,
@@ -30,7 +29,7 @@ async def hook_new_org_member(db: Any, member_id: uuid.UUID, tenant_id: uuid.UUI
         logger.info(f"[OKR Hook] Auto-bound OrgMember {member_id} to OKR Agent {okr_agent.id}")
 
 
-async def sync_okr_agent_platform_members(db: Any, tenant_id: uuid.UUID) -> int:
+async def sync_okr_agent_platform_members(db: object | None, tenant_id: uuid.UUID) -> int:
     """Bind all existing active platform users in a tenant to its OKR Agent.
 
     hook_new_org_member covers newly-created or newly-bound members. This
@@ -47,7 +46,7 @@ async def sync_okr_agent_platform_members(db: Any, tenant_id: uuid.UUID) -> int:
     for member in members:
         if member.id in existing_member_ids:
             continue
-        await agent_relationship_dao.create(
+        _ = await agent_relationship_dao.create(
             obj_in={
                 "agent_id": okr_agent.id,
                 "member_id": member.id,
@@ -64,7 +63,7 @@ async def sync_okr_agent_platform_members(db: Any, tenant_id: uuid.UUID) -> int:
     return added
 
 
-async def hook_new_agent(db: Any, new_agent_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+async def hook_new_agent(db: object | None, new_agent_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     """When a new company-visible agent is created, bind to OKR Agent."""
     agent = await agent_dao.get(new_agent_id)
     if not agent or getattr(agent, "is_system", False):
@@ -76,8 +75,8 @@ async def hook_new_agent(db: Any, new_agent_id: uuid.UUID, tenant_id: uuid.UUID)
     if not okr_agent:
         return
 
-    await agent_agent_relationship_dao.ensure(okr_agent.id, new_agent_id, relation="okr_coordinator")
-    await agent_agent_relationship_dao.ensure(new_agent_id, okr_agent.id, relation="okr_coordinator")
+    _ = await agent_agent_relationship_dao.ensure(okr_agent.id, new_agent_id, relation="okr_coordinator")
+    _ = await agent_agent_relationship_dao.ensure(new_agent_id, okr_agent.id, relation="okr_coordinator")
 
     logger.info(f"[OKR Hook] Auto-bound Agent {new_agent_id} to OKR Agent {okr_agent.id}")
 

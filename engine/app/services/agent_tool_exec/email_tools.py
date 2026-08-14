@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,7 +38,9 @@ def _string_list_argument(arguments: ToolArguments, name: str) -> list[str] | No
     return None
 
 
-def _decrypt_sensitive_fields(config: JsonObject, config_schema: ToolConfigSchema | None = None) -> JsonObject:
+def _decrypt_sensitive_fields(
+    config: JsonObject, config_schema: ToolConfigSchema | Mapping[str, object] | None = None
+) -> JsonObject:
     """Decrypt sensitive fields in config dict.
 
     When config_schema is provided, also decrypts fields with type='password'
@@ -54,11 +57,15 @@ def _decrypt_sensitive_fields(config: JsonObject, config_schema: ToolConfigSchem
 
     sensitive_keys = set(SENSITIVE_FIELD_KEYS)
     if config_schema:
-        for field in config_schema.get("fields", []):
-            if field.get("type") == "password":
-                key = field.get("key", "")
-                if key:
-                    sensitive_keys.add(key)
+        fields = config_schema.get("fields", [])
+        if isinstance(fields, list):
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                if field.get("type") == "password":
+                    key = field.get("key", "")
+                    if isinstance(key, str) and key:
+                        sensitive_keys.add(key)
 
     for key in sensitive_keys:
         if result.get(key):
@@ -110,10 +117,10 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
     if not config.get("email_address") or not config.get("auth_code"):
         return (
             "❌ Email not configured for this agent.\n\n"
-            "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
-            "1. Select your email provider\n"
-            "2. Enter your email address\n"
-            "3. Enter your authorization code (not your login password)"
+            + "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
+            + "1. Select your email provider\n"
+            + "2. Enter your email address\n"
+            + "3. Enter your authorization code (not your login password)"
         )
 
     try:

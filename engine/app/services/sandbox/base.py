@@ -41,9 +41,9 @@ class SandboxBackend(Protocol):
         self,
         code: str,
         language: str,
-        timeout: int = 30,  # noqa: ASYNC109 - public backend protocol preserves caller timeout contract
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """
         Execute code in the sandbox.
@@ -51,7 +51,7 @@ class SandboxBackend(Protocol):
         Args:
             code: The code to execute
             language: Programming language (python, bash, node, etc.)
-            timeout: Execution timeout in seconds
+            exec_timeout: Execution timeout in seconds
             work_dir: Working directory for execution (optional)
             **kwargs: Additional backend-specific options
 
@@ -83,6 +83,16 @@ class SandboxBackend(Protocol):
         ...
 
 
+def resolve_exec_timeout(exec_timeout: int, kwargs: dict[str, object], *, default: int = 30) -> int:
+    """Honor leftover ``timeout=`` kwargs when ``exec_timeout`` is the default."""
+    legacy = kwargs.pop("timeout", None)
+    if exec_timeout != default:
+        return exec_timeout
+    if isinstance(legacy, bool) or not isinstance(legacy, int | float):
+        return exec_timeout
+    return int(legacy)
+
+
 class BaseSandboxBackend(ABC):
     """Base class providing common functionality for sandbox backends."""
 
@@ -96,9 +106,9 @@ class BaseSandboxBackend(ABC):
         self,
         code: str,
         language: str,
-        timeout: int = 30,  # noqa: ASYNC109 - public backend base preserves caller timeout contract
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code in the sandbox."""
 

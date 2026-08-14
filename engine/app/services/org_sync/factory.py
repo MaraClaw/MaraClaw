@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from app.dao import identity_provider_dao
 
@@ -14,7 +13,7 @@ from .google_workspace import GoogleWorkspaceOrgSyncAdapter
 from .wecom import WeComOrgSyncAdapter
 
 # Adapter class mapping
-SYNC_ADAPTER_CLASSES = {
+SYNC_ADAPTER_CLASSES: dict[str, type[BaseOrgSyncAdapter]] = {
     "feishu": FeishuOrgSyncAdapter,
     "dingtalk": DingTalkOrgSyncAdapter,
     "wecom": WeComOrgSyncAdapter,
@@ -23,7 +22,7 @@ SYNC_ADAPTER_CLASSES = {
 
 
 async def get_org_sync_adapter(
-    db: Any,
+    db: object | None,
     provider_type: str,
     tenant_id: uuid.UUID | None = None,
     provider_id: uuid.UUID | None = None,

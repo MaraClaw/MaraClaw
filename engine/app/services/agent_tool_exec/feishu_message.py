@@ -44,14 +44,14 @@ async def _save_outgoing_to_feishu_session(outgoing: _OutgoingFeishuMessage) -> 
             source_channel="feishu",
             first_message_title=f"[Agent → {outgoing.member_name or outgoing.feishu_user_id}]",
         )
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=outgoing.agent_id,
             user_id=platform_user.id,
             role="assistant",
             content=outgoing.message_text,
             conversation_id=str(session.id),
         )
-        await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
+        _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
         logger.info(f"[Feishu] Saved outgoing message to session {session.id} (user_id: {outgoing.feishu_user_id})")
     except Exception as error:
         logger.error(f"[Feishu] Failed to save outgoing message to history: {error}")
@@ -75,6 +75,10 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
         if not config:
             return "❌ This agent has no Feishu channel configured"
+        app_id = config.app_id
+        app_secret = config.app_secret
+        if not app_id or not app_secret:
+            return "❌ This agent has no Feishu channel configured"
 
         if direct_user_id and not member_name:
             direct_relationship = await agent_relationship_dao.get_active_for_agent_by_feishu_id(
@@ -85,13 +89,13 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             status_info = await evaluate_human_relationship_status(None, direct_relationship)
             if status_info["access_status"] != "active":
                 return (
-                    f"❌ Relationship to recipient is not active "
-                    f"({status_info['access_status_reason'] or 'restricted'})"
+                    "❌ Relationship to recipient is not active "
+                    + f"({status_info['access_status_reason'] or 'restricted'})"
                 )
             try:
                 response = await feishu_service_module.feishu_service.send_message(
-                    config.app_id,
-                    config.app_secret,
+                    app_id,
+                    app_secret,
                     receive_id=direct_user_id,
                     msg_type="text",
                     content=json.dumps({"text": message_text}, ensure_ascii=False),
@@ -132,7 +136,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
 
         logger.info(
             f"target_member={target_member.external_id}, {target_member.open_id}, "
-            f"{target_member.email}, {target_member.phone}"
+            + f"{target_member.email}, {target_member.phone}"
         )
         if not target_member.external_id:
             logger.error(f"❌ {member_name} has no linked Feishu user_id")
@@ -140,8 +144,8 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
 
         try:
             response = await feishu_service_module.feishu_service.send_message(
-                config.app_id,
-                config.app_secret,
+                app_id,
+                app_secret,
                 receive_id=target_member.external_id,
                 msg_type="text",
                 content=json.dumps({"text": message_text}, ensure_ascii=False),

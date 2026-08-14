@@ -9,7 +9,7 @@ from app.db.session import connection_ctx
 
 
 async def main() -> None:
-    await init_pool()
+    _ = await init_pool()
     try:
         async with connection_ctx() as conn:
             rows = await conn.fetchall(

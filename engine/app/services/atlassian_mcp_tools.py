@@ -146,12 +146,12 @@ async def _sync_atlassian_tools_for_agent(agent_id: uuid.UUID, api_key: str) -> 
         agent_tool_config: JsonObject = {"api_key": api_key}
         existing = await agent_tool_dao.get_assignment(agent_id, tool.id)
         if existing:
-            await agent_tool_dao.update(
+            _ = await agent_tool_dao.update(
                 db_obj=existing,
                 obj_in={"enabled": True, "config": agent_tool_config},
             )
         else:
-            await agent_tool_dao.create(
+            _ = await agent_tool_dao.create(
                 obj_in={
                     "agent_id": agent_id,
                     "tool_id": tool.id,

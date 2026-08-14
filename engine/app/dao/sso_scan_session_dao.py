@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar, final
+
 from app.dao.base import BaseDAO
 from app.records.sso_scan_session import SSOScanSessionRecord
 
@@ -18,9 +20,10 @@ _COLUMNS = (
 )
 
 
+@final
 class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
-    table = "sso_scan_sessions"
-    columns = _COLUMNS
+    table: ClassVar[str] = "sso_scan_sessions"
+    columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(SSOScanSessionRecord.from_row)
 
 

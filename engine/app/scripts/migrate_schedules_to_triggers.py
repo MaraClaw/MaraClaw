@@ -17,7 +17,7 @@ from app.db.pool import close_pool, init_pool
 
 async def migrate():
     """Convert all AgentSchedule records to AgentTrigger(type='cron')."""
-    await init_pool()
+    _ = await init_pool()
     try:
         schedules = await agent_schedule_dao.list_all()
 
@@ -35,7 +35,7 @@ async def migrate():
                 skipped += 1
                 continue
 
-            await agent_trigger_dao.create(
+            _ = await agent_trigger_dao.create(
                 obj_in={
                     "agent_id": s.agent_id,
                     "name": trigger_name,
@@ -48,7 +48,7 @@ async def migrate():
                 }
             )
             # Disable the source schedule so it won't be re-migrated
-            await agent_schedule_dao.update(db_obj=s, obj_in={"is_enabled": False})
+            _ = await agent_schedule_dao.update(db_obj=s, obj_in={"is_enabled": False})
             migrated += 1
             logger.info(f"  Migrated: '{s.name}' -> cron({s.cron_expr})")
 

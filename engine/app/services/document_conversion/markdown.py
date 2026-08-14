@@ -3,10 +3,53 @@ from __future__ import annotations
 import importlib
 import re
 from pathlib import Path
+from typing import Protocol, TypeIs
+
+
+class _DocxCell(Protocol):
+    text: str
+
+
+class _DocxTable(Protocol):
+    style: object
+
+    def cell(self, row: int, column: int) -> _DocxCell: ...
+
+
+class _DocxDocument(Protocol):
+    def add_paragraph(self, text: str = "", style: str | None = None) -> object: ...
+
+    def add_heading(self, text: str = "", level: int = 1) -> object: ...
+
+    def add_table(self, rows: int, cols: int) -> _DocxTable: ...
+
+    def save(self, path: str) -> object: ...
+
+
+class _DocxModule(Protocol):
+    def Document(self, path: str | None = None) -> _DocxDocument: ...
+
+
+class _WeasyHtml(Protocol):
+    def write_pdf(self, target: str) -> object: ...
+
+
+class _WeasyprintModule(Protocol):
+    def HTML(self, string: str = "", base_url: str | None = None) -> _WeasyHtml: ...
+
+
+def _is_docx_module(value: object) -> TypeIs[_DocxModule]:
+    return callable(getattr(value, "Document", None))
+
+
+def _is_weasyprint_module(value: object) -> TypeIs[_WeasyprintModule]:
+    return callable(getattr(value, "HTML", None))
 
 
 def _convert_markdown_to_docx(src_file: Path, tgt_file: Path, target_path: str) -> str:
-    document_module = importlib.import_module("docx")
+    document_module: object = importlib.import_module("docx")
+    if not _is_docx_module(document_module):
+        raise TypeError("docx.Document is unavailable")
 
     md_text = src_file.read_text(encoding="utf-8")
     doc = document_module.Document()
@@ -62,7 +105,7 @@ def _convert_markdown_to_docx(src_file: Path, tgt_file: Path, target_path: str) 
                 if candidate:
                     table_lines.append(candidate)
                 index += 1
-            data_rows = []
+            data_rows: list[list[str]] = []
             for raw in table_lines:
                 cells = [cell.strip() for cell in raw.strip("|").split("|")]
                 if cells and all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
@@ -86,7 +129,9 @@ def _convert_markdown_to_docx(src_file: Path, tgt_file: Path, target_path: str) 
 
 
 def _convert_markdown_to_pdf(src_file: Path, tgt_file: Path, target_path: str, ws: Path) -> str:
-    weasyprint = importlib.import_module("weasyprint")
+    weasyprint_mod: object = importlib.import_module("weasyprint")
+    if not _is_weasyprint_module(weasyprint_mod):
+        raise TypeError("weasyprint.HTML is unavailable")
 
     md_text = src_file.read_text(encoding="utf-8")
 
@@ -163,18 +208,18 @@ def _convert_markdown_to_pdf(src_file: Path, tgt_file: Path, target_path: str, w
     html_text = "\n".join(html_parts)
     full_html = (
         "<html><head><meta charset='utf-8'><style>"
-        "body{font-family:'WenQuanYi Micro Hei','Noto Sans CJK SC',sans-serif;line-height:1.65;padding:2em;color:#111827;}"
-        "h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;}"
-        "p{margin:.55em 0;}"
-        "table{width:100%;border-collapse:collapse;margin:1em 0;font-size:12px;}"
-        "th,td{border:1px solid #d8dee9;padding:7px 9px;text-align:left;vertical-align:top;}"
-        "th{background:#f3f4f6;font-weight:700;}"
-        "code{background:#f3f4f6;padding:1px 4px;border-radius:4px;}"
-        "a{color:#2563eb;text-decoration:none;}"
-        "</style></head><body>"
-        f"{html_text}"
-        "</body></html>"
+        + "body{font-family:'WenQuanYi Micro Hei','Noto Sans CJK SC',sans-serif;line-height:1.65;padding:2em;color:#111827;}"
+        + "h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;}"
+        + "p{margin:.55em 0;}"
+        + "table{width:100%;border-collapse:collapse;margin:1em 0;font-size:12px;}"
+        + "th,td{border:1px solid #d8dee9;padding:7px 9px;text-align:left;vertical-align:top;}"
+        + "th{background:#f3f4f6;font-weight:700;}"
+        + "code{background:#f3f4f6;padding:1px 4px;border-radius:4px;}"
+        + "a{color:#2563eb;text-decoration:none;}"
+        + "</style></head><body>"
+        + f"{html_text}"
+        + "</body></html>"
     )
     tgt_file.parent.mkdir(parents=True, exist_ok=True)
-    weasyprint.HTML(string=full_html, base_url=str(ws.resolve())).write_pdf(str(tgt_file))
+    weasyprint_mod.HTML(string=full_html, base_url=str(ws.resolve())).write_pdf(str(tgt_file))
     return f"✅ Successfully converted Markdown to PDF: {target_path}"

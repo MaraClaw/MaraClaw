@@ -5,20 +5,22 @@ import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from python_on_whales import ClientNotFoundError, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.dao import llm_model_dao
+from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.llm import get_model_api_key
 from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.base import StorageBackend
 
 settings = get_settings()
 
@@ -30,7 +32,7 @@ class ContainerStatus(TypedDict):
 
 class InspectedContainerStatus(ContainerStatus, total=False):
     ports: JsonObject | None
-    created: datetime | None
+    created: str | datetime | None
 
 
 class AgentManager:
@@ -38,7 +40,7 @@ class AgentManager:
 
     def __init__(self):
         try:
-            self.docker_client = DockerClient()
+            self.docker_client: DockerClient | None = DockerClient()
         except ClientNotFoundError, DockerException:
             logger.warning("Docker not available - agent containers will not be managed")
             self.docker_client = None
@@ -65,7 +67,7 @@ class AgentManager:
             await self._materialize_entry(storage, entry.key, agent_dir)
         return agent_dir
 
-    async def _materialize_entry(self, storage, storage_key: str, local_root: Path) -> None:
+    async def _materialize_entry(self, storage: StorageBackend, storage_key: str, local_root: Path) -> None:
         rel = Path(storage_key).relative_to(Path(storage_key).parts[0]).as_posix()
         local_path = local_root / rel
         if await storage.is_dir(storage_key):
@@ -74,10 +76,10 @@ class AgentManager:
                 await self._materialize_entry(storage, child.key, local_root)
             return
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(await storage.read_bytes(storage_key))
+        _ = local_path.write_bytes(await storage.read_bytes(storage_key))
 
     async def initialize_agent_files(
-        self, agent: Any, personality: str = "", boundaries: str = "", db: Any = None
+        self, agent: AgentRecord, personality: str = "", boundaries: str = "", db: object | None = None
     ) -> None:
         """Copy template files and customize for this agent."""
         agent_dir = self._agent_dir(agent.id)
@@ -94,21 +96,20 @@ class AgentManager:
             import time
 
             t_start_files = time.perf_counter()
-            tasks = []
+
+            async def _write_template(dest: str, payload: bytes) -> None:
+                await storage.write_bytes(dest, payload)
+
+            tasks: list[asyncio.Task[None]] = []
             for src in template_dir.rglob("*"):
                 if src.is_dir():
                     continue
                 rel = src.relative_to(template_dir).as_posix()
                 if rel == "tasks.json" or rel == "todo.json" or rel.startswith("enterprise_info/"):
                     continue
-                tasks.append(
-                    storage.write_bytes(
-                        f"{agent_prefix}/{rel}",
-                        src.read_bytes(),
-                    )
-                )
+                tasks.append(asyncio.create_task(_write_template(f"{agent_prefix}/{rel}", src.read_bytes())))
             if tasks:
-                await asyncio.gather(*tasks)
+                _ = await asyncio.gather(*tasks)
             logger.info(
                 f"[AgentManager] Uploaded {len(tasks)} template files concurrently in {time.perf_counter() - t_start_files:.2f}s for agent {agent.id}"
             )
@@ -205,14 +206,14 @@ class AgentManager:
         # Customize state.json
         state_key = f"{agent_prefix}/state.json"
         if await storage.exists(state_key):
-            state = json.loads(await storage.read_text(state_key, encoding="utf-8", errors="replace"))
+            state = json_loads_object(await storage.read_text(state_key, encoding="utf-8", errors="replace"))
             state["agent_id"] = str(agent.id)
             state["name"] = agent.name
             await storage.write_text(state_key, json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
         logger.info(f"Initialized agent files at {agent_dir}")
 
-    def _generate_openclaw_config(self, agent: Any, model: LLMModelRecord | None) -> JsonObject:
+    def _generate_openclaw_config(self, agent: AgentRecord, model: LLMModelRecord | None) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
         del agent  # reserved for future per-agent openclaw knobs
         config: JsonObject = {
@@ -256,7 +257,7 @@ class AgentManager:
 
         return config
 
-    async def start_container(self, db: Any, agent: Any) -> str | None:
+    async def start_container(self, db: object | None, agent: AgentRecord) -> str | None:
         """Start an OpenClaw Gateway Docker container for the agent.
 
         Returns container_id or None if Docker not available.
@@ -269,7 +270,7 @@ class AgentManager:
 
         agent_dir = await self._materialize_agent_dir(agent.id)
         if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
-            await restore_gogcli_state(db, agent.id, agent_dir)
+            _ = await restore_gogcli_state(db, agent.id, agent_dir)
 
         gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
 
@@ -282,7 +283,7 @@ class AgentManager:
         config = self._generate_openclaw_config(agent, model)
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (agent_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        _ = (agent_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
         # Create workspace symlink
         workspace_dir = config_dir / "workspace"
@@ -328,7 +329,7 @@ class AgentManager:
             agent.status = "error"
             return None
 
-    async def stop_container(self, agent: Any) -> bool:
+    async def stop_container(self, agent: AgentRecord) -> bool:
         """Stop the agent's Docker container."""
         if not self.docker_client or not agent.container_id:
             agent.status = "stopped"
@@ -347,7 +348,7 @@ class AgentManager:
             logger.error(f"Failed to stop container: {e}")
             return False
 
-    async def remove_container(self, agent: Any) -> bool:
+    async def remove_container(self, agent: AgentRecord) -> bool:
         """Stop and remove the agent's Docker container."""
         if not self.docker_client or not agent.container_id:
             return True
@@ -376,25 +377,31 @@ class AgentManager:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         dest = archive_dir / f"{agent_id}_{timestamp}"
         if agent_dir.exists():
-            shutil.move(str(agent_dir), str(dest))
+            _ = shutil.move(str(agent_dir), str(dest))
             logger.info(f"Archived agent files to {dest}")
         else:
             dest.mkdir(parents=True, exist_ok=True)
         return dest
 
-    def get_container_status(self, agent: Any) -> ContainerStatus | InspectedContainerStatus:
+    def get_container_status(self, agent: AgentRecord) -> ContainerStatus | InspectedContainerStatus:
         """Get real-time container status."""
         if not self.docker_client or not agent.container_id:
             return {"running": False, "status": agent.status}
 
         try:
             container = self.docker_client.container.inspect(agent.container_id)
-            return {
-                "running": container.state.running,
-                "status": container.state.status,
-                "ports": container.network_settings.ports,
-                "created": container.created,
+            state = getattr(container, "state", None)
+            network = getattr(container, "network_settings", None)
+            ports = getattr(network, "ports", None)
+            created = getattr(container, "created", None)
+            created_value: str | datetime | None = created if isinstance(created, (str, datetime)) else None
+            status: InspectedContainerStatus = {
+                "running": bool(getattr(state, "running", False)),
+                "status": str(getattr(state, "status", None) or agent.status),
+                "ports": json_object_from(ports) if isinstance(ports, dict) else None,
+                "created": created_value,
             }
+            return status
         except NoSuchContainer:
             return {"running": False, "status": "not_found"}
         except ClientNotFoundError, DockerException:

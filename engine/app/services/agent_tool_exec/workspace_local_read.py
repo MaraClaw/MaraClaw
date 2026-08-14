@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+
+type ResolveToolSourcePath = Callable[..., Path]
 
 
 def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, workspace_root: Path) -> str:
@@ -59,7 +62,7 @@ def _read_file(
     offset: int = 0,
     limit: int = 2000,
     *,
-    resolve_tool_source_path,
+    resolve_tool_source_path: ResolveToolSourcePath,
 ) -> str:
     try:
         file_path = resolve_tool_source_path(ws, rel_path, tenant_id=tenant_id)

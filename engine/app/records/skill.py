@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -18,12 +20,12 @@ class SkillFileRecord:
     content: str = ""
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> SkillFileRecord:
+    def from_row(cls, row: Mapping[str, object]) -> SkillFileRecord:
         return cls(
-            id=row["id"],
-            skill_id=row["skill_id"],
-            path=row["path"],
-            content=row.get("content") or "",
+            id=uuid_from_row(row["id"]),
+            skill_id=uuid_from_row(row["skill_id"]),
+            path=str_from_row(row["path"]),
+            content=str_from_row(row.get("content")),
         )
 
 
@@ -41,20 +43,20 @@ class SkillRecord:
     is_builtin: bool = False
     is_default: bool = False
     created_at: datetime | None = None
-    files: list[SkillFileRecord] = field(default_factory=list)
+    files: list[SkillFileRecord] = field(default_factory=list[SkillFileRecord])
 
     @classmethod
-    def from_row(cls, row: dict[str, Any], *, files: list[SkillFileRecord] | None = None) -> SkillRecord:
+    def from_row(cls, row: Mapping[str, object], *, files: list[SkillFileRecord] | None = None) -> SkillRecord:
         return cls(
-            id=row["id"],
-            name=row["name"],
-            folder_name=row["folder_name"],
-            tenant_id=row.get("tenant_id"),
-            description=row.get("description") or "",
-            category=row.get("category") or "general",
-            icon=row.get("icon") or "📋",
+            id=uuid_from_row(row["id"]),
+            name=str_from_row(row["name"]),
+            folder_name=str_from_row(row["folder_name"]),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            description=str_from_row(row.get("description")),
+            category=str_from_row(row.get("category"), "general") or "general",
+            icon=str_from_row(row.get("icon"), "📋") or "📋",
             is_builtin=bool(row.get("is_builtin", False)),
             is_default=bool(row.get("is_default", False)),
-            created_at=row.get("created_at"),
+            created_at=datetime_from_row(row.get("created_at")),
             files=list(files or []),
         )

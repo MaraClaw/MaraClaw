@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from app.config import get_settings
+from app.core.json_types import json_object_from
 from app.dao.trigger_dao import trigger_execution_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
@@ -97,17 +97,15 @@ async def claim_pending_trigger_executions(
 
 
 def build_execution_runtime_trigger(
-    trigger: AgentTriggerRecord | Any,
-    execution: TriggerExecutionRecord | Any,
+    trigger: AgentTriggerRecord,
+    execution: TriggerExecutionRecord,
 ) -> AgentTriggerRecord:
-    runtime_cfg = {
-        **(getattr(trigger, "config", None) or {}),
-        "_execution_id": str(execution.id),
-    }
-    payload = getattr(execution, "payload", None)
+    runtime_cfg = dict(json_object_from(trigger.config))
+    runtime_cfg["_execution_id"] = str(execution.id)
+    payload = json_object_from(execution.payload)
     if payload:
         runtime_cfg.update(payload)
-    payload_text = getattr(execution, "payload_text", None)
+    payload_text = execution.payload_text
     if payload_text:
         runtime_cfg["_webhook_payload"] = payload_text
     return AgentTriggerRecord(

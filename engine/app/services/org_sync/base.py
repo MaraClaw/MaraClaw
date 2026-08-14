@@ -2,13 +2,14 @@
 
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.db.session import optional_connection_ctx
+from app.records.identity import IdentityProviderRecord
 from app.services.org_sync.departments import OrgSyncDepartmentMixin
 from app.services.org_sync.members import OrgSyncMemberMixin
 from app.services.org_sync.types import ExternalDepartment, ExternalUser
@@ -18,11 +19,11 @@ from app.services.org_sync.utils import _utcnow
 class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
     """Abstract base class for organization sync adapters."""
 
-    provider_type: str = ""
+    provider_type: ClassVar[str] = ""
 
     def __init__(
         self,
-        provider: Any = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
@@ -33,9 +34,9 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
             config: Configuration dict (fallback if no provider record)
             tenant_id: Tenant ID for org sync
         """
-        self.provider = provider
+        self.provider: IdentityProviderRecord | None = provider
         self.config: JsonObject = config or {}
-        self.tenant_id = tenant_id
+        self.tenant_id: uuid.UUID | None = tenant_id
         self._client: httpx.AsyncClient | None = None
 
         if provider and provider.config:
@@ -76,7 +77,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
             List of ExternalUser
         """
 
-    async def sync_org_structure(self, db: Any = None) -> dict[str, Any]:
+    async def sync_org_structure(self, db: object | None = None) -> dict[str, Any]:
         """Main sync function - syncs departments and members.
 
         Args:
@@ -110,7 +111,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                         errors.append(f"Department {dept.external_id}: {e!s}")
                         logger.error(f"[OrgSync] Failed to sync department {dept.external_id}: {e}")
 
-                await self._rebuild_department_paths(None, provider.id)
+                _ = await self._rebuild_department_paths(None, provider.id)
 
             # Fetch users over HTTP; persist each department's members together.
             for dept in departments:
@@ -152,7 +153,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                     if partial_failure:
                         logger.warning(
                             f"[OrgSync] Skipping reconcile for provider {provider.id} "
-                            "because this sync had partial failures"
+                            + "because this sync had partial failures"
                         )
                         errors.append("Reconcile skipped due to partial sync failures")
                     else:

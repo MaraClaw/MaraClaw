@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -40,7 +40,12 @@ class CollaborationService:
     """
 
     async def delegate_task(
-        self, db: Any, from_agent_id: uuid.UUID, to_agent_id: uuid.UUID, task_title: str, task_description: str
+        self,
+        db: object | None,
+        from_agent_id: uuid.UUID,
+        to_agent_id: uuid.UUID,
+        task_title: str,
+        task_description: str,
     ) -> DelegatedTaskResult:
         """Agent A delegates a task to Agent B."""
         from_agent = await agent_dao.get(from_agent_id)
@@ -81,7 +86,7 @@ class CollaborationService:
             "status": "delegated",
         }
 
-    async def list_collaborators(self, db: Any, agent_id: uuid.UUID) -> list[CollaboratorSummary]:
+    async def list_collaborators(self, db: object | None, agent_id: uuid.UUID) -> list[CollaboratorSummary]:
         """List agents that can collaborate with the given agent.
 
         Returns agents from the same enterprise (same creator's org).
@@ -104,7 +109,12 @@ class CollaborationService:
         ]
 
     async def send_message_between_agents(
-        self, db: Any, from_agent_id: uuid.UUID, to_agent_id: uuid.UUID, message: str, msg_type: str = "notify"
+        self,
+        db: object | None,
+        from_agent_id: uuid.UUID,
+        to_agent_id: uuid.UUID,
+        message: str,
+        msg_type: str = "notify",
     ) -> MessageDeliveryResult:
         """Send an inter-agent message.
 
@@ -114,13 +124,18 @@ class CollaborationService:
 
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         rel_path = f"workspace/inbox/{timestamp}_{str(from_agent_id)[:8]}.md"
-        await store_agent_bytes(
+        payload = "".join(
+            (
+                f"# Message from {from_agent.name if from_agent else 'Unknown'}\n",
+                f"- Type: {msg_type}\n",
+                f"- Time: {datetime.now(UTC).isoformat()}\n\n",
+                f"{message}\n",
+            )
+        )
+        _ = await store_agent_bytes(
             to_agent_id,
             rel_path,
-            f"# Message from {from_agent.name if from_agent else 'Unknown'}\n"
-            f"- Type: {msg_type}\n"
-            f"- Time: {datetime.now(UTC).isoformat()}\n\n"
-            f"{message}\n".encode(),
+            payload.encode(),
             content_type="text/markdown; charset=utf-8",
         )
 

@@ -68,6 +68,7 @@ dev = [
     "httpx>=0.28.1",
     "ruff>=0.16.1",
     "ty>=0.0.65",
+    "basedpyright>=1.39.10",
 ]
 
 [tool.ruff]
@@ -125,11 +126,25 @@ known-first-party = ["app"]
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
-"app/scripts/**/*.py" = ["T201"]
+"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S311", "PT011"]
+"app/scripts/**/*.py" = ["T201", "S608"]
 "scripts/**/*.py" = ["T201"]
-# DAO SQL builders use class-constant table/column names, not user input.
+# DAO SQL builders use class-constant fragments and named parameters.
 "app/dao/**/*.py" = ["S608"]
+# Parameterized fragment SQL (%(name)s). Bandit S608 flags concatenation, not interpolation.
+"app/api/schedules.py" = ["S608"]
+"app/api/skills.py" = ["S608"]
+"app/services/agent_tool_exec/a2a_triggers.py" = ["S608"]
+"app/services/agent_tool_exec/trigger_helpers.py" = ["S608"]
+"app/services/onboarding.py" = ["S608"]
+"app/services/org_sync/departments.py" = ["S608"]
+"app/services/tool_config.py" = ["S608"]
+# Protocol methods/args must match third-party APIs (boto3, docx, pptx).
+"app/services/storage_runtime/s3.py" = ["N803"]
+"app/services/text_extractor.py" = ["N802"]
+"app/services/document_conversion/markdown.py" = ["N802"]
+"app/services/document_conversion/csv.py" = ["N802"]
+"app/services/agent_tool_exec/document_reading.py" = ["N802"]
 
 [tool.ruff.lint.extend-per-file-ignores]
 "app/api/**/*.py" = ["B008", "FAST002"]
@@ -147,6 +162,26 @@ indent-style = "space"
 line-ending = "lf"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+
+[tool.pyright]
+include = ["app"]
+extraPaths = ["."]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+reportUnannotatedClassAttribute = "error"
+reportAny = "error"
+
+[tool.basedpyright]
+include = ["app"]
+extraPaths = ["."]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+reportUnannotatedClassAttribute = "error"
+reportAny = "error"
 
 [tool.ty.environment]
 root = ["."]

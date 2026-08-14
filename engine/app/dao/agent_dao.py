@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
+from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_list_from_rows
+from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.base import BaseDAO
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
@@ -86,22 +89,34 @@ _HEARTBEAT_CANDIDATE_COLUMNS = (
 )
 
 
+@final
 class AgentDAO(BaseDAO[AgentRecord]):
     """DAO for Agent records."""
 
-    table = "agents"
-    columns = _AGENT_COLUMNS
+    table: ClassVar[str] = "agents"
+    columns: ClassVar[tuple[str, ...]] = _AGENT_COLUMNS
     record_factory = staticmethod(AgentRecord.from_row)
+
+    async def get(self, id: UUID) -> AgentRecord | None:
+        cached = memo_get("agent", id)
+        if isinstance(cached, AgentRecord):
+            return cached
+        agent = await super().get(id)
+        if agent is not None:
+            memo_set("agent", agent.id, agent)
+        return agent
 
     async def update(self, *, db_obj: AgentRecord, obj_in: Mapping[str, Any]) -> AgentRecord:
         updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+        memo_set("agent", updated.id, updated)
         if _AGENT_POLICY_COLUMNS.intersection(obj_in):
             await bump_agent_acl_version(updated.id)
         return updated
 
-    async def delete(self, *, id: Any) -> AgentRecord | None:
+    async def delete(self, *, id: UUID) -> AgentRecord | None:
         deleted = await super().delete(id=id)
         if deleted is not None:
+            memo_drop("agent", deleted.id)
             await drop_agent_acl_version(deleted.id)
         return deleted
 
@@ -117,7 +132,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                "WHERE tenant_id = %(tenant_id)s AND is_system IS TRUE AND name = %(name)s LIMIT 1",
+                + "WHERE tenant_id = %(tenant_id)s AND is_system IS TRUE AND name = %(name)s LIMIT 1",
                 {"tenant_id": tenant_id, "name": name},
             )
             return AgentRecord.from_row(row) if row else None
@@ -126,7 +141,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                "WHERE is_system IS TRUE AND name = %(name)s AND status <> 'stopped' LIMIT 1",
+                + "WHERE is_system IS TRUE AND name = %(name)s AND status <> 'stopped' LIMIT 1",
                 {"name": name},
             )
             return AgentRecord.from_row(row) if row else None
@@ -137,8 +152,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                f"WHERE is_system IS TRUE AND name = %(name)s{status_sql} "
-                "ORDER BY created_at DESC NULLS LAST",
+                + f"WHERE is_system IS TRUE AND name = %(name)s{status_sql} "
+                + "ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -149,7 +164,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                f"WHERE name = %(name)s{status_sql} ORDER BY created_at DESC NULLS LAST",
+                + f"WHERE name = %(name)s{status_sql} ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -187,21 +202,21 @@ class AgentDAO(BaseDAO[AgentRecord]):
         if role in ("platform_admin", "org_admin"):
             sql = (
                 f"SELECT {self._select_list('a')} FROM agents a "
-                "WHERE a.tenant_id = %(tenant_id)s "
-                "AND (a.creator_id = %(user_id)s OR a.access_mode <> 'private')"
-                f"{exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
+                + "WHERE a.tenant_id = %(tenant_id)s "
+                + "AND (a.creator_id = %(user_id)s OR a.access_mode <> 'private')"
+                + f"{exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
             )
         else:
             sql = (
                 f"SELECT {self._select_list('a')} FROM agents a "
-                "WHERE a.tenant_id = %(tenant_id)s AND ("
-                " a.creator_id = %(user_id)s"
-                " OR a.access_mode = 'company'"
-                " OR a.id IN ("
-                "   SELECT ap.agent_id FROM agent_permissions ap"
-                "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
-                " )"
-                f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
+                + "WHERE a.tenant_id = %(tenant_id)s AND ("
+                + " a.creator_id = %(user_id)s"
+                + " OR a.access_mode = 'company'"
+                + " OR a.id IN ("
+                + "   SELECT ap.agent_id FROM agent_permissions ap"
+                + "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
+                + " )"
+                + f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
             )
 
         async with self.session() as db:
@@ -215,7 +230,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
                 {"key": api_key},
             )
             if row:
@@ -223,7 +238,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
                 {"key": key_hash},
             )
             return AgentRecord.from_row(row) if row else None
@@ -231,7 +246,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def list_all_ids(self) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall("SELECT id FROM agents")
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def list_ids_for_creator(self, creator_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
@@ -239,7 +254,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT id FROM agents WHERE creator_id = %(creator_id)s",
                 {"creator_id": creator_id},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def apply_token_counter_resets(self, agent: AgentRecord) -> AgentRecord | None:
         """Persist lazy daily/monthly token counter resets when needed."""
@@ -289,15 +304,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             if daily_ids:
                 await db.execute(
                     "UPDATE agents SET tokens_used_today = 0, cache_read_tokens_today = 0, "
-                    "cache_creation_tokens_today = 0, last_daily_reset = %(now)s "
-                    "WHERE id = ANY(%(ids)s) AND (last_daily_reset IS NULL OR last_daily_reset::date < %(today)s)",
+                    + "cache_creation_tokens_today = 0, last_daily_reset = %(now)s "
+                    + "WHERE id = ANY(%(ids)s) AND (last_daily_reset IS NULL OR last_daily_reset::date < %(today)s)",
                     {"now": now, "ids": daily_ids, "today": now.date()},
                 )
             if monthly_ids:
                 await db.execute(
                     "UPDATE agents SET tokens_used_month = 0, cache_read_tokens_month = 0, "
-                    "cache_creation_tokens_month = 0, last_monthly_reset = %(now)s "
-                    "WHERE id = ANY(%(ids)s) AND (last_monthly_reset IS NULL OR last_monthly_reset < %(month_start)s)",
+                    + "cache_creation_tokens_month = 0, last_monthly_reset = %(now)s "
+                    + "WHERE id = ANY(%(ids)s) AND (last_monthly_reset IS NULL OR last_monthly_reset < %(month_start)s)",
                     {"now": now, "ids": monthly_ids, "month_start": month_start},
                 )
         daily_set = set(daily_ids)
@@ -328,18 +343,18 @@ class AgentDAO(BaseDAO[AgentRecord]):
         self,
         agent_id: UUID,
         *,
-        now: Any,
-        interval,
+        now: datetime,
+        interval: timedelta,
     ) -> bool:
         """Atomically claim a heartbeat slot; return True when this process won the claim."""
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agents SET last_heartbeat_at = %(now)s "
-                "WHERE id = %(id)s "
-                "AND heartbeat_enabled IS TRUE "
-                "AND status = ANY(%(statuses)s) "
-                "AND (last_heartbeat_at IS NULL OR last_heartbeat_at <= %(cutoff)s) "
-                "RETURNING id",
+                + "WHERE id = %(id)s "
+                + "AND heartbeat_enabled IS TRUE "
+                + "AND status = ANY(%(statuses)s) "
+                + "AND (last_heartbeat_at IS NULL OR last_heartbeat_at <= %(cutoff)s) "
+                + "RETURNING id",
                 {
                     "id": agent_id,
                     "now": now,
@@ -361,14 +376,14 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT COUNT(*) FROM agents WHERE creator_id = %(creator_id)s AND is_expired IS FALSE",
                 {"creator_id": creator_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def is_hidden_from_plaza(self, agent_id: UUID) -> bool:
         """True when agent is system or not company-public (excluded from plaza feed)."""
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM agents WHERE id = %(id)s "
-                "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company') LIMIT 1",
+                + "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company') LIMIT 1",
                 {"id": agent_id},
             )
             return value is not None
@@ -379,10 +394,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id FROM agents WHERE id = ANY(%(ids)s) "
-                "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company')",
+                + "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company')",
                 {"ids": list(agent_ids)},
             )
-            return {row["id"] for row in rows}
+            return {uuid_from_row(row["id"]) for row in rows}
 
     async def list_for_tenant(self, tenant_id: UUID) -> Sequence[AgentRecord]:
         async with self.session() as db:
@@ -424,8 +439,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id, name, avatar_url FROM agents "
-                "WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
-                "AND NOT (status = ANY(%(exclude_statuses)s))",
+                + "WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
+                + "AND NOT (status = ANY(%(exclude_statuses)s))",
                 {"tenant_id": tenant_id, "exclude_statuses": ["stopped", "error"]},
             )
             return list(rows)
@@ -450,7 +465,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC NULLS LAST",
+                + f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -483,8 +498,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET heartbeat_interval_minutes = %(floor)s, updated_at = NOW() "
-                "WHERE tenant_id = %(tenant_id)s AND heartbeat_interval_minutes < %(floor)s "
-                "RETURNING id",
+                + "WHERE tenant_id = %(tenant_id)s AND heartbeat_interval_minutes < %(floor)s "
+                + "RETURNING id",
                 {"tenant_id": tenant_id, "floor": floor},
             )
             return len(rows)
@@ -500,18 +515,18 @@ class AgentDAO(BaseDAO[AgentRecord]):
         """Atomically add token counters; return the refreshed agent row."""
         async with self.session() as db:
             row = await db.fetchone(
-                f"UPDATE agents SET "
-                "tokens_used_today = COALESCE(tokens_used_today, 0) + %(total)s, "
-                "tokens_used_month = COALESCE(tokens_used_month, 0) + %(total)s, "
-                "tokens_used_total = COALESCE(tokens_used_total, 0) + %(total)s, "
-                "cache_read_tokens_today = COALESCE(cache_read_tokens_today, 0) + %(cache_read)s, "
-                "cache_read_tokens_month = COALESCE(cache_read_tokens_month, 0) + %(cache_read)s, "
-                "cache_read_tokens_total = COALESCE(cache_read_tokens_total, 0) + %(cache_read)s, "
-                "cache_creation_tokens_today = COALESCE(cache_creation_tokens_today, 0) + %(cache_creation)s, "
-                "cache_creation_tokens_month = COALESCE(cache_creation_tokens_month, 0) + %(cache_creation)s, "
-                "cache_creation_tokens_total = COALESCE(cache_creation_tokens_total, 0) + %(cache_creation)s, "
-                "updated_at = NOW() "
-                f"WHERE id = %(id)s RETURNING {self._select_list()}",
+                "UPDATE agents SET "
+                + "tokens_used_today = COALESCE(tokens_used_today, 0) + %(total)s, "
+                + "tokens_used_month = COALESCE(tokens_used_month, 0) + %(total)s, "
+                + "tokens_used_total = COALESCE(tokens_used_total, 0) + %(total)s, "
+                + "cache_read_tokens_today = COALESCE(cache_read_tokens_today, 0) + %(cache_read)s, "
+                + "cache_read_tokens_month = COALESCE(cache_read_tokens_month, 0) + %(cache_read)s, "
+                + "cache_read_tokens_total = COALESCE(cache_read_tokens_total, 0) + %(cache_read)s, "
+                + "cache_creation_tokens_today = COALESCE(cache_creation_tokens_today, 0) + %(cache_creation)s, "
+                + "cache_creation_tokens_month = COALESCE(cache_creation_tokens_month, 0) + %(cache_creation)s, "
+                + "cache_creation_tokens_total = COALESCE(cache_creation_tokens_total, 0) + %(cache_creation)s, "
+                + "updated_at = NOW() "
+                + f"WHERE id = %(id)s RETURNING {self._select_list()}",
                 {
                     "id": agent_id,
                     "total": total_tokens,
@@ -519,7 +534,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     "cache_creation": cache_creation_tokens,
                 },
             )
-            return AgentRecord.from_row(row) if row else None
+            agent = AgentRecord.from_row(row) if row else None
+            if agent is not None:
+                memo_set("agent", agent.id, agent)
+            return agent
 
     async def count_for_tenant(self, tenant_id: UUID, *, status: str | None = None) -> int:
         params: dict[str, Any] = {"tenant_id": tenant_id}
@@ -532,53 +550,57 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 f"SELECT COUNT(*) FROM agents WHERE tenant_id = %(tenant_id)s{status_sql}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def sum_tokens_for_tenant(self, tenant_id: UUID) -> tuple[int, int]:
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COALESCE(SUM(tokens_used_total), 0) AS total, "
-                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
-                "FROM agents WHERE tenant_id = %(tenant_id)s",
+                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
+                + "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             if not row:
                 return 0, 0
-            return int(row["total"] or 0), int(row["cache_read"] or 0)
+            return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
     async def pause_running_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
+                + "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
                 {"tenant_id": tenant_id},
             )
-            return len(rows)
+        for row in rows:
+            memo_drop("agent", uuid_from_row(row["id"]))
+        return len(rows)
 
     async def disable_for_tenant(self, tenant_id: UUID) -> int:
         """Stop every agent in the tenant (``paused`` is not a valid agent_status)."""
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                "WHERE tenant_id = %(tenant_id)s AND status <> 'stopped' RETURNING id",
+                + "WHERE tenant_id = %(tenant_id)s AND status <> 'stopped' RETURNING id",
                 {"tenant_id": tenant_id},
             )
-            return len(rows)
+        for row in rows:
+            memo_drop("agent", uuid_from_row(row["id"]))
+        return len(rows)
 
     async def token_usage_for_tenant(self, tenant_id: UUID) -> dict[str, int]:
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT "
-                "COALESCE(SUM(tokens_used_today), 0) AS tokens_today, "
-                "COALESCE(SUM(tokens_used_month), 0) AS tokens_month, "
-                "COALESCE(SUM(tokens_used_total), 0) AS tokens_total, "
-                "COALESCE(SUM(cache_read_tokens_today), 0) AS cache_today, "
-                "COALESCE(SUM(cache_read_tokens_month), 0) AS cache_month, "
-                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_total, "
-                "COALESCE(SUM(cache_creation_tokens_today), 0) AS cache_creation_today, "
-                "COALESCE(SUM(cache_creation_tokens_month), 0) AS cache_creation_month, "
-                "COALESCE(SUM(cache_creation_tokens_total), 0) AS cache_creation_total "
-                "FROM agents WHERE tenant_id = %(tenant_id)s",
+                + "COALESCE(SUM(tokens_used_today), 0) AS tokens_today, "
+                + "COALESCE(SUM(tokens_used_month), 0) AS tokens_month, "
+                + "COALESCE(SUM(tokens_used_total), 0) AS tokens_total, "
+                + "COALESCE(SUM(cache_read_tokens_today), 0) AS cache_today, "
+                + "COALESCE(SUM(cache_read_tokens_month), 0) AS cache_month, "
+                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_total, "
+                + "COALESCE(SUM(cache_creation_tokens_today), 0) AS cache_creation_today, "
+                + "COALESCE(SUM(cache_creation_tokens_month), 0) AS cache_creation_month, "
+                + "COALESCE(SUM(cache_creation_tokens_total), 0) AS cache_creation_total "
+                + "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             if not row:
@@ -593,37 +615,37 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     "cache_creation_month": 0,
                     "cache_creation_total": 0,
                 }
-            return {k: int(row[k] or 0) for k in row}
+            return {str(k): int_from_row(row.get(k)) for k in row}
 
-    async def sum_tokens_created_before(self, before: Any) -> tuple[int, int]:
+    async def sum_tokens_created_before(self, before: datetime) -> tuple[int, int]:
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COALESCE(SUM(tokens_used_total), 0) AS total, "
-                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
-                "FROM agents WHERE created_at < %(before)s",
+                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
+                + "FROM agents WHERE created_at < %(before)s",
                 {"before": before},
             )
             if not row:
                 return 0, 0
-            return int(row["total"] or 0), int(row["cache_read"] or 0)
+            return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
     async def top_token_companies(self, *, limit: int = 20) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT t.name, "
-                "COALESCE(SUM(a.tokens_used_total), 0) AS total, "
-                "COALESCE(SUM(a.cache_read_tokens_total), 0) AS cache_read "
-                "FROM tenants t JOIN agents a ON a.tenant_id = t.id "
-                "GROUP BY t.id, t.name "
-                "ORDER BY SUM(a.tokens_used_total) DESC NULLS LAST "
-                "LIMIT %(limit)s",
+                + "COALESCE(SUM(a.tokens_used_total), 0) AS total, "
+                + "COALESCE(SUM(a.cache_read_tokens_total), 0) AS cache_read "
+                + "FROM tenants t JOIN agents a ON a.tenant_id = t.id "
+                + "GROUP BY t.id, t.name "
+                + "ORDER BY SUM(a.tokens_used_total) DESC NULLS LAST "
+                + "LIMIT %(limit)s",
                 {"limit": limit},
             )
             return [
                 {
                     "name": row["name"],
-                    "total": int(row["total"] or 0),
-                    "cache_read": int(row["cache_read"] or 0),
+                    "total": int_from_row(row.get("total")),
+                    "cache_read": int_from_row(row.get("cache_read")),
                 }
                 for row in rows
             ]
@@ -632,16 +654,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT a.name, t.name AS tenant_name, a.tokens_used_total, a.cache_read_tokens_total "
-                "FROM agents a JOIN tenants t ON t.id = a.tenant_id "
-                "ORDER BY a.tokens_used_total DESC NULLS LAST LIMIT %(limit)s",
+                + "FROM agents a JOIN tenants t ON t.id = a.tenant_id "
+                + "ORDER BY a.tokens_used_total DESC NULLS LAST LIMIT %(limit)s",
                 {"limit": limit},
             )
             return [
                 {
                     "name": row["name"],
                     "company": row["tenant_name"],
-                    "tokens": int(row["tokens_used_total"] or 0),
-                    "cache_read_tokens": int(row["cache_read_tokens_total"] or 0),
+                    "tokens": int_from_row(row.get("tokens_used_total")),
+                    "cache_read_tokens": int_from_row(row.get("cache_read_tokens_total")),
                 }
                 for row in rows
             ]
@@ -653,16 +675,18 @@ class AgentDAO(BaseDAO[AgentRecord]):
             for sql in AGENT_DELETE_CLEANUP_SQL:
                 await db.execute(sql, params)
             await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)
+        memo_drop("agent", agent_id)
+        await drop_agent_acl_version(agent_id)
 
     async def names_referencing_model(self, model_id: UUID) -> list[str]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT name FROM agents "
-                "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
-                "ORDER BY name",
+                + "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
+                + "ORDER BY name",
                 {"model_id": model_id},
             )
-            return [row["name"] for row in rows if row.get("name")]
+            return [str_from_row(row.get("name")) for row in rows if row.get("name")]
 
     async def nullify_model_references(self, model_id: UUID) -> None:
         async with self.session() as db:
@@ -685,8 +709,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET primary_model_id = %(new_model_id)s "
-                "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(old_model_id)s "
-                "RETURNING id",
+                + "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(old_model_id)s "
+                + "RETURNING id",
                 {
                     "tenant_id": tenant_id,
                     "old_model_id": old_model_id,
@@ -703,7 +727,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT id, name FROM agents WHERE id = ANY(%(ids)s)",
                 {"ids": list(agent_ids)},
             )
-            return {row["id"]: row["name"] for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row(row.get("name")) for row in rows}
 
 
 # Ordered cleanup before deleting the agents row (FK dependents).
@@ -734,11 +758,12 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
 )
 
 
+@final
 class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
     """DAO for AgentPermission records."""
 
-    table = "agent_permissions"
-    columns = _PERM_COLUMNS
+    table: ClassVar[str] = "agent_permissions"
+    columns: ClassVar[tuple[str, ...]] = _PERM_COLUMNS
     record_factory = staticmethod(AgentPermissionRecord.from_row)
 
     async def create(self, *, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
@@ -751,7 +776,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
         await bump_agent_acl_version(updated.agent_id)
         return updated
 
-    async def delete(self, *, id: Any) -> AgentPermissionRecord | None:
+    async def delete(self, *, id: UUID) -> AgentPermissionRecord | None:
         deleted = await super().delete(id=id)
         if deleted is not None:
             await bump_agent_acl_version(deleted.agent_id)
@@ -769,10 +794,10 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT scope_id FROM agent_permissions "
-                "WHERE agent_id = %(agent_id)s AND scope_type = 'user' AND scope_id IS NOT NULL",
+                + "WHERE agent_id = %(agent_id)s AND scope_type = 'user' AND scope_id IS NOT NULL",
                 {"agent_id": agent_id},
             )
-            return [row["scope_id"] for row in rows if row.get("scope_id") is not None]
+            return [uuid_from_row(row["scope_id"]) for row in rows if row.get("scope_id") is not None]
 
     async def delete_for_agent(self, agent_id: UUID) -> None:
         async with self.session() as db:

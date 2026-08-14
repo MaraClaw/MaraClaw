@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,7 +15,7 @@ router = APIRouter(tags=["sso"])
 
 
 @router.post("/sso/session")
-async def create_sso_session(tenant_id: uuid.UUID | None = None):
+async def create_sso_session(tenant_id: uuid.UUID | None = None) -> dict[str, Any]:
     """Create a new SSO scan session for QR code login."""
     session = await sso_scan_session_dao.create(
         obj_in={
@@ -28,7 +29,7 @@ async def create_sso_session(tenant_id: uuid.UUID | None = None):
 
 
 @router.get("/sso/session/{sid}/status")
-async def get_sso_session_status(sid: uuid.UUID):
+async def get_sso_session_status(sid: uuid.UUID) -> dict[str, Any]:
     """Check the status of an SSO scan session."""
     session = await sso_scan_session_dao.get(sid)
     if not session:
@@ -37,7 +38,11 @@ async def get_sso_session_status(sid: uuid.UUID):
     if session.expires_at < datetime.now(UTC):
         session = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "expired"}) or session
 
-    response = {"status": session.status, "provider_type": session.provider_type, "error_msg": session.error_msg}
+    response: dict[str, Any] = {
+        "status": session.status,
+        "provider_type": session.provider_type,
+        "error_msg": session.error_msg,
+    }
 
     if session.status == "authorized" and session.access_token:
         user = await user_dao.get_with_identity(session.user_id) if session.user_id else None
@@ -47,7 +52,7 @@ async def get_sso_session_status(sid: uuid.UUID):
             response["user"] = UserOut.model_validate(user).model_dump()
 
         # Mark as completed so it can't be reused
-        await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "completed"})
+        _ = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "completed"})
 
     return response
 
@@ -57,12 +62,12 @@ async def mark_sso_session_scanned(sid: uuid.UUID):
     """Optional: Mark session as 'scanned' when the landing page loads on mobile."""
     session = await sso_scan_session_dao.get(sid)
     if session and session.status == "pending":
-        await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "scanned"})
+        _ = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "scanned"})
     return {"status": "ok"}
 
 
 @router.get("/sso/config")
-async def get_sso_config(sid: uuid.UUID, request: Request, db=None):
+async def get_sso_config(sid: uuid.UUID, request: Request, db: object | None = None) -> list[dict[str, Any]]:
     """List active SSO providers with their redirect URLs for the specified session ID."""
     session = await sso_scan_session_dao.get(sid)
     if not session:
@@ -82,7 +87,7 @@ async def get_sso_config(sid: uuid.UUID, request: Request, db=None):
     else:
         public_base = await platform_service.get_public_base_url(db, request)
 
-    auth_urls = []
+    auth_urls: list[dict[str, Any]] = []
     for p in providers:
         if p.provider_type == "feishu":
             app_id = (p.config or {}).get("app_id")

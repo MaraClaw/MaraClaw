@@ -5,9 +5,10 @@ import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.sandbox.config import SandboxConfig, SandboxType
 
@@ -105,6 +106,15 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_KEY_PREFIX: str = "mrc"
+    REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_SOCKET_CONNECT_TIMEOUT: float = 2.0
+    REDIS_SOCKET_TIMEOUT: float = 5.0
+    REDIS_HEALTH_CHECK_INTERVAL: int = 30
+    REDIS_CACHE_MAX_CONNECTIONS: int = 20
+    REDIS_CACHE_SOCKET_TIMEOUT: float = 0.2
+    REDIS_CACHE_WAIT_SECONDS: float = 0.2
+    REDIS_CACHE_MAX_VALUE_BYTES: int = 65536
     INSTANCE_ID: str = _default_instance_id()
 
     # JWT
@@ -121,6 +131,14 @@ class Settings(BaseSettings):
     AGENT_ACCESS_CACHE_TTL_SECONDS: int = 45
     # Redis TTL for soul/memory/skill prompt fragments. 0 disables.
     AGENT_CONTEXT_CACHE_TTL_SECONDS: int = 60
+    # Redis TTL for user+identity auth snapshots (no password_hash). 0 disables.
+    USER_SESSION_CACHE_TTL_SECONDS: int = 20
+    # Redis TTL for tenant rows used on chat/timezone/catalog paths. 0 disables.
+    TENANT_CACHE_TTL_SECONDS: int = 60
+    # Redis TTL for inbound channel event dedup. 0 uses process-local only.
+    CHANNEL_DEDUP_TTL_SECONDS: int = 86400
+    # Master switch for Feishu/WeCom/DingTalk token sharing. 0 disables.
+    IM_TOKEN_CACHE_TTL_SECONDS: int = 1
 
     # File Storage
     STORAGE_BACKEND: str = "local"
@@ -191,12 +209,12 @@ class Settings(BaseSettings):
     SANDBOX_HTTPS_PROXY: str = ""
     SANDBOX_NO_PROXY: str = ""
 
-    model_config = {
-        "env_file": [".env", "../.env"],
-        "env_file_encoding": "utf-8",
-        "case_sensitive": True,
-        "extra": "ignore",
-    }
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_file=[".env", "../.env"],
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 @lru_cache

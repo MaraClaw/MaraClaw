@@ -5,8 +5,9 @@ from typing import override
 
 import httpx
 
+from app.core.json_types import json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 # CodeSandbox language mapping
@@ -31,8 +32,8 @@ class CodeSandboxBackend(BaseSandboxBackend):
         return "codesandbox"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self.api_url = "https://codesandbox.io/api/v1/sandboxes/exec"
+        self.config: SandboxConfig = config
+        self.api_url: str = "https://codesandbox.io/api/v1/sandboxes/exec"
 
         if not config.api_key:
             raise ValueError("CodeSandbox API key is required. Set SANDBOX_API_KEY environment variable.")
@@ -66,11 +67,12 @@ class CodeSandboxBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using CodeSandbox API."""
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Map language
@@ -116,12 +118,12 @@ class CodeSandboxBackend(BaseSandboxBackend):
                         error=f"CodeSandbox API error: {response.status_code}",
                     )
 
-                result = response.json()
+                result = json_object_from_response(response)
 
                 # Extract output
-                stdout = result.get("output", "") or ""
-                stderr = result.get("errors", "") or ""
-                exit_code = result.get("exitCode", 0)
+                stdout = json_as_str_or(result.get("output"))
+                stderr = json_as_str_or(result.get("errors"))
+                exit_code = json_as_int(result.get("exitCode"))
 
                 # Truncate output
                 stdout = stdout[:10000]

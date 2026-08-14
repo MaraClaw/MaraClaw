@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from app.core.logging.levels import CRITICAL, DEBUG, ERROR, INFO, SUCCESS, TRACE, WARNING
 from app.core.logging.record import LogRecord
@@ -40,10 +40,10 @@ def _exception_text(exc: BaseException) -> str:
 class TextFormatter:
     """Human-readable line matching the previous loguru layout."""
 
-    __slots__ = ("_color",)
+    __slots__: ClassVar[tuple[str, ...]] = ("_color",)
 
     def __init__(self, *, color: bool) -> None:
-        self._color = color
+        self._color: bool = color
 
     def format(self, record: LogRecord) -> str:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
@@ -53,8 +53,8 @@ class TextFormatter:
             color = _LEVEL_COLOR.get(record.levelno, "")
             line = (
                 f"{_GREEN}{stamp}{_RESET} | {color}{record.levelname}{_RESET} | "
-                f"{_CYAN}{trace}{_RESET} | {_CYAN}{location}{_RESET} - "
-                f"{color}{record.message}{_RESET}"
+                + f"{_CYAN}{trace}{_RESET} | {_CYAN}{location}{_RESET} - "
+                + f"{color}{record.message}{_RESET}"
             )
         else:
             line = f"{stamp} | {record.levelname} | {trace} | {location} - {record.message}"
@@ -66,7 +66,7 @@ class TextFormatter:
 class JsonFormatter:
     """One JSON object per line for log aggregators."""
 
-    __slots__ = ()
+    __slots__: ClassVar[tuple[str, ...]] = ()
 
     def format(self, record: LogRecord) -> str:
         payload: dict[str, object] = {

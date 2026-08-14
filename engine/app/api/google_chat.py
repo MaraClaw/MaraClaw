@@ -10,9 +10,11 @@ from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.core.json_types import json_loads_value, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
+from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channels import (
@@ -73,11 +75,12 @@ async def configure_google_chat_channel(
         client_email = client_email or str(sa_json.get("client_email") or "").strip()
     elif isinstance(sa_json, str) and sa_json.strip():
         try:
-            parsed = json.loads(sa_json)
+            parsed_raw = json_loads_value(sa_json)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=422, detail="service_account_json must be valid JSON") from exc
-        if not isinstance(parsed, dict):
+        if not isinstance(parsed_raw, dict):
             raise HTTPException(status_code=422, detail="service_account_json must be a JSON object")
+        parsed = json_object_from(parsed_raw)
         if "private_key" not in parsed or "client_email" not in parsed:
             raise HTTPException(
                 status_code=422,
@@ -116,9 +119,9 @@ async def get_google_chat_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-    db=None,
+    db: object | None = None,
 ):
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
     public_base = await platform_service.get_public_base_url(db, request)
     return {"webhook_url": f"{public_base}/api/channel/google-chat/{agent_id}/webhook"}
 
@@ -133,7 +136,7 @@ async def delete_google_chat_channel(agent_id: uuid.UUID, current_user: UserReco
 async def _process_message_event(
     *,
     agent_id: uuid.UUID,
-    config: Any,
+    config: ChannelConfigRecord,
     event: gchat.GoogleChatInbound,
 ) -> None:
     """Run LLM and deliver reply (async path after webhook ack)."""
@@ -173,7 +176,7 @@ async def _process_message_event(
         # Attachments not downloaded yet - honest failure instead of empty LLM turn.
         notice = (
             "I received an attachment, but Google Chat attachment download is not enabled yet. "
-            "Please send the content as text, or re-send with a text caption."
+            + "Please send the content as text, or re-send with a text caption."
         )
         await channel_inbound.persist_assistant_message(
             agent_id=agent_id,
@@ -183,7 +186,7 @@ async def _process_message_event(
         )
         if gchat.has_service_account(config) and event.space_name:
             try:
-                await gchat.send_google_chat_message(
+                _ = await gchat.send_google_chat_message(
                     config,
                     space_name=event.space_name,
                     text=notice,
@@ -230,7 +233,7 @@ async def _process_message_event(
 
     if gchat.has_service_account(config) and event.space_name:
         try:
-            await gchat.send_google_chat_message(
+            _ = await gchat.send_google_chat_message(
                 config,
                 space_name=event.space_name,
                 text=reply_text,
@@ -240,8 +243,8 @@ async def _process_message_event(
             logger.exception("[GoogleChat] Failed async delivery for agent %s", agent_id)
 
 
-@router.post("/channel/google-chat/{agent_id}/webhook")
-async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
+@router.post("/channel/google-chat/{agent_id}/webhook", response_model=None)
+async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | dict[str, Any]:
     """HTTP endpoint for a Google Chat app (interaction events).
 
     Configure the Chat app's HTTP endpoint URL to the webhook-url from
@@ -259,7 +262,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
 
     body_bytes = await request.body()
     try:
-        body = json.loads(body_bytes) if body_bytes else {}
+        body: dict[str, Any] = json.loads(body_bytes) if body_bytes else {}
     except json.JSONDecodeError:
         return Response(status_code=400)
     if not isinstance(body, dict):
@@ -269,7 +272,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     if audience:
         try:
-            await gchat.verify_google_chat_bearer(auth_header, audience)
+            _ = await gchat.verify_google_chat_bearer(auth_header, audience)
         except ValueError as exc:
             logger.warning("[GoogleChat] Auth failed for agent %s: %s", agent_id, exc)
             return Response(status_code=401)
@@ -306,8 +309,14 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
     elif event.event_type != "MESSAGE":
         return {}
 
-    dedupe_key = event.message_name or f"{event.space_name}:{event.sender_name}:{event.text[:64]}"
-    if channel_dedup.already_processed(_DEDUP_NS, dedupe_key):
+    if event.message_name:
+        dedupe_key = event.message_name
+    else:
+        import hashlib
+
+        raw = f"{event.space_name}:{event.sender_name}:{event.text[:64]}"
+        dedupe_key = hashlib.sha256(raw.encode()).hexdigest()
+    if await channel_dedup.already_processed_shared(_DEDUP_NS, dedupe_key):
         return {}
 
     use_async = gchat.has_service_account(config) and bool(event.space_name)
@@ -317,7 +326,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
         async def _bg() -> None:
             try:
                 await _process_message_event(agent_id=agent_id, config=config, event=event)
-                channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+                await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             except Exception:
                 logger.exception("[GoogleChat] Background processing failed for agent %s", agent_id)
 
@@ -358,12 +367,12 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
         if event.has_attachment and not event.text:
             msg = (
                 "I received an attachment, but attachment handling requires a service account "
-                "for async delivery. Please send text, or configure service_account_json."
+                + "for async delivery. Please send text, or configure service_account_json."
             )
-            channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return gchat.sync_text_response(msg, thread_name=event.thread_name)
         if not event.text:
-            channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return {}
 
         history = await channel_inbound.load_history_for_session(
@@ -391,7 +400,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
         except TimeoutError:
             reply_text = (
                 "I'm still working on that, but Google Chat timed out waiting for a sync reply. "
-                "Configure a service account for reliable async replies."
+                + "Configure a service account for reliable async replies."
             )
         except Exception:
             logger.exception("[GoogleChat] Sync LLM failed for agent %s", agent_id)
@@ -403,7 +412,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
             session=session,
             content=reply_text,
         )
-        channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+        await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
         return gchat.sync_text_response(reply_text, thread_name=event.thread_name)
     except Exception:
         logger.exception("[GoogleChat] Sync path failed for agent %s", agent_id)

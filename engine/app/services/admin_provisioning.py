@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from app.core.security import hash_password_async
@@ -25,7 +24,7 @@ class ProvisionedAdmin:
     admin_email: str
 
 
-def _flag(user: Any, name: str, default: bool = False) -> bool:
+def _flag(user: UserRecord, name: str, default: bool = False) -> bool:
     return bool(getattr(user, name, default))
 
 
@@ -91,7 +90,7 @@ async def create_additional_platform_admin(
                 }
             )
             user.identity = identity
-            await participant_dao.create_for_user(
+            _ = await participant_dao.create_for_user(
                 user.id,
                 display_name=user.display_name,
                 avatar_url=user.avatar_url,
@@ -148,7 +147,7 @@ async def create_additional_org_admin(
                 }
             )
             user.identity = identity
-            await participant_dao.create_for_user(
+            _ = await participant_dao.create_for_user(
                 user.id,
                 display_name=user.display_name,
                 avatar_url=user.avatar_url,
@@ -167,8 +166,8 @@ class AdminGuardError(Exception):
 
     def __init__(self, status_code: int, detail: str):
         super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
+        self.status_code: int = status_code
+        self.detail: str = detail
 
 
 AdminActivationError = AdminGuardError
@@ -199,7 +198,7 @@ async def _assert_not_last_active_admin(target: UserRecord, *, leaving_role: str
 
 async def _sync_platform_admin_flag(target: UserRecord, *, is_platform_admin: bool) -> None:
     if target.identity is not None:
-        await identity_dao.update(db_obj=target.identity, obj_in={"is_platform_admin": is_platform_admin})
+        _ = await identity_dao.update(db_obj=target.identity, obj_in={"is_platform_admin": is_platform_admin})
         target.identity.is_platform_admin = is_platform_admin
 
 
@@ -359,7 +358,7 @@ async def set_peer_admin_active(
         # identity so login itself is denied. Org admins can share an identity
         # across companies, so login filters inactive memberships instead.
         if target.role == "platform_admin" and target.identity is not None:
-            await identity_dao.update(db_obj=target.identity, obj_in={"is_active": is_active})
+            _ = await identity_dao.update(db_obj=target.identity, obj_in={"is_active": is_active})
 
     await write_admin_audit(
         actor=actor,

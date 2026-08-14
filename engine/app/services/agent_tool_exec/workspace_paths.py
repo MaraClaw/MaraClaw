@@ -3,7 +3,14 @@ from __future__ import annotations
 import re
 import unicodedata
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+
+type NormalizeRelPathFn = Callable[[str], str]
+type AllowedRootFn = Callable[..., tuple[Path, str]]
+type CollapseFilenameFn = Callable[[str], str]
+type NormalizeStorageKeyFn = Callable[[str], str]
+type EnterpriseInfoPathCheck = Callable[[str], bool]
 
 
 async def _get_agent_tenant_id(agent_id: uuid.UUID) -> str | None:
@@ -38,7 +45,7 @@ def _allowed_root_for_tool_path(
     tenant_id: str | None = None,
     *,
     workspace_root: Path,
-    normalize_tool_rel_path,
+    normalize_tool_rel_path: NormalizeRelPathFn,
 ) -> tuple[Path, str]:
     normalized = normalize_tool_rel_path(rel_path)
     if normalized.startswith("enterprise_info"):
@@ -57,8 +64,8 @@ def _resolve_tool_source_path(
     rel_path: str,
     tenant_id: str | None = None,
     *,
-    allowed_root_for_tool_path,
-    collapse_filename_for_match,
+    allowed_root_for_tool_path: AllowedRootFn,
+    collapse_filename_for_match: CollapseFilenameFn,
 ) -> Path:
     root, normalized = allowed_root_for_tool_path(ws, rel_path, tenant_id=tenant_id)
     candidate = (root / normalized).resolve() if normalized else root
@@ -81,7 +88,7 @@ def _resolve_tool_target_path(
     rel_path: str,
     tenant_id: str | None = None,
     *,
-    allowed_root_for_tool_path,
+    allowed_root_for_tool_path: AllowedRootFn,
 ) -> Path:
     root, normalized = allowed_root_for_tool_path(ws, rel_path, tenant_id=tenant_id)
     candidate = (root / normalized).resolve() if normalized else root
@@ -95,10 +102,10 @@ def _tool_storage_key(
     rel_path: str,
     tenant_id: str | None = None,
     *,
-    normalize_workspace_path_fn,
-    normalize_tool_rel_path,
-    is_enterprise_info_path,
-    normalize_storage_key_fn,
+    normalize_workspace_path_fn: NormalizeRelPathFn,
+    normalize_tool_rel_path: NormalizeRelPathFn,
+    is_enterprise_info_path: EnterpriseInfoPathCheck,
+    normalize_storage_key_fn: NormalizeStorageKeyFn,
 ) -> tuple[str, str, bool]:
     normalized = normalize_workspace_path_fn(normalize_tool_rel_path(rel_path))
     if is_enterprise_info_path(normalized):

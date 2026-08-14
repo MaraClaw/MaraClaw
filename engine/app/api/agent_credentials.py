@@ -8,11 +8,12 @@ using AES-256-CBC and are NEVER returned in API responses.
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import get_settings
+from app.core.json_types import json_as_str, json_loads_value, object_mapping_from
 from app.core.permissions import check_agent_access
 from app.core.security import encrypt_data, get_current_user
 from app.dao.agent_credential_dao import agent_credential_dao
@@ -97,7 +98,7 @@ async def create_credential(
     # Validate cookies_json format if provided
     if data.cookies_json:
         try:
-            parsed = json.loads(data.cookies_json)
+            parsed = json_loads_value(data.cookies_json)
             if not isinstance(parsed, list):
                 raise ValueError("cookies_json must be a JSON array")
         except (json.JSONDecodeError, ValueError) as e:
@@ -106,7 +107,7 @@ async def create_credential(
                 detail=f"Invalid cookies_json format: {e}",
             ) from e
 
-    obj_in: dict = {
+    obj_in: dict[str, Any] = {
         "agent_id": agent_id,
         "credential_type": data.credential_type,
         "platform": data.platform,
@@ -147,8 +148,8 @@ async def update_credential(
         raise HTTPException(status_code=404, detail="Credential not found")
 
     settings = get_settings()
-    update_data = data.model_dump(exclude_unset=True)
-    obj_in: dict = {}
+    update_data = object_mapping_from(data.model_dump(exclude_unset=True))
+    obj_in: dict[str, Any] = {}
 
     # Handle plaintext fields
     for field in ("credential_type", "platform", "display_name", "status"):
@@ -159,15 +160,19 @@ async def update_credential(
         if update_data["cookies_json"]:
             # Validate JSON format
             try:
-                parsed = json.loads(update_data["cookies_json"])
+                cookies_json = json_as_str(update_data["cookies_json"])
+                if cookies_json is None:
+                    raise ValueError("cookies_json must be a JSON array")
+                parsed = json_loads_value(cookies_json)
                 if not isinstance(parsed, list):
                     raise ValueError("cookies_json must be a JSON array")
+                update_data["cookies_json"] = cookies_json
             except (json.JSONDecodeError, ValueError) as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid cookies_json format: {e}",
                 ) from e
-            obj_in["cookies_json"] = encrypt_data(update_data["cookies_json"], settings.SECRET_KEY)
+            obj_in["cookies_json"] = encrypt_data(cookies_json, settings.SECRET_KEY)
             obj_in["cookies_updated_at"] = datetime.now(UTC)
             # Reset status to active when cookies are updated
             obj_in["status"] = "active"
@@ -195,4 +200,4 @@ async def delete_credential(
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    await agent_credential_dao.delete(id=cred.id)
+    _ = await agent_credential_dao.delete(id=cred.id)

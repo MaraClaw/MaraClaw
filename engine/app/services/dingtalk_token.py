@@ -9,6 +9,7 @@ import time
 
 import httpx
 
+from app.core.json_types import json_as_int, json_as_str, json_object_from_response
 from app.core.logging import logger
 
 
@@ -31,17 +32,26 @@ class DingTalkTokenManager:
 
     async def get_token(self, app_key: str, app_secret: str) -> str | None:
         """Get access_token, return cached if valid, refresh if expired."""
-        if app_key in self._cache:
-            token, expires_at = self._cache[app_key]
+        from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
+
+        local_key = f"{app_key}\0{app_secret}"
+        if local_key in self._cache:
+            token, expires_at = self._cache[local_key]
             if time.time() < expires_at - 300:
                 return token
+        shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
+        if shared:
+            return shared
 
-        async with self._get_lock(app_key):
+        async with self._get_lock(local_key):
             # Double-check after acquiring lock
-            if app_key in self._cache:
-                token, expires_at = self._cache[app_key]
+            if local_key in self._cache:
+                token, expires_at = self._cache[local_key]
                 if time.time() < expires_at - 300:
                     return token
+            shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
+            if shared:
+                return shared
 
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -49,12 +59,19 @@ class DingTalkTokenManager:
                         "https://api.dingtalk.com/v1.0/oauth2/accessToken",
                         json={"appKey": app_key, "appSecret": app_secret},
                     )
-                    data = resp.json()
-                    token = data.get("accessToken")
-                    expires_in = data.get("expireIn", 7200)
+                    data = json_object_from_response(resp)
+                    token = json_as_str(data.get("accessToken"))
+                    expires_in = json_as_int(data.get("expireIn"), 7200)
 
                     if token:
-                        self._cache[app_key] = (token, time.time() + expires_in)
+                        self._cache[local_key] = (token, time.time() + expires_in)
+                        await set_cached_im_token(
+                            "dingtalk",
+                            app_key,
+                            token,
+                            secret=app_secret,
+                            ttl=refresh_ttl(expires_in),
+                        )
                         logger.debug(f"[DingTalk Token] Refreshed for {app_key[:8]}..., expires in {expires_in}s")
                         return token
 

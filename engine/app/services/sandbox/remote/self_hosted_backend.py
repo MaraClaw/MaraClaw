@@ -5,8 +5,16 @@ from typing import override
 
 import httpx
 
+from app.core.json_types import (
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+)
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -29,13 +37,13 @@ class SelfHostedBackend(BaseSandboxBackend):
         return "self_hosted"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
+        self.config: SandboxConfig = config
 
         if not config.api_url:
             raise ValueError("Self-hosted sandbox URL is required. Set SANDBOX_API_URL environment variable.")
 
         # Normalize URL (remove trailing slash)
-        self.api_url = config.api_url.rstrip("/")
+        self.api_url: str = config.api_url.rstrip("/")
 
     @override
     def get_capabilities(self) -> SandboxCapabilities:
@@ -79,11 +87,12 @@ class SelfHostedBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using the self-hosted sandbox service."""
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Build request
@@ -112,7 +121,7 @@ class SelfHostedBackend(BaseSandboxBackend):
                 cmd = f"node -e {code!r}"
             else:
                 cmd = code
-            payload = {"cmd": cmd}
+            payload: dict[str, object] = {"cmd": cmd}
         elif "jupyter" in url_lower:
             # aio-sandbox jupyter
             payload = {"code": code}
@@ -149,7 +158,7 @@ class SelfHostedBackend(BaseSandboxBackend):
                         error=f"Sandbox service error: HTTP {response.status_code} - {response.text[:200]}",
                     )
 
-                result = response.json()
+                result = json_object_from_response(response)
 
                 # Parse response - support multiple formats:
                 # Generic: {"success": true, "stdout": "...", "stderr": "...", "exit_code": 0}
@@ -163,29 +172,30 @@ class SelfHostedBackend(BaseSandboxBackend):
                 error_msg = None
                 exit_code = 0
 
+                data_raw: object = result.get("data")
                 # aio-sandbox shell format
-                if "data" in result and isinstance(result.get("data"), dict):
-                    output = result["data"].get("output", "")
+                if "data" in result and isinstance(data_raw, dict):
+                    output = json_as_str_or(json_object_from(data_raw).get("output"))
                 # aio-sandbox jupyter format
                 elif "output" in result and "status" in result:
-                    output = result.get("output", "")
-                    if result.get("status") != "ok":
+                    output = json_as_str_or(result.get("output"))
+                    if json_as_str(result.get("status")) != "ok":
                         success = False
-                        error_msg = result.get("error", result.get("output", ""))
+                        error_msg = json_as_str(result.get("error")) or json_as_str(result.get("output")) or ""
                 # Generic format
                 else:
-                    output = result.get("stdout") or result.get("output") or ""
-                    stderr = result.get("stderr") or ""
-                    success = result.get("success", True)
-                    exit_code = result.get("exit_code", 0 if success else 1)
-                    error_msg = result.get("error")
+                    output = json_as_str_or(result.get("stdout")) or json_as_str_or(result.get("output"))
+                    stderr = json_as_str_or(result.get("stderr"))
+                    success = json_as_bool(result.get("success"), True)
+                    exit_code = json_as_int(result.get("exit_code"), 0 if success else 1)
+                    error_msg = json_as_str(result.get("error"))
 
                 return ExecutionResult(
                     success=success,
                     stdout=output[:10000],
                     stderr=stderr[:5000],
                     exit_code=exit_code,
-                    duration_ms=result.get("duration_ms", duration_ms),
+                    duration_ms=json_as_int(result.get("duration_ms"), duration_ms),
                     error=error_msg,
                 )
 

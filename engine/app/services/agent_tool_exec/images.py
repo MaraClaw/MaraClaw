@@ -4,6 +4,7 @@ from pathlib import Path
 
 import anyio
 
+from app.core.json_types import json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
 from app.services import agent_tools
 
@@ -14,7 +15,7 @@ def _string_value(value: ToolArgumentValue | None, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-def _integer_or_string_value(value: ToolArgumentValue | None, default: int) -> int | str:
+def _integer_or_string_value(value: object, default: int) -> int | str:
     if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
         return value
     return default
@@ -39,11 +40,11 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
     if not file_path and not url:
         return "❌ Please provide either 'file_path' (workspace path) or 'url' (public image URL)"
 
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     private_key = ""
     try:
         config = await agent_tools._get_tool_config(agent_id, "upload_image") or {}
-        private_key = _string_value(config.get("private_key"))
+        private_key = json_as_str_or(config.get("private_key"))
     except Exception as e:
         logger.error(f"[UploadImage] Config load error: {e}")
 
@@ -103,17 +104,17 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
                 )
 
         if resp.status_code in (200, 201):
-            result = resp.json()
-            cdn_url = result.get("url", "")
-            file_id = result.get("fileId", "")
-            size = result.get("size", 0)
+            result = json_object_from_response(resp)
+            cdn_url = json_as_str_or(result.get("url"))
+            file_id = json_as_str_or(result.get("fileId"))
+            size = json_as_int(result.get("size"))
             size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f}MB"
             return (
-                f"✅ Image uploaded successfully!\n\n"
-                f"**CDN URL**: {cdn_url}\n"
-                f"**File ID**: {file_id}\n"
-                f"**Size**: {size_str}\n"
-                f"**Name**: {result.get('name', file_name)}"
+                "✅ Image uploaded successfully!\n\n"
+                + f"**CDN URL**: {cdn_url}\n"
+                + f"**File ID**: {file_id}\n"
+                + f"**Size**: {size_str}\n"
+                + f"**Name**: {json_as_str_or(result.get('name'), file_name)}"
             )
         error_detail = resp.text[:300]
         return f"❌ Upload failed (HTTP {resp.status_code}): {error_detail}"
@@ -147,17 +148,17 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     size = _string_value(arguments.get("size"), "1024x1024")
     save_path = _string_value(arguments.get("save_path"))
 
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     tool_key = f"generate_image_{provider}"
     config = await agent_tools._get_tool_config(agent_id, tool_key) or {}
-    model = _string_value(config.get("model"))
-    api_key = _string_value(config.get("api_key"))
-    base_url = _string_value(config.get("base_url"))
+    model = json_as_str_or(config.get("model"))
+    api_key = json_as_str_or(config.get("api_key"))
+    base_url = json_as_str_or(config.get("base_url"))
 
     if not api_key:
         return (
             "❌ Image generation API key not configured. "
-            "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
+            + "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
         )
 
     if not save_path:
@@ -202,12 +203,12 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
                 api_key=api_key,
                 model=model,
                 base_url=base_url,
-                endpoint_path=_string_value(config.get("endpoint_path"), "/chat/completions"),
-                request_body_template_json=_string_value(config.get("request_body_template_json")),
-                response_image_path=_string_value(
+                endpoint_path=json_as_str_or(config.get("endpoint_path"), "/chat/completions"),
+                request_body_template_json=json_as_str_or(config.get("request_body_template_json")),
+                response_image_path=json_as_str_or(
                     config.get("response_image_path"), "choices.0.message.images.0.image_url.url"
                 ),
-                extra_headers_json=_string_value(config.get("extra_headers_json")),
+                extra_headers_json=json_as_str_or(config.get("extra_headers_json")),
                 timeout_seconds=_integer_or_string_value(config.get("timeout_seconds"), 120),
                 prompt=prompt,
                 size=size,
@@ -218,21 +219,21 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
         if not image_bytes:
             return "❌ Image generation returned empty result. Please try a different prompt."
 
-        await anyio.Path(full_save_path).write_bytes(image_bytes)
+        _ = await anyio.Path(full_save_path).write_bytes(image_bytes)
         size_kb = len(image_bytes) / 1024
         api_image_path = f"/api/agents/{agent_id}/files/download?path={save_path}"
 
         return (
             f"✅ Image generated and saved to: {save_path}\n"
-            f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
-            f"Display this image to the user using this exact markdown:\n"
-            f"![generated image]({api_image_path})"
+            + f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
+            + "Display this image to the user using this exact markdown:\n"
+            + f"![generated image]({api_image_path})"
         )
     except httpx.TimeoutException:
         logger.error(f"[GenerateImage] Timeout ({provider}): took longer than 120 seconds or network unreachable.")
         return (
             f"❌ Image generation failed ({provider}): API request timed out after 120 seconds. "
-            f"This is usually caused by network issues or the model taking too long to generate."
+            + "This is usually caused by network issues or the model taking too long to generate."
         )
     except Exception as e:
         err_msg = str(e) or type(e).__name__

@@ -1,6 +1,7 @@
 """Public pages API - serves published HTML without authentication."""
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -49,11 +50,11 @@ async def render_page(short_id: str):
 
 
 @router.get("/list")
-async def list_pages(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def list_pages(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """List published pages for an agent."""
     from app.core.permissions import check_agent_access
 
-    await check_agent_access(current_user, agent_id)
+    _ = await check_agent_access(current_user, agent_id)
 
     pages = await published_page_dao.list_for_agent(agent_id)
     return [

@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Protocol, TypeGuard, override
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -82,7 +82,7 @@ class E2bBackend(BaseSandboxBackend):
         return "e2b"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
+        self.config: SandboxConfig = config
         self._client: E2bAsyncSandbox | None = None
 
         if not config.api_key:
@@ -112,7 +112,7 @@ class E2bBackend(BaseSandboxBackend):
         try:
             e2b_lib = _get_e2b()
             # Try to list sandboxes to verify API is accessible
-            await e2b_lib.AsyncSandbox.list(api_key=self.config.api_key)
+            _ = await e2b_lib.AsyncSandbox.list(api_key=self.config.api_key)
             return True
         except Exception:
             return False
@@ -122,11 +122,12 @@ class E2bBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using E2B cloud sandbox."""
+        timeout = resolve_exec_timeout(exec_timeout, kwargs)
         start_time = time.time()
 
         # Map language to E2B format

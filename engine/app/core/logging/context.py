@@ -15,7 +15,7 @@ def get_trace_id() -> str | None:
 
 def set_trace_id(trace_id: str) -> None:
     """Bind a trace ID to the current context."""
-    trace_id_var.set(trace_id)
+    _ = trace_id_var.set(trace_id)
 
 
 def new_trace_id() -> str:

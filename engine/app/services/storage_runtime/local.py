@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import override
 
@@ -22,7 +23,7 @@ from app.services.storage_runtime.utils import normalize_storage_key
 
 class LocalStorageBackend(StorageBackend):
     def __init__(self, root: str):
-        self.root = Path(root)
+        self.root: Path = Path(root)
 
     def _full_path(self, key: str) -> Path:
         normalized = normalize_storage_key(key)
@@ -78,7 +79,7 @@ class LocalStorageBackend(StorageBackend):
         path = self._full_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         async with aiofiles.open(path, "wb") as f:
-            await f.write(data)
+            _ = await f.write(data)
 
     @override
     async def delete(self, key: str) -> None:
@@ -174,6 +175,6 @@ def _local_delete_tree(path: Path) -> None:
     shutil.rmtree(path)
 
 
-def _local_version_token(stat, file_hash: str | None) -> str:
+def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
     hash_part = file_hash or ""
     return f"{stat.st_mtime_ns}:{stat.st_size}:{hash_part}"

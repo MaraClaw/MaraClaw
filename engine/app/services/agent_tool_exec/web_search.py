@@ -1,20 +1,40 @@
 from __future__ import annotations
 
-import importlib
 import uuid
-from types import ModuleType
+from urllib.parse import quote
+
+from httpx import Response
 
 from app.config import get_settings
+from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from_response
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
-
-def _search_providers_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.search_providers")
+from . import search_providers
 
 
-def _httpx_module() -> ModuleType:
-    return importlib.import_module("httpx")
+def _search_providers_module():
+    return search_providers
+
+
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
+
+
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
+
+
+def _object_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -34,8 +54,8 @@ async def _web_search(arguments: ToolArguments, agent_id: uuid.UUID | None = Non
 
     config = await agent_tools._get_tool_config(agent_id, "web_search") or {}
 
-    engine = config.get("search_engine", "duckduckgo")
-    api_key = config.get("api_key", "")
+    engine = json_as_str_or(config.get("search_engine"), "duckduckgo")
+    api_key = json_as_str_or(config.get("api_key"))
     configured_max_results = config.get("max_results", 5)
     max_results = min(
         _integer_argument(
@@ -43,7 +63,7 @@ async def _web_search(arguments: ToolArguments, agent_id: uuid.UUID | None = Non
         ),
         10,
     )
-    language = config.get("language", "zh-CN")
+    language = json_as_str_or(config.get("language"), "zh-CN")
 
     try:
         if engine == "tavily" and api_key:
@@ -76,26 +96,26 @@ async def _jina_search(arguments: ToolArguments) -> str:
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        async with _httpx_module().AsyncClient(follow_redirects=True, timeout=30) as client:
+        async with _httpx_client(follow_redirects=True, timeout=30) as client:
             resp = await client.get(
-                f"https://s.jina.ai/{__import__('urllib.parse', fromlist=['quote']).quote(query)}",
+                f"https://s.jina.ai/{quote(query)}",
                 headers=headers,
             )
 
         if resp.status_code != 200:
             return f"❌ Jina Search error HTTP {resp.status_code}: {resp.text[:200]}"
 
-        data = resp.json()
-        items = data.get("data", [])[:max_results]
+        data = _response_mapping(resp)
+        items = _object_items(data.get("data"))[:max_results]
 
         if not items:
             return f'🔍 No results found for "{query}"'
 
         parts = []
         for i, item in enumerate(items, 1):
-            title = item.get("title", "Untitled")
-            url = item.get("url", "")
-            description = item.get("description", "") or item.get("content", "")[:500]
+            title = json_as_str(item.get("title")) or "Untitled"
+            url = json_as_str(item.get("url")) or ""
+            description = json_as_str(item.get("description")) or (json_as_str(item.get("content")) or "")[:500]
             parts.append(f"**{i}. {title}**\n{url}\n{description}")
 
         return f'🔍 Jina Search results for "{query}" ({len(items)} items):\n\n' + "\n\n---\n\n".join(parts)
@@ -110,7 +130,7 @@ async def _exa_search(arguments: ToolArguments, agent_id: uuid.UUID | None = Non
         return "❌ Please provide search keywords"
 
     config = await agent_tools._get_tool_config(agent_id, "exa_search") or {}
-    api_key = config.get("api_key", "") or get_settings().EXA_API_KEY
+    api_key = json_as_str_or(config.get("api_key")) or get_settings().EXA_API_KEY
     if not api_key:
         return "❌ Exa API key is required. Set it in tool settings or the EXA_API_KEY environment variable."
 
@@ -144,7 +164,7 @@ async def _exa_search(arguments: ToolArguments, agent_id: uuid.UUID | None = Non
         contents["text"] = {"maxCharacters": 1000}
 
     try:
-        async with _httpx_module().AsyncClient() as client:
+        async with _httpx_client() as client:
             resp = await client.post(
                 "https://api.exa.ai/search",
                 json=body,
@@ -155,26 +175,29 @@ async def _exa_search(arguments: ToolArguments, agent_id: uuid.UUID | None = Non
                 },
                 timeout=15,
             )
-            data = resp.json()
+            data = _response_mapping(resp)
 
         if resp.status_code != 200:
-            return f"❌ Exa search failed: {data.get('error', data.get('message', str(data)[:200]))}"
+            return f"❌ Exa search failed: {json_as_str(data.get('error')) or json_as_str(data.get('message')) or str(data)[:200]}"
 
-        items = data.get("results", [])[:max_results]
+        items = _object_items(data.get("results"))[:max_results]
         if not items:
             return f'🔍 No results found for "{query}"'
 
         parts = []
         for i, r in enumerate(items, 1):
-            title = r.get("title", "Untitled")
-            url = r.get("url", "")
+            title = json_as_str(r.get("title")) or "Untitled"
+            url = json_as_str(r.get("url")) or ""
             content = ""
-            if content_mode == "highlights" and r.get("highlights"):
-                content = " ... ".join(r["highlights"])
-            elif content_mode == "summary" and r.get("summary"):
-                content = r["summary"]
-            elif r.get("text"):
-                content = r["text"][:500]
+            highlights = r.get("highlights")
+            summary = r.get("summary")
+            text = json_as_str(r.get("text"))
+            if content_mode == "highlights" and isinstance(highlights, list) and highlights:
+                content = " ... ".join(item for item in highlights if isinstance(item, str))
+            elif content_mode == "summary" and summary:
+                content = json_as_str(summary) or ""
+            elif text:
+                content = text[:500]
             parts.append(f"**{i}. {title}**\n{url}\n{content}")
 
         return f'🔍 Exa search for "{query}" ({len(items)} items):\n\n' + "\n\n---\n\n".join(parts)
@@ -196,7 +219,7 @@ async def _tavily_search_tool(arguments: ToolArguments, agent_id: uuid.UUID | No
     if not query:
         return "Please provide search keywords"
     config = await agent_tools._get_tool_config(agent_id, "tavily_search") or {}
-    api_key = config.get("api_key", "").strip()
+    api_key = json_as_str_or(config.get("api_key")).strip()
     if not api_key:
         return "Tavily API key is required. Set it in the tool settings."
     max_results = min(_integer_argument(arguments, "max_results", 5), 10)
@@ -211,10 +234,10 @@ async def _google_search_tool(arguments: ToolArguments, agent_id: uuid.UUID | No
     if not query:
         return "Please provide search keywords"
     config = await agent_tools._get_tool_config(agent_id, "google_search") or {}
-    api_key = config.get("api_key", "").strip()
+    api_key = json_as_str_or(config.get("api_key")).strip()
     if not api_key:
         return "Google Search API key is required (format: API_KEY:SEARCH_ENGINE_ID). Set it in the tool settings."
-    language = _string_argument(arguments, "language") or config.get("language", "en")
+    language = _string_argument(arguments, "language") or json_as_str_or(config.get("language"), "en")
     max_results = min(_integer_argument(arguments, "max_results", 5), 10)
     try:
         return await _search_providers_module()._search_google(query, api_key, max_results, language)
@@ -227,10 +250,10 @@ async def _bing_search_tool(arguments: ToolArguments, agent_id: uuid.UUID | None
     if not query:
         return "Please provide search keywords"
     config = await agent_tools._get_tool_config(agent_id, "bing_search") or {}
-    api_key = config.get("api_key", "").strip()
+    api_key = json_as_str_or(config.get("api_key")).strip()
     if not api_key:
         return "Bing Search API key is required. Set it in the tool settings."
-    language = _string_argument(arguments, "language") or config.get("language", "en-US")
+    language = _string_argument(arguments, "language") or json_as_str_or(config.get("language"), "en-US")
     max_results = min(_integer_argument(arguments, "max_results", 5), 10)
     try:
         return await _search_providers_module()._search_bing(query, api_key, max_results, language)

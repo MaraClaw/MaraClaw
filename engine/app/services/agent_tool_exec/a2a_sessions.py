@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 async def _resolve_a2a_target(
-    db: Any,
+    db: object | None,
     from_agent_id: uuid.UUID,
     agent_name: str,
 ) -> tuple[AgentRecord | None, str | None]:
@@ -49,12 +49,12 @@ async def _resolve_a2a_target(
     return (
         None,
         f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-        f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}",
+        + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}",
     )
 
 
 async def _ensure_a2a_session(
-    db: Any,
+    db: object | None,
     from_agent_id: uuid.UUID,
     target_id: uuid.UUID,
     source_name: str,

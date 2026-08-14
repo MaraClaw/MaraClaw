@@ -8,6 +8,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.logging import logger, set_trace_id
+from app.core.row_memo import clear_row_memo
 
 
 class TraceIdMiddleware(BaseHTTPMiddleware):
@@ -18,6 +19,7 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         # Generate or extract trace ID from header
         trace_id = request.headers.get("X-Trace-Id") or str(uuid.uuid4())[:12]
         set_trace_id(trace_id)
+        clear_row_memo()
 
         # Add trace ID to request state for access in endpoints
         request.state.trace_id = trace_id
@@ -44,3 +46,5 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
             duration = time.time() - start_time
             logger.error(f"<-- {request.method} {request.url.path} ERROR {duration:.3f}s - {exc}")
             raise
+        finally:
+            clear_row_memo()

@@ -5,10 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 import httpx
 
+from app.core.json_types import (
+    JsonObject,
+    is_any_list,
+    is_str_dict,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_loads_value,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.core.logging import logger
 from app.services.llm.base import (
     ChunkCallback,
@@ -19,14 +31,31 @@ from app.services.llm.base import (
     ToolCallbackData,
     ToolDefinition,
 )
-from app.services.llm.types import LLMMessage, LLMResponse, LLMStreamChunk, LLMToolCall
+from app.services.llm.types import LLMMessage, LLMResponse, LLMStreamChunk, LLMToolCall, LLMUsage
+
+
+def _usage_from_json(value: object) -> LLMUsage | None:
+    usage_obj = json_object_from(value)
+    if not usage_obj:
+        return None
+    usage: LLMUsage = {}
+    for key, raw in usage_obj.items():
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            usage[key] = raw
+    return usage or None
+
+
+def _first_json_object(value: object) -> JsonObject:
+    if is_any_list(value) and value:
+        items = list[object](value)
+        return json_object_from(items[0])
+    return json_object_from(value)
 
 
 class OpenAICompatibleClient(LLMClient):
     """Client for OpenAI-compatible APIs (OpenAI, DeepSeek, Qwen, etc.)."""
 
-    base_url: str
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_BASE_URL: ClassVar[str] = "https://api.openai.com/v1"
 
     def __init__(
         self,
@@ -38,8 +67,8 @@ class OpenAICompatibleClient(LLMClient):
         supports_cache_control: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
-        self.supports_tool_choice = supports_tool_choice
-        self.supports_cache_control = supports_cache_control
+        self.supports_tool_choice: bool = supports_tool_choice
+        self.supports_cache_control: bool = supports_cache_control
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -57,7 +86,7 @@ class OpenAICompatibleClient(LLMClient):
 
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing /chat/completions."""
-        url = self.base_url.rstrip("/")
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
         if url.endswith("/chat/completions"):
             url = url[: -len("/chat/completions")]
         return url
@@ -69,7 +98,7 @@ class OpenAICompatibleClient(LLMClient):
         temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """Build request payload."""
         messages_payload = self._messages_to_openai_payload(messages)
@@ -113,7 +142,7 @@ class OpenAICompatibleClient(LLMClient):
         for msg in messages:
             if msg.role == "system":
                 formatted: dict[str, object] = {"role": "system"}
-                content_blocks: list[dict[str, object]] = []
+                content_blocks: list[JsonObject] = []
 
                 if isinstance(msg.content, str) and msg.content:
                     content_blocks.append(
@@ -124,8 +153,8 @@ class OpenAICompatibleClient(LLMClient):
                         }
                     )
                 elif isinstance(msg.content, list):
-                    content_blocks = [dict(part) for part in msg.content if isinstance(part, dict)]
-                    self._mark_last_text_block_cacheable(content_blocks)
+                    content_blocks = [json_object_from(part) for part in msg.content if isinstance(part, dict)]
+                    _ = self._mark_last_text_block_cacheable(content_blocks)
 
                 if msg.dynamic_content:
                     content_blocks.append(
@@ -164,13 +193,14 @@ class OpenAICompatibleClient(LLMClient):
             ]
             return message
         if isinstance(content, list):
-            blocks = [dict(part) for part in content if isinstance(part, dict)]
+            content_items: list[object] = list(content)
+            blocks: list[JsonObject] = [json_object_from(part) for part in content_items if is_str_dict(part)]
             if self._mark_last_text_block_cacheable(blocks):
                 message = dict(message)
                 message["content"] = blocks
         return message
 
-    def _mark_last_text_block_cacheable(self, blocks: list[dict[str, Any]]) -> bool:
+    def _mark_last_text_block_cacheable(self, blocks: list[JsonObject]) -> bool:
         for part in reversed(blocks):
             if part.get("type") == "text" and part.get("text"):
                 part["cache_control"] = {"type": "ephemeral"}
@@ -216,7 +246,7 @@ class OpenAICompatibleClient(LLMClient):
             json_buffer = data_str
 
         try:
-            data = json.loads(json_buffer)
+            parsed = json_loads_value(json_buffer)
             json_buffer = ""  # Reset on successful parse
         except json.JSONDecodeError:
             # Cap buffer at 64KB to prevent memory leaks
@@ -225,37 +255,56 @@ class OpenAICompatibleClient(LLMClient):
                 json_buffer = ""
             return chunk, in_think, tag_buffer, json_buffer
 
+        data = json_object_from(parsed)
         if "error" in data:
             raise LLMError(f"Stream error: {data['error']}")
 
         # Parse usage from stream (returned in the final chunk with include_usage)
         if data.get("usage"):
-            chunk.usage = data["usage"]
+            chunk.usage = _usage_from_json(data.get("usage"))
 
-        choices = data.get("choices", [])
-        if not choices:
+        choices_raw: object = data.get("choices")
+        if not is_any_list(choices_raw) or not choices_raw:
             return chunk, in_think, tag_buffer, json_buffer
 
-        choice = choices[0]
-        delta = choice.get("delta", {})
+        choice = _first_json_object(choices_raw)
+        delta = json_object_from(choice.get("delta"))
 
-        if choice.get("finish_reason"):
-            chunk.finish_reason = choice["finish_reason"]
+        finish_reason = json_as_str(choice.get("finish_reason"))
+        if finish_reason:
+            chunk.finish_reason = finish_reason
 
         # Reasoning content (DeepSeek R1)
-        if delta.get("reasoning_content"):
-            chunk.reasoning_content = delta["reasoning_content"]
+        reasoning = json_as_str(delta.get("reasoning_content"))
+        if reasoning:
+            chunk.reasoning_content = reasoning
 
         # Regular content with think tag filtering
-        if delta.get("content"):
-            text = delta["content"]
+        text = json_as_str(delta.get("content"))
+        if text:
             chunk.content, in_think, tag_buffer = self._filter_think_tags(text, in_think, tag_buffer)
 
         # Tool calls
-        if delta.get("tool_calls"):
-            for tc_delta in delta["tool_calls"]:
-                chunk.tool_call = tc_delta
-                break  # Return one at a time
+        tool_calls_raw: object = delta.get("tool_calls")
+        if is_any_list(tool_calls_raw) and tool_calls_raw:
+            tool_call_items = list[object](tool_calls_raw)
+            tc_obj = json_object_from(tool_call_items[0])
+            fn = json_object_from(tc_obj.get("function"))
+            args_raw: object = fn.get("arguments")
+            if is_str_dict(args_raw):
+                arguments: str = json.dumps(json_object_from(args_raw), ensure_ascii=False)
+            elif isinstance(args_raw, str):
+                arguments = args_raw
+            else:
+                arguments = json_as_str_or(args_raw)
+            chunk.tool_call = {
+                "id": json_as_str_or(tc_obj.get("id")),
+                "index": json_as_int(tc_obj.get("index")),
+                "function": {
+                    "name": json_as_str_or(fn.get("name")),
+                    "arguments": arguments,
+                },
+            }
 
         return chunk, in_think, tag_buffer, json_buffer
 
@@ -308,7 +357,7 @@ class OpenAICompatibleClient(LLMClient):
         tools: list[ToolDefinition] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Non-streaming completion."""
         url = f"{self._normalize_base_url()}/chat/completions"
@@ -321,20 +370,44 @@ class OpenAICompatibleClient(LLMClient):
             error_text = response.text[:500]
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
-        data = response.json()
+        data = json_object_from_response(response)
 
         if "error" in data:
             raise LLMError(f"API error: {data['error']}")
 
-        choice = data.get("choices", [{}])[0]
-        msg = choice.get("message", {})
+        choice = _first_json_object(data.get("choices"))
+        msg = json_object_from(choice.get("message"))
+        tool_calls: list[LLMToolCall] = []
+        for tc_item in object_list_from_row(msg.get("tool_calls")):
+            tc_obj = json_object_from(tc_item)
+            fn = json_object_from(tc_obj.get("function"))
+            args_raw: object = fn.get("arguments")
+            if is_str_dict(args_raw):
+                arguments = json.dumps(json_object_from(args_raw), ensure_ascii=False)
+            elif isinstance(args_raw, str):
+                arguments = args_raw
+            else:
+                arguments = json_as_str_or(args_raw)
+            tool_calls.append(
+                {
+                    "id": json_as_str_or(tc_obj.get("id")),
+                    "type": json_as_str_or(tc_obj.get("type"), "function"),
+                    "function": {
+                        "name": json_as_str_or(fn.get("name")),
+                        "arguments": arguments,
+                    },
+                }
+            )
+
+        content_raw: object = msg.get("content")
+        content = content_raw if isinstance(content_raw, str) else json_as_str_or(content_raw)
 
         return LLMResponse(
-            content=msg.get("content", ""),
-            tool_calls=msg.get("tool_calls", []),
-            finish_reason=choice.get("finish_reason"),
-            usage=data.get("usage"),
-            model=data.get("model"),
+            content=content,
+            tool_calls=tool_calls,
+            finish_reason=json_as_str(choice.get("finish_reason")),
+            usage=_usage_from_json(data.get("usage")),
+            model=json_as_str(data.get("model")),
         )
 
     @override
@@ -347,7 +420,7 @@ class OpenAICompatibleClient(LLMClient):
         on_chunk: ChunkCallback | None = None,
         on_tool_delta: ToolCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Streaming completion."""
         url = f"{self._normalize_base_url()}/chat/completions"
