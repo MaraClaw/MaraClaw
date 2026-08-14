@@ -5,15 +5,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api import admin as admin_api
-from app.api import tenants as tenants_api
-from app.api import users as users_api
+from app.api import admin as admin_api, tenants as tenants_api, users as users_api
 from app.records.audit import AdminAuditLogRecord
 from app.records.tenant import TenantRecord
 from app.services import admin_provisioning as provisioning
@@ -23,7 +21,7 @@ from app.services.tenant_provisioning import AdminEmailTakenError
 _NOW = datetime.now(UTC)
 
 
-def _user(*, role="platform_admin", user_id=None, tenant_id=None, is_active=True, email="a@b.com"):
+def _user(*, role="platform_admin", user_id=None, tenant_id=None, is_active=True, email="a@b.com", is_genesis=False):
     uid = user_id or uuid.uuid4()
     return SimpleNamespace(
         id=uid,
@@ -34,6 +32,7 @@ def _user(*, role="platform_admin", user_id=None, tenant_id=None, is_active=True
         display_name="Admin",
         avatar_url=None,
         is_active=is_active,
+        is_genesis=is_genesis,
         email=email,
         username="admin",
         created_at=_NOW,
@@ -116,9 +115,8 @@ async def test_toggle_company_not_found(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_list_and_toggle_platform_admins(monkeypatch):
-    genesis = _user(role="platform_admin")
+    genesis = _user(role="platform_admin", is_genesis=True)
     other = _user(role="platform_admin", is_active=True)
-    monkeypatch.setattr(admin_api.user_dao, "first_by_role", AsyncMock(return_value=genesis))
     monkeypatch.setattr(admin_api.user_dao, "list_by_role", AsyncMock(return_value=[genesis, other]))
     listed = await admin_api.list_platform_admins(genesis)
     assert listed[0].is_genesis is True
@@ -225,9 +223,8 @@ async def test_users_list_quota_and_org_admin_surface(monkeypatch):
 @pytest.mark.asyncio
 async def test_org_admin_list_active_and_audit(monkeypatch):
     tenant_id = uuid.uuid4()
-    genesis = _user(role="org_admin", tenant_id=tenant_id)
+    genesis = _user(role="org_admin", tenant_id=tenant_id, is_genesis=True)
     other = _user(role="org_admin", tenant_id=tenant_id)
-    monkeypatch.setattr(users_api.user_dao, "first_org_admin_for_tenant", AsyncMock(return_value=genesis))
     monkeypatch.setattr(users_api.user_dao, "list_org_admins_for_tenant", AsyncMock(return_value=[genesis, other]))
     listed = await users_api.list_org_admins(genesis)
     assert listed[0].is_genesis is True
@@ -305,6 +302,7 @@ async def test_tenants_join_registration_and_me(monkeypatch):
     monkeypatch.setattr(tenants_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=False))
     cfg = await tenants_api.get_registration_config()
     assert cfg["allow_self_create_company"] is False
+    assert cfg["tenant_creation"] == "platform_admin_only"
 
     member = _user(role="member", tenant_id=tenant.id)
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -345,15 +343,17 @@ async def test_tenants_get_update_assign_delete(monkeypatch):
     assert got.name == "Acme"
 
     monkeypatch.setattr(tenants_api.tenant_dao, "update", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
     updated = await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(name="Acme2"), pa)
     assert updated.id == tenant.id
 
-    monkeypatch.setattr(tenants_api.user_dao, "get", AsyncMock(return_value=_user(role="member")))
-    monkeypatch.setattr(tenants_api.user_dao, "update", AsyncMock())
-    assigned = await tenants_api.assign_user_to_tenant(tenant.id, uuid.uuid4(), role="member", current_user=pa)
+    member = _user(role="member")
+    monkeypatch.setattr(tenants_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
+    monkeypatch.setattr(tenants_api, "apply_user_assignment", AsyncMock(return_value=member))
+    assigned = await tenants_api.assign_user_to_tenant(tenant.id, member.id, role="member", current_user=pa)
     assert assigned["role"] == "member"
 
-    monkeypatch.setattr(tenants_api.tenant_dao, "delete_cascade", AsyncMock())
+    monkeypatch.setattr(tenants_api, "delete_tenant_and_release_identities", AsyncMock())
     monkeypatch.setattr(tenants_api.user_dao, "fallback_tenant_for_identity", AsyncMock(return_value=None))
     deleted = await tenants_api.delete_tenant(tenant.id, pa)
     assert deleted["status"] == "deleted"
@@ -410,14 +410,16 @@ async def test_set_org_admin_active_happy(monkeypatch):
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_org_admin", _is_genesis)
-    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
     monkeypatch.setattr(
         provisioning.user_dao,
-        "update",
-        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+        "deactivate_unless_last_active",
+        AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": False})),
     )
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
-    updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
     assert updated.is_active is False
 
 
@@ -650,7 +652,7 @@ async def test_update_tenant_org_admin_and_assign_errors(monkeypatch):
     await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(name="N"), org)
     with pytest.raises(HTTPException):
         await tenants_api.update_tenant(uuid.uuid4(), tenants_api.TenantUpdate(name="N"), org)
-    monkeypatch.setattr(tenants_api.user_dao, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(tenants_api.user_dao, "get_with_identity", AsyncMock(return_value=None))
     with pytest.raises(HTTPException):
         await tenants_api.assign_user_to_tenant(tenant.id, uuid.uuid4(), role="member", current_user=_user())
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
@@ -675,18 +677,26 @@ async def test_user_role_remaining_branches(monkeypatch):
 
     last = _user(role="org_admin", tenant_id=tenant_id)
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=last))
-    monkeypatch.setattr(users_api, "is_genesis_org_admin", AsyncMock(return_value=True))
-    monkeypatch.setattr(users_api.user_dao, "count_admins_for_tenant", AsyncMock(return_value=1))
-    with pytest.raises(HTTPException):
+    monkeypatch.setattr(
+        users_api,
+        "apply_user_role_change",
+        AsyncMock(side_effect=provisioning.AdminGuardError(400, "last admin")),
+    )
+    with pytest.raises(HTTPException) as exc:
         await users_api.update_user_role(last.id, users_api.RoleUpdate(role="member"), org)
+    assert exc.value.status_code == 400
 
     pa = _user(role="platform_admin")
     last_pa = _user(role="platform_admin")
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=last_pa))
-    monkeypatch.setattr(users_api, "is_genesis_platform_admin", AsyncMock(return_value=True))
-    monkeypatch.setattr(users_api.user_dao, "count_by_role", AsyncMock(return_value=1))
-    with pytest.raises(HTTPException):
+    monkeypatch.setattr(
+        users_api,
+        "apply_user_role_change",
+        AsyncMock(side_effect=provisioning.AdminGuardError(400, "last pa")),
+    )
+    with pytest.raises(HTTPException) as exc:
         await users_api.update_user_role(last_pa.id, users_api.RoleUpdate(role="member"), pa)
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -698,9 +708,12 @@ async def test_provisioning_last_active_and_non_admin(monkeypatch):
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
-    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=1))
-    with pytest.raises(provisioning.AdminActivationError):
-        await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    monkeypatch.setattr(provisioning.user_dao, "deactivate_unless_last_active", AsyncMock(return_value=None))
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        with pytest.raises(provisioning.AdminActivationError):
+            await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
     with pytest.raises(provisioning.AdminActivationError):
         await provisioning.set_peer_admin_active(actor=_user(role="member"), target=target, is_active=False)
 
@@ -746,15 +759,17 @@ async def test_provisioning_noop_active(monkeypatch):
     identity = SimpleNamespace(id=uuid.uuid4(), is_active=True)
     active_target = _user(role="platform_admin", is_active=True)
     active_target.identity = identity
-    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=3))
     monkeypatch.setattr(
         provisioning.user_dao,
-        "update",
-        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+        "deactivate_unless_last_active",
+        AsyncMock(return_value=SimpleNamespace(**{**active_target.__dict__, "is_active": False})),
     )
     monkeypatch.setattr(provisioning.identity_dao, "update", AsyncMock())
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
-    flipped = await provisioning.set_peer_admin_active(actor=genesis, target=active_target, is_active=False)
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        flipped = await provisioning.set_peer_admin_active(actor=genesis, target=active_target, is_active=False)
     assert flipped.is_active is False
 
 
@@ -780,3 +795,207 @@ async def test_load_user_from_access_token_branches(monkeypatch):
         await sec.load_user_from_access_token(token, require_active=True)
     with pytest.raises(HTTPException):
         await sec.load_user_from_access_token("not-a-jwt")
+
+
+@pytest.mark.asyncio
+async def test_join_refuses_genesis_platform_admin_rewrite(monkeypatch):
+    tenant = _tenant()
+    genesis = _user(role="platform_admin", tenant_id=None, is_genesis=True)
+    code = SimpleNamespace(tenant_id=tenant.id, used_count=0, max_uses=5)
+    monkeypatch.setattr(tenants_api.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenants_api.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="ABCD"), genesis)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_repair_genesis_org_admin(monkeypatch):
+    tenant = _tenant()
+    pa = _user(role="platform_admin", is_genesis=True)
+    oa = _user(role="org_admin", tenant_id=tenant.id, is_genesis=True)
+    monkeypatch.setattr(tenants_api, "is_genesis_platform_admin", AsyncMock(return_value=True))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        tenants_api,
+        "attach_genesis_org_admin",
+        AsyncMock(return_value=SimpleNamespace(tenant=tenant, org_admin=oa, admin_email="oa@acme.com")),
+    )
+    monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
+    result = await tenants_api.repair_genesis_org_admin(
+        tenant.id,
+        tenants_api.GenesisOrgAdminCreate(admin_email="oa@acme.com", admin_password="secret1"),
+        pa,
+    )
+    assert result.org_admin_email == "oa@acme.com"
+    assert result.must_change_password is True
+
+    monkeypatch.setattr(tenants_api, "is_genesis_platform_admin", AsyncMock(return_value=False))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.repair_genesis_org_admin(
+            tenant.id,
+            tenants_api.GenesisOrgAdminCreate(admin_email="oa@acme.com", admin_password="secret1"),
+            _user(role="platform_admin"),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_repair_genesis_org_admin_conflict(monkeypatch):
+    from app.services.tenant_provisioning import GenesisOrgAdminExistsError
+
+    tenant = _tenant()
+    monkeypatch.setattr(tenants_api, "is_genesis_platform_admin", AsyncMock(return_value=True))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenants_api, "attach_genesis_org_admin", AsyncMock(side_effect=GenesisOrgAdminExistsError()))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.repair_genesis_org_admin(
+            tenant.id,
+            tenants_api.GenesisOrgAdminCreate(admin_email="oa@acme.com", admin_password="secret1"),
+            _user(role="platform_admin", is_genesis=True),
+        )
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_upload_tenant_logo_happy_path(monkeypatch):
+    from io import BytesIO
+
+    from PIL import Image
+
+    tenant = _tenant(im_config={})
+    org = _user(role="org_admin", tenant_id=tenant.id)
+    image = Image.new("RGB", (32, 32), color="red")
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    payload = buf.getvalue()
+    upload = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=payload))
+    storage = SimpleNamespace(write_bytes=AsyncMock())
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenants_api, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(tenants_api.tenant_dao, "update", AsyncMock(return_value=tenant))
+    out = await tenants_api.upload_tenant_logo(tenant.id, upload, org)
+    assert out.id == tenant.id
+    storage.write_bytes.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_login_skips_inactive_memberships(monkeypatch):
+    from app.api import auth as auth_api
+
+    identity = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="oa@acme.com",
+        password_hash="hashed",
+        is_active=True,
+        email_verified=True,
+        must_change_password=False,
+        username="oa",
+        phone=None,
+        is_platform_admin=False,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inactive = _user(role="org_admin", is_active=False, tenant_id=uuid.uuid4())
+    active = _user(role="member", is_active=True, tenant_id=uuid.uuid4())
+    monkeypatch.setattr(auth_api.identity_dao, "get_by_login_identifier", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth_api, "verify_password_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive]))
+    with pytest.raises(HTTPException) as exc:
+        await auth_api.login(
+            auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
+            background_tasks=SimpleNamespace(),
+        )
+    assert exc.value.status_code == 403
+
+    monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive, active]))
+    monkeypatch.setattr(auth_api.tenant_dao, "get", AsyncMock(return_value=_tenant(id=active.tenant_id)))
+    result = await auth_api.login(
+        auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
+        background_tasks=SimpleNamespace(),
+    )
+    assert result.user.id == active.id
+
+
+@pytest.mark.asyncio
+async def test_logo_and_repair_error_branches(monkeypatch):
+    tenant = _tenant()
+    org = _user(role="org_admin", tenant_id=tenant.id)
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+
+    bad_type = SimpleNamespace(content_type="text/plain", read=AsyncMock(return_value=b"x"))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.upload_tenant_logo(tenant.id, bad_type, org)
+    assert exc.value.status_code == 400
+
+    huge = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"x" * (1024 * 1024 + 1)))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.upload_tenant_logo(tenant.id, huge, org)
+    assert exc.value.status_code == 400
+
+    invalid = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"not-an-image"))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.upload_tenant_logo(tenant.id, invalid, org)
+    assert exc.value.status_code == 400
+
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = Image.new("RGB", (32, 16), color="red")
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    rect = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=buf.getvalue()))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.upload_tenant_logo(tenant.id, rect, org)
+    assert exc.value.status_code == 400
+
+    storage = SimpleNamespace(exists=AsyncMock(return_value=True))
+    monkeypatch.setattr(tenants_api, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(tenants_api, "ensure_local_path", AsyncMock(return_value="/tmp/logo.png"))
+    logo = await tenants_api.get_tenant_logo(tenant.id)
+    assert logo.path == "/tmp/logo.png"
+
+    monkeypatch.setattr(tenants_api.user_dao, "get_with_identity", AsyncMock(return_value=_user(role="member")))
+    monkeypatch.setattr(
+        tenants_api,
+        "apply_user_assignment",
+        AsyncMock(side_effect=provisioning.AdminGuardError(403, "genesis")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.assign_user_to_tenant(tenant.id, uuid.uuid4(), role="member", current_user=_user())
+    assert exc.value.status_code == 403
+
+    monkeypatch.setattr(tenants_api, "is_genesis_platform_admin", AsyncMock(return_value=True))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.repair_genesis_org_admin(
+            tenant.id,
+            tenants_api.GenesisOrgAdminCreate(admin_email="oa@acme.com", admin_password="secret1"),
+            _user(role="platform_admin", is_genesis=True),
+        )
+    assert exc.value.status_code == 404
+
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenants_api, "attach_genesis_org_admin", AsyncMock(side_effect=AdminEmailTakenError("x")))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.repair_genesis_org_admin(
+            tenant.id,
+            tenants_api.GenesisOrgAdminCreate(admin_email="oa@acme.com", admin_password="secret1"),
+            _user(role="platform_admin", is_genesis=True),
+        )
+    assert exc.value.status_code == 409
+
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.delete_tenant(tenant.id, _user(role="member"))
+    assert exc.value.status_code == 403
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.delete_tenant(tenant.id, _user(role="platform_admin"))
+    assert exc.value.status_code == 404
+
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(name="N"), _user())
+    assert exc.value.status_code == 404

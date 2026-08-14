@@ -27,6 +27,14 @@ def test_llm_models_fk_is_deferred_until_tenants_exist() -> None:
     assert 0 <= llm_at < tenants_at < fk_at
 
 
+def test_users_persist_genesis_flag() -> None:
+    sql = BASELINE.read_text(encoding="utf-8")
+    start = sql.find("CREATE TABLE IF NOT EXISTS users")
+    end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
+    block = sql[start:end]
+    assert "is_genesis BOOLEAN NOT NULL DEFAULT false" in block
+
+
 def test_tenant_not_null_columns_have_defaults() -> None:
     sql = BASELINE.read_text(encoding="utf-8")
     start = sql.find("CREATE TABLE IF NOT EXISTS tenants")
@@ -52,6 +60,8 @@ def test_hot_path_indexes_are_declared() -> None:
         "ix_agent_permissions_agent_id",
         "ix_agent_permissions_user_scope",
         "ix_users_tenant_id",
+        "ux_users_genesis_platform_admin",
+        "ux_users_genesis_org_admin",
         "ix_tools_tenant_source",
         "ix_chat_messages_conv_created",
         "ix_chat_sessions_last_message",

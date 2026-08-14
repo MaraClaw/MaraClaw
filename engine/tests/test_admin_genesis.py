@@ -43,7 +43,7 @@ def _identity_record(
     )
 
 
-def _user_record(identity: IdentityRecord, *, role="platform_admin", tenant_id=None):
+def _user_record(identity: IdentityRecord, *, role="platform_admin", tenant_id=None, is_genesis=None):
     return UserRecord(
         id=uuid.uuid4(),
         identity_id=identity.id,
@@ -53,6 +53,7 @@ def _user_record(identity: IdentityRecord, *, role="platform_admin", tenant_id=N
         is_active=True,
         registration_source="bootstrap",
         created_at=_NOW,
+        is_genesis=role == "platform_admin" if is_genesis is None else is_genesis,
         identity=identity,
     )
 
@@ -327,6 +328,7 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     create_user_kwargs = seeder.user_dao.create.await_args.kwargs["obj_in"]
     assert create_user_kwargs["tenant_id"] is None
     assert create_user_kwargs["role"] == "platform_admin"
+    assert create_user_kwargs["is_genesis"] is True
 
 
 @pytest.mark.asyncio

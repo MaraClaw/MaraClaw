@@ -95,7 +95,9 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
 - Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends paths (WS, file download) must call `load_user_from_access_token`.
 - New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone. `allow_self_create_company` does not create tenants.
-- Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis = earliest membership of that role (`created_at`).
+- Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis is persisted on `users.is_genesis` (not recomputed from `created_at`). Genesis rows cannot be demoted, reassigned, or converted by join.
+- Login ignores inactive memberships. Deactivating an org admin does not flip `identity.is_active` (multi-tenant identities). Deactivating a platform admin does.
+- Tenant delete tombstones orphaned identities so emails can be reused. `POST /api/tenants/{id}/genesis-org-admin` repairs a tenant that has no genesis OA.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -145,7 +147,7 @@ uv run python -m app.scripts.bootstrap_db
 - Image may setuid `bwrap` (`BWRAP_SETUID=1`). Local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; the live pool is psycopg3. Do not add new asyncpg callers.
 - `app/services/agent_runtime/` is gone. Do not recreate it or add `AGENTS.md` there.
-- Three Node pins: guest image `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, classifier/smoke still expect host/container `v26.5.0` (smoke probe is stale vs guest 26.7).
+- Three Node pins: guest image `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, classifier/smoke expect guest/host `v26.7.0`.
 - OpenClaw guest is **linux/arm64 only**. Publish: `DOCKERHUB_NAMESPACE=… ./publish-openclaw-local-dockerfile.sh`.
 - `docs/refactoring/psycopg-migration.md` is historical dual-stack, not current policy.
 - Depth 5–7 under `clawsec_skill_files/` is AGPL payload. Do not add `AGENTS.md` there.

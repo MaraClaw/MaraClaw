@@ -27,6 +27,7 @@ _USER_COLUMNS = (
     "quota_period_start",
     "quota_max_agents",
     "quota_agent_ttl_hours",
+    "is_genesis",
 )
 
 _IDENTITY_COLUMNS = (
@@ -294,6 +295,51 @@ class UserDAO(BaseDAO[UserRecord]):
                 params,
             )
             return int(value or 0)
+
+    async def deactivate_unless_last_active(
+        self, user_id: Any, *, role: str, tenant_id: Any | None = None
+    ) -> UserRecord | None:
+        """Deactivate ``user_id`` only when another active peer of ``role`` exists."""
+        params: dict[str, Any] = {"user_id": user_id, "role": role}
+        tenant_sql = ""
+        if tenant_id is not None:
+            tenant_sql = " AND tenant_id = %(tenant_id)s"
+            params["tenant_id"] = tenant_id
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"UPDATE users SET is_active = FALSE, updated_at = now() "
+                f"WHERE id = %(user_id)s AND is_active IS TRUE AND ("
+                f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
+                f") > 1 RETURNING {self._select_list()}",
+                params,
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def list_identity_ids_for_tenant(self, tenant_id: Any) -> list[Any]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT identity_id FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND identity_id IS NOT NULL",
+                {"tenant_id": tenant_id},
+            )
+            return [row["identity_id"] for row in rows]
+
+    async def genesis_platform_admin(self) -> UserRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE role = 'platform_admin' AND is_genesis IS TRUE LIMIT 1",
+            )
+            return UserRecord.from_row(row) if row else None
+
+    async def genesis_org_admin_for_tenant(self, tenant_id: Any) -> UserRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM users "
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' AND is_genesis IS TRUE LIMIT 1",
+                {"tenant_id": tenant_id},
+            )
+            return UserRecord.from_row(row) if row else None
 
     async def display_names_for_ids(self, user_ids: Sequence[Any]) -> dict[Any, str]:
         if not user_ids:

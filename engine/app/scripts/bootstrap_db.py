@@ -94,6 +94,39 @@ PATCHES = [
     "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id)",
     "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id)",
     "CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis BOOLEAN NOT NULL DEFAULT false",
+    """
+    UPDATE users SET is_genesis = TRUE
+    WHERE id = (
+        SELECT id FROM users WHERE role = 'platform_admin'
+        ORDER BY created_at ASC NULLS LAST LIMIT 1
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM users WHERE is_genesis IS TRUE AND role = 'platform_admin'
+    )
+    """,
+    """
+    UPDATE users AS u SET is_genesis = TRUE
+    FROM (
+        SELECT DISTINCT ON (tenant_id) id
+        FROM users
+        WHERE role = 'org_admin' AND tenant_id IS NOT NULL
+        ORDER BY tenant_id, created_at ASC NULLS LAST
+    ) AS g
+    WHERE u.id = g.id
+    AND NOT EXISTS (
+        SELECT 1 FROM users AS x
+        WHERE x.tenant_id = u.tenant_id AND x.is_genesis IS TRUE AND x.role = 'org_admin'
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
+    ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin'
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
+    ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin'
+    """,
 ]
 
 

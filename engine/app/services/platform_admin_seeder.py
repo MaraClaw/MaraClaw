@@ -63,7 +63,12 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
     if null_tenant_user:
         updated = await user_dao.update(
             db_obj=null_tenant_user,
-            obj_in={"role": "platform_admin", "is_active": True, "registration_source": "bootstrap"},
+            obj_in={
+                "role": "platform_admin",
+                "is_active": True,
+                "registration_source": "bootstrap",
+                "is_genesis": True,
+            },
         )
         user = updated or null_tenant_user
         user.identity = identity
@@ -77,6 +82,7 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
             "role": "platform_admin",
             "registration_source": "bootstrap",
             "is_active": True,
+            "is_genesis": True,
         }
     )
     await participant_dao.create_for_user(
@@ -102,6 +108,11 @@ async def ensure_platform_admin() -> UserRecord:
     if existing_admin:
         loaded = await user_dao.get_with_identity(existing_admin.id)
         admin = loaded or existing_admin
+        if not getattr(admin, "is_genesis", False):
+            marked = await user_dao.genesis_platform_admin()
+            if marked is None:
+                admin = await user_dao.update(db_obj=admin, obj_in={"is_genesis": True}) or admin
+                admin.is_genesis = True
         logger.info(
             "[startup] Platform admin already present (user_id=%s); skipping env re-seed",
             admin.id,

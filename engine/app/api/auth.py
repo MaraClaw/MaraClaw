@@ -443,12 +443,16 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
             )
 
     # 3. Find all User records (tenants)
-    valid_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
+    all_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
 
-    if not valid_users:
+    if not all_users:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="No organization associated with this account."
         )
+
+    valid_users = [u for u in all_users if u.is_active]
+    if not valid_users:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been disabled.")
 
     # 4. Handle Tenant Selection
     if not data.tenant_id:
@@ -482,6 +486,12 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
         user = valid_users[0]
     else:
         # Specific tenant requested (Dedicated Link flow)
+        requested = next((u for u in all_users if u.tenant_id == data.tenant_id), None)
+        if requested is not None and not requested.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This organization membership has been disabled.",
+            )
         user = next((u for u in valid_users if u.tenant_id == data.tenant_id), None)
 
         # Cross-tenant access check

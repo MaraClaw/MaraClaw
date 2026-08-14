@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, EmailStr, Field
@@ -26,10 +26,28 @@ from app.dao.user_dao import user_dao
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
+from app.services.admin_provisioning import (
+    AdminGuardError,
+    apply_user_assignment,
+    assert_join_may_rewrite_membership,
+    is_genesis_platform_admin,
+)
 from app.services.storage import ensure_local_path, get_storage_backend, normalize_storage_key
-from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
+from app.services.tenant_provisioning import (
+    AdminEmailTakenError,
+    GenesisOrgAdminExistsError,
+    attach_genesis_org_admin,
+    create_tenant_with_org_admin,
+    delete_tenant_and_release_identities,
+)
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
+
+
+async def get_client_ip(request: Request) -> str | None:
+    if request.client is None:
+        return None
+    return request.client.host
 
 
 class TokenUsageBucket(TypedDict):
@@ -71,6 +89,12 @@ class TenantCreateResponse(BaseModel):
     tenant: TenantOut
     org_admin_email: str
     must_change_password: bool = True
+
+
+class GenesisOrgAdminCreate(BaseModel):
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=200)
 
 
 class TenantUpdate(BaseModel):
@@ -124,6 +148,7 @@ async def _get_updateable_tenant(
 async def create_tenant(
     data: TenantCreate,
     current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
 ):
     """Create a company and its genesis org admin (platform admin only).
 
@@ -155,6 +180,7 @@ async def create_tenant(
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},
+        ip_address=client_ip,
     )
     return TenantCreateResponse(
         tenant=TenantOut.model_validate(provisioned.tenant),
@@ -215,6 +241,12 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
     final_role = assigned_role
 
     from app.services.registration_service import registration_service
+
+    if current_user.tenant_id is None:
+        try:
+            assert_join_may_rewrite_membership(current_user)
+        except AdminGuardError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     if current_user.tenant_id is not None:
         from app.core.security import create_access_token
@@ -277,9 +309,8 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 
 @router.get("/registration-config")
 async def get_registration_config():
-    """Public - returns whether self-creation of companies is allowed."""
-    allowed = await system_setting_dao.is_flag_enabled("allow_self_create_company", default=False)
-    return {"allow_self_create_company": allowed}
+    """Public - tenant creation is platform-admin only; self-create is gone."""
+    return {"allow_self_create_company": False, "tenant_creation": "platform_admin_only"}
 
 
 # ─── Public: Resolve Tenant by Domain ───────────────────
@@ -406,6 +437,7 @@ async def update_tenant(
     tenant_id: uuid.UUID,
     data: TenantUpdate,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
 ):
     """Update tenant settings. Platform admins can update any; org_admins only their own."""
     if current_user.role == "org_admin":
@@ -426,6 +458,16 @@ async def update_tenant(
         update_data.pop("sso_domain", None)
 
     updated = await tenant_dao.update(db_obj=tenant, obj_in=update_data)
+    if update_data:
+        await write_admin_audit(
+            actor=current_user,
+            action="tenant_update",
+            target_type="tenant",
+            target_id=tenant_id,
+            tenant_id=tenant_id,
+            changes={key: field_change(getattr(tenant, key, None), value) for key, value in update_data.items()},
+            ip_address=client_ip,
+        )
     return TenantOut.model_validate(updated)
 
 
@@ -505,6 +547,7 @@ async def assign_user_to_tenant(
     user_id: uuid.UUID,
     role: str = "member",
     current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
 ):
     """Assign a user to a tenant with a specific role."""
     if role not in ("agent_admin", "member"):
@@ -513,12 +556,71 @@ async def assign_user_to_tenant(
     if not await tenant_dao.get(tenant_id):
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    user = await user_dao.get(user_id)
+    user = await user_dao.get_with_identity(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    await user_dao.update(db_obj=user, obj_in={"tenant_id": tenant_id, "role": role})
-    return {"status": "ok", "user_id": str(user_id), "tenant_id": str(tenant_id), "role": role}
+    try:
+        updated = await apply_user_assignment(
+            actor=current_user,
+            target=user,
+            tenant_id=tenant_id,
+            role=role,
+            ip_address=client_ip,
+        )
+    except AdminGuardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"status": "ok", "user_id": str(user_id), "tenant_id": str(tenant_id), "role": updated.role}
+
+
+@router.post(
+    "/{tenant_id}/genesis-org-admin",
+    response_model=TenantCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def repair_genesis_org_admin(
+    tenant_id: uuid.UUID,
+    data: GenesisOrgAdminCreate,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Attach a genesis org admin to a tenant that does not have one."""
+    if not await is_genesis_platform_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the genesis platform admin can repair a company admin")
+    if not await tenant_dao.get(tenant_id):
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    try:
+        provisioned = await attach_genesis_org_admin(
+            tenant_id=tenant_id,
+            admin_email=str(data.admin_email),
+            admin_password=data.admin_password,
+            admin_display_name=data.admin_display_name,
+        )
+    except GenesisOrgAdminExistsError as exc:
+        raise HTTPException(status_code=409, detail="This company already has a genesis organization admin") from exc
+    except AdminEmailTakenError as exc:
+        raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Tenant not found") from exc
+
+    await write_admin_audit(
+        actor=current_user,
+        action="org_admin_repair",
+        target_type="user",
+        target_id=provisioned.org_admin.id,
+        tenant_id=tenant_id,
+        changes={
+            "role": field_change(None, "org_admin"),
+            "admin_email": field_change(None, provisioned.admin_email),
+            "is_genesis": field_change(None, True),
+        },
+        ip_address=client_ip,
+    )
+    return TenantCreateResponse(
+        tenant=TenantOut.model_validate(provisioned.tenant),
+        org_admin_email=provisioned.admin_email,
+        must_change_password=True,
+    )
 
 
 # ─── Authenticated: Delete Company ─────────────────────
@@ -552,7 +654,16 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
 
     identity_id = current_user.identity_id
 
-    await tenant_dao.delete_cascade(tenant_id)
+    await delete_tenant_and_release_identities(tenant_id)
+    await write_admin_audit(
+        actor=current_user,
+        action="tenant_delete",
+        target_type="tenant",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        changes={"deleted": field_change(False, True)},
+        details={"tenant_name": tenant.name},
+    )
 
     fallback = await user_dao.fallback_tenant_for_identity(identity_id, exclude_tenant_id=tenant_id)
     fallback_tenant_id = str(fallback) if fallback else None

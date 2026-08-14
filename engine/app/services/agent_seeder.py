@@ -211,6 +211,9 @@ async def seed_default_agents():
     if not admin:
         logger.warning("[AgentSeeder] No platform admin found, skipping default agents")
         return
+    if admin.tenant_id is None:
+        logger.warning("[AgentSeeder] Platform admin has no company; skipping default agents")
+        return
 
     existing_agents = await agent_dao.list_by_names_for_tenant(
         admin.tenant_id, ["Morty", "Meeseeks"], agent_type="native", exclude_stopped=True

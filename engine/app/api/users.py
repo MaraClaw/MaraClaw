@@ -7,15 +7,15 @@ from pydantic import BaseModel, EmailStr, Field
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
-from app.dao.identity_dao import identity_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminActivationError,
+    AdminGuardError,
+    apply_user_role_change,
     create_additional_org_admin,
     is_genesis_org_admin,
-    is_genesis_platform_admin,
     set_peer_admin_active,
 )
 from app.services.tenant_provisioning import AdminEmailTakenError
@@ -128,8 +128,17 @@ async def update_user_quota(
         raise HTTPException(status_code=400, detail="Invalid period. Use: permanent, daily, weekly, monthly")
 
     if updates:
+        before = {key: getattr(user, key, None) for key in updates}
         user = await user_dao.update(db_obj=user, obj_in=updates) or user
         user = await user_dao.get_with_identity(user_id) or user
+        await write_admin_audit(
+            actor=current_user,
+            action="user_quota_update",
+            target_type="user",
+            target_id=user.id,
+            tenant_id=user.tenant_id,
+            changes={key: field_change(before.get(key), value) for key, value in updates.items()},
+        )
 
     agents_count = await agent_dao.count_active_for_creator(user.id)
     return _user_out(user, agents_count=agents_count)
@@ -235,8 +244,6 @@ async def list_org_admins(current_user: UserRecord = Depends(require_role("org_a
     """List org admins in the caller's company."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
-    genesis = await user_dao.first_org_admin_for_tenant(current_user.tenant_id)
-    genesis_id = genesis.id if genesis else None
     users = await user_dao.list_org_admins_for_tenant(current_user.tenant_id)
     return [
         OrgAdminOut(
@@ -245,7 +252,7 @@ async def list_org_admins(current_user: UserRecord = Depends(require_role("org_a
             display_name=u.display_name,
             role=u.role,
             is_active=u.is_active,
-            is_genesis=u.id == genesis_id,
+            is_genesis=bool(getattr(u, "is_genesis", False)),
             tenant_id=u.tenant_id,
             created_at=u.created_at,
         )
@@ -274,14 +281,13 @@ async def set_org_admin_active(
     except AdminActivationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    genesis = await user_dao.first_org_admin_for_tenant(current_user.tenant_id) if current_user.tenant_id else None
     return OrgAdminOut(
         id=updated.id,
         email=updated.email if updated.identity else target.email,
         display_name=updated.display_name,
         role=updated.role,
         is_active=updated.is_active,
-        is_genesis=updated.id == (genesis.id if genesis else None),
+        is_genesis=bool(getattr(updated, "is_genesis", getattr(target, "is_genesis", False))),
         tenant_id=updated.tenant_id,
         created_at=updated.created_at,
     )
@@ -305,7 +311,12 @@ async def list_org_admin_audit_logs(
 
 
 @router.patch("/{user_id}/role")
-async def update_user_role(user_id: uuid.UUID, data: RoleUpdate, current_user: UserRecord = Depends(get_current_user)):
+async def update_user_role(
+    user_id: uuid.UUID,
+    data: RoleUpdate,
+    current_user: UserRecord = Depends(get_current_user),
+    client_ip: str | None = Depends(get_client_ip),
+):
     """Change a user's role within the same company.
 
     Permissions:
@@ -316,63 +327,21 @@ async def update_user_role(user_id: uuid.UUID, data: RoleUpdate, current_user: U
     - Nobody may assign the other admin type.
 
     Safety:
-    - If the target is the ONLY remaining org_admin in the company,
-      demoting them is blocked to prevent orphaned companies.
-    - The last platform_admin cannot be demoted.
+    - Genesis rows cannot change role.
+    - The last *active* org / platform admin cannot be demoted.
     """
-    if current_user.role not in ("platform_admin", "org_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     if data.role not in ("platform_admin", "org_admin", "member"):
         raise HTTPException(status_code=400, detail="Invalid role. Allowed: platform_admin, org_admin, member")
-
     target_user = await user_dao.get_with_identity(user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    if current_user.role == "org_admin" and target_user.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Cannot modify users outside your organization")
-
-    if target_user.role == data.role:
-        return {"status": "ok", "user_id": str(user_id), "role": data.role}
-
-    if data.role == "platform_admin":
-        if not await is_genesis_platform_admin(current_user):
-            raise HTTPException(status_code=403, detail="Only the genesis platform admin can create platform admins")
-    elif data.role == "org_admin":
-        if current_user.role != "org_admin" or not await is_genesis_org_admin(current_user):
-            raise HTTPException(status_code=403, detail="Only the genesis organization admin can create org admins")
-        if target_user.tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=403, detail="Cannot modify users outside your organization")
-
-    if target_user.role == "platform_admin" and data.role != "platform_admin":
-        if await user_dao.count_by_role("platform_admin") <= 1:
-            raise HTTPException(
-                status_code=400, detail="Cannot demote the only platform administrator. Create another first."
-            )
-    elif target_user.role == "org_admin" and data.role != "org_admin":
-        admin_count = await user_dao.count_admins_for_tenant(target_user.tenant_id)
-        if admin_count <= 1:
-            raise HTTPException(
-                status_code=400, detail="Cannot demote the only administrator. Promote another user first."
-            )
-
-    user_updates: dict[str, object] = {"role": data.role}
-    if data.role == "platform_admin":
-        user_updates["tenant_id"] = None
-        if target_user.identity is not None:
-            await identity_dao.update(db_obj=target_user.identity, obj_in={"is_platform_admin": True})
-    elif target_user.role == "platform_admin" and target_user.identity is not None:
-        await identity_dao.update(db_obj=target_user.identity, obj_in={"is_platform_admin": False})
-
-    await user_dao.update(db_obj=target_user, obj_in=user_updates)
-    await write_admin_audit(
-        actor=current_user,
-        action="role_assign",
-        target_type="user",
-        target_id=target_user.id,
-        tenant_id=target_user.tenant_id if data.role != "platform_admin" else None,
-        changes={"role": field_change(target_user.role, data.role)},
-        details={"target_email": getattr(target_user, "email", None)},
-    )
-    return {"status": "ok", "user_id": str(user_id), "role": data.role}
+    try:
+        updated = await apply_user_role_change(
+            actor=current_user,
+            target=target_user,
+            new_role=data.role,
+            ip_address=client_ip,
+        )
+    except AdminGuardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"status": "ok", "user_id": str(user_id), "role": updated.role}

@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS users (
 	quota_period_start TIMESTAMP WITH TIME ZONE, 
 	quota_max_agents INTEGER NOT NULL DEFAULT 2, 
 	quota_agent_ttl_hours INTEGER NOT NULL DEFAULT 0, 
+	is_genesis BOOLEAN NOT NULL DEFAULT false, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(identity_id) REFERENCES identities (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
@@ -374,6 +375,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 
 CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
+	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
+	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin';
 
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 

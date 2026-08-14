@@ -14,7 +14,7 @@ from app.services import admin_provisioning as provisioning
 from app.services.tenant_provisioning import AdminEmailTakenError
 
 
-def _user(*, role: str, user_id=None, tenant_id=None, identity=None, is_active=True, email=None):
+def _user(*, role: str, user_id=None, tenant_id=None, identity=None, is_active=True, email=None, is_genesis=False):
     return SimpleNamespace(
         id=user_id or uuid.uuid4(),
         role=role,
@@ -24,37 +24,35 @@ def _user(*, role: str, user_id=None, tenant_id=None, identity=None, is_active=T
         avatar_url=None,
         is_active=is_active,
         email=email,
+        is_genesis=is_genesis,
     )
 
 
 @pytest.mark.asyncio
-async def test_is_genesis_platform_admin_matches_earliest(monkeypatch):
+async def test_is_genesis_platform_admin_uses_persisted_flag():
     genesis_id = uuid.uuid4()
-    monkeypatch.setattr(
-        provisioning.user_dao,
-        "first_by_role",
-        AsyncMock(return_value=_user(role="platform_admin", user_id=genesis_id)),
+    assert (
+        await provisioning.is_genesis_platform_admin(
+            _user(role="platform_admin", user_id=genesis_id, is_genesis=True)
+        )
+        is True
     )
-    assert await provisioning.is_genesis_platform_admin(_user(role="platform_admin", user_id=genesis_id)) is True
     assert await provisioning.is_genesis_platform_admin(_user(role="platform_admin")) is False
-    assert await provisioning.is_genesis_platform_admin(_user(role="org_admin")) is False
+    assert await provisioning.is_genesis_platform_admin(_user(role="org_admin", is_genesis=True)) is False
 
 
 @pytest.mark.asyncio
-async def test_is_genesis_org_admin_matches_earliest_in_tenant(monkeypatch):
+async def test_is_genesis_org_admin_uses_persisted_flag():
     tenant_id = uuid.uuid4()
     genesis_id = uuid.uuid4()
-    monkeypatch.setattr(
-        provisioning.user_dao,
-        "first_org_admin_for_tenant",
-        AsyncMock(return_value=_user(role="org_admin", user_id=genesis_id, tenant_id=tenant_id)),
-    )
     assert (
-        await provisioning.is_genesis_org_admin(_user(role="org_admin", user_id=genesis_id, tenant_id=tenant_id))
+        await provisioning.is_genesis_org_admin(
+            _user(role="org_admin", user_id=genesis_id, tenant_id=tenant_id, is_genesis=True)
+        )
         is True
     )
     assert await provisioning.is_genesis_org_admin(_user(role="org_admin", tenant_id=tenant_id)) is False
-    assert await provisioning.is_genesis_org_admin(_user(role="org_admin", tenant_id=None)) is False
+    assert await provisioning.is_genesis_org_admin(_user(role="org_admin", tenant_id=None, is_genesis=True)) is False
 
 
 @pytest.mark.asyncio
@@ -126,31 +124,27 @@ async def test_create_org_admin_provisions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_role_blocks_non_genesis_from_minting_org_admin(monkeypatch):
+async def test_update_role_blocks_non_genesis_from_minting_org_admin():
     tenant_id = uuid.uuid4()
     target = _user(role="member", tenant_id=tenant_id)
-    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=target))
-    monkeypatch.setattr(users_api, "is_genesis_org_admin", AsyncMock(return_value=False))
-    with pytest.raises(HTTPException) as exc:
-        await users_api.update_user_role(
-            target.id,
-            users_api.RoleUpdate(role="org_admin"),
-            current_user=_user(role="org_admin", tenant_id=tenant_id),
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_role_change(
+            actor=_user(role="org_admin", tenant_id=tenant_id),
+            target=target,
+            new_role="org_admin",
         )
     assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_update_role_blocks_platform_admin_from_minting_org_admin(monkeypatch):
+async def test_update_role_blocks_platform_admin_from_minting_org_admin():
     tenant_id = uuid.uuid4()
     target = _user(role="member", tenant_id=tenant_id)
-    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=target))
-    monkeypatch.setattr(users_api, "is_genesis_platform_admin", AsyncMock(return_value=True))
-    with pytest.raises(HTTPException) as exc:
-        await users_api.update_user_role(
-            target.id,
-            users_api.RoleUpdate(role="org_admin"),
-            current_user=_user(role="platform_admin"),
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_role_change(
+            actor=_user(role="platform_admin", is_genesis=True),
+            target=target,
+            new_role="org_admin",
         )
     assert exc.value.status_code == 403
 
@@ -159,16 +153,18 @@ async def test_update_role_blocks_platform_admin_from_minting_org_admin(monkeypa
 async def test_update_role_genesis_org_admin_can_promote(monkeypatch):
     tenant_id = uuid.uuid4()
     target = _user(role="member", tenant_id=tenant_id)
-    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=target))
-    monkeypatch.setattr(users_api, "is_genesis_org_admin", AsyncMock(return_value=True))
-    monkeypatch.setattr(users_api.user_dao, "update", AsyncMock(return_value=target))
-    result = await users_api.update_user_role(
-        target.id,
-        users_api.RoleUpdate(role="org_admin"),
-        current_user=_user(role="org_admin", tenant_id=tenant_id),
-    )
-    assert result["role"] == "org_admin"
-    users_api.user_dao.update.assert_awaited_once()
+    promoted = _user(role="org_admin", tenant_id=tenant_id)
+    monkeypatch.setattr(provisioning.user_dao, "update", AsyncMock(return_value=promoted))
+    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        result = await provisioning.apply_user_role_change(
+            actor=_user(role="org_admin", tenant_id=tenant_id, is_genesis=True),
+            target=target,
+            new_role="org_admin",
+        )
+    assert result.role == "org_admin"
 
 
 @pytest.mark.asyncio
@@ -210,6 +206,7 @@ async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
     assert create_identity.await_args.kwargs["must_change_password"] is True
     assert create_user.await_args.kwargs["obj_in"]["role"] == "platform_admin"
     assert create_user.await_args.kwargs["obj_in"]["tenant_id"] is None
+    assert create_user.await_args.kwargs["obj_in"]["is_genesis"] is False
 
 
 @pytest.mark.asyncio
@@ -252,15 +249,17 @@ async def test_set_peer_admin_active_deactivates_other_platform_admin(monkeypatc
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
-    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
     monkeypatch.setattr(
         provisioning.user_dao,
-        "update",
-        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+        "deactivate_unless_last_active",
+        AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": False})),
     )
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
 
-    updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
     assert updated.is_active is False
     provisioning.write_admin_audit.assert_awaited_once()
     assert provisioning.write_admin_audit.await_args.kwargs["action"] == "user_deactivate"
@@ -305,3 +304,75 @@ async def test_write_admin_audit_persists_actor_and_changes(monkeypatch):
     assert payload["action"] == "user_deactivate"
     assert payload["changes"]["is_active"] == {"before": True, "after": False}
     assert payload["ip_address"] == "127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_apply_user_role_change_refuses_genesis_demotion():
+    genesis = _user(role="platform_admin", is_genesis=True)
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_role_change(
+            actor=_user(role="platform_admin", is_genesis=True),
+            target=genesis,
+            new_role="member",
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_apply_user_role_change_refuses_last_active_demotion(monkeypatch):
+    target = _user(role="platform_admin", is_active=True)
+    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=1))
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_role_change(
+            actor=_user(role="platform_admin", is_genesis=True),
+            target=target,
+            new_role="member",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(monkeypatch):
+    tenant_id = uuid.uuid4()
+    genesis = _user(role="platform_admin", is_genesis=True)
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        await provisioning.apply_user_assignment(
+            actor=_user(role="platform_admin", is_genesis=True),
+            target=genesis,
+            tenant_id=tenant_id,
+            role="member",
+        )
+    assert exc.value.status_code == 403
+
+    identity = SimpleNamespace(id=uuid.uuid4(), is_platform_admin=True)
+    peer = _user(role="platform_admin", identity=identity, is_active=True)
+    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
+    monkeypatch.setattr(provisioning.identity_dao, "update", AsyncMock())
+    monkeypatch.setattr(
+        provisioning.user_dao,
+        "update",
+        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+    )
+    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        updated = await provisioning.apply_user_assignment(
+            actor=_user(role="platform_admin", is_genesis=True),
+            target=peer,
+            tenant_id=tenant_id,
+            role="member",
+        )
+    assert updated.role == "member"
+    provisioning.identity_dao.update.assert_awaited_once()
+    assert provisioning.identity_dao.update.await_args.kwargs["obj_in"]["is_platform_admin"] is False
+
+
+def test_join_refuses_genesis_and_platform_admin_rewrite():
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        provisioning.assert_join_may_rewrite_membership(_user(role="platform_admin", is_genesis=True))
+    assert exc.value.status_code == 403
+    with pytest.raises(provisioning.AdminGuardError) as exc:
+        provisioning.assert_join_may_rewrite_membership(_user(role="platform_admin"))
+    assert exc.value.status_code == 403
+    provisioning.assert_join_may_rewrite_membership(_user(role="member", tenant_id=None))

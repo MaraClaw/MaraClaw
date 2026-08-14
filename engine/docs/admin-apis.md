@@ -33,7 +33,7 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 | **Additional platform admin** | Genesis platform admin only: `POST /api/admin/platform-admins` | Must change password after first successful login |
 | **Additional org admin** | Genesis org admin only: `POST /api/users/org-admins` (or `PATCH /api/users/{id}/role`) | New accounts must change password after first login |
 
-Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Platform admin membership is **null-tenant** so disabling a company cannot lock out the operator.
+Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Platform admin membership is **null-tenant** so disabling a company cannot lock out the operator. Genesis is stored on `users.is_genesis` and cannot be moved by role change, assign-user, or join.
 
 While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). The `allow_self_create_company` flag is retained on platform settings but does not create tenants.
 
@@ -73,7 +73,8 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 |--------|------|------|---------|------------------|
 | `GET` | `/api/tenants/` | platform_admin | — | `TenantOut[]` all tenants |
 | `POST` | `/api/tenants/` | platform_admin | `{ name, admin_email, admin_password, admin_display_name? }` | **201** `{ tenant: TenantOut, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin. Duplicate admin email → **409**. Replaces `POST /api/tenants/self-create`. |
-| `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }`. Cannot assign `org_admin`. |
+| `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }`. Cannot assign `org_admin`. Cannot reassign genesis or the last *active* admin. Clears `identity.is_platform_admin` when moving a PA. |
+| `POST` | `/api/tenants/{tenant_id}/genesis-org-admin` | genesis platform_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** attach a genesis OA when the tenant has none. **409** if one already exists or the email is taken. |
 
 **SSO note:** On `PUT /api/tenants/{tenant_id}`, platform admins **cannot** set `sso_enabled` / `sso_domain` (stripped server-side). SSO is managed by the company’s own org admin via Enterprise settings / identity providers.
 
@@ -106,8 +107,9 @@ sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/join` | Invite code join |
-| `GET` | `/api/tenants/registration-config` | Public |
+| `POST` | `/api/tenants/join` | Invite code join. Always `member`. Refuses to rewrite a genesis or platform-admin membership. |
+| `GET` | `/api/tenants/registration-config` | Public. Always `{ allow_self_create_company: false, tenant_creation: "platform_admin_only" }`. |
+| `DELETE` | `/api/tenants/{tenant_id}` | Cascade delete, then tombstone identities that have no remaining membership so the email can be reused. |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
 | `GET` | `/api/tenants/me` | Any member; company + default model |
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |
@@ -125,7 +127,7 @@ sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_
 | `GET` | `/api/users/org-admins` | org_admin | — | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
 | `GET` | `/api/users/admin-audit-logs` | org_admin | Query: `action?`, `limit=100` | Company-scoped admin action trail |
-| `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Blocks demoting last admin. |
+| `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Genesis rows cannot change role. Blocks demoting the last *active* admin. |
 
 #### `UserOut` (users router)
 

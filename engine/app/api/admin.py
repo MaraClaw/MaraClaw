@@ -257,8 +257,6 @@ async def create_platform_admin(
 async def list_platform_admins(current_user: UserRecord = Depends(require_role("platform_admin"))):
     """List platform admins. Any platform admin may read; genesis is marked."""
     _ = current_user
-    genesis = await user_dao.first_by_role("platform_admin")
-    genesis_id = genesis.id if genesis else None
     users = await user_dao.list_by_role("platform_admin")
     return [
         PlatformAdminOut(
@@ -267,7 +265,7 @@ async def list_platform_admins(current_user: UserRecord = Depends(require_role("
             display_name=u.display_name,
             role=u.role,
             is_active=u.is_active,
-            is_genesis=u.id == genesis_id,
+            is_genesis=bool(getattr(u, "is_genesis", False)),
             created_at=u.created_at,
         )
         for u in users
@@ -295,14 +293,13 @@ async def set_platform_admin_active(
     except AdminActivationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    genesis = await user_dao.first_by_role("platform_admin")
     return PlatformAdminOut(
         id=updated.id,
         email=updated.email if updated.identity else target.email,
         display_name=updated.display_name,
         role=updated.role,
         is_active=updated.is_active,
-        is_genesis=updated.id == (genesis.id if genesis else None),
+        is_genesis=bool(getattr(updated, "is_genesis", getattr(target, "is_genesis", False))),
         created_at=updated.created_at,
     )
 
@@ -327,7 +324,11 @@ async def list_admin_audit_logs(
 
 
 @router.put("/companies/{company_id}/toggle")
-async def toggle_company(company_id: uuid.UUID, current_user: UserRecord = Depends(require_role("platform_admin"))):
+async def toggle_company(
+    company_id: uuid.UUID,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+):
     """Enable or disable a company."""
     tenant = await tenant_dao.get(company_id)
     if not tenant:
@@ -339,6 +340,15 @@ async def toggle_company(company_id: uuid.UUID, current_user: UserRecord = Depen
     if not new_state:
         await agent_dao.pause_running_for_tenant(company_id)
 
+    await write_admin_audit(
+        actor=current_user,
+        action="company_toggle",
+        target_type="tenant",
+        target_id=company_id,
+        tenant_id=company_id,
+        changes={"is_active": field_change(tenant.is_active, new_state)},
+        ip_address=client_ip,
+    )
     return {"ok": True, "is_active": new_state}
 
 
@@ -497,12 +507,26 @@ async def get_platform_settings(current_user: UserRecord = Depends(require_role(
 
 @router.put("/platform-settings", response_model=PlatformSettingsOut)
 async def update_platform_settings(
-    data: PlatformSettingsUpdate, current_user: UserRecord = Depends(require_role("platform_admin"))
+    data: PlatformSettingsUpdate,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
 ):
     """Update platform-level settings."""
     updates = data.model_dump(exclude_unset=True)
+    previous: dict[str, bool] = {}
+    for key in updates:
+        previous[key] = await system_setting_dao.is_flag_enabled(key, default=False)
 
     for key, value in updates.items():
         await system_setting_dao.set_flag(key, bool(value))
+
+    if updates:
+        await write_admin_audit(
+            actor=current_user,
+            action="platform_settings_update",
+            target_type="platform_settings",
+            changes={key: field_change(previous.get(key), bool(value)) for key, value in updates.items()},
+            ip_address=client_ip,
+        )
 
     return await get_platform_settings(current_user=current_user)
