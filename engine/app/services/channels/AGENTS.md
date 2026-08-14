@@ -23,7 +23,7 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 | `types.py` | Canonical `channel_type` registry, aliases, outbound keys |
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
 | `inbound.py` | Shared session / history / persist / LLM reply helpers |
-| `dedup.py` | Process-local webhook event dedupe (mark after success) |
+| `dedup.py` | Process-local + Redis (`already_processed_shared` / `mark_processed_shared`) webhook event dedupe |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
 | `google_chat.py` | Verify JWT (iss+aud), parse events, chunked Chat API send |
 

@@ -13,6 +13,13 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
 
     API: https://open.dingtalk.com/document/orgapp/obtain-access_token
     """
+    from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
+
+    if app_id:
+        cached = await get_cached_im_token("dingtalk_oapi", app_id, secret=app_secret)
+        if cached:
+            return {"access_token": cached, "expires_in": 7200}
+
     url = "https://oapi.dingtalk.com/gettoken"
     params = {
         "appkey": app_id,
@@ -25,7 +32,16 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
             data = resp.json()
 
             if data.get("errcode") == 0:
-                return {"access_token": data.get("access_token"), "expires_in": data.get("expires_in")}
+                token = data.get("access_token")
+                if isinstance(token, str) and token and app_id:
+                    await set_cached_im_token(
+                        "dingtalk_oapi",
+                        app_id,
+                        token,
+                        secret=app_secret,
+                        ttl=refresh_ttl(data.get("expires_in")),
+                    )
+                return {"access_token": token, "expires_in": data.get("expires_in")}
             logger.error(f"[DingTalk] Failed to get access_token: {data}")
             return {"errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
         except Exception as e:

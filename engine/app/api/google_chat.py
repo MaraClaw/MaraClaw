@@ -306,8 +306,14 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
     elif event.event_type != "MESSAGE":
         return {}
 
-    dedupe_key = event.message_name or f"{event.space_name}:{event.sender_name}:{event.text[:64]}"
-    if channel_dedup.already_processed(_DEDUP_NS, dedupe_key):
+    if event.message_name:
+        dedupe_key = event.message_name
+    else:
+        import hashlib
+
+        raw = f"{event.space_name}:{event.sender_name}:{event.text[:64]}"
+        dedupe_key = hashlib.sha256(raw.encode()).hexdigest()
+    if await channel_dedup.already_processed_shared(_DEDUP_NS, dedupe_key):
         return {}
 
     use_async = gchat.has_service_account(config) and bool(event.space_name)
@@ -317,7 +323,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
         async def _bg() -> None:
             try:
                 await _process_message_event(agent_id=agent_id, config=config, event=event)
-                channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+                await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             except Exception:
                 logger.exception("[GoogleChat] Background processing failed for agent %s", agent_id)
 
@@ -360,10 +366,10 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
                 "I received an attachment, but attachment handling requires a service account "
                 "for async delivery. Please send text, or configure service_account_json."
             )
-            channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return gchat.sync_text_response(msg, thread_name=event.thread_name)
         if not event.text:
-            channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return {}
 
         history = await channel_inbound.load_history_for_session(
@@ -403,7 +409,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request):
             session=session,
             content=reply_text,
         )
-        channel_dedup.mark_processed(_DEDUP_NS, dedupe_key)
+        await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
         return gchat.sync_text_response(reply_text, thread_name=event.thread_name)
     except Exception:
         logger.exception("[GoogleChat] Sync path failed for agent %s", agent_id)

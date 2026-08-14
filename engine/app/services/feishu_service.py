@@ -157,6 +157,15 @@ class FeishuService:
         target_app_id = app_id or self.app_id
         target_app_secret = app_secret or self.app_secret
 
+        from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
+
+        if target_app_id:
+            cached = await get_cached_im_token("feishu", target_app_id, secret=target_app_secret or "")
+            if cached:
+                if not app_id:
+                    self._app_access_token = cached
+                return cached
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 FEISHU_APP_ACCESS_ENDPOINT,
@@ -170,6 +179,18 @@ class FeishuService:
             token = data.get("tenant_access_token") or data.get("app_access_token", "")
             if not app_id:  # only cache default app token
                 self._app_access_token = token
+            if token and target_app_id:
+                await set_cached_im_token(
+                    "feishu",
+                    target_app_id,
+                    token,
+                    secret=target_app_secret or "",
+                    ttl=refresh_ttl(data.get("expire")),
+                )
+            elif target_app_id:
+                from app.services.im_token_cache import drop_cached_im_token
+
+                await drop_cached_im_token("feishu", target_app_id, secret=target_app_secret or "")
 
             return token
 

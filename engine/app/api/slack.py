@@ -161,7 +161,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     from app.services.channels import dedup as channel_dedup
 
-    if event_id and channel_dedup.already_processed("slack", event_id, cap=2000):
+    if event_id and await channel_dedup.already_processed_shared("slack", event_id, cap=2000):
         return {"ok": True}
 
     if event.get("bot_id") or event.get("subtype"):
@@ -423,5 +423,5 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if event_id:
         from app.services.channels import dedup as channel_dedup
 
-        channel_dedup.mark_processed("slack", event_id, cap=2000)
+        await channel_dedup.mark_processed_shared("slack", event_id, cap=2000)
     return {"ok": True}

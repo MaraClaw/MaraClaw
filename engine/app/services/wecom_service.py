@@ -11,6 +11,13 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     API: https://developer.work.weixin.qq.com/document/14403
     """
+    from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
+
+    if corp_id:
+        cached = await get_cached_im_token("wecom", corp_id, secret=secret)
+        if cached:
+            return {"access_token": cached, "expires_in": 7200}
+
     url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
     params = {
         "corpid": corp_id,
@@ -22,8 +29,17 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
         data = resp.json()
 
         if data.get("errcode") == 0:
+            token = data.get("access_token")
+            if isinstance(token, str) and token and corp_id:
+                await set_cached_im_token(
+                    "wecom",
+                    corp_id,
+                    token,
+                    secret=secret,
+                    ttl=refresh_ttl(data.get("expires_in")),
+                )
             return {
-                "access_token": data.get("access_token"),
+                "access_token": token,
                 "expires_in": data.get("expires_in"),
             }
         logger.error(f"[WeCom] Failed to get access_token: {data}")
@@ -83,5 +99,9 @@ async def send_wecom_message(
         if data.get("errcode") == 0:
             logger.info(f"[WeCom] Message sent to {user_id}")
             return data
+        if data.get("errcode") in {40001, 40014, 42001}:
+            from app.services.im_token_cache import drop_cached_im_token
+
+            await drop_cached_im_token("wecom", corp_id, secret=secret)
         logger.error(f"[WeCom] Failed to send message: {data}")
         return data

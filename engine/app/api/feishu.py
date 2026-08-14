@@ -520,7 +520,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
     # Deduplicate - Feishu retries on slow responses.
     # Mark only after successful handling so retries work on crash.
     event_id = body.get("header", {}).get("event_id", "")
-    if event_id and channel_dedup.already_processed("feishu", event_id, cap=2000):
+    if event_id and await channel_dedup.already_processed_shared("feishu", event_id, cap=2000):
         return {"code": 0, "msg": "already processed"}
 
     # ── Phase 1: Load config + agent/model for LLM (pure-psycopg DAOs) ──
@@ -1202,7 +1202,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body):
             )
 
     if event_id:
-        channel_dedup.mark_processed("feishu", event_id, cap=2000)
+        await channel_dedup.mark_processed_shared("feishu", event_id, cap=2000)
     return {"code": 0, "msg": "ok"}
 
 

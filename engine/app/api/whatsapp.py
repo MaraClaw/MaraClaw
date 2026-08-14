@@ -29,9 +29,6 @@ router = APIRouter(tags=["whatsapp"])
 WHATSAPP_TEXT_LIMIT = 4096
 DEFAULT_WHATSAPP_API_VERSION = "v23.0"
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
-_processed_whatsapp_messages: set[str] = set()
-
-
 class WhatsAppText(TypedDict, total=False):
     body: str
 
@@ -257,12 +254,12 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
 
             for message in messages:
                 message_id = str(message.get("id") or "").strip()
-                if message_id and message_id in _processed_whatsapp_messages:
+                from app.services.channels import dedup as channel_dedup
+
+                if message_id and await channel_dedup.already_processed_shared("whatsapp", message_id):
                     continue
                 if message_id:
-                    _processed_whatsapp_messages.add(message_id)
-                    if len(_processed_whatsapp_messages) > 2000:
-                        _processed_whatsapp_messages.clear()
+                    await channel_dedup.mark_processed_shared("whatsapp", message_id)
 
                 user_text = _extract_message_text(message)
                 sender_phone = str(message.get("from") or "").strip()

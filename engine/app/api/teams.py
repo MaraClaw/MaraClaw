@@ -376,7 +376,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.info(f"Teams: Updated service_url for agent {agent_id} to {service_url}")
 
         activity_id = activity.get("id")
-        if activity_id and channel_dedup.already_processed("teams", str(activity_id), cap=2000):
+        if activity_id and await channel_dedup.already_processed_shared("teams", str(activity_id), cap=2000):
             return {"ok": True}
 
         if activity.get("type") != "message":
@@ -527,7 +527,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             )
 
         if activity_id:
-            channel_dedup.mark_processed("teams", str(activity_id), cap=2000)
+            await channel_dedup.mark_processed_shared("teams", str(activity_id), cap=2000)
 
         return {"ok": True}
     except Exception as e:

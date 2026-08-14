@@ -347,9 +347,6 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 # ─── Event Webhook ──────────────────────────────────────
 
-_processed_wecom_events: set[str] = set()
-_processed_kf_msgids: set[str] = set()
-
 
 @router.get("/channel/wecom/{agent_id}/webhook")
 async def wecom_verify_webhook(
@@ -430,13 +427,13 @@ async def wecom_event_webhook(
     chat_id = msg_root.findtext("ChatId", "")
 
     # Dedup
+    from app.services.channels import dedup as channel_dedup
+
     dedup_key = msg_id if msg_id else token
-    if dedup_key and dedup_key in _processed_wecom_events:
+    if dedup_key and await channel_dedup.already_processed_shared("wecom", dedup_key):
         return Response(content="success", media_type="text/plain")
     if dedup_key:
-        _processed_wecom_events.add(dedup_key)
-        if len(_processed_wecom_events) > 1000:
-            _processed_wecom_events.clear()
+        await channel_dedup.mark_processed_shared("wecom", dedup_key)
 
     logger.info(f"[WeCom] Message type={msg_type}, from={from_user}, msg_id={msg_id}, chat_id={chat_id or 'N/A'}")
 
@@ -514,11 +511,14 @@ async def _process_wecom_kf_event(
                 for msg in sync_data.get("msg_list", []):
                     if msg.get("origin") == 3 and msg.get("msgtype") == "text":
                         mid = msg.get("msgid")
-                        if mid in _processed_kf_msgids:
+                        from app.services.channels import dedup as channel_dedup
+
+                        if mid and await channel_dedup.already_processed_shared("wecom_kf", str(mid)):
                             continue
                         if msg.get("send_time", 0) > 0 and (current_ts - msg.get("send_time", 0) > 86400):
                             continue
-                        _processed_kf_msgids.add(mid)
+                        if mid:
+                            await channel_dedup.mark_processed_shared("wecom_kf", str(mid))
                         text = msg.get("text", {}).get("content", "").strip()
                         if text:
                             logger.info(f"[WeCom KF] Found msg from {msg.get('external_userid')}: {text[:20]}...")
