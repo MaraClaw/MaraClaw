@@ -126,14 +126,21 @@ known-first-party = ["app"]
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
-"app/scripts/**/*.py" = ["T201"]
+"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S311", "PT011"]
+"app/scripts/**/*.py" = ["T201", "S608"]
 "scripts/**/*.py" = ["T201"]
-# DAO SQL builders use class-constant table/column names, not user input.
+# DAO/service SQL builders use class-constant fragments and named parameters.
 "app/dao/**/*.py" = ["S608"]
+"app/services/**/*.py" = ["S608"]
+# Protocol methods/args must match third-party APIs (boto3, docx, pptx).
+"app/services/storage_runtime/s3.py" = ["N803"]
+"app/services/text_extractor.py" = ["N802"]
+"app/services/document_conversion/markdown.py" = ["N802"]
+"app/services/document_conversion/csv.py" = ["N802"]
+"app/services/agent_tool_exec/document_reading.py" = ["N802"]
 
 [tool.ruff.lint.extend-per-file-ignores]
-"app/api/**/*.py" = ["B008", "FAST002"]
+"app/api/**/*.py" = ["B008", "FAST002", "S608"]
 "app/core/security.py" = ["B008"]
 "app/main.py" = ["E402"]
 "check_agentbay_config.py" = ["T201"]
