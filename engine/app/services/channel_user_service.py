@@ -10,13 +10,22 @@ from __future__ import annotations
 import uuid
 from typing import Any, ClassVar
 
+from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
+from app.records.agent import AgentRecord
 from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.sso_service import sso_service
-from app.records.agent import AgentRecord
+
+
+def _extra_text(info: JsonObject, key: str) -> str | None:
+    text = json_as_str(info.get(key))
+    if text is None:
+        return None
+    text = text.strip()
+    return text or None
 
 
 class ChannelUserResolutionError(ValueError):
@@ -59,13 +68,14 @@ class ChannelUserService:
         external_user_id: str | None,
         extra_info: dict[str, Any],
     ) -> tuple[str | None, str | None, str | None]:
+        info = json_object_from(extra_info)
         normalized_channel = self._normalize_channel_type(channel_type)
-        unionid = (extra_info.get("unionid") or extra_info.get("union_id") or "").strip() or None
-        open_id = (extra_info.get("open_id") or "").strip() or None
-        external_id = (extra_info.get("external_id") or external_user_id or "").strip() or None
+        unionid = _extra_text(info, "unionid") or _extra_text(info, "union_id")
+        open_id = _extra_text(info, "open_id")
+        external_id = _extra_text(info, "external_id") or (external_user_id or "").strip() or None
 
         if normalized_channel == "feishu":
-            external_id = (extra_info.get("external_id") or "").strip() or None
+            external_id = _extra_text(info, "external_id")
         elif normalized_channel == "dingtalk":
             open_id = open_id or None
         elif normalized_channel == "wecom":
@@ -89,7 +99,7 @@ class ChannelUserService:
         del db
         tenant_id = agent.tenant_id
         tenant_id_text = str(tenant_id) if tenant_id is not None else None
-        extra_info = extra_info or {}
+        extra_info = json_object_from(extra_info)
 
         provider = await self._ensure_provider(None, channel_type, tenant_id)
         org_member = await self._find_org_member(None, provider.id, channel_type, external_user_id, extra_info)
@@ -102,8 +112,8 @@ class ChannelUserService:
                 logger.debug(f"[{channel_type}] Found user via linked OrgMember: {user.id}")
                 return user
 
-        email = extra_info.get("email")
-        mobile = extra_info.get("mobile")
+        email = _extra_text(extra_info, "email")
+        mobile = _extra_text(extra_info, "mobile")
 
         if not user and email:
             user = await sso_service.match_user_by_email(email, tenant_id_text)
@@ -208,7 +218,7 @@ class ChannelUserService:
         """Find OrgMember by external identity."""
         del db
         try:
-            extra_info = extra_info or {}
+            extra_info = json_object_from(extra_info)
             unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
             normalized_channel = self._normalize_channel_type(channel_type)
 
@@ -253,23 +263,24 @@ class ChannelUserService:
     ) -> OrgMemberRecord:
         """Create a shell OrgMember record for this identity."""
         del db
-        identity_seed = external_user_id or (extra_info.get("open_id") or "").strip() or uuid.uuid4().hex
-        name = extra_info.get("name") or f"{channel_type.capitalize()} User {identity_seed[:8]}"
-        unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
+        info = json_object_from(extra_info)
+        identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
+        name = _extra_text(info, "name") or f"{channel_type.capitalize()} User {identity_seed[:8]}"
+        unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, info)
 
         return await org_member_dao.create(
             obj_in={
                 "name": name,
-                "email": extra_info.get("email"),
+                "email": _extra_text(info, "email"),
                 "provider_id": provider.id,
                 "user_id": linked_user_id,
                 "tenant_id": provider.tenant_id,
                 "external_id": external_id,
                 "unionid": unionid,
                 "open_id": open_id,
-                "avatar_url": extra_info.get("avatar_url"),
-                "phone": extra_info.get("mobile"),
-                "title": extra_info.get("title", ""),
+                "avatar_url": _extra_text(info, "avatar_url"),
+                "phone": _extra_text(info, "mobile"),
+                "title": json_as_str_or(info.get("title")),
                 "status": "active",
             }
         )
@@ -298,10 +309,11 @@ class ChannelUserService:
     ) -> UserRecord:
         """Create a new Identity + User for channel identity (lazy registration)."""
         del db
-        email = extra_info.get("email")
-        mobile = extra_info.get("mobile")
-        identity_seed = external_user_id or (extra_info.get("open_id") or "").strip() or uuid.uuid4().hex
-        name = extra_info.get("name") or f"{channel_type.capitalize()} {identity_seed[:8]}"
+        info = json_object_from(extra_info)
+        email = _extra_text(info, "email")
+        mobile = _extra_text(info, "mobile")
+        identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
+        name = _extra_text(info, "name") or f"{channel_type.capitalize()} {identity_seed[:8]}"
 
         username = email.split("@")[0] if email else f"{channel_type}_{identity_seed[:12]}"
 
@@ -334,7 +346,7 @@ class ChannelUserService:
             obj_in={
                 "identity_id": identity.id,
                 "display_name": name,
-                "avatar_url": extra_info.get("avatar_url"),
+                "avatar_url": _extra_text(info, "avatar_url"),
                 "role": "member",
                 "registration_source": channel_type,
                 "tenant_id": tenant_id,

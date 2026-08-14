@@ -1,12 +1,16 @@
 """Async, local-only Chrome DevTools helpers for document conversion."""
 
 import asyncio
+import socket
 import sys
 import tempfile
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
+
+from app.core.json_types import json_as_str, json_object_from_response
 
 
 def trusted_executable(candidate: str | Path | None) -> Path | None:
@@ -17,6 +21,22 @@ def trusted_executable(candidate: str | Path | None) -> Path | None:
     if not path.is_absolute() or not path.is_file() or not path.stat().st_mode & 0o111:
         return None
     return path
+
+
+class _InetSocket(Protocol):
+    def getsockname(self) -> tuple[str, int]: ...
+
+
+def _port_from_inet(sock: _InetSocket) -> int:
+    _host, port = sock.getsockname()
+    return port
+
+
+def local_ephemeral_port() -> int:
+    """Bind an unused localhost TCP port and return its number."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return _port_from_inet(sock)
 
 
 def chrome_arguments(executable: Path, port: int, profile_path: str) -> list[str]:
@@ -77,8 +97,7 @@ async def create_cdp_target(port: int, file_url: str) -> str | None:
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
         response = await client.put(endpoint)
         _ = response.raise_for_status()
-    value = response.json().get("webSocketDebuggerUrl")
-    return value if isinstance(value, str) else None
+    return json_as_str(json_object_from_response(response).get("webSocketDebuggerUrl"))
 
 
 async def terminate_process(process: asyncio.subprocess.Process) -> None:

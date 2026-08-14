@@ -8,6 +8,7 @@ import uuid
 
 from app.config import get_settings
 from app.core.events import get_redis
+from app.core.json_types import json_as_str, json_loads_object
 from app.core.logging import logger
 
 _DEFAULT_TTL = 60
@@ -33,14 +34,13 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
     if raw is None:
         return None
     try:
-        data = json.loads(raw)
-    except TypeError, ValueError:
+        data = json_loads_object(raw)
+    except (TypeError, ValueError):
         return raw
-    if isinstance(data, dict) and "v" in data:
+    if data and "v" in data:
         if str(data.get("ver") or "0") != current_ver:
             return None
-        value: object | None = data.get("v")
-        return value if isinstance(value, str) else None
+        return json_as_str(data.get("v"))
     return raw if isinstance(raw, str) else None
 
 
@@ -102,10 +102,8 @@ async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None)
             client.delete(*(_key(agent_id, item) for item in kinds)),
             timeout=_wait(),
         )
-        incr = getattr(client, "incr", None)
-        if incr is not None:
-            for item in kinds:
-                await asyncio.wait_for(incr(_ver_key(agent_id, item)), timeout=_wait())
+        for item in kinds:
+            _ = await asyncio.wait_for(client.incr(_ver_key(agent_id, item)), timeout=_wait())
     except Exception as exc:
         logger.debug("agent_context_cache invalidate skipped: {}", type(exc).__name__)
 

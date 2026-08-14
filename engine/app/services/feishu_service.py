@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections import OrderedDict
 from pathlib import Path
-from typing import ClassVar, NotRequired, Protocol, TypeIs, TypedDict
+from typing import ClassVar, NotRequired, Protocol, TypedDict, TypeIs
 from uuid import UUID
 
 import httpx
@@ -26,6 +26,8 @@ from app.core.json_types import (
     JsonObject,
     json_as_str,
     json_as_str_or,
+    json_object_from_response,
+    json_value_from_response,
     mapping_from_row,
     object_list_from_row,
 )
@@ -43,8 +45,7 @@ def _json_object(value: object) -> JsonObject:
 
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
-    raw: object = resp.json()
-    return _json_object(raw)
+    return json_object_from_response(resp)
 
 
 def _app_access_token(resp: httpx.Response) -> str:
@@ -210,7 +211,7 @@ class FeishuService:
     ) -> JsonObject:
         """Parse Feishu API response and verify both HTTP status and business code."""
         try:
-            raw: object = resp.json()
+            raw = json_value_from_response(resp)
         except Exception as e:
             logger.warning(
                 f"[Feishu] {stage} returned non-JSON response "

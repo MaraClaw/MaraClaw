@@ -9,12 +9,13 @@ from fastapi import HTTPException
 
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.dao.channel_config_dao import channel_config_dao
+from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.services.channels.types import normalize_channel_type
 
 
-async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID) -> Any:
+async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID) -> AgentRecord:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure channel")

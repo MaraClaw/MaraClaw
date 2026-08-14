@@ -100,9 +100,9 @@ async def render_html_to_pptx(
         def parse_css_block(css: str) -> dict[str, dict[str, str]]:
             rules: dict[str, dict[str, str]] = {}
             css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-            for selector_text, body in re.findall(r"([^{}]+)\{([^{}]+)\}", css):
-                decls = parse_style(body)
-                for selector in selector_text.split(","):
+            for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
+                decls = parse_style(match.group(2))
+                for selector in match.group(1).split(","):
                     selector = selector.strip()
                     if selector:
                         rules.setdefault(selector, {}).update(decls)
@@ -209,7 +209,10 @@ async def render_html_to_pptx(
         ) -> RGBColor | None:
             if not value:
                 return None
-            matches = re.findall(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b|rgba?\([^)]+\)", value)
+            matches = [
+                match.group(0)
+                for match in re.finditer(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b|rgba?\([^)]+\)", value)
+            ]
             if not matches:
                 return parse_color(value, backdrop)
             chosen = matches[-1] if prefer == "last" else matches[0]

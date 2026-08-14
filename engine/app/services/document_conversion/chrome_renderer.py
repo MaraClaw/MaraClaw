@@ -5,12 +5,13 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any
 
+from app.core.json_types import JsonObject, JsonValue, json_as_str, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_runtime import (
     chrome_arguments,
     create_cdp_target,
+    local_ephemeral_port,
     terminate_process,
     trusted_executable,
     validate_debugger_websocket_url,
@@ -51,14 +52,44 @@ def is_translucent_css_color(value: str | None) -> bool:
         return False
 
 
+def _json_objects(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    items: list[object] = list(value)
+    return [json_object_from(item) for item in items]
+
+
+def _json_float(value: object, default: float) -> float:
+    raw: object = value if value else default
+    if isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, int | float):
+        return float(raw)
+    if isinstance(raw, str):
+        return float(raw)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(raw).__name__}'")
+
+
+def _cdp_payload(raw: object) -> JsonObject:
+    if isinstance(raw, str | bytes | bytearray):
+        return json_loads_object(raw)
+    return json_object_from(raw)
+
+
+def _cdp_nested(message: JsonObject, *keys: str) -> object:
+    current: object = message
+    for key in keys:
+        current = json_object_from(current).get(key)
+    return current
+
+
 async def collect_browser_layout(
     src_file: Path,
     design_w_px: int,
     design_h_px: int,
     render_mode: str,
     render_scale: float = 2.0,
-) -> dict[str, Any] | None:
-    import socket
+) -> JsonObject | None:
     import tempfile
 
     import websockets
@@ -67,9 +98,7 @@ async def collect_browser_layout(
     if not chrome:
         return None
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
+    port = local_ephemeral_port()
 
     profile_dir = tempfile.TemporaryDirectory(prefix="maraclaw-html-pptx-")
 
@@ -273,13 +302,13 @@ roots = [body];
 
         async with websockets.connect(ws_url, max_size=20_000_000) as ws_conn:
 
-            async def send(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            async def send(method: str, params: JsonObject | None = None) -> JsonObject:
                 nonlocal msg_id
                 msg_id += 1
                 await ws_conn.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
                 while True:
                     raw = await asyncio.wait_for(ws_conn.recv(), timeout=8)
-                    message = json.loads(raw)
+                    message = _cdp_payload(raw)
                     if message.get("id") == msg_id:
                         return message
 
@@ -298,7 +327,7 @@ roots = [body];
             load_deadline = asyncio.get_running_loop().time() + 8
             while asyncio.get_running_loop().time() < load_deadline:
                 raw = await asyncio.wait_for(ws_conn.recv(), timeout=8)
-                message = json.loads(raw)
+                message = _cdp_payload(raw)
                 if message.get("method") == "Page.loadEventFired":
                     break
             await asyncio.sleep(0.25)
@@ -310,14 +339,15 @@ roots = [body];
                     "awaitPromise": True,
                 },
             )
-            layout = result.get("result", {}).get("result", {}).get("value")
+            layout_raw: object = _cdp_nested(result, "result", "result", "value")
+            layout = json_object_from(layout_raw)
             if layout and render_mode in ("visual", "screenshot", "image", "hybrid"):
                 import base64
 
-                screenshots: list[str | None] = []
-                for idx, slide_data in enumerate(layout.get("slides") or []):
-                    clip_w = max(1.0, float(slide_data.get("width") or design_w_px))
-                    clip_h = max(1.0, float(slide_data.get("height") or design_h_px))
+                screenshots: list[JsonValue] = []
+                for idx, slide_data in enumerate(_json_objects(layout.get("slides"))):
+                    clip_w = max(1.0, _json_float(slide_data.get("width"), float(design_w_px)))
+                    clip_h = max(1.0, _json_float(slide_data.get("height"), float(design_h_px)))
                     screenshot_result = await send(
                         "Page.captureScreenshot",
                         {
@@ -325,15 +355,15 @@ roots = [body];
                             "captureBeyondViewport": True,
                             "fromSurface": True,
                             "clip": {
-                                "x": max(0.0, float(slide_data.get("x") or 0)),
-                                "y": max(0.0, float(slide_data.get("y") or 0)),
+                                "x": max(0.0, _json_float(slide_data.get("x"), 0.0)),
+                                "y": max(0.0, _json_float(slide_data.get("y"), 0.0)),
                                 "width": clip_w,
                                 "height": clip_h,
                                 "scale": 1,
                             },
                         },
                     )
-                    data = screenshot_result.get("result", {}).get("data")
+                    data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
                     if not data:
                         screenshots.append(None)
                         continue
@@ -343,13 +373,13 @@ roots = [body];
             if layout and render_mode in ("editable", "hybrid_editable"):
                 import base64
 
-                background_screenshots: list[str | None] = []
-                shape_screenshots: dict[str, str] = {}
+                background_screenshots: list[JsonValue] = []
+                shape_screenshots: JsonObject = {}
                 page_bg_value = str(layout.get("pageBackground") or "")
-                for idx, slide_data in enumerate(layout.get("slides") or []):
+                for idx, slide_data in enumerate(_json_objects(layout.get("slides"))):
                     bg_value = str(slide_data.get("backgroundColor") or "")
-                    root_w = max(1.0, float(slide_data.get("width") or design_w_px))
-                    root_h = max(1.0, float(slide_data.get("height") or design_h_px))
+                    root_w = max(1.0, _json_float(slide_data.get("width"), float(design_w_px)))
+                    root_h = max(1.0, _json_float(slide_data.get("height"), float(design_h_px)))
                     root_is_full_canvas = root_w >= design_w_px * 0.98 and root_h >= design_h_px * 0.98
                     needs_bg = (
                         is_complex_css_paint(bg_value)
@@ -381,8 +411,8 @@ roots = [body];
                                 "captureBeyondViewport": True,
                                 "fromSurface": True,
                                 "clip": {
-                                    "x": max(0.0, float(slide_data.get("x") or 0)),
-                                    "y": max(0.0, float(slide_data.get("y") or 0)),
+                                    "x": max(0.0, _json_float(slide_data.get("x"), 0.0)),
+                                    "y": max(0.0, _json_float(slide_data.get("y"), 0.0)),
                                     "width": clip_w,
                                     "height": clip_h,
                                     "scale": 1,
@@ -391,7 +421,7 @@ roots = [body];
                         )
                     finally:
                         _ = await send("Runtime.evaluate", {"expression": restore_expr})
-                    data = screenshot_result.get("result", {}).get("data")
+                    data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
                     if not data:
                         background_screenshots.append(None)
                         continue
@@ -400,12 +430,11 @@ roots = [body];
                     # Root background capture temporarily hides direct
                     # children; after it is restored, item-level captures
                     # can preserve shadows/backdrop effects for cards.
-                for slide_idx, slide_data in enumerate(list[Any](layout.get("slides") or [])):
-                    for item in list[Any](slide_data.get("items") or []):
+                for slide_idx, slide_data in enumerate(_json_objects(layout.get("slides"))):
+                    for item in _json_objects(slide_data.get("items")):
                         if item.get("kind") != "shape":
                             continue
-                        style_raw = item.get("style") or {}
-                        style: dict[str, Any] = dict[str, Any](style_raw) if isinstance(style_raw, dict) else {}
+                        style = json_object_from(item.get("style"))
                         bg_value = str(style.get("backgroundImage") or "")
                         has_complex_paint = (
                             "gradient(" in bg_value
@@ -417,8 +446,8 @@ roots = [body];
                         if not has_complex_paint or not item.get("itemId"):
                             continue
                         item_id = str(item["itemId"])
-                        clip_w = max(1.0, float(item.get("w") or 1))
-                        clip_h = max(1.0, float(item.get("h") or 1))
+                        clip_w = max(1.0, _json_float(item.get("w"), 1.0))
+                        clip_h = max(1.0, _json_float(item.get("h"), 1.0))
                         hide_expr = (
                             "(() => {"
                             + "const id='maraclaw-item-bg-capture-style';"
@@ -444,8 +473,14 @@ roots = [body];
                                     "captureBeyondViewport": True,
                                     "fromSurface": True,
                                     "clip": {
-                                        "x": max(0.0, float(slide_data.get("x") or 0) + float(item.get("x") or 0)),
-                                        "y": max(0.0, float(slide_data.get("y") or 0) + float(item.get("y") or 0)),
+                                        "x": max(
+                                            0.0,
+                                            _json_float(slide_data.get("x"), 0.0) + _json_float(item.get("x"), 0.0),
+                                        ),
+                                        "y": max(
+                                            0.0,
+                                            _json_float(slide_data.get("y"), 0.0) + _json_float(item.get("y"), 0.0),
+                                        ),
                                         "width": clip_w,
                                         "height": clip_h,
                                         "scale": 1,
@@ -454,14 +489,14 @@ roots = [body];
                             )
                         finally:
                             _ = await send("Runtime.evaluate", {"expression": restore_expr})
-                        data = screenshot_result.get("result", {}).get("data")
+                        data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
                         if not data:
                             continue
                         image_file = await write_temporary_bytes(base64.b64decode(data), f"-item-bg-{item_id}.png")
                         shape_screenshots[item_id] = str(image_file)
                 layout["backgroundScreenshots"] = background_screenshots
                 layout["shapeScreenshots"] = shape_screenshots
-            return layout
+            return layout if layout else None
     except Exception as layout_exc:
         logger.warning(f"Browser layout extraction failed, falling back to DOM flow conversion: {layout_exc}")
         return None

@@ -4,14 +4,26 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, override, ClassVar
+from typing import Any, ClassVar, override
 
 import httpx
 
-from app.core.json_types import is_str_dict, mapping_from_row, object_list_from_row
+from app.core.json_types import (
+    JsonObject,
+    is_json_value,
+    is_str_dict,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_loads_object,
+    json_loads_value,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
-from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
+from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, ToolPayload
 
 
 class GeminiClient(LLMClient):
@@ -84,7 +96,7 @@ class GeminiClient(LLMClient):
             return None
         return m.group(1), m.group(2)
 
-    def _content_to_gemini_parts(self, content: object) -> list[dict[str, Any]]:
+    def _content_to_gemini_parts(self, content: object) -> list[JsonObject]:
         """Convert canonical content into Gemini `parts`."""
         if content is None:
             return []
@@ -93,20 +105,20 @@ class GeminiClient(LLMClient):
             return [{"text": content}]
 
         if isinstance(content, list):
-            parts: list[dict[str, Any]] = []
-            content_parts: list[Any] = content
+            parts: list[JsonObject] = []
+            content_parts: list[object] = list(content)
             for raw_part in content_parts:
                 if not is_str_dict(raw_part):
                     continue
-                part: dict[str, Any] = dict(raw_part)
-                ptype = part.get("type")
+                part = json_object_from(raw_part)
+                ptype = json_as_str(part.get("type"))
                 if ptype == "text":
-                    text = part.get("text", "")
+                    text = json_as_str_or(part.get("text"))
                     if text:
                         parts.append({"text": text})
                 elif ptype == "image_url":
-                    image_obj = part.get("image_url", {})
-                    image_url = image_obj.get("url", "") if is_str_dict(image_obj) else ""
+                    image_obj = json_object_from(part.get("image_url"))
+                    image_url = json_as_str_or(image_obj.get("url"))
                     parsed = self._parse_data_url_image(image_url)
                     if parsed:
                         mime_type, b64_data = parsed
@@ -177,7 +189,7 @@ class GeminiClient(LLMClient):
         tools: list[ToolDefinition] | None,
         temperature: float | None,
         max_tokens: int | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """Build Gemini request payload."""
         system_blocks: list[str] = []
@@ -187,7 +199,7 @@ class GeminiClient(LLMClient):
         for msg in messages:
             if msg.role == "system":
                 parts = self._content_to_gemini_parts(msg.content)
-                text_chunks = [p.get("text", "") for p in parts if p.get("text")]
+                text_chunks = [json_as_str_or(p.get("text")) for p in parts if p.get("text")]
                 if text_chunks:
                     system_blocks.append("\n".join(text_chunks))
                 continue
@@ -206,20 +218,21 @@ class GeminiClient(LLMClient):
                         args = fn.get("arguments", "{}")
                         if isinstance(args, str):
                             try:
-                                parsed_args = json.loads(args)
+                                parsed_args = json_loads_object(args)
                             except json.JSONDecodeError:
                                 parsed_args = {}
-                        elif isinstance(args, dict):
-                            parsed_args = args
+                        elif is_str_dict(args):
+                            parsed_args = json_object_from(args)
                         else:
                             parsed_args = {}
 
-                        func_call_dict: dict[str, Any] = {
-                            "name": fn.get("name", ""),
+                        func_call_dict: JsonObject = {
+                            "name": json_as_str_or(fn.get("name")),
                             "args": parsed_args,
                         }
-                        if "_gemini_extra" in tc:
-                            func_call_dict.update(tc["_gemini_extra"])
+                        extra = tc.get("_gemini_extra")
+                        if extra:
+                            func_call_dict.update(json_object_from(extra))
 
                         parts.append({"functionCall": func_call_dict})
                 if parts:
@@ -231,15 +244,17 @@ class GeminiClient(LLMClient):
                 response_content = msg.content or ""
                 if isinstance(response_content, str):
                     try:
-                        parsed = json.loads(response_content)
-                        if is_str_dict(parsed):
-                            response_obj: dict[str, Any] = parsed
+                        parsed_raw = json_loads_value(response_content)
+                        if is_str_dict(parsed_raw):
+                            response_obj: JsonObject = json_object_from(parsed_raw)
+                        elif is_json_value(parsed_raw):
+                            response_obj = {"result": parsed_raw}
                         else:
-                            response_obj = {"result": parsed}
+                            response_obj = {"result": str(parsed_raw)}
                     except json.JSONDecodeError:
                         response_obj = {"result": response_content}
                 elif is_str_dict(response_content):
-                    response_obj = response_content
+                    response_obj = json_object_from(response_content)
                 else:
                     response_obj = {"result": str(response_content)}
 
@@ -279,13 +294,15 @@ class GeminiClient(LLMClient):
         payload.update(kwargs)
         return payload
 
-    def _normalize_usage(self, usage: dict[str, Any] | None) -> dict[str, int] | None:
+    def _normalize_usage(self, usage: object) -> dict[str, int] | None:
         """Normalize Gemini usage metadata to unified usage dict."""
         if not isinstance(usage, dict):
             return None
-        input_tokens = int(usage.get("promptTokenCount", 0) or 0)
-        output_tokens = int(usage.get("candidatesTokenCount", 0) or 0)
-        total_tokens = int(usage.get("totalTokenCount", input_tokens + output_tokens) or 0)
+        usage_obj = json_object_from(usage)
+        input_tokens = json_as_int(usage_obj.get("promptTokenCount"))
+        output_tokens = json_as_int(usage_obj.get("candidatesTokenCount"))
+        total_raw: object = usage_obj.get("totalTokenCount")
+        total_tokens = json_as_int(total_raw, input_tokens + output_tokens)
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -306,7 +323,7 @@ class GeminiClient(LLMClient):
         }
         return mapping.get(finish_reason, "stop")
 
-    def _parse_response_data(self, data: dict[str, Any]) -> LLMResponse:
+    def _parse_response_data(self, data: JsonObject) -> LLMResponse:
         """Convert Gemini native response into canonical LLMResponse."""
         content_chunks: list[str] = []
         tool_calls: list[LLMToolCall] = []
@@ -315,24 +332,27 @@ class GeminiClient(LLMClient):
 
         candidates = object_list_from_row(data.get("candidates"))
         if candidates:
-            candidate = candidates[0]
-            finish_reason = candidate.get("finishReason")
-            content_obj = mapping_from_row(candidate.get("content"))
-            for part in object_list_from_row(content_obj.get("parts")):
-                text = part.get("text")
+            candidate = json_object_from(candidates[0])
+            finish_reason = json_as_str(candidate.get("finishReason"))
+            content_obj = json_object_from(candidate.get("content"))
+            for part_raw in object_list_from_row(content_obj.get("parts")):
+                part = json_object_from(part_raw)
+                text = json_as_str(part.get("text"))
                 if text:
                     content_chunks.append(text)
-                function_call = mapping_from_row(part.get("functionCall")) if part.get("functionCall") else {}
+                function_call = json_object_from(part.get("functionCall")) if part.get("functionCall") else {}
                 if function_call:
-                    name = function_call.get("name", "")
-                    args = function_call.get("args", {})
-                    args_str = json.dumps(args if isinstance(args, dict) else {}, ensure_ascii=False)
+                    name = json_as_str_or(function_call.get("name"))
+                    args_raw: object = function_call.get("args")
+                    args_str = json.dumps(json_object_from(args_raw), ensure_ascii=False)
                     dedup_key = f"{name}:{args_str}"
                     if dedup_key in seen_tool_calls:
                         continue
                     seen_tool_calls.add(dedup_key)
 
-                    extra: dict[str, Any] = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
+                    extra: ToolPayload = {
+                        key: value for key, value in function_call.items() if key not in ["name", "args"]
+                    }
 
                     tool_calls.append(
                         {
@@ -353,7 +373,7 @@ class GeminiClient(LLMClient):
             tool_calls=tool_calls,
             finish_reason=self._normalize_finish_reason(finish_reason, tool_calls),
             usage=usage,
-            model=data.get("modelVersion") or self.model,
+            model=json_as_str(data.get("modelVersion")) or self.model,
         )
 
     @override
@@ -363,7 +383,7 @@ class GeminiClient(LLMClient):
         tools: list[ToolDefinition] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Non-streaming completion."""
         if self._is_openai_compatible_base():
@@ -387,8 +407,8 @@ class GeminiClient(LLMClient):
             error_text = response.text[:500]
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
-        data = response.json()
-        if isinstance(data, dict) and data.get("error"):
+        data = json_object_from_response(response)
+        if data.get("error"):
             raise LLMError(f"API error: {data['error']}")
 
         return self._parse_response_data(data)
@@ -403,7 +423,7 @@ class GeminiClient(LLMClient):
         on_chunk: ChunkCallback | None = None,
         on_tool_delta: ToolCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Streaming completion using Gemini SSE endpoint."""
         if self._is_openai_compatible_base():
@@ -453,12 +473,13 @@ class GeminiClient(LLMClient):
                         continue
 
                     try:
-                        data = json.loads(data_str)
+                        parsed = json_loads_value(data_str)
                     except json.JSONDecodeError:
                         continue
 
-                    if not is_str_dict(data):
+                    if not is_str_dict(parsed):
                         continue
+                    data = json_object_from(parsed)
                     if data.get("error"):
                         raise LLMError(f"API error: {data['error']}")
 
@@ -469,27 +490,30 @@ class GeminiClient(LLMClient):
                     candidates = object_list_from_row(data.get("candidates"))
                     if not candidates:
                         continue
-                    candidate = candidates[0]
-                    final_finish_reason = candidate.get("finishReason") or final_finish_reason
-                    content_obj = mapping_from_row(candidate.get("content"))
-                    for part in object_list_from_row(content_obj.get("parts")):
-                        text = part.get("text")
+                    candidate = json_object_from(candidates[0])
+                    final_finish_reason = json_as_str(candidate.get("finishReason")) or final_finish_reason
+                    content_obj = json_object_from(candidate.get("content"))
+                    for part_raw in object_list_from_row(content_obj.get("parts")):
+                        part = json_object_from(part_raw)
+                        text = json_as_str(part.get("text"))
                         if text:
                             full_text += text
                             if on_chunk:
                                 await on_chunk(text)
 
-                        function_call = mapping_from_row(part.get("functionCall")) if part.get("functionCall") else {}
+                        function_call = json_object_from(part.get("functionCall")) if part.get("functionCall") else {}
                         if function_call:
-                            name = function_call.get("name", "")
-                            args = function_call.get("args", {})
-                            args_str = json.dumps(args if isinstance(args, dict) else {}, ensure_ascii=False)
+                            name = json_as_str_or(function_call.get("name"))
+                            args_raw: object = function_call.get("args")
+                            args_str = json.dumps(json_object_from(args_raw), ensure_ascii=False)
                             dedup_key = f"{name}:{args_str}"
                             if dedup_key in seen_tool_calls:
                                 continue
                             seen_tool_calls.add(dedup_key)
 
-                            extra: dict[str, Any] = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
+                            extra: ToolPayload = {
+                                key: value for key, value in function_call.items() if key not in ["name", "args"]
+                            }
 
                             tool_calls.append(
                                 {

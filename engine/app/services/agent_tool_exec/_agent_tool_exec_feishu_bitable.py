@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import json
 import uuid
 from dataclasses import dataclass
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_loads_object, json_loads_value
 from app.services import agent_tools
-from app.services.feishu_service import FeishuService
+from app.services.feishu_service import FeishuService, feishu_service
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
@@ -32,7 +31,7 @@ class _RecordWrite:
 
 
 def _feishu_service() -> FeishuService:
-    return importlib.import_module("app.services.feishu_service").feishu_service
+    return feishu_service
 
 
 def _nested_mapping(value: object) -> JsonObject:
@@ -70,7 +69,7 @@ def _filters_from(filter_info: ToolArgumentValue) -> dict[str, ToolArgumentValue
         return filter_info
     if isinstance(filter_info, str) and filter_info.strip():
         try:
-            loaded: object = json.loads(filter_info)
+            loaded = json_loads_value(filter_info)
         except json.JSONDecodeError:
             return {}
         return loaded if isinstance(loaded, dict) else {}
@@ -199,7 +198,7 @@ async def _bitable_create_record(agent_id: uuid.UUID, arguments: ToolArguments) 
     if not app_token or not table_id:
         return "Failed: Could not resolve app_token or table_id from the provided parameters/URL."
     try:
-        parsed_fields: object = json.loads(_string_argument(arguments, "fields", "{}"))
+        parsed_fields = json_loads_object(_string_argument(arguments, "fields", "{}"))
     except json.JSONDecodeError:
         return "Failed: The 'fields' parameter is not valid JSON."
     return await _write_record(
@@ -214,7 +213,7 @@ async def _bitable_update_record(agent_id: uuid.UUID, arguments: ToolArguments) 
     if not app_token or not table_id or not record_id:
         return "Failed: Missing required parameters. Need app_token (from URL), table_id, and record_id."
     try:
-        parsed_fields: object = json.loads(_string_argument(arguments, "fields", "{}"))
+        parsed_fields = json_loads_object(_string_argument(arguments, "fields", "{}"))
     except json.JSONDecodeError:
         return "Failed: The 'fields' parameter is not valid JSON."
     return await _write_record(

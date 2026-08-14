@@ -1,11 +1,9 @@
-from typing import Any
-
 from app.services.llm.finish import FINISH_TOOL_DEFINITION, FINISH_TOOL_NAME
 
 # allow: SIZE_OK - static OpenAI tool catalog extracted verbatim; pure data table.
 # ─── Tool Definitions (OpenAI function-calling format) ──────────
 
-AGENT_TOOLS: list[Any] = [
+AGENT_TOOLS: list[object] = [
     FINISH_TOOL_DEFINITION,
     {
         "type": "function",
@@ -1784,6 +1782,18 @@ _FEISHU_TOOL_NAMES: set[str] = {
     "feishu_approval_query",
     "feishu_approval_get",
 }
-_always_core_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _ALWAYS_INCLUDE_CORE]
-_feishu_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _FEISHU_TOOL_NAMES]
-_channel_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES]
+
+
+def _catalog_tool_name(tool: object) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return ""
+    name = function.get("name")
+    return name if isinstance(name, str) else ""
+
+
+_always_core_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _ALWAYS_INCLUDE_CORE]
+_feishu_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _FEISHU_TOOL_NAMES]
+_channel_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _CHANNEL_MESSAGE_TOOL_NAMES]

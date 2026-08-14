@@ -1,6 +1,5 @@
 """Organization structure sync service (provider-based only)."""
 
-from typing import Any
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger

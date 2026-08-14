@@ -47,8 +47,5 @@ async def _save_channel_message(
         conversation_id=str(session.id),
     )
     _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
-    log = getattr(facade, "logger", None) if facade is not None else None
-    if log is not None:
-        log.info(f"[{log_label}] Proactive message saved to session {session.id}")
-    else:
-        logger.info(f"[{log_label}] Proactive message saved to session {session.id}")
+    del facade
+    logger.info(f"[{log_label}] Proactive message saved to session {session.id}")

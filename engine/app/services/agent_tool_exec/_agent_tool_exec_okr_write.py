@@ -3,11 +3,12 @@ from __future__ import annotations
 import importlib
 import uuid
 from datetime import UTC, datetime
-from types import ModuleType
+from typing import Protocol, TypeIs
 
 from app.core.logging import logger
 from app.dao.okr_dao import okr_key_result_dao, okr_progress_log_dao
 
+from ._agent_tool_exec_okr_access import _OKRRequestContext
 from .registry import ToolArguments, ToolArgumentValue
 
 
@@ -22,12 +23,56 @@ def _float_value(value: ToolArgumentValue) -> float:
     return float(value)
 
 
-def _okr_access_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_access")
+class _OkrAccessModule(Protocol):
+    async def _load_okr_request_context(
+        self, db: object | None, agent_id: uuid.UUID, user_id: uuid.UUID | None
+    ) -> _OKRRequestContext: ...
+
+    def _can_access_existing_okr_target(
+        self, ctx: _OKRRequestContext, owner_type: str, owner_id: uuid.UUID | None
+    ) -> str | None: ...
 
 
-def _okr_write_objectives_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.okr_write_objectives")
+class _OkrWriteObjectivesModule(Protocol):
+    async def _create_objective(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _create_key_result(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _update_objective(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+
+def _is_okr_access_module(value: object) -> TypeIs[_OkrAccessModule]:
+    return all(
+        callable(getattr(value, name, None))
+        for name in ("_load_okr_request_context", "_can_access_existing_okr_target")
+    )
+
+
+def _is_okr_write_objectives_module(value: object) -> TypeIs[_OkrWriteObjectivesModule]:
+    return all(
+        callable(getattr(value, name, None))
+        for name in ("_create_objective", "_create_key_result", "_update_objective")
+    )
+
+
+def _okr_access_module() -> _OkrAccessModule:
+    module: object = importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_access")
+    if not _is_okr_access_module(module):
+        raise TypeError("okr_access module is missing required helpers")
+    return module
+
+
+def _okr_write_objectives_module() -> _OkrWriteObjectivesModule:
+    module: object = importlib.import_module("app.services.agent_tool_exec.okr_write_objectives")
+    if not _is_okr_write_objectives_module(module):
+        raise TypeError("okr_write_objectives module is missing required helpers")
+    return module
 
 
 async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments) -> str:

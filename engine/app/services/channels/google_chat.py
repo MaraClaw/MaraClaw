@@ -24,6 +24,14 @@ from typing import Any
 import httpx
 from jose import JWTError, jwt
 
+from app.core.json_types import (
+    json_as_str,
+    json_loads_object,
+    json_object_from,
+    json_object_from_response,
+    json_value_from_response,
+    mapping_from_row,
+)
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
 
@@ -36,7 +44,8 @@ ALLOWED_TOKEN_URIS = frozenset({"https://oauth2.googleapis.com/token"})
 CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 # Practical text budget for a single Chat message (bytes-ish; we use char chunks).
 CHAT_MSG_CHUNK = 3500
-_CERT_CACHE: dict[str, Any] = {"expires_at": 0.0, "certs": {}}
+_certs: dict[str, str] = {}
+_certs_expires_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,29 +68,31 @@ class GoogleChatInbound:
 
 
 async def _fetch_chat_certs() -> dict[str, str]:
+    global _certs, _certs_expires_at
     now = time.time()
-    if _CERT_CACHE["certs"] and _CERT_CACHE["expires_at"] > now:
-        return _CERT_CACHE["certs"]
+    if _certs and _certs_expires_at > now:
+        return _certs
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(CHAT_CERTS_URL)
         _ = resp.raise_for_status()
-        certs = resp.json()
-    if not isinstance(certs, dict):
+        certs_raw = json_value_from_response(resp)
+    if not isinstance(certs_raw, dict):
         raise ValueError("Unexpected Chat certs payload")
-    certs_map = dict[str, str](certs)
-    _CERT_CACHE["certs"] = certs_map
-    _CERT_CACHE["expires_at"] = now + 3600
+    certs_map = {key: value for key, value in json_object_from(certs_raw).items() if isinstance(value, str)}
+    _certs = certs_map
+    _certs_expires_at = now + 3600
     return certs_map
 
 
 def _decode_with_key(token: str, key: str, audience: str) -> dict[str, Any]:
-    claims = jwt.decode(
+    claims_raw: object = jwt.decode(
         token,
         key,
         algorithms=["RS256"],
         audience=audience,
         options={"verify_at_hash": False},
     )
+    claims = mapping_from_row(claims_raw)
     iss = str(claims.get("iss") or "").strip()
     if iss != CHAT_ISSUER:
         raise ValueError(f"Unexpected JWT issuer: {iss!r}")
@@ -104,10 +115,11 @@ async def verify_google_chat_bearer(authorization: str | None, audience: str) ->
 
     certs = await _fetch_chat_certs()
     try:
-        headers = jwt.get_unverified_header(token)
+        headers_raw: object = jwt.get_unverified_header(token)
     except JWTError as exc:
         raise ValueError(f"Invalid JWT header: {exc}") from exc
-    kid = headers.get("kid")
+    headers = mapping_from_row(headers_raw)
+    kid = json_as_str(headers.get("kid"))
     key = certs.get(kid) if kid else None
     if key:
         try:
@@ -126,8 +138,9 @@ async def verify_google_chat_bearer(authorization: str | None, audience: str) ->
 
 
 def audience_for_config(config: ChannelConfigRecord) -> str:
-    extra = config.extra_config or {}
-    return str(extra.get("audience") or config.app_id or "").strip()
+    extra = mapping_from_row(config.extra_config)
+    audience_raw: object = extra.get("audience") or config.app_id or ""
+    return str(audience_raw).strip()
 
 
 def has_service_account(config: ChannelConfigRecord) -> bool:
@@ -281,15 +294,15 @@ def parse_external_conv_id(external: str) -> tuple[str, str | None]:
 
 
 def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
-    extra = config.extra_config or {}
-    raw = extra.get("service_account_json")
+    extra = mapping_from_row(config.extra_config)
+    raw: object = extra.get("service_account_json")
     if isinstance(raw, dict):
-        return dict[str, Any](raw)
+        return mapping_from_row(raw)
     if isinstance(raw, str) and raw.strip():
         try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return dict[str, Any](parsed)
+            parsed = json_loads_object(raw)
+            if parsed:
+                return mapping_from_row(parsed)
         except json.JSONDecodeError:
             logger.warning("[GoogleChat] extra_config.service_account_json is not valid JSON")
     # Legacy: never prefer encrypt_key PEM path for new writes; still read if present
@@ -309,10 +322,12 @@ def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
 async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[str]) -> str:
     """Mint a service-account access token via JWT bearer grant (no google-auth dep)."""
     now = int(time.time())
-    client_email = sa_info.get("client_email")
-    private_key = sa_info.get("private_key")
-    if not client_email or not private_key:
+    client_email_raw: object = sa_info.get("client_email")
+    private_key_raw: object = sa_info.get("private_key")
+    if not client_email_raw or not private_key_raw:
         raise ValueError("Service account missing client_email/private_key")
+    client_email = str(client_email_raw)
+    private_key = private_key_raw if isinstance(private_key_raw, str) else str(private_key_raw)
 
     # Fail closed: never POST assertions to attacker-controlled token URIs.
     token_uri = next(iter(ALLOWED_TOKEN_URIS))
@@ -342,11 +357,11 @@ async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[st
         )
         if resp.status_code >= 400:
             raise ValueError(f"Token exchange failed: {resp.status_code} {resp.text[:200]}")
-        data = resp.json()
-    token = data.get("access_token")
+        data = json_object_from_response(resp)
+    token = json_as_str(data.get("access_token"))
     if not token:
         raise ValueError("Token exchange returned no access_token")
-    return str(token)
+    return token
 
 
 async def send_google_chat_message(
@@ -385,5 +400,5 @@ async def send_google_chat_message(
             )
             if resp.status_code >= 400:
                 raise ValueError(f"Chat API send failed: {resp.status_code} {resp.text[:300]}")
-            last = resp.json()
+            last = mapping_from_row(json_object_from_response(resp))
     return last

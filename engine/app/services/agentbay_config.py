@@ -3,7 +3,6 @@
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from app.config import get_settings
 from app.core.security import decrypt_data

@@ -16,8 +16,10 @@ from __future__ import annotations
 import importlib
 import multiprocessing as mp
 import uuid
+from collections.abc import Awaitable
+from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeIs
+from typing import TYPE_CHECKING, Protocol, TypeIs, cast
 
 if TYPE_CHECKING:
     from app.services.agentbay_client import AgentBayClient
@@ -113,6 +115,45 @@ from .agent_tool_exec.workspace_temp import (
 )
 
 resolve_tool_handler = _resolve_tool_handler
+
+
+class _ImportedCall(Protocol):
+    def __call__(self, *args: object, **kwargs: object) -> object: ...
+
+
+def _is_imported_call(value: object) -> TypeIs[_ImportedCall]:
+    return callable(value)
+
+
+def _is_awaitable_value(value: object) -> TypeIs[Awaitable[object]]:
+    return hasattr(value, "__await__")
+
+
+def _imported_module(name: str) -> object:
+    return importlib.import_module(name)
+
+
+def _imported_attr(module_name: str, attr: str) -> object:
+    return cast(object, getattr(_imported_module(module_name), attr))
+
+
+def _call_imported(module_name: str, attr: str, *args: object, **kwargs: object) -> object:
+    fn = _imported_attr(module_name, attr)
+    if not _is_imported_call(fn):
+        raise TypeError(f"{module_name}.{attr} is not callable")
+    return fn(*args, **kwargs)
+
+
+async def _call_imported_async(module_name: str, attr: str, *args: object, **kwargs: object) -> object:
+    result = _call_imported(module_name, attr, *args, **kwargs)
+    if _is_awaitable_value(result):
+        return await result
+    return result
+
+
+async def _call_imported_str(module_name: str, attr: str, *args: object, **kwargs: object) -> str:
+    result = await _call_imported_async(module_name, attr, *args, **kwargs)
+    return result if isinstance(result, str) else str(result)
 
 
 _settings = get_settings()
@@ -273,8 +314,7 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
 
 
 async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path) -> None:
-    tasks_tool = importlib.import_module("app.services.agent_tool_exec.tasks_tool")
-    await tasks_tool._sync_tasks_to_file(agent_id, ws)
+    _ = await _call_imported_async("app.services.agent_tool_exec.tasks_tool", "_sync_tasks_to_file", agent_id, ws)
 
 
 # ─── Tool Executors ─────────────────────────────────────────────
@@ -344,93 +384,97 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolParameter
 
 
 async def _web_search(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._web_search(arguments, agent_id)
+    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_web_search", arguments, agent_id)
 
 
 async def _search_duckduckgo(query: str, max_results: int) -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._search_duckduckgo(query, max_results)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.search_providers", "_search_duckduckgo", query, max_results
+    )
 
 
 async def _get_jina_api_key() -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._get_jina_api_key()
+    return await _call_imported_str("app.services.agent_tool_exec.search_providers", "_get_jina_api_key")
 
 
 async def _jina_search(arguments: ToolParameters) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._jina_search(arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_jina_search", arguments)
 
 
 async def _jina_read(arguments: ToolParameters) -> str:
-    web_read = importlib.import_module("app.services.agent_tool_exec.web_read")
-    return await web_read._jina_read(arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.web_read", "_jina_read", arguments)
 
 
 async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
-    web_read = importlib.import_module("app.services.agent_tool_exec.web_read")
-    return await web_read._validate_public_http_url(url)
+    result = await _call_imported_async("app.services.agent_tool_exec.web_read", "_validate_public_http_url", url)
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise TypeError("web_read._validate_public_http_url must return a two-item tuple")
+    left, right = result
+    return left if isinstance(left, str) else None, right if isinstance(right, str) else None
 
 
 def _fallback_extract_visible_text(html: str) -> str:
-    web_read = importlib.import_module("app.services.agent_tool_exec.web_read")
-    return web_read._fallback_extract_visible_text(html)
+    result = _call_imported("app.services.agent_tool_exec.web_read", "_fallback_extract_visible_text", html)
+    return result if isinstance(result, str) else str(result)
 
 
 def _extract_page_links(html: str, base_url: str, limit: int = 30) -> list[str]:
-    web_read = importlib.import_module("app.services.agent_tool_exec.web_read")
-    return web_read._extract_page_links(html, base_url, limit=limit)
+    result = _call_imported("app.services.agent_tool_exec.web_read", "_extract_page_links", html, base_url, limit)
+    if not isinstance(result, list):
+        return []
+    return [item for item in list[object](result) if isinstance(item, str)]
 
 
 async def _read_webpage(arguments: ToolParameters) -> str:
-    web_read = importlib.import_module("app.services.agent_tool_exec.web_read")
-    return await web_read._read_webpage(arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.web_read", "_read_webpage", arguments)
 
 
 async def _search_tavily(query: str, api_key: str, max_results: int) -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._search_tavily(query, api_key, max_results)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.search_providers", "_search_tavily", query, api_key, max_results
+    )
 
 
 async def _search_google(query: str, api_key: str, max_results: int, language: str) -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._search_google(query, api_key, max_results, language)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.search_providers", "_search_google", query, api_key, max_results, language
+    )
 
 
 async def _search_bing(query: str, api_key: str, max_results: int, language: str) -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._search_bing(query, api_key, max_results, language)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.search_providers", "_search_bing", query, api_key, max_results, language
+    )
 
 
 async def _search_exa(query: str, api_key: str, max_results: int) -> str:
-    search_providers = importlib.import_module("app.services.agent_tool_exec.search_providers")
-    return await search_providers._search_exa(query, api_key, max_results)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.search_providers", "_search_exa", query, api_key, max_results
+    )
 
 
 async def _exa_search(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._exa_search(arguments, agent_id)
+    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_exa_search", arguments, agent_id)
 
 
 async def _duckduckgo_search_tool(arguments: ToolParameters) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._duckduckgo_search_tool(arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_duckduckgo_search_tool", arguments)
 
 
 async def _tavily_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._tavily_search_tool(arguments, agent_id)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.web_search", "_tavily_search_tool", arguments, agent_id
+    )
 
 
 async def _google_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._google_search_tool(arguments, agent_id)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.web_search", "_google_search_tool", arguments, agent_id
+    )
 
 
 async def _bing_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    web_search = importlib.import_module("app.services.agent_tool_exec.web_search")
-    return await web_search._bing_search_tool(arguments, agent_id)
+    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_bing_search_tool", arguments, agent_id)
 
 
 async def _execute_mcp_tool(tool_name: str, arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
@@ -814,8 +858,9 @@ async def _manage_tasks(
     ws: Path,
     args: ToolParameters,
 ) -> str:
-    tasks_tool = importlib.import_module("app.services.agent_tool_exec.tasks_tool")
-    return await tasks_tool._manage_tasks(agent_id, user_id, ws, args)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.tasks_tool", "_manage_tasks", agent_id, user_id, ws, args
+    )
 
 
 async def _send_feishu_message(agent_id: uuid.UUID, args: ToolParameters) -> str:
@@ -845,8 +890,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArgumentMapping) 
 
 async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
     """Get recent posts from the Agent Plaza, scoped to agent's tenant."""
-    plaza = importlib.import_module("app.services.agent_tool_exec.plaza")
-    return await plaza._plaza_get_new_posts(agent_id, arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_get_new_posts", agent_id, arguments)
 
 
 async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
@@ -856,14 +900,12 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
     keep the social feed clean - the OKR Agent communicates through Chat and
     reports, not through Plaza posts.
     """
-    plaza = importlib.import_module("app.services.agent_tool_exec.plaza")
-    return await plaza._plaza_create_post(agent_id, arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_create_post", agent_id, arguments)
 
 
 async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
     """Add a comment to a plaza post."""
-    plaza = importlib.import_module("app.services.agent_tool_exec.plaza")
-    return await plaza._plaza_add_comment(agent_id, arguments)
+    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_add_comment", agent_id, arguments)
 
 
 # ─── Code Execution ─────────────────────────────────────────────
@@ -1422,15 +1464,18 @@ def _agentbay_app_field(app: JsonObject, *keys: str) -> str:
 
 
 def _agentbay_format_apps(apps: list[ToolArgumentValue], limit: int = 40) -> str:
-    from app.services.agent_tool_exec.agentbay_apps import _agentbay_format_apps as extracted
+    from app.services.agent_tool_exec.agentbay_apps import _agentbay_format_apps as extracted, _apps_from_response
 
-    return extracted(apps, limit)
+    return extracted(_apps_from_response(apps), limit)
 
 
 def _agentbay_find_installed_app_match(query: str, apps: list[ToolArgumentValue]) -> tuple[JsonObject | None, float]:
-    from app.services.agent_tool_exec.agentbay_apps import _agentbay_find_installed_app_match as extracted
+    from app.services.agent_tool_exec.agentbay_apps import (
+        _agentbay_find_installed_app_match as extracted,
+        _apps_from_response,
+    )
 
-    return extracted(query, apps)
+    return extracted(query, _apps_from_response(apps))
 
 
 def _agentbay_uncertain_start_error(error_message: str) -> bool:
@@ -1514,8 +1559,11 @@ async def _get_agent_owner_info(agent_id: uuid.UUID) -> tuple[str, str]:
     return await _agent_tool_exec_okr_access._get_agent_owner_info(agent_id)
 
 
-def _compute_okr_period_bounds(frequency: str, length_days: int | None):
-    return _agent_tool_exec_okr_access._compute_okr_period_bounds(frequency, length_days)
+def _compute_okr_period_bounds(frequency: str, length_days: int | None) -> tuple[date, date]:
+    bounds = _agent_tool_exec_okr_access._compute_okr_period_bounds(frequency, length_days)
+    if isinstance(bounds, tuple) and len(bounds) == 2 and isinstance(bounds[0], date) and isinstance(bounds[1], date):
+        return bounds[0], bounds[1]
+    raise TypeError("OKR period bounds must be a date pair")
 
 
 async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolParameters) -> str:

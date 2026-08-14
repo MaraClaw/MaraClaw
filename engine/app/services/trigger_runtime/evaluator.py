@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from croniter import croniter
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, JsonValue, str_from_row, uuid_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
@@ -401,7 +401,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
             if not source_agent:
                 return False
 
-            from_participant = await participant_dao.get_by_type_ref("agent", source_agent["id"])
+            from_participant = await participant_dao.get_by_type_ref("agent", uuid_from_row(source_agent["id"]))
             if not from_participant:
                 return False
 
@@ -426,7 +426,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                 )
             if not msg:
                 return False
-            cfg["_matched_message"] = (msg.get("content") or "")[:2000]
+            cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
             cfg["_matched_from"] = from_agent_name
             return True
 
@@ -518,7 +518,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
 
             if not msg:
                 return False
-            cfg["_matched_message"] = (msg.get("content") or "")[:2000]
+            cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
             cfg["_matched_from"] = from_user_name
             return True
     except Exception as e:

@@ -3,13 +3,21 @@
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, override
+from typing import ClassVar, override
 
 import httpx
 from jose import jwt
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, json_as_str_or
+from app.core.json_types import (
+    JsonObject,
+    json_as_bool,
+    json_as_str_or,
+    json_loads_object,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.records.identity import IdentityProviderRecord
@@ -68,10 +76,10 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
             if isinstance(legacy_secret, str) and legacy_secret.lstrip().startswith("{"):
                 raw = legacy_secret
         if isinstance(raw, dict):
-            return raw
+            return json_object_from(raw)
         if isinstance(raw, str) and raw.strip():
             try:
-                return json.loads(raw)
+                return json_loads_object(raw)
             except json.JSONDecodeError as exc:
                 raise ValueError("service_account_json must be valid JSON") from exc
         return {}
@@ -138,13 +146,19 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
                     "assertion": assertion,
                 },
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code >= 400 or "access_token" not in data:
                 raise RuntimeError(f"Google OAuth token error: {data}")
-            self._access_token = str(data["access_token"])
-            expires_in = int(data.get("expires_in") or 3600)
+            token = json_as_str_or(data.get("access_token"))
+            self._access_token = token
+            expires_value = data.get("expires_in")
+            expires_in = (
+                int(expires_value)
+                if isinstance(expires_value, str | int | float) and not isinstance(expires_value, bool)
+                else 3600
+            )
             self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
-            return self._access_token
+            return token
 
     async def _refresh_user_access_token(self) -> str:
         if not self.client_id or not self.client_secret:
@@ -162,11 +176,16 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
         data = await provider.refresh_access_token(self.admin_refresh_token)
         if "access_token" not in data:
             raise RuntimeError(f"Google OAuth refresh error: {data}")
-        self._access_token = str(data["access_token"])
+        token = json_as_str_or(data.get("access_token"))
+        self._access_token = token
         expires_value = data.get("expires_in")
-        expires_in = int(expires_value) if isinstance(expires_value, str | int | float) else 3600
+        expires_in = (
+            int(expires_value)
+            if isinstance(expires_value, str | int | float) and not isinstance(expires_value, bool)
+            else 3600
+        )
         self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
-        return self._access_token
+        return token
 
     @override
     async def fetch_departments(self) -> list[ExternalDepartment]:
@@ -180,13 +199,11 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
                 params={"type": "all"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code >= 400:
                 raise RuntimeError(f"Google Workspace orgunits error: {data}")
 
-            items: list[dict[str, Any]] = [
-                dict[str, Any](item) for item in (data.get("organizationUnits", []) or []) if isinstance(item, dict)
-            ]
+            items = [json_object_from(item) for item in object_list_from_row(data.get("organizationUnits"))]
 
             for item in items:
                 org_unit_path = json_as_str_or(item.get("orgUnitPath"))
@@ -206,7 +223,7 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
             )
 
             for item in items:
-                org_unit_path = item.get("orgUnitPath") or ""
+                org_unit_path = json_as_str_or(item.get("orgUnitPath"))
                 parent_org_unit_path = json_as_str_or(item.get("parentOrgUnitPath"), "/")
                 external_id = json_as_str_or(item.get("orgUnitId")) or org_unit_path or json_as_str_or(item.get("name"))
                 normalized_path = org_unit_path if org_unit_path.startswith("/") else f"/{org_unit_path}"
@@ -220,7 +237,7 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
                 departments.append(
                     ExternalDepartment(
                         external_id=external_id,
-                        name=item.get("name", ""),
+                        name=json_as_str_or(item.get("name")),
                         parent_external_id=parent_external_id,
                         member_count=0,
                         raw_data=item,
@@ -243,7 +260,7 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
 
         async with httpx.AsyncClient(timeout=20, proxy=GOOGLE_HTTP_PROXY) as client:
             while True:
-                params: dict[str, Any] = {
+                params: dict[str, str | int] = {
                     "customer": customer,
                     "maxResults": 500,
                     "projection": "full",
@@ -258,52 +275,54 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
                     params=params,
                     headers={"Authorization": f"Bearer {token}"},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if resp.status_code >= 400:
                     raise RuntimeError(f"Google Workspace users error: {data}")
 
-                for item_raw in data.get("users", []) or []:
-                    item = dict[str, Any](item_raw) if isinstance(item_raw, dict) else {}
-                    org_unit_path = item.get("orgUnitPath") or "/"
+                for item_raw in object_list_from_row(data.get("users")):
+                    item = json_object_from(item_raw)
+                    org_unit_path = json_as_str_or(item.get("orgUnitPath"), "/")
                     normalized_path = org_unit_path if org_unit_path.startswith("/") else f"/{org_unit_path}"
                     department_external = self._org_unit_path_to_external_id.get(normalized_path, "root")
-                    orgs = item.get("organizations") or [None]
-                    primary_org_raw = orgs[0] if orgs else None
-                    primary_org: dict[str, Any] = (
-                        dict[str, Any](primary_org_raw) if isinstance(primary_org_raw, dict) else {}
-                    )
-                    primary_phone = self._extract_primary_phone(item.get("phones") or [])
+                    orgs = object_list_from_row(item.get("organizations"))
+                    primary_org = json_object_from(orgs[0]) if orgs else {}
+                    primary_phone = self._extract_primary_phone(item.get("phones"))
+                    name_obj = json_object_from(item.get("name"))
+                    primary_email = json_as_str_or(item.get("primaryEmail"))
 
                     users.append(
                         ExternalUser(
-                            external_id=item.get("id", "") or item.get("primaryEmail", ""),
-                            open_id=item.get("primaryEmail", ""),
+                            external_id=json_as_str_or(item.get("id")) or primary_email,
+                            open_id=primary_email,
                             unionid="",
-                            name=(item.get("name") or {}).get("fullName") or item.get("primaryEmail", ""),
-                            email=item.get("primaryEmail", "") or "",
-                            avatar_url=item.get("thumbnailPhotoUrl", "") or "",
-                            title=primary_org.get("title", "") or "",
+                            name=json_as_str_or(name_obj.get("fullName")) or primary_email,
+                            email=primary_email,
+                            avatar_url=json_as_str_or(item.get("thumbnailPhotoUrl")),
+                            title=json_as_str_or(primary_org.get("title")),
                             department_external_id=department_external,
                             department_path=self._org_unit_path_to_display_path.get(normalized_path, "Root"),
                             department_ids=[department_external],
                             mobile=primary_phone,
-                            status="inactive" if item.get("suspended") or item.get("archived") else "active",
+                            status=(
+                                "inactive"
+                                if json_as_bool(item.get("suspended")) or json_as_bool(item.get("archived"))
+                                else "active"
+                            ),
                             raw_data=item,
                         )
                     )
 
-                page_token = data.get("nextPageToken") or ""
+                page_token = json_as_str_or(data.get("nextPageToken"))
                 if not page_token:
                     break
 
         return users
 
-    def _extract_primary_phone(self, phones: list[JsonObject]) -> str:
-        if not phones:
+    def _extract_primary_phone(self, phones: object) -> str:
+        items = [json_object_from(phone) for phone in object_list_from_row(phones)]
+        if not items:
             return ""
-        for phone in phones:
-            if phone.get("primary"):
-                value = phone.get("value")
-                return value if isinstance(value, str) else ""
-        fallback = phones[0].get("value")
-        return fallback if isinstance(fallback, str) else ""
+        for phone in items:
+            if json_as_bool(phone.get("primary")):
+                return json_as_str_or(phone.get("value"))
+        return json_as_str_or(items[0].get("value"))

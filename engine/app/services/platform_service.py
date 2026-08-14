@@ -2,7 +2,7 @@
 
 import os
 import re
-from typing import Any, Protocol
+from typing import Protocol
 
 from fastapi import Request
 

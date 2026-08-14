@@ -10,7 +10,7 @@ Runs as a background task inside the FastAPI process.
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import Any, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -20,9 +20,9 @@ from app.dao.llm_dao import llm_model_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.task_dao import task_dao, task_log_dao
+from app.records.agent import AgentRecord
 from app.records.task import TaskRecord
 from app.services.activity_logger import log_activity
-from app.records.agent import AgentRecord
 
 # Schedule JSON format:
 # {"freq": "daily"|"weekly", "interval": N, "time": "HH:MM", "weekdays": [0-6]}

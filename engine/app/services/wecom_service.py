@@ -1,10 +1,8 @@
 """WeCom (Enterprise WeChat) service for sending messages via Open API."""
 
-from typing import Any
-
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_int, json_object_from_response
 from app.core.logging import logger
 
 
@@ -28,7 +26,7 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params=params)
-        data = resp.json()
+        data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
             token = data.get("access_token")
@@ -38,7 +36,7 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
                     corp_id,
                     token,
                     secret=secret,
-                    ttl=refresh_ttl(data.get("expires_in")),
+                    ttl=refresh_ttl(json_as_int(data.get("expires_in"))),
                 )
             return {
                 "access_token": token,
@@ -85,7 +83,7 @@ async def send_wecom_message(
     if not agent_id:
         return {"errcode": -1, "errmsg": "agent_id is required for WeCom messages"}
 
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "touser": user_id,
         "msgtype": "text",
         "agentid": agent_id,
@@ -96,7 +94,7 @@ async def send_wecom_message(
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, params=params, json=payload)
-        data = resp.json()
+        data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
             logger.info(f"[WeCom] Message sent to {user_id}")

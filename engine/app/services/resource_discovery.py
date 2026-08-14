@@ -12,7 +12,9 @@ from app.core.json_types import (
     json_as_int,
     json_as_str,
     json_as_str_or,
+    json_loads_value,
     json_object_from,
+    json_object_from_response,
 )
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -67,14 +69,14 @@ def _normalize_discovered_mcp_tool(mcp_tool: JsonObject) -> DiscoveredMCPTool | 
     description = mcp_tool.get("description")
     raw_schema = mcp_tool.get("inputSchema")
     parameters_schema: ToolParameterSchema = {"type": "object", "properties": {}}
-    if isinstance(raw_schema, dict):
+    if is_json_object(raw_schema):
         schema_type = raw_schema.get("type")
         properties = raw_schema.get("properties")
-        if isinstance(schema_type, str) and isinstance(properties, dict):
+        if isinstance(schema_type, str) and is_json_object(properties):
             normalized_properties: dict[str, JsonObject] = {
                 field_name: property_schema
                 for field_name, property_schema in properties.items()
-                if isinstance(property_schema, dict)
+                if is_json_object(property_schema)
             }
             if len(normalized_properties) == len(properties):
                 parameters_schema = {"type": schema_type, "properties": normalized_properties}
@@ -116,7 +118,7 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
 
         if agent_id:
             for at in await agent_tool_dao.list_for_agent(agent_id):
-                value = at.config.get("smithery_api_key") if at.config else None
+                value: object = at.config.get("smithery_api_key") if at.config else None
                 if isinstance(value, str) and value:
                     return _maybe_decrypt(value)
         for tool_name in ("discover_resources", "import_mcp_server"):
@@ -124,12 +126,12 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
             if not tool:
                 continue
             tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, tool.config_schema)
-            tenant_value = tenant_config.get("smithery_api_key")
+            tenant_value: object = tenant_config.get("smithery_api_key")
             if isinstance(tenant_value, str) and tenant_value:
                 return tenant_value
-            value = tool.config.get("smithery_api_key") if tool.config and not agent_tenant_id else None
-            if isinstance(value, str) and value:
-                return _maybe_decrypt(value)
+            stored: object = tool.config.get("smithery_api_key") if tool.config and not agent_tenant_id else None
+            if isinstance(stored, str) and stored:
+                return _maybe_decrypt(stored)
     except Exception:
         logger.warning("Unable to read Smithery API key configuration")
     return ""
@@ -149,7 +151,7 @@ async def _search_smithery_api(query: str, max_results: int, api_key: str) -> li
             )
             if resp.status_code != 200:
                 return []
-            data = json_object_from(resp.json())
+            data = json_object_from_response(resp)
         servers_raw = data.get("servers", [])
         servers = [srv for srv in servers_raw if is_json_object(srv)] if isinstance(servers_raw, list) else []
         return [
@@ -182,12 +184,12 @@ async def _get_modelscope_api_token(agent_id: uuid.UUID | None = None) -> str:
             if not tool:
                 continue
             tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, tool.config_schema)
-            tenant_value = tenant_config.get("modelscope_api_token")
+            tenant_value: object = tenant_config.get("modelscope_api_token")
             if isinstance(tenant_value, str) and tenant_value:
                 return tenant_value
-            value = tool.config.get("modelscope_api_token") if tool.config and not agent_tenant_id else None
-            if isinstance(value, str) and value:
-                return value
+            stored: object = tool.config.get("modelscope_api_token") if tool.config and not agent_tenant_id else None
+            if isinstance(stored, str) and stored:
+                return stored
     except Exception:
         logger.warning("Unable to read ModelScope API token configuration")
     return ""
@@ -216,7 +218,7 @@ async def _search_modelscope_api(
             )
             if resp.status_code != 200:
                 return []
-            data = json_object_from(resp.json())
+            data = json_object_from_response(resp)
             if not data.get("success"):
                 return []
 
@@ -314,7 +316,7 @@ async def _ensure_smithery_connection(
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             # Get or create namespace
             ns_resp = await client.get("https://api.smithery.ai/namespaces", headers=headers)
-            namespaces_payload = json_object_from(ns_resp.json()) if ns_resp.status_code == 200 else {}
+            namespaces_payload = json_object_from_response(ns_resp) if ns_resp.status_code == 200 else {}
             namespaces_raw = namespaces_payload.get("namespaces", [])
             namespaces = (
                 [item for item in namespaces_raw if is_json_object(item)] if isinstance(namespaces_raw, list) else []
@@ -331,7 +333,7 @@ async def _ensure_smithery_connection(
                 )
                 if create_ns.status_code not in (200, 201):
                     return {"error": f"Failed to create namespace: HTTP {create_ns.status_code}"}
-                namespace = json_as_str_or(json_object_from(create_ns.json()).get("name"))
+                namespace = json_as_str_or(json_object_from_response(create_ns).get("name"))
                 if not namespace:
                     return {"error": f"Failed to create namespace: HTTP {create_ns.status_code}"}
 
@@ -345,7 +347,7 @@ async def _ensure_smithery_connection(
             if conn_resp.status_code not in (200, 201):
                 return {"error": f"Failed to create connection: HTTP {conn_resp.status_code} - {conn_resp.text[:200]}"}
 
-            conn_data = json_object_from(conn_resp.json())
+            conn_data = json_object_from_response(conn_resp)
             result: SmitheryConnectionSuccess = {
                 "namespace": namespace,
                 "connection_id": json_as_str_or(conn_data.get("connectionId"), conn_id),
@@ -444,7 +446,7 @@ async def import_mcp_from_smithery(
             )
             if resp.status_code != 200:
                 return f"❌ Server '{server_id}' not found on Smithery (HTTP {resp.status_code})"
-            data = json_object_from(resp.json())
+            data = json_object_from_response(resp)
             servers_raw = data.get("servers", [])
             servers = [item for item in servers_raw if is_json_object(item)] if isinstance(servers_raw, list) else []
             server_info: JsonObject | None = None
@@ -483,7 +485,7 @@ async def import_mcp_from_smithery(
                 headers=headers,
             )
             if detail_resp.status_code == 200:
-                detail = json_object_from(detail_resp.json())
+                detail = json_object_from_response(detail_resp)
                 deployment_url = json_as_str(detail.get("deploymentUrl"))
                 raw_tools = detail.get("tools", [])
                 tools_discovered = [
@@ -510,12 +512,13 @@ async def import_mcp_from_smithery(
     smithery_config: JsonObject = {}  # will be merged into every AgentTool.config
     auth_message = ""
     conn_result = await _ensure_smithery_connection(api_key, base_mcp_url, display_name)
-    if "error" in conn_result:
-        auth_message = f"\n\n⚠️ Could not auto-create Smithery connection: {conn_result['error']}"
+    conn_error = json_as_str(conn_result.get("error"))
+    if conn_error:
+        auth_message = f"\n\n⚠️ Could not auto-create Smithery connection: {conn_error}"
     else:
         smithery_config = {
-            "smithery_namespace": conn_result["namespace"],
-            "smithery_connection_id": conn_result["connection_id"],
+            "smithery_namespace": json_as_str_or(conn_result.get("namespace")),
+            "smithery_connection_id": json_as_str_or(conn_result.get("connection_id")),
         }
         auth_url = json_as_str(conn_result.get("auth_url"))
         if auth_url:
@@ -534,8 +537,6 @@ async def import_mcp_from_smithery(
         ns_ = json_as_str_or(smithery_config["smithery_namespace"])
         conn_ = json_as_str_or(smithery_config["smithery_connection_id"])
         try:
-            import json as _json
-
             async with httpx.AsyncClient(timeout=15) as client:
                 live_resp = await client.post(
                     f"https://api.smithery.ai/connect/{ns_}/{conn_}/mcp",
@@ -553,14 +554,14 @@ async def import_mcp_from_smithery(
                     line = line.strip()
                     if line.startswith("data: "):
                         try:
-                            live_data = _json.loads(line[6:])
+                            live_data = json_loads_value(line[6:])
                             break
-                        except _json.JSONDecodeError:
+                        except ValueError:
                             pass
                 if live_data is None:
                     try:
-                        live_data = _json.loads(live_resp.text)
-                    except _json.JSONDecodeError:
+                        live_data = json_loads_value(live_resp.text)
+                    except ValueError:
                         live_data = None
                 live_payload = live_data if is_json_object(live_data) else None
                 live_result = json_object_from(live_payload.get("result")) if live_payload else {}
@@ -735,7 +736,7 @@ async def import_mcp_direct(
         logger.error(f"[DirectImport] Could not list tools from {mcp_url}: {e}")
 
     # Config to store in AgentTool
-    agent_tool_config = {}
+    agent_tool_config: JsonObject = {}
     if api_key:
         agent_tool_config["api_key"] = api_key
 

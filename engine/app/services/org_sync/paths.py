@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from typing import Any
 
 from app.dao.org_department_dao import org_department_dao
+from app.records.org import OrgMemberRecord
 from app.records.org_department import OrgDepartmentRecord
 
 
@@ -16,7 +16,7 @@ def build_department_path_map(departments: Sequence[OrgDepartmentRecord]) -> dic
     paths: dict[uuid.UUID, str] = {}
 
     def is_virtual_root(dept: OrgDepartmentRecord) -> bool:
-        return not dept.parent_id and str(getattr(dept, "external_id", "") or "") == "0"
+        return not dept.parent_id and str(dept.external_id or "") == "0"
 
     def compute_path(dept_id: uuid.UUID, visited: set[uuid.UUID] | None = None) -> str:
         if dept_id in paths:
@@ -56,7 +56,7 @@ def build_department_path_map(departments: Sequence[OrgDepartmentRecord]) -> dic
 
 async def derive_member_department_paths(
     db: object | None,
-    members: list[Any],
+    members: Sequence[OrgMemberRecord],
 ) -> dict[uuid.UUID, str]:
     """Resolve member department paths from department_id via the department tree."""
     del db
@@ -64,11 +64,11 @@ async def derive_member_department_paths(
     if not dept_ids:
         return {}
 
-    departments: dict[uuid.UUID, Any] = {}
+    departments: dict[uuid.UUID, OrgDepartmentRecord] = {}
     pending_ids = set(dept_ids)
 
     while pending_ids:
-        batch: list[Any] = []
+        batch: list[OrgDepartmentRecord] = []
         for dept_id in list(pending_ids):
             dept = await org_department_dao.get(dept_id)
             if dept:
@@ -85,4 +85,11 @@ async def derive_member_department_paths(
 
     dept_path_map = build_department_path_map(list(departments.values()))
 
-    return {member.id: dept_path_map.get(member.department_id, member.department_path or "") for member in members}
+    return {
+        member.id: (
+            dept_path_map.get(member.department_id, member.department_path or "")
+            if member.department_id is not None
+            else (member.department_path or "")
+        )
+        for member in members
+    }

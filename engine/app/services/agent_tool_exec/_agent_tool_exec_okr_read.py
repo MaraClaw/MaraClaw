@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import importlib
 import json
 import uuid
 from datetime import date
-from types import ModuleType
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -14,11 +12,8 @@ from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord
 
+from . import _agent_tool_exec_okr_access as _okr_access
 from .registry import ToolArguments
-
-
-def _okr_access_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_access")
 
 
 async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
@@ -45,7 +40,7 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
             ps = date.fromisoformat(period_start)
             pe = date.fromisoformat(period_end)
         else:
-            ps, pe = _okr_access_module()._compute_okr_period_bounds(
+            ps, pe = _okr_access._compute_okr_period_bounds(
                 settings.period_frequency,
                 settings.period_length_days,
             )
@@ -158,7 +153,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
         if not settings or not settings.enabled:
             return "OKR is not enabled for your organization."
 
-        ps, pe = _okr_access_module()._compute_okr_period_bounds(
+        ps, pe = _okr_access._compute_okr_period_bounds(
             settings.period_frequency,
             settings.period_length_days,
         )

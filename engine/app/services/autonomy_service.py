@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_str_dict, json_as_str_or, mapping_from_row, object_from_literal
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.approval_dao import approval_request_dao
@@ -53,9 +52,8 @@ class AutonomyService:
         if agent is None:
             return {"allowed": False, "level": "unknown", "message": "Agent required"}
         details = details or {}
-        raw_policy = agent.autonomy_policy or {}
-        policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
-        level = policy.get(action_type, "L2")  # Default to L2
+        policy = mapping_from_row(agent.autonomy_policy)
+        level = json_as_str_or(dict[str, object](policy).get(action_type), "L2") or "L2"
 
         await write_audit_log(
             action=f"autonomy_check:{action_type}",
@@ -194,20 +192,15 @@ class AutonomyService:
             return None
 
         try:
-            import ast
-
             if isinstance(args_raw, str):
                 try:
-                    arguments = ast.literal_eval(args_raw)
-                except ValueError, SyntaxError:
-                    try:
-                        arguments = json.loads(args_raw)
-                    except json.JSONDecodeError:
-                        return "Execution failed: approved action arguments must be a JSON object"
+                    arguments = object_from_literal(args_raw)
+                except (ValueError, SyntaxError, json.JSONDecodeError):
+                    return "Execution failed: approved action arguments must be a JSON object"
             else:
                 arguments = args_raw
 
-            if not isinstance(arguments, dict):
+            if not is_str_dict(arguments):
                 return "Execution failed: approved action arguments must be a JSON object"
 
             from app.services.agent_tool_exec.dispatcher import _execute_tool_direct

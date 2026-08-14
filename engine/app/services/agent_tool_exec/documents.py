@@ -5,9 +5,32 @@ import importlib
 import multiprocessing as mp
 import queue
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol, TypeIs
 
-document_reading = importlib.import_module("app.services.agent_tool_exec.document_reading")
+from . import document_reading
+
+
+class _FitzPage(Protocol):
+    def get_text(self, kind: str) -> object: ...
+
+
+class _FitzDocument(Protocol):
+    def __enter__(self) -> Sequence[_FitzPage]: ...
+
+    def __exit__(self, *args: object) -> object: ...
+
+    def __getitem__(self, key: slice) -> Sequence[_FitzPage]: ...
+
+
+class _FitzModule(Protocol):
+    def open(self, path: str) -> _FitzDocument: ...
+
+
+def _is_fitz_module(value: object) -> TypeIs[_FitzModule]:
+    return callable(getattr(value, "open", None))
+
 
 _READ_DOCUMENT_TIMEOUT_SECONDS = 25
 _READ_DOCUMENT_FALLBACK_TIMEOUT_SECONDS = 10
@@ -46,12 +69,15 @@ def _read_pdf_fast_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
     if file_path.is_dir():
         return f"Path is a directory, not a document: {rel_path}"
     try:
-        fitz = importlib.import_module("fitz")
+        fitz_mod: object = importlib.import_module("fitz")
+        if not _is_fitz_module(fitz_mod):
+            return "PDF fallback extractor unavailable: fitz.open is missing"
 
         text_parts: list[str] = []
-        with fitz.open(str(file_path)) as doc:
+        with fitz_mod.open(str(file_path)) as doc:
             for index, page in enumerate(doc[:50]):
-                page_text = page.get_text("text") or ""
+                page_text_raw = page.get_text("text")
+                page_text = page_text_raw if isinstance(page_text_raw, str) else ""
                 if page_text:
                     text_parts.append(f"--- Page {index + 1} ---\n{page_text}")
                 if sum(len(part) for part in text_parts) >= max_chars:

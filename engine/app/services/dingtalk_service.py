@@ -1,11 +1,10 @@
 """DingTalk service for sending messages via Open API."""
 
 import json
-from typing import Any
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, JsonValue, json_as_int, json_object_from_response
 from app.core.logging import logger
 
 
@@ -30,7 +29,7 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(url, params=params)
-            data = resp.json()
+            data = json_object_from_response(resp)
 
             if data.get("errcode") == 0:
                 token = data.get("access_token")
@@ -40,7 +39,7 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
                         app_id,
                         token,
                         secret=app_secret,
-                        ttl=refresh_ttl(data.get("expires_in")),
+                        ttl=refresh_ttl(json_as_int(data.get("expires_in"))),
                     )
                 return {"access_token": token, "expires_in": data.get("expires_in")}
             logger.error(f"[DingTalk] Failed to get access_token: {data}")
@@ -79,9 +78,9 @@ async def send_dingtalk_v1_robot_oto_message(
         msg_key = "sampleText"
         msg_param = json.dumps({"content": message})
 
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "robotCode": robot_code or app_id,
-        "userIds": user_ids,
+        "userIds": list[JsonValue](user_ids),
         "msgKey": msg_key,
         "msgParam": msg_param,
     }
@@ -89,7 +88,7 @@ async def send_dingtalk_v1_robot_oto_message(
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             resp = await client.post(url, headers=headers, json=payload)
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code == 200:
                 logger.info(f"[DingTalk] Robot v1.0 OTO batch message sent to {user_ids}")
                 return {"errcode": 0, "processQueryKey": data.get("processQueryKey")}
@@ -128,7 +127,7 @@ async def send_dingtalk_corp_conversation(
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             resp = await client.post(url, params=params, json=payload)
-            data = resp.json()
+            data = json_object_from_response(resp)
             if data.get("errcode") == 0:
                 return data
             logger.error(f"[DingTalk] Failed to send corp conversation: {data}")

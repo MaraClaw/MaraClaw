@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.json_types import is_str_dict
+from app.core.json_types import is_str_dict, json_loads_object
 from app.core.tool_types import ToolDefinition
 from app.services.llm.types import LLMToolCall
 
@@ -73,8 +73,7 @@ def parse_tool_arguments(raw_args: object) -> dict[str, Any]:
     if is_str_dict(raw_args):
         return raw_args
     if isinstance(raw_args, str):
-        parsed = json.loads(raw_args)
-        return parsed if is_str_dict(parsed) else {}
+        return json_loads_object(raw_args)
     return {}
 
 

@@ -1,7 +1,6 @@
 """Hook to automatically bind new users and company-visible agents to the OKR Agent."""
 
 import uuid
-from typing import Any
 
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao

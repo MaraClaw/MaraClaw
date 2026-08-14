@@ -3,18 +3,14 @@
 import contextlib
 import os
 import uuid
-from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.sandbox.config import SandboxConfigOverrides
 
-from .registry import ToolArguments
-
-type CodeOutputCallback = Callable[[str, str], Awaitable[None] | None]
+from .registry import ToolArguments, ToolOutputCallback
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str) -> str:
@@ -129,7 +125,7 @@ async def _execute_code(
     arguments: ToolArguments,
     *,
     tool_name: str = "execute_code",
-    on_output: Any = None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Execute code using the configured sandbox backend.
 
@@ -235,7 +231,7 @@ async def _execute_code_legacy(
     arguments: ToolArguments,
     allow_network: bool = False,
     max_timeout: int = 60,
-    on_output: Any = None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Legacy subprocess-based code execution (fallback)."""
     import asyncio

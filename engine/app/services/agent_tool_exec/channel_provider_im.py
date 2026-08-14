@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import importlib
 import uuid
-from types import ModuleType
 
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 
-
-def _channel_provider_common() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.channel_provider_common")
+from . import channel_provider_common
 
 
 async def _send_dingtalk_message(
@@ -50,7 +46,7 @@ async def _send_dingtalk_message(
 
         if result.get("errcode") == 0:
             try:
-                await _channel_provider_common()._save_channel_message(
+                await channel_provider_common._save_channel_message(
                     agent_tools,
                     db=None,
                     agent_id=agent_id,
@@ -100,7 +96,7 @@ async def _send_wecom_message(
 
         if result.get("errcode") == 0:
             try:
-                await _channel_provider_common()._save_channel_message(
+                await channel_provider_common._save_channel_message(
                     agent_tools,
                     db=None,
                     agent_id=agent_id,

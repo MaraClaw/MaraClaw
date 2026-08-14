@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import importlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Final
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -13,9 +12,10 @@ from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue, ToolOutputCallback, register
 from app.services.focus_service import ensure_focus_item
 
+from . import trigger_helpers as _TRIGGER_HELPERS
+
 MAX_TRIGGERS_PER_AGENT = 20
 VALID_TRIGGER_TYPES: Final = {"cron", "once", "interval", "poll", "on_message", "webhook"}
-_TRIGGER_HELPERS: Final = importlib.import_module("app.services.agent_tool_exec.trigger_helpers")
 
 
 def _string_argument(arguments: ToolArguments, name: str) -> str:
@@ -86,7 +86,7 @@ async def _handle_set_trigger(
                 old_token = (existing.config or {}).get("token")
                 if old_token:
                     config["token"] = old_token
-            updates: dict[str, Any] = {
+            updates: dict[str, object] = {
                 "type": ttype,
                 "config": config,
                 "reason": reason,
@@ -101,7 +101,7 @@ async def _handle_set_trigger(
                 + f"({ttype}, fired {existing.fire_count} times so far)"
             )
 
-        obj_in: dict[str, Any] = {
+        obj_in: dict[str, object] = {
             "agent_id": agent_id,
             "name": name,
             "type": ttype,
@@ -153,7 +153,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
             return f"❌ Trigger '{name}' not found"
 
         changes = []
-        updates: dict[str, Any] = {}
+        updates: dict[str, object] = {}
         if new_config is not None:
             old_config = trigger.config
             updates["config"] = new_config

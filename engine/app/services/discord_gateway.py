@@ -12,20 +12,69 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from types import ModuleType
+from typing import Protocol, TypeIs
 
+from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.user_dao import user_dao
 
-if TYPE_CHECKING:
-    from discord import Client as DiscordClient
-    from discord import Message as DiscordMessage
 
-_discord_mod: Any
+class _DiscordUserLike(Protocol):
+    name: str
+    discriminator: str
+    id: int
+
+
+class _DiscordAuthorLike(Protocol):
+    id: int
+    name: str
+    display_name: str
+
+
+class _DiscordChannelLike(Protocol):
+    id: int
+
+    def typing(self) -> AbstractAsyncContextManager[object]: ...
+
+
+class _DiscordMessageLike(Protocol):
+    author: _DiscordAuthorLike
+    guild: object | None
+    mentions: Sequence[object]
+    content: str
+    channel: _DiscordChannelLike
+
+    def reply(self, content: str, *, mention_author: bool) -> Awaitable[object]: ...
+
+
+class _DiscordClientLike(Protocol):
+    user: _DiscordUserLike | None
+
+    def event(self, callback: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]: ...
+
+    def start(self, token: str, *, reconnect: bool) -> Awaitable[None]: ...
+
+    def is_closed(self) -> bool: ...
+
+    def close(self) -> Awaitable[None]: ...
+
+
+def _is_discord_client(value: object) -> TypeIs[_DiscordClientLike]:
+    return all(hasattr(value, name) for name in ("event", "start", "is_closed", "close"))
+
+
+def _mod_attr(value: object, name: str) -> object:
+    return list[object]((getattr(value, name, None),))[0]
+
+
+_discord_mod: ModuleType | None
 try:
     import discord as _discord_mod
 
@@ -49,7 +98,7 @@ class DiscordGatewayManager:
     """Manages Discord Gateway bot clients for all agents."""
 
     def __init__(self):
-        self._clients: dict[uuid.UUID, DiscordClient] = {}
+        self._clients: dict[uuid.UUID, _DiscordClientLike] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
 
     async def start_client(
@@ -77,10 +126,24 @@ class DiscordGatewayManager:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
             return
         sdk = _discord_mod
-        intents = sdk.Intents.default()
-        intents.message_content = True  # Required to read message text
+        intents_cls = _mod_attr(sdk, "Intents")
+        default_intents = _mod_attr(intents_cls, "default")
+        if not callable(default_intents):
+            logger.warning("[Discord GW] discord.py Intents.default is unavailable")
+            return
+        intents = default_intents()
+        if hasattr(intents, "message_content"):
+            setattr(intents, "message_content", True)  # Required to read message text
 
-        client = sdk.Client(intents=intents)
+        client_cls = _mod_attr(sdk, "Client")
+        if not callable(client_cls):
+            logger.warning("[Discord GW] discord.py Client is unavailable")
+            return
+        client_obj = client_cls(intents=intents)
+        if not _is_discord_client(client_obj):
+            logger.warning("[Discord GW] discord.py Client is missing required methods")
+            return
+        client = client_obj
         self._clients[agent_id] = client
 
         @client.event
@@ -93,7 +156,7 @@ class DiscordGatewayManager:
             )
 
         @client.event
-        async def on_message(message: DiscordMessage):
+        async def on_message(message: _DiscordMessageLike):
             # Ignore own messages
             if message.author == client.user:
                 return
@@ -134,8 +197,8 @@ class DiscordGatewayManager:
             except asyncio.CancelledError:
                 logger.info(f"[Discord GW] Bot task cancelled for agent {agent_id}")
             except Exception as exc:
-                login_failure = getattr(_discord_mod, "LoginFailure", ())
-                if login_failure and isinstance(exc, login_failure):
+                login_failure = _mod_attr(sdk, "LoginFailure")
+                if isinstance(login_failure, type) and isinstance(exc, login_failure):
                     logger.error(f"[Discord GW] Invalid bot token for agent {agent_id}")
                 else:
                     logger.exception(f"[Discord GW] Bot error for agent {agent_id}: {exc}")
@@ -151,7 +214,7 @@ class DiscordGatewayManager:
     async def _handle_message(
         self,
         agent_id: uuid.UUID,
-        message: DiscordMessage,
+        message: _DiscordMessageLike,
         user_text: str,
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
@@ -245,7 +308,7 @@ class DiscordGatewayManager:
                 fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                 if fresh:
                     _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 pass
 
             return reply_text
@@ -278,8 +341,8 @@ class DiscordGatewayManager:
         configs = await channel_config_dao.list_configured("discord")
 
         for config in configs:
-            extra = config.extra_config or {}
-            mode = extra.get("connection_mode", "webhook")
+            extra = json_object_from(config.extra_config)
+            mode = json_as_str_or(extra.get("connection_mode"), "webhook")
             if mode == "gateway":
                 bot_token = config.app_secret
                 if bot_token:

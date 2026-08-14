@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 
-import httpx
+from httpx import AsyncClient, Response
 
-from app.core.json_types import JsonObject, json_as_str
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
-
-
-def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _nested_mapping(value: object) -> JsonObject:
@@ -179,7 +173,9 @@ async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -
                 )
                 if price_res.status_code == 200:
                     price_value = _response_mapping(price_res).get("price", 0)
-                    price = price_value if isinstance(price_value, int | float) and not isinstance(price_value, bool) else 0
+                    price = (
+                        price_value if isinstance(price_value, int | float) and not isinstance(price_value, bool) else 0
+                    )
                 else:
                     logger.warning(f"Failed to check domain price: {price_res.text}")
                 avail_str = "Yes" if available else "No"

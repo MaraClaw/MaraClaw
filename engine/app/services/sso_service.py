@@ -94,7 +94,7 @@ class SSOService:
         provider_type: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> UserRecord | None:
         """Resolve user from external identity via OrgMember."""
         # Accept legacy `db=` kwarg for gradual call-site migration.
@@ -207,7 +207,7 @@ class SSOService:
         provider_user_id: str,
         identity_data: dict[str, Any] | None = None,
         tenant_id: str | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> OrgMemberRecord:
         """Link an external identity to an existing user via OrgMember."""
         _compat.pop("db", None)
@@ -288,7 +288,7 @@ class SSOService:
         user_id: str,
         provider_type: str,
         tenant_id: str | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> bool:
         """Unlink an external identity (OrgMember) from a user."""
         _compat.pop("db", None)
@@ -311,7 +311,7 @@ class SSOService:
         provider_user_id: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: Any,
+        **_compat: object,
     ) -> UserRecord | None:
         """Check if an external identity is already linked to another user."""
         _compat.pop("db", None)
@@ -322,7 +322,7 @@ class SSOService:
             identity_data=identity_data,
         )
 
-    async def validate_sso_enablement(self, tenant_id: uuid.UUID, **_compat: Any) -> bool:
+    async def validate_sso_enablement(self, tenant_id: uuid.UUID, **_compat: object) -> bool:
         """Check if SSO can be enabled for this tenant under IP restrictions."""
         _compat.pop("db", None)
 

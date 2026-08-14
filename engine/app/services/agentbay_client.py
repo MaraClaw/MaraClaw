@@ -8,10 +8,10 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from pydantic import BaseModel, JsonValue, RootModel
 
+from app.core.json_types import json_as_str, json_as_str_or, json_loads_value, json_object_from
 from app.core.logging import configure_logging, disable_agentbay_logger_override, logger
 from app.core.logging.agentbay import disable_agentbay_logger_override as _disable_before_sdk
 
@@ -23,8 +23,31 @@ class GenericExtractSchema(RootModel[JsonValue]):
     pass
 
 
-AgentBayResponseValue = BaseModel | JsonValue | bytes | list[str] | list[dict[str, Any]] | list[dict[str, Any] | str]
-AgentBayResponse = dict[str, Any]
+type AgentBayResponseValue = (
+    BaseModel | JsonValue | bytes | list[str] | list[dict[str, object]] | list[dict[str, object] | str]
+)
+type AgentBayResponse = dict[str, object]
+
+
+def _sdk_attr(value: object, name: str, default: object = None) -> object:
+    return list[object]((getattr(value, name, default),))[0]
+
+
+def _sdk_item(value: object) -> dict[str, object] | str:
+    attrs = _sdk_attr(value, "__dict__")
+    if not isinstance(attrs, dict):
+        return str(value)
+    mapped: dict[str, object] = {}
+    for key, item in attrs.items():
+        if isinstance(key, str):
+            mapped[key] = item
+    return mapped
+
+
+def _sdk_items(value: object) -> list[dict[str, object] | str]:
+    if not isinstance(value, list):
+        return []
+    return [_sdk_item(item) for item in list[object](value)]
 
 
 disable_agentbay_logger_override()
@@ -161,7 +184,7 @@ class AgentBayClient:
                 + "state, or retry the navigation."
             ) from None
 
-        result: dict[str, Any] = {"url": url, "success": True, "title": url}
+        result: AgentBayResponse = {"url": url, "success": True, "title": url}
 
         if screenshot:
             # Wait for dynamic content and SPA rendering (React/Vue) before screenshotting
@@ -298,10 +321,11 @@ class AgentBayClient:
             schema=GenericExtractSchema,
             selector=selector or None,
         )
-        success, data = await asyncio.to_thread(session.browser.operator.extract, options)
-        if success and data and isinstance(data, BaseModel):
-            data = data.model_dump()
-        return {"success": success, "data": data}
+        success, extracted = await asyncio.to_thread(session.browser.operator.extract, options)
+        extracted_raw: object = extracted
+        if success and extracted_raw and isinstance(extracted_raw, BaseModel):
+            extracted_raw = extracted_raw.model_dump()
+        return {"success": success, "data": extracted_raw}
 
     async def browser_observe(self, instruction: str, selector: str = "") -> AgentBayResponse:
         """Observe the current page state and return interactive elements."""
@@ -317,9 +341,7 @@ class AgentBayClient:
             selector=selector or None,
         )
         success, results = await asyncio.to_thread(session.browser.operator.observe, options)
-        # Convert ObserveResult objects to dicts for serialization
-        result_dicts = [vars(result) if hasattr(result, "__dict__") else str(result) for result in (results or [])]
-        return {"success": success, "elements": result_dicts}
+        return {"success": success, "elements": _sdk_items(results)}
 
     # ─── Command (Shell) Operations ──────────────────
 
@@ -377,9 +399,10 @@ class AgentBayClient:
                 result = await asyncio.to_thread(session.computer.beta_take_screenshot)
             else:
                 raise
+        screenshot_payload = _sdk_attr(result, "data")
         return {
             "success": result.success,
-            "data": getattr(result, "data", None),
+            "data": screenshot_payload,
             "error_message": result.error_message or "",
         }
 
@@ -390,7 +413,7 @@ class AgentBayClient:
         result = await asyncio.to_thread(session.computer.click_mouse, x, y, button)
         return {
             "success": result.success,
-            "moved": getattr(move_result, "success", False),
+            "moved": _sdk_attr(move_result, "success", False) is True,
             "x": x,
             "y": y,
             "button": button,
@@ -432,9 +455,10 @@ class AgentBayClient:
         """Get the screen resolution."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.get_screen_size)
+        size_payload = _sdk_attr(result, "data")
         return {
             "success": result.success,
-            "data": getattr(result, "data", None),
+            "data": size_payload,
             "error_message": result.error_message or "",
         }
 
@@ -442,9 +466,10 @@ class AgentBayClient:
         """Start an application by its command."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.start_app, cmd, work_directory=work_dir)
+        start_payload = _sdk_attr(result, "data")
         return {
             "success": result.success,
-            "data": getattr(result, "data", None),
+            "data": start_payload,
             "error_message": result.error_message or "",
         }
 
@@ -462,13 +487,9 @@ class AgentBayClient:
             desktop,
             ignore_system_apps,
         )
-        raw_apps: list[Any] = list(getattr(result, "data", None) or [])
-        apps: list[dict[str, Any] | str] = [
-            vars(app) if hasattr(app, "__dict__") else str(app) for app in raw_apps
-        ]
         return {
             "success": result.success,
-            "apps": apps,
+            "apps": _sdk_items(_sdk_attr(result, "data")),
             "error_message": result.error_message or "",
         }
 
@@ -476,9 +497,10 @@ class AgentBayClient:
         """Get current cursor position."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.get_cursor_position)
+        cursor_payload = _sdk_attr(result, "data")
         return {
             "success": result.success,
-            "data": getattr(result, "data", None),
+            "data": cursor_payload,
             "error_message": result.error_message or "",
         }
 
@@ -486,10 +508,10 @@ class AgentBayClient:
         """Get info about the currently active window."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.get_active_window)
-        window = getattr(result, "window", None)
+        window = _sdk_attr(result, "window")
         return {
             "success": result.success,
-            "window": vars(window) if window and hasattr(window, "__dict__") else str(window),
+            "window": _sdk_item(window) if window is not None else None,
             "error_message": result.error_message or "",
         }
 
@@ -497,13 +519,9 @@ class AgentBayClient:
         """List root desktop windows with IDs and geometry."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.list_root_windows, timeout_ms)
-        raw_windows: list[Any] = list(getattr(result, "windows", None) or [])
-        windows: list[dict[str, Any] | str] = [
-            vars(window) if hasattr(window, "__dict__") else str(window) for window in raw_windows
-        ]
         return {
             "success": result.success,
-            "windows": windows,
+            "windows": _sdk_items(_sdk_attr(result, "windows")),
             "error_message": result.error_message or "",
         }
 
@@ -527,15 +545,9 @@ class AgentBayClient:
         """List currently visible/running applications."""
         session = await self._ensure_computer_session()
         result = await asyncio.to_thread(session.computer.list_visible_apps)
-        data = getattr(result, "data", [])
-        # Convert process objects to dicts
-        raw_visible: list[Any] = list(data or [])
-        apps: list[dict[str, Any] | str] = [
-            vars(process) if hasattr(process, "__dict__") else str(process) for process in raw_visible
-        ]
         return {
             "success": result.success,
-            "apps": apps,
+            "apps": _sdk_items(_sdk_attr(result, "data", [])),
             "error_message": result.error_message or "",
         }
 
@@ -553,9 +565,10 @@ class AgentBayClient:
             return None
         try:
             result = await asyncio.to_thread(session.get_link)
-            if result.success and result.data:
-                logger.info(f"[AgentBay] Got live URL: {str(result.data)[:80]}...")
-                return result.data
+            link_raw = _sdk_attr(result, "data")
+            if result.success and link_raw:
+                logger.info(f"[AgentBay] Got live URL: {str(link_raw)[:80]}...")
+                return link_raw if isinstance(link_raw, str) else str(link_raw)
             logger.warning(f"[AgentBay] get_link() failed: {result.error_message}")
             return None
         except Exception as e:
@@ -585,8 +598,8 @@ class AgentBayClient:
                 else:
                     raise
 
-            screenshot_data = getattr(result, "data", None)
-            if not screenshot_data:
+            screenshot_raw = _sdk_attr(result, "data")
+            if not screenshot_raw:
                 return None
 
             # Compress to JPEG base64 for live preview
@@ -595,7 +608,9 @@ class AgentBayClient:
 
             from PIL import Image
 
-            img = Image.open(BytesIO(screenshot_data))
+            if not isinstance(screenshot_raw, (bytes, bytearray)):
+                return None
+            img = Image.open(BytesIO(bytes(screenshot_raw)))
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
@@ -626,7 +641,7 @@ class AgentBayClient:
             return None
 
         try:
-            screenshot_data = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
+            screenshot_data: object = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
             if not screenshot_data:
                 logger.info("[AgentBay] Browser snapshot returned empty data")
                 return None
@@ -650,7 +665,10 @@ class AgentBayClient:
                     screenshot_data += "=" * (4 - missing_padding)
                 screenshot_data = base64.b64decode(screenshot_data)
 
-            img = Image.open(BytesIO(screenshot_data))
+            if not isinstance(screenshot_data, (bytes, bytearray)):
+                logger.info("[AgentBay] Browser snapshot returned unknown data format")
+                return None
+            img = Image.open(BytesIO(bytes(screenshot_data)))
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
@@ -750,11 +768,11 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
 
     from app.services.agent_tools import _get_tool_config
 
-    tool_config = await _get_tool_config(agent_id, "agentbay_browser_navigate")
+    tool_config = json_object_from(await _get_tool_config(agent_id, "agentbay_browser_navigate"))
     api_key: str | None = None
-    stored_api_key = tool_config.get("api_key") if tool_config else None
+    stored_api_key = json_as_str(tool_config.get("api_key"))
 
-    if isinstance(stored_api_key, str):
+    if stored_api_key:
         from app.config import get_settings
         from app.core.security import decrypt_data
 
@@ -784,7 +802,7 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
         await _inject_credentials(client, agent_id)
     elif image_type == "computer":
         # Read OS preference from tool config (default: windows)
-        os_type = (tool_config or {}).get("os_type", "windows")
+        os_type = json_as_str_or(tool_config.get("os_type"), "windows")
         computer_image = "windows_latest" if os_type == "windows" else "linux_latest"
         logger.info(
             f"[AgentBay] Creating computer session with OS: {os_type} (image: {computer_image}) for session={session_id[:8]}"
@@ -843,15 +861,15 @@ async def _inject_credentials(client: AgentBayClient, agent_id: uuid.UUID):
         return  # No cookies to inject
 
     # Collect and decrypt all cookies
-    all_cookies = []
+    all_cookies: list[object] = []
     for cred in credentials:
         if cred.cookies_json is None:
             continue
         try:
             raw = decrypt_data(cred.cookies_json, settings.SECRET_KEY)
-            cookies = json.loads(raw)
-            if isinstance(cookies, list):
-                all_cookies.extend(cookies)
+            cookies_raw = json_loads_value(raw)
+            if isinstance(cookies_raw, list):
+                all_cookies.extend(list[object](cookies_raw))
         except Exception as e:
             logger.warning(f"[AgentBay] Failed to decrypt cookies for {cred.platform}: {e}")
 
@@ -935,7 +953,7 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
             session.command.exec,
             f"echo '{script_b64}' | /usr/bin/base64 -d > tc_inject_cookies.js",
         )
-        write_ok = getattr(write_result, "success", False)
+        write_ok = _sdk_attr(write_result, "success", False) is True
         logger.info(f"[AgentBay] Cookie inject script write: success={write_ok}")
 
         # Execute the injection script
@@ -944,8 +962,8 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
             "node tc_inject_cookies.js",
             timeout_ms=15000,
         )
-        stdout = getattr(exec_result, "stdout", "") or getattr(exec_result, "output", "") or ""
-        stderr = getattr(exec_result, "stderr", "") or ""
+        stdout = json_as_str(_sdk_attr(exec_result, "stdout")) or json_as_str(_sdk_attr(exec_result, "output")) or ""
+        stderr = json_as_str(_sdk_attr(exec_result, "stderr")) or ""
 
         if "INJECT_OK" in stdout:
             logger.info(f"[AgentBay] Cookie injection successful for agent {agent_id}: {stdout.strip()[:100]}")

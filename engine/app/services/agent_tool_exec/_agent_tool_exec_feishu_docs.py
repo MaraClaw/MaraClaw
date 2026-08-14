@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 from typing import TypedDict
 
+from httpx import AsyncClient, Response
+
+from app.core.json_types import (
+    JsonObject,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.services import agent_tools
+from app.services.feishu_service import FeishuService, feishu_service
 
 from . import feishu_docs_legacy as _legacy, feishu_docs_write as _write
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
@@ -24,12 +35,16 @@ _FW_LEFT_PAREN = "\uff08"
 _FW_RIGHT_PAREN = "\uff09"
 
 
-def _feishu_service():
-    return importlib.import_module("app.services.feishu_service").feishu_service
+def _feishu_service() -> FeishuService:
+    return feishu_service
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+
+
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -67,22 +82,22 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
 
 
 async def _feishu_wiki_get_node(token_str: str, auth_token: str) -> dict[str, ToolArgumentValue] | None:
-    async with _httpx_module().AsyncClient(timeout=5) as client:
+    async with _httpx_client(timeout=5) as client:
         response = await client.get(
             "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node",
             headers={"Authorization": f"Bearer {auth_token}"},
             params={"token": token_str, "obj_type": "wiki"},
         )
-    data = response.json()
+    data = _response_mapping(response)
     if data.get("code") != 0:
         return None
-    node = data.get("data", {}).get("node", {})
+    node = json_object_from(json_object_from(data.get("data")).get("node"))
     return {
-        "obj_token": node.get("obj_token", ""),
-        "space_id": node.get("origin_space_id", node.get("space_id", "")),
-        "has_child": node.get("has_child", False),
-        "title": node.get("title", ""),
-        "node_token": node.get("node_token", token_str),
+        "obj_token": json_as_str_or(node.get("obj_token")),
+        "space_id": json_as_str_or(node.get("origin_space_id")) or json_as_str_or(node.get("space_id")),
+        "has_child": bool(node.get("has_child", False)),
+        "title": json_as_str_or(node.get("title")),
+        "node_token": json_as_str_or(node.get("node_token"), token_str),
     }
 
 
@@ -106,23 +121,19 @@ async def _feishu_doc_search(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     if docs_types:
         payload["docs_types"] = docs_types
 
-    async with _httpx_module().AsyncClient(timeout=20) as client:
+    async with _httpx_client(timeout=20) as client:
         response = await client.post(
             "https://open.feishu.cn/open-apis/suite/docs-api/search/object",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
         )
-    data: dict[str, ToolArgumentValue] = response.json()
+    data = _response_mapping(response)
     error = agent_tools._check_feishu_err(data)
     if error:
         return error
 
-    result_raw = data.get("data", {})
-    result: dict[str, ToolArgumentValue] = result_raw if isinstance(result_raw, dict) else {}
-    entities_raw = result.get("docs_entities", []) or []
-    entities: list[dict[str, ToolArgumentValue]] = (
-        [item for item in entities_raw if isinstance(item, dict)] if isinstance(entities_raw, list) else []
-    )
+    result = json_object_from(data.get("data"))
+    entities = [json_object_from(item) for item in object_list_from_row(result.get("docs_entities"))]
     if not entities:
         return _empty_search_result(query)
     return _format_search_results(query, count, offset, entities, result)
@@ -142,10 +153,10 @@ def _format_search_results(
     query: str,
     count: int,
     offset: int,
-    entities: list[dict[str, ToolArgumentValue]],
-    result: dict[str, ToolArgumentValue],
+    entities: list[JsonObject],
+    result: JsonObject,
 ) -> str:
-    total = result.get("total", len(entities))
+    total = json_as_int(result.get("total"), len(entities))
     has_more = bool(result.get("has_more", False))
     lines = [
         f"🔎 飞书文档搜索结果{_FW_COLON}关键词 `{query}`",
@@ -154,10 +165,10 @@ def _format_search_results(
     ]
     for index, item in enumerate(entities, start=offset + 1):
         lines.append(
-            f"{index}. **{item.get('title') or '(无标题)'}**\n"
-            + f"   - docs_type: `{item.get('docs_type') or 'unknown'}`\n"
-            + f"   - docs_token: `{item.get('docs_token') or ''}`\n"
-            + f"   - owner_id: `{item.get('owner_id') or ''}`"
+            f"{index}. **{json_as_str(item.get('title')) or '(无标题)'}**\n"
+            + f"   - docs_type: `{json_as_str(item.get('docs_type')) or 'unknown'}`\n"
+            + f"   - docs_token: `{json_as_str(item.get('docs_token')) or ''}`\n"
+            + f"   - owner_id: `{json_as_str(item.get('owner_id')) or ''}`"
         )
     lines.extend(
         [
@@ -220,22 +231,23 @@ async def _feishu_wiki_list(agent_id: uuid.UUID, arguments: ToolArguments) -> st
 async def _list_wiki_children(
     space_id: str, parent_token: str, tenant_token: str, recursive: bool, depth: int
 ) -> list[_WikiPage]:
-    async with _httpx_module().AsyncClient(timeout=15) as client:
+    async with _httpx_client(timeout=15) as client:
         response = await client.get(
             f"https://open.feishu.cn/open-apis/wiki/v2/spaces/{space_id}/nodes",
             headers={"Authorization": f"Bearer {tenant_token}"},
             params={"parent_node_token": parent_token, "page_size": 50},
         )
-    data = response.json()
+    data = _response_mapping(response)
     if data.get("code") != 0:
         return []
     pages: list[_WikiPage] = []
-    for item in data.get("data", {}).get("items", []):
+    for item in object_list_from_row(json_object_from(data.get("data")).get("items")):
+        node = json_object_from(item)
         page: _WikiPage = {
-            "title": item.get("title", "(无标题)"),
-            "node_token": item.get("node_token", ""),
-            "obj_token": item.get("obj_token", ""),
-            "has_child": item.get("has_child", False),
+            "title": json_as_str_or(node.get("title"), "(无标题)"),
+            "node_token": json_as_str_or(node.get("node_token")),
+            "obj_token": json_as_str_or(node.get("obj_token")),
+            "has_child": bool(node.get("has_child", False)),
             "depth": depth,
         }
         pages.append(page)
@@ -261,9 +273,10 @@ async def _feishu_doc_read(agent_id: uuid.UUID, arguments: ToolArguments) -> str
     read_token = document_token
     wiki_hint = ""
     node_info = await agent_tools._feishu_wiki_get_node(document_token, tenant_token)
-    if node_info and node_info.get("obj_token"):
-        read_token = node_info["obj_token"]
-        if node_info.get("has_child"):
+    obj_token = json_as_str(node_info.get("obj_token")) if node_info else None
+    if obj_token:
+        read_token = obj_token
+        if node_info and node_info.get("has_child"):
             wiki_hint = (
                 f"\n\n> 💡 这是一个 Wiki 目录页{_FW_COMMA}它有多个子页面。"
                 + f"使用 `feishu_wiki_list` 工具{_FW_LEFT_PAREN}传入相同的 node_token{_FW_RIGHT_PAREN}可以查看所有子页面列表。"
@@ -274,7 +287,7 @@ async def _feishu_doc_read(agent_id: uuid.UUID, arguments: ToolArguments) -> str
         error = agent_tools._check_feishu_err(response)
         if error:
             return error
-        content = response.get("data", {}).get("content", "")
+        content = json_as_str_or(json_object_from(response.get("data")).get("content"))
         if not content:
             return f"📄 Document '{document_token}' is empty.{wiki_hint}"
         truncated = ""

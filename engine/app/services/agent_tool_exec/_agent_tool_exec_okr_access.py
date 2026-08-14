@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import user_dao
@@ -26,7 +26,7 @@ async def _get_agent_owner_info(agent_id: uuid.UUID) -> tuple[str, str]:
     return "agent", str(agent_id)
 
 
-def _compute_okr_period_bounds(frequency: str, length_days: int | None):
+def _compute_okr_period_bounds(frequency: str, length_days: int | None) -> tuple[date, date]:
     today = date.today()  # noqa: DTZ011 - OKR periods intentionally follow the host-local calendar.
     if frequency == "monthly":
         start = today.replace(day=1)

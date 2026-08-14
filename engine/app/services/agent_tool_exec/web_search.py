@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import uuid
+from urllib.parse import quote
 
-import httpx
+from httpx import AsyncClient, Response
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, json_as_str, json_as_str_or
+from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from_response
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
@@ -17,17 +17,12 @@ def _search_providers_module():
     return search_providers
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
-
-
-def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -97,7 +92,7 @@ async def _jina_search(arguments: ToolArguments) -> str:
     try:
         async with _httpx_client(follow_redirects=True, timeout=30) as client:
             resp = await client.get(
-                f"https://s.jina.ai/{__import__('urllib.parse', fromlist=['quote']).quote(query)}",
+                f"https://s.jina.ai/{quote(query)}",
                 headers=headers,
             )
 

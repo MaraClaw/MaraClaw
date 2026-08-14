@@ -123,8 +123,8 @@ async def _ensure_platform_user(identity: IdentityRecord) -> UserRecord:
 
 async def _rehydrate_identity_hash(user: UserRecord) -> UserRecord:
     """Reload password_hash from SQL when a session snapshot stripped it."""
-    identity = getattr(user, "identity", None)
-    identity_id = getattr(user, "identity_id", None) or getattr(identity, "id", None)
+    identity = user.identity
+    identity_id = user.identity_id or (identity.id if identity is not None else None)
     if identity is not None and identity.password_hash:
         return user
     if identity_id is None:
@@ -139,11 +139,11 @@ async def _rehydrate_identity_hash(user: UserRecord) -> UserRecord:
 
 
 def _has_login_credentials(user: UserRecord) -> bool:
-    identity = getattr(user, "identity", None)
+    identity = user.identity
     if identity is None:
         return False
-    email = (getattr(identity, "email", None) or "").strip()
-    return bool(email and getattr(identity, "password_hash", None))
+    email = (identity.email or "").strip()
+    return bool(email and identity.password_hash)
 
 
 async def _find_genesis_membership() -> UserRecord | None:
@@ -154,7 +154,7 @@ async def _find_genesis_membership() -> UserRecord | None:
     earliest = await user_dao.first_by_role("platform_admin")
     if earliest is None:
         return None
-    if not getattr(earliest, "is_genesis", False):
+    if not earliest.is_genesis:
         earliest = await user_dao.update(db_obj=earliest, obj_in={"is_genesis": True}) or earliest
         earliest.is_genesis = True
     return earliest
@@ -228,7 +228,7 @@ async def ensure_platform_admin() -> UserRecord:
     if existing is not None:
         settings = get_settings()
         env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
-        actual = (getattr(getattr(existing, "identity", None), "email", None) or "").strip().lower()
+        actual = ((existing.identity.email if existing.identity is not None else None) or "").strip().lower()
         if env_email and actual and env_email != actual:
             logger.warning(
                 "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
@@ -242,7 +242,7 @@ async def ensure_platform_admin() -> UserRecord:
                 "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
                 existing.id,
             )
-        identity = getattr(existing, "identity", None)
+        identity = existing.identity
         if identity is not None:
             return await _ensure_platform_user(identity)
         return existing

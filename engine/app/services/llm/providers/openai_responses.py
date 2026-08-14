@@ -3,14 +3,37 @@
 from __future__ import annotations
 
 import json
-from typing import Any, override, ClassVar
+from typing import Any, ClassVar, override
 
 import httpx
 
-from app.core.json_types import is_str_dict, object_list_from_row
+from app.core.json_types import (
+    JsonObject,
+    is_str_dict,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
-from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
+from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
+
+
+def _mapping_str(mapping: dict[str, object], key: str, default: str = "") -> str:
+    return json_as_str_or(mapping.get(key), default)
+
+
+def _usage_from_json(value: object) -> LLMUsage | None:
+    usage_obj = json_object_from(value)
+    if not usage_obj:
+        return None
+    usage: LLMUsage = {}
+    for key, raw in usage_obj.items():
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            usage[key] = raw
+    return usage or None
 
 
 class OpenAIResponsesClient(LLMClient):
@@ -55,19 +78,18 @@ class OpenAIResponsesClient(LLMClient):
         if not isinstance(content, list):
             return content
 
-        content_parts: list[Any] = content
+        content_parts: list[object] = list(content)
         formatted: list[dict[str, Any]] = []
         for raw_part in content_parts:
             if not is_str_dict(raw_part):
                 continue
-            part: dict[str, Any] = dict(raw_part)
-            ptype = part.get("type")
+            part = json_object_from(raw_part)
+            ptype = json_as_str(part.get("type"))
             if ptype == "text":
-                formatted.append({"type": "input_text", "text": part.get("text", "")})
+                formatted.append({"type": "input_text", "text": json_as_str_or(part.get("text"))})
             elif ptype == "image_url":
-                img = part.get("image_url", {})
-                if is_str_dict(img):
-                    formatted.append({"type": "input_image", "image_url": img.get("url", "")})
+                img = json_object_from(part.get("image_url"))
+                formatted.append({"type": "input_image", "image_url": json_as_str_or(img.get("url"))})
             else:
                 formatted.append(part)
         return formatted if formatted else content_parts
@@ -135,18 +157,16 @@ class OpenAIResponsesClient(LLMClient):
         # Collect all call_ids from function_call items
         call_ids_with_fc: set[str] = set()
         for item in items:
-            if item.get("type") == "function_call":
-                call_id = item.get("call_id", "")
-                if call_id:
-                    call_ids_with_fc.add(call_id)
+            call_id = _mapping_str(item, "call_id")
+            if _mapping_str(item, "type") == "function_call" and call_id:
+                call_ids_with_fc.add(call_id)
 
         # Collect all call_ids from function_call_output items
         call_ids_with_fco: set[str] = set()
         for item in items:
-            if item.get("type") == "function_call_output":
-                call_id = item.get("call_id", "")
-                if call_id:
-                    call_ids_with_fco.add(call_id)
+            call_id = _mapping_str(item, "call_id")
+            if _mapping_str(item, "type") == "function_call_output" and call_id:
+                call_ids_with_fco.add(call_id)
 
         # Determine which call_ids are orphaned (output without call, or call without output)
         orphaned_fco = call_ids_with_fco - call_ids_with_fc
@@ -175,8 +195,8 @@ class OpenAIResponsesClient(LLMClient):
             item
             for item in items
             if not (
-                (item.get("type") == "function_call_output" and item.get("call_id", "") in orphaned_fco)
-                or (item.get("type") == "function_call" and item.get("call_id", "") in orphaned_fc)
+                (_mapping_str(item, "type") == "function_call_output" and _mapping_str(item, "call_id") in orphaned_fco)
+                or (_mapping_str(item, "type") == "function_call" and _mapping_str(item, "call_id") in orphaned_fc)
             )
         ]
 
@@ -209,7 +229,7 @@ class OpenAIResponsesClient(LLMClient):
         temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """Build request payload."""
         payload: dict[str, Any] = {
@@ -231,42 +251,48 @@ class OpenAIResponsesClient(LLMClient):
         payload.update(kwargs)
         return payload
 
-    def _parse_response_data(self, data: dict[str, Any]) -> LLMResponse:
+    def _parse_response_data(self, data: JsonObject) -> LLMResponse:
         """Convert Responses API payload into canonical LLMResponse."""
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[LLMToolCall] = []
 
-        for item in object_list_from_row(data.get("output")):
-            item_type = item.get("type")
+        for item_raw in object_list_from_row(data.get("output")):
+            item = json_object_from(item_raw)
+            item_type = json_as_str(item.get("type"))
             if item_type == "message":
-                for c in object_list_from_row(item.get("content")):
-                    c_type = c.get("type")
+                for content_raw in object_list_from_row(item.get("content")):
+                    content_item = json_object_from(content_raw)
+                    c_type = json_as_str(content_item.get("type"))
                     if c_type in {"output_text", "text"}:
-                        content_parts.append(c.get("text", ""))
+                        content_parts.append(json_as_str_or(content_item.get("text")))
                     elif c_type == "reasoning":
-                        reasoning_parts.append(c.get("summary", "") or c.get("text", ""))
+                        reasoning_parts.append(
+                            json_as_str_or(content_item.get("summary")) or json_as_str_or(content_item.get("text"))
+                        )
             elif item_type == "function_call":
-                args = item.get("arguments", "{}")
-                if isinstance(args, dict):
-                    args = json.dumps(args, ensure_ascii=False)
+                args_raw: object = item.get("arguments", "{}")
+                if is_str_dict(args_raw):
+                    args = json.dumps(json_object_from(args_raw), ensure_ascii=False)
+                else:
+                    args = json_as_str_or(args_raw, "{}")
                 tool_calls.append(
                     {
-                        "id": item.get("call_id") or item.get("id", ""),
+                        "id": json_as_str(item.get("call_id")) or json_as_str_or(item.get("id")),
                         "type": "function",
                         "function": {
-                            "name": item.get("name", ""),
-                            "arguments": str(args or "{}"),
+                            "name": json_as_str_or(item.get("name")),
+                            "arguments": args or "{}",
                         },
                     }
                 )
 
         # Some Responses payloads include a pre-aggregated output_text field.
         # Use it as a fallback when output blocks are empty.
-        if not content_parts and data.get("output_text"):
-            content_parts.append(str(data.get("output_text", "")))
+        output_text = json_as_str(data.get("output_text"))
+        if not content_parts and output_text:
+            content_parts.append(output_text)
 
-        usage = data.get("usage")
         finish_reason = "tool_calls" if tool_calls else "stop"
 
         return LLMResponse(
@@ -274,20 +300,21 @@ class OpenAIResponsesClient(LLMClient):
             tool_calls=tool_calls,
             reasoning_content="".join(reasoning_parts) or None,
             finish_reason=finish_reason,
-            usage=usage if isinstance(usage, dict) else None,
-            model=data.get("model"),
+            usage=_usage_from_json(data.get("usage")),
+            model=json_as_str(data.get("model")),
         )
 
-    def _extract_api_error(self, data: dict[str, Any]) -> str | None:
+    def _extract_api_error(self, data: JsonObject) -> str | None:
         """Extract meaningful error message from Responses API payload."""
         # OpenAI Responses often returns `"error": null` on success,
         # so we must only treat it as error when it's truthy.
-        err = data.get("error")
-        if err:
-            if is_str_dict(err):
-                msg = err.get("message") or str(err)
-                err_type = err.get("type")
-                err_code = err.get("code")
+        err_raw: object = data.get("error")
+        if err_raw:
+            if is_str_dict(err_raw):
+                err = json_object_from(err_raw)
+                msg = json_as_str(err.get("message")) or str(err_raw)
+                err_type = json_as_str(err.get("type"))
+                err_code = json_as_str(err.get("code"))
                 extra = []
                 if err_type:
                     extra.append(f"type={err_type}")
@@ -295,7 +322,7 @@ class OpenAIResponsesClient(LLMClient):
                     extra.append(f"code={err_code}")
                 suffix = f" ({', '.join(extra)})" if extra else ""
                 return f"{msg}{suffix}"
-            return str(err)
+            return str(err_raw)
 
         status = str(data.get("status") or "").lower()
         if status in {"failed", "incomplete", "cancelled"}:
@@ -313,7 +340,7 @@ class OpenAIResponsesClient(LLMClient):
 
         return None
 
-    def _build_error_log_context(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _build_error_log_context(self, data: JsonObject) -> dict[str, Any]:
         """Build compact context for error logs."""
         return {
             "provider": "openai-response",
@@ -332,7 +359,7 @@ class OpenAIResponsesClient(LLMClient):
         tools: list[ToolDefinition] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Non-streaming completion."""
         url = f"{self._normalize_base_url()}/responses"
@@ -345,7 +372,7 @@ class OpenAIResponsesClient(LLMClient):
             error_text = response.text[:500]
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
-        data = response.json()
+        data = json_object_from_response(response)
         api_error = self._extract_api_error(data)
         if api_error:
             ctx = self._build_error_log_context(data)
@@ -368,7 +395,7 @@ class OpenAIResponsesClient(LLMClient):
         on_chunk: ChunkCallback | None = None,
         on_tool_delta: ToolCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Streaming completion.
 

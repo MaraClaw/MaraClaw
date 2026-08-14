@@ -11,32 +11,22 @@ Reference: https://modelcontextprotocol.io/docs
 import json
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import Any, TypeIs
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    is_json_object,
+    json_loads_value,
+    json_value_from_response,
+)
 from app.core.logging import logger
 
 
-def _is_json_object(value: object) -> TypeIs[JsonObject]:
-    if not isinstance(value, dict):
-        return False
-    mapping: dict[object, object] = dict(value)
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
-
-
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, list):
-        return all(_is_json_value(item) for item in list[object](value))
-    return _is_json_object(value)
-
-
 def _require_json_object(value: object) -> JsonObject:
-    if not _is_json_object(value):
+    if not is_json_object(value):
         raise TypeError("MCP response must be a JSON object")
     return value
 
@@ -79,16 +69,15 @@ class MCPClient:
 
     def _parse_response(self, resp: httpx.Response) -> JsonObject:
         """Parse response - handles both JSON and SSE (text/event-stream) formats."""
-        content_type = resp.headers.get("content-type", "")
+        content_type = resp.headers["content-type"] if "content-type" in resp.headers else ""
 
         # Save session ID if the server returns one
-        session_id = resp.headers.get("mcp-session-id")
-        if session_id:
-            self._session_id = session_id
+        if "mcp-session-id" in resp.headers:
+            self._session_id = resp.headers["mcp-session-id"]
 
         if "text/event-stream" in content_type:
             return self._parse_sse_response(resp.text)
-        return _require_json_object(resp.json())
+        return _require_json_object(json_value_from_response(resp))
 
     def _parse_sse_response(self, text: str) -> JsonObject:
         """Extract the last JSON-RPC result from an SSE stream."""
@@ -98,8 +87,8 @@ class MCPClient:
                 raw = line[5:].strip()
                 if raw and raw != "[DONE]":
                     with suppress(json.JSONDecodeError):
-                        data = json.loads(raw)
-                        if _is_json_object(data):
+                        data = json_loads_value(raw)
+                        if is_json_object(data):
                             last_data = data
         if last_data is None:
             raise Exception("No valid JSON found in SSE response")
@@ -265,9 +254,9 @@ class MCPClient:
 
             # Phase 3: Read the response - either from POST response or from SSE stream
             if post_resp.status_code == 200:
-                ct = post_resp.headers.get("content-type", "")
+                ct = post_resp.headers["content-type"] if "content-type" in post_resp.headers else ""
                 if "application/json" in ct:
-                    return _require_json_object(post_resp.json())
+                    return _require_json_object(json_value_from_response(post_resp))
 
             # Read response from SSE stream
             result: JsonObject | None = None
@@ -279,9 +268,9 @@ class MCPClient:
                     data = line[5:].strip()
                     if event_type == "message" and data:
                         with suppress(json.JSONDecodeError):
-                            parsed_data = json.loads(data)
+                            parsed_data = json_loads_value(data)
                             # Match our request ID
-                            if _is_json_object(parsed_data) and parsed_data.get("id") in (0, 1):
+                            if is_json_object(parsed_data) and parsed_data.get("id") in (0, 1):
                                 result = parsed_data
                                 if parsed_data.get("id") == 1:
                                     break  # Got our actual request response
@@ -334,12 +323,12 @@ class MCPClient:
 
             if "error" in data:
                 err = data["error"]
-                error_message = err.get("message", str(err)) if _is_json_object(err) else str(err)
+                error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
                 msg = error_message if isinstance(error_message, str) else str(error_message)
                 raise Exception(f"MCP error: {msg}")
 
             result = data.get("result", {})
-            if not _is_json_object(result):
+            if not is_json_object(result):
                 return []
             tools = result.get("tools", [])
             if not isinstance(tools, list):
@@ -351,7 +340,7 @@ class MCPClient:
                     "inputSchema": tool.get("inputSchema", {}),
                 }
                 for tool in tools
-                if _is_json_object(tool)
+                if is_json_object(tool)
             ]
         except httpx.HTTPError as e:
             raise Exception(f"Connection failed: {str(e)[:200]}") from e
@@ -366,7 +355,7 @@ class MCPClient:
 
             if "error" in data:
                 err = data["error"]
-                error_message = err.get("message", str(err)) if _is_json_object(err) else str(err)
+                error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
                 msg = error_message if isinstance(error_message, str) else str(error_message)
                 return f"❌ MCP tool execution error: {msg[:200]}"
 
@@ -375,15 +364,15 @@ class MCPClient:
                 return result
 
             # MCP returns content as list of content blocks
-            raw_blocks = result.get("content") if _is_json_object(result) else None
+            raw_blocks = result.get("content") if is_json_object(result) else None
             if not isinstance(raw_blocks, list):
                 return str(result)
-            content_blocks: list[Any] = list(raw_blocks)
-            texts = []
+            content_blocks: list[object] = list(raw_blocks)
+            texts: list[str] = []
             for block in content_blocks:
                 if isinstance(block, str):
                     texts.append(block)
-                elif _is_json_object(block):
+                elif is_json_object(block):
                     if block.get("type") == "text":
                         text = block.get("text", "")
                         texts.append(text if isinstance(text, str) else str(text))

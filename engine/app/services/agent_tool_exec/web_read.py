@@ -6,22 +6,29 @@ import ipaddress
 import re
 import socket
 from collections.abc import Callable
+from typing import Protocol, TypeIs, cast
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
+from httpx import AsyncClient, Response, TimeoutException
 
 from app.services.agent_tool_exec.registry import ToolArguments
 
 from . import search_providers
 
-
-def _httpx_module():
-    return importlib.import_module("httpx")
+type TrafilaturaExtract = Callable[..., object]
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
+class _TrafilaturaModule(Protocol):
+    extract: TrafilaturaExtract
+
+
+def _is_trafilatura_module(value: object) -> TypeIs[_TrafilaturaModule]:
+    return callable(getattr(value, "extract", None))
+
+
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
 def _search_providers_module():
@@ -32,8 +39,11 @@ def _beautiful_soup() -> type[BeautifulSoup]:
     return BeautifulSoup
 
 
-def _trafilatura_extract() -> Callable[..., object]:
-    return importlib.import_module("trafilatura").extract
+def _trafilatura_extract() -> TrafilaturaExtract:
+    module: object = importlib.import_module("trafilatura")
+    if not _is_trafilatura_module(module):
+        raise TypeError("trafilatura.extract is unavailable")
+    return module.extract
 
 
 async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
@@ -135,7 +145,6 @@ def _integer_argument(arguments: ToolArguments, name: str, default: int) -> int:
 
 
 async def _read_webpage(arguments: ToolArguments) -> str:
-    httpx_mod = _httpx_module()
     extract_readable = _trafilatura_extract()
     beautiful_soup = _beautiful_soup()
     url, validation_error = await _validate_public_http_url(_string_argument(arguments, "url"))
@@ -153,10 +162,11 @@ async def _read_webpage(arguments: ToolArguments) -> str:
     try:
         async with (
             _httpx_client(follow_redirects=True, timeout=15) as client,
-            client.stream("GET", url, headers=headers) as resp,
+            client.stream("GET", url, headers=headers) as streamed,
         ):
-            content_length = resp.headers.get("content-length")
-            if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+            resp: Response = streamed
+            content_length = cast(str | None, resp.headers.get("content-length"))
+            if isinstance(content_length, str) and content_length.isdigit() and int(content_length) > max_bytes:
                 return f"❌ Page is too large to read safely ({content_length} bytes, limit {max_bytes} bytes)"
 
             chunks: list[bytes] = []
@@ -207,7 +217,11 @@ async def _read_webpage(arguments: ToolArguments) -> str:
                 include_comments=False,
                 include_tables=True,
             )
-            extracted = extracted_raw if isinstance(extracted_raw, str) and extracted_raw else _fallback_extract_visible_text(text)
+            extracted = (
+                extracted_raw
+                if isinstance(extracted_raw, str) and extracted_raw
+                else _fallback_extract_visible_text(text)
+            )
             if include_links:
                 links = _extract_page_links(text, final_url)
         elif content_type.startswith("text/") or content_type in {"application/json", "application/xml", "text/xml"}:
@@ -241,7 +255,7 @@ async def _read_webpage(arguments: ToolArguments) -> str:
             result += "\n\n---\n\nLinks:\n" + "\n".join(links)
         return result
 
-    except httpx_mod.TimeoutException:
+    except TimeoutException:
         return f"❌ Webpage fetch timed out: {url}"
     except Exception as e:
         return f"❌ Webpage read error: {str(e)[:300]}"

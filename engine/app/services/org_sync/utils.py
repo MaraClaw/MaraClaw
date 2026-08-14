@@ -1,9 +1,9 @@
 """Shared organization sync utility helpers."""
 
-from typing import ClassVar
 import importlib
 from datetime import UTC, datetime
 from types import ModuleType
+from typing import ClassVar
 
 
 def _load_optional_module(name: str) -> ModuleType | None:

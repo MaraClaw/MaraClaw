@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from types import ModuleType
+from typing import Protocol, TypeIs
 
+import httpx
+
+from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.services import agent_tools
 from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str, tool_arg_str_or
@@ -15,12 +18,38 @@ _FW_LEFT_PAREN = "\uff08"
 _FW_RIGHT_PAREN = "\uff09"
 
 
-def _feishu_service():
-    return importlib.import_module("app.services.feishu_service").feishu_service
+class _FeishuDocsService(Protocol):
+    async def get_tenant_access_token(self, app_id: str | None = None, app_secret: str | None = None) -> str: ...
+
+    async def create_feishu_doc(
+        self, app_id: str, app_secret: str, folder_token: str | None = None, title: str = "Untitled Document"
+    ) -> JsonObject: ...
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+class _FeishuServiceModule(Protocol):
+    feishu_service: _FeishuDocsService
+
+
+def _is_feishu_service_module(value: object) -> TypeIs[_FeishuServiceModule]:
+    service: object = getattr(value, "feishu_service", None)
+    return callable(getattr(service, "get_tenant_access_token", None)) and callable(
+        getattr(service, "create_feishu_doc", None)
+    )
+
+
+def _feishu_service() -> _FeishuDocsService:
+    module: object = importlib.import_module("app.services.feishu_service")
+    if not _is_feishu_service_module(module):
+        raise TypeError("feishu_service is unavailable")
+    return module.feishu_service
+
+
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+
+
+def _response_mapping(response: httpx.Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
@@ -63,7 +92,9 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         error = agent_tools._check_feishu_err(response)
         if error:
             return error
-        doc_token = response.get("data", {}).get("document", {}).get("document_id", "")
+        doc_token = json_as_str_or(
+            json_object_from(json_object_from(response.get("data")).get("document")).get("document_id")
+        )
         doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, doc_token)
         share_note = await _share_with_sender(agent_tools, tenant_token, doc_token)
         return (
@@ -78,7 +109,7 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
 
 
 async def _create_wiki_doc(
-    facade: ModuleType,
+    facade: object,
     tenant_token: str,
     title: str,
     wiki_space_id: str,
@@ -88,20 +119,20 @@ async def _create_wiki_doc(
     if parent_node_token:
         body["parent_node_token"] = parent_node_token
 
-    async with _httpx_module().AsyncClient(timeout=15) as client:
+    async with _httpx_client(timeout=15) as client:
         response = await client.post(
             f"https://open.feishu.cn/open-apis/wiki/v2/spaces/{wiki_space_id}/nodes",
             json=body,
             headers={"Authorization": f"Bearer {tenant_token}"},
         )
-    result = response.json()
+    result = _response_mapping(response)
     error = agent_tools._check_feishu_err(result)
     if error:
         return error
 
-    node = result.get("data", {}).get("node", {})
-    doc_token = node.get("obj_token", "")
-    node_token = node.get("node_token", "")
+    node = json_object_from(json_object_from(result.get("data")).get("node"))
+    doc_token = json_as_str_or(node.get("obj_token"))
+    node_token = json_as_str_or(node.get("node_token"))
     doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, node_token, doc_type="wiki")
     return (
         f"✅ 知识库文档创建成功{_FW_EXCLAMATION}\n"
@@ -113,19 +144,19 @@ async def _create_wiki_doc(
     )
 
 
-async def _share_with_sender(facade: ModuleType, tenant_token: str, doc_token: str) -> str:
+async def _share_with_sender(facade: object, tenant_token: str, doc_token: str) -> str:
     try:
         sender_open_id = channel_feishu_sender_open_id.get(None)
         if not sender_open_id or not doc_token:
             return ""
-        async with _httpx_module().AsyncClient(timeout=10) as client:
+        async with _httpx_client(timeout=10) as client:
             response = await client.post(
                 f"https://open.feishu.cn/open-apis/drive/v1/permissions/{doc_token}/members",
                 params={"type": "docx"},
                 json={"member_type": "openid", "member_id": sender_open_id, "perm": "full_access"},
                 headers={"Authorization": f"Bearer {tenant_token}"},
             )
-        result = response.json()
+        result = _response_mapping(response)
         if result.get("code") == 0:
             return "\n✅ 已自动为你开通访问权限。"
         return f"\n⚠️ 自动授权失败{_FW_LEFT_PAREN}{result.get('code')}{_FW_RIGHT_PAREN}{_FW_COMMA}你可能需要手动在飞书前端搜索此文件。"
@@ -159,26 +190,27 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     docx_token = obj_token or document_token
 
     try:
-        async with _httpx_module().AsyncClient(timeout=20) as client:
-            metadata = (
-                await client.get(
-                    f"https://open.feishu.cn/open-apis/docx/v1/documents/{docx_token}",
-                    headers={"Authorization": f"Bearer {tenant_token}"},
-                )
-            ).json()
+        async with _httpx_client(timeout=20) as client:
+            metadata_response = await client.get(
+                f"https://open.feishu.cn/open-apis/docx/v1/documents/{docx_token}",
+                headers={"Authorization": f"Bearer {tenant_token}"},
+            )
+            metadata = _response_mapping(metadata_response)
             error = agent_tools._check_feishu_err(metadata)
             if error:
                 return error
 
-            body_block_id = metadata.get("data", {}).get("document", {}).get("body", {}).get("block_id") or docx_token
+            body = json_object_from(
+                json_object_from(json_object_from(metadata.get("data")).get("document")).get("body")
+            )
+            body_block_id = json_as_str(body.get("block_id")) or docx_token
             children = agent_tools._markdown_to_feishu_blocks(content)
-            result = (
-                await client.post(
-                    f"https://open.feishu.cn/open-apis/docx/v1/documents/{docx_token}/blocks/{body_block_id}/children",
-                    json={"children": children},
-                    headers={"Authorization": f"Bearer {tenant_token}"},
-                )
-            ).json()
+            result_response = await client.post(
+                f"https://open.feishu.cn/open-apis/docx/v1/documents/{docx_token}/blocks/{body_block_id}/children",
+                json={"children": children},
+                headers={"Authorization": f"Bearer {tenant_token}"},
+            )
+            result = _response_mapping(result_response)
             error = agent_tools._check_feishu_err(result)
             if error:
                 return error

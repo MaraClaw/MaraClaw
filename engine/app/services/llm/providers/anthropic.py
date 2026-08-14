@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, override, ClassVar
+from typing import ClassVar, override
 
 import httpx
 
@@ -14,7 +14,9 @@ from app.core.json_types import (
     json_as_int,
     json_as_str,
     json_as_str_or,
+    json_loads_object,
     json_object_from,
+    json_object_from_response,
 )
 from app.services.llm.base import (
     ChunkCallback,
@@ -166,7 +168,7 @@ class AnthropicClient(LLMClient):
         tools: list[ToolDefinition] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Non-streaming completion."""
         url = f"{self._normalize_base_url()}/v1/messages"
@@ -179,7 +181,7 @@ class AnthropicClient(LLMClient):
             error_text = response.text[:500]
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
-        data = json_object_from(response.json())
+        data = json_object_from_response(response)
         if data.get("type") == "error":
             raise LLMError(f"API error: {data.get('error', {})}")
 
@@ -242,7 +244,7 @@ class AnthropicClient(LLMClient):
         on_chunk: ChunkCallback | None = None,
         on_tool_delta: ToolCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Streaming completion."""
         url = f"{self._normalize_base_url()}/v1/messages"
@@ -285,7 +287,7 @@ class AnthropicClient(LLMClient):
                         break
 
                     try:
-                        data = json_object_from(json.loads(data_str))
+                        data = json_loads_object(data_str)
                     except json.JSONDecodeError:
                         continue
 

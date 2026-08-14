@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 
 from app.services import focus_service
 from app.services.focus_service import is_focus_file_path
 
-from . import workspace, workspace_read
+from . import documents, workspace, workspace_read
 from .registry import ToolArguments, ToolOutputCallback, current_execution_context, register
-
-documents = importlib.import_module("app.services.agent_tool_exec.documents")
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:

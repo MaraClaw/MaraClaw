@@ -2,13 +2,42 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from typing import Protocol, TypeIs
 
+from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
 
 
-def _feishu_service():
-    return importlib.import_module("app.services.feishu_service").feishu_service
+class _FeishuDocsService(Protocol):
+    async def get_tenant_access_token(self, app_id: str | None = None, app_secret: str | None = None) -> str: ...
+
+    async def read_feishu_doc(self, app_id: str, app_secret: str, document_id: str) -> JsonObject: ...
+
+    async def create_feishu_doc(
+        self, app_id: str, app_secret: str, folder_token: str | None = None, title: str = "Untitled Document"
+    ) -> JsonObject: ...
+
+    async def append_feishu_doc(self, app_id: str, app_secret: str, document_id: str, content: str) -> JsonObject: ...
+
+
+class _FeishuServiceModule(Protocol):
+    feishu_service: _FeishuDocsService
+
+
+def _is_feishu_service_module(value: object) -> TypeIs[_FeishuServiceModule]:
+    service: object = getattr(value, "feishu_service", None)
+    return all(
+        callable(getattr(service, name, None))
+        for name in ("get_tenant_access_token", "read_feishu_doc", "create_feishu_doc", "append_feishu_doc")
+    )
+
+
+def _feishu_service() -> _FeishuDocsService:
+    module: object = importlib.import_module("app.services.feishu_service")
+    if not _is_feishu_service_module(module):
+        raise TypeError("feishu_service is unavailable")
+    return module.feishu_service
 
 
 async def _resolve_docx_document_token(agent_id: uuid.UUID, parsed_url: dict[str, str]) -> str | None:
@@ -43,7 +72,7 @@ async def _feishu_read_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> str
         error = agent_tools._check_feishu_err(response)
         if error:
             return error
-        content = response.get("data", {}).get("content", "")
+        content = json_as_str_or(json_object_from(response.get("data")).get("content"))
         if not content:
             return "OK: Document is empty or content is unavailable."
         return f"OK: Document Content:\n{content}"
@@ -66,7 +95,9 @@ async def _feishu_create_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         error = agent_tools._check_feishu_err(response)
         if error:
             return error
-        doc_id = response.get("data", {}).get("document", {}).get("document_id")
+        doc_id = json_as_str_or(
+            json_object_from(json_object_from(response.get("data")).get("document")).get("document_id")
+        )
         tenant_token = await service.get_tenant_access_token(app_id, app_secret)
         url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, doc_id)
         return f"OK: Document created perfectly. Document ID: {doc_id}\nURL: {url}"

@@ -1,9 +1,10 @@
 """Seed builtin tools into the database on startup."""
 
+from collections.abc import Sequence
 from typing import Any, TypedDict, TypeIs
 from uuid import UUID
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, JsonValue, json_as_str, object_list_from_row
 from app.core.logging import logger
 from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tenant_dao, tool_dao
@@ -12,9 +13,9 @@ from app.services import tool_definitions
 from app.services.tool_config import get_tenant_tool_config, meaningful_config, set_tenant_tool_config
 
 AGENTBAY_TOOLS = tool_definitions.AGENTBAY_TOOLS
-BUILTIN_TOOLS = tool_definitions.BUILTIN_TOOLS
-DEPLOY_BUILTIN_TOOLS = tool_definitions.DEPLOY_BUILTIN_TOOLS
-OKR_BUILTIN_TOOLS = tool_definitions.OKR_BUILTIN_TOOLS
+BUILTIN_TOOLS: Sequence[object] = tool_definitions.BUILTIN_TOOLS
+DEPLOY_BUILTIN_TOOLS: Sequence[object] = tool_definitions.DEPLOY_BUILTIN_TOOLS
+OKR_BUILTIN_TOOLS: Sequence[object] = tool_definitions.OKR_BUILTIN_TOOLS
 
 SYNC_IS_DEFAULT_TOOL_NAMES = {
     "finish",
@@ -331,8 +332,12 @@ async def seed_builtin_tools():
                         config_schema,
                     )
                     migrated += 1
-                schema_fields = (tool.config_schema or {}).get("fields", [])
-                sensitive_keys = {f["key"] for f in schema_fields if f.get("type") == "password"}
+                schema_fields = object_list_from_row((tool.config_schema or {}).get("fields", []))
+                sensitive_keys = {
+                    key
+                    for field in schema_fields
+                    if json_as_str(field.get("type")) == "password" and (key := json_as_str(field.get("key")))
+                }
                 clean_config = {key: value for key, value in (tool.config or {}).items() if key not in sensitive_keys}
                 if clean_config != tool.config:
                     _ = await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})

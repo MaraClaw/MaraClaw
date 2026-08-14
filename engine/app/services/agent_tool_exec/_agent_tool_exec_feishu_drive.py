@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import importlib
 import re
 import uuid
 from typing import Final
 
-import httpx
+from httpx import AsyncClient, Response
 
-from app.core.json_types import JsonObject, json_as_str
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response
 from app.services import agent_tools
-from app.services.feishu_service import FeishuService
+from app.services.feishu_service import FeishuService, feishu_service
 
 from .registry import ToolArguments, tool_arg_str_or
 
@@ -28,20 +27,15 @@ _TYPE_LABELS: Final = {
 
 
 def _feishu_service() -> FeishuService:
-    return importlib.import_module("app.services.feishu_service").feishu_service
+    return feishu_service
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
-
-
-def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _nested_mapping(value: object) -> JsonObject:
@@ -152,7 +146,9 @@ async def _list_drive_members(
         if code == 1063003 and is_wiki:
             return (
                 f"ℹ️ 文档 `{document_token}` 是知识库页面，其权限由知识库空间统一管理。\n"  # noqa: RUF001
-                + "知识库空间 ID：`" + space_id + "`\n"
+                + "知识库空间 ID：`"
+                + space_id
+                + "`\n"
                 + "请直接在飞书知识库中管理成员权限。"
             )
         if code in (99991672, 99991668):
@@ -173,7 +169,7 @@ async def _list_drive_members(
 
 
 async def _add_member(
-    client: httpx.AsyncClient,
+    client: AsyncClient,
     display: str,
     open_id: str,
     document_token: str,
@@ -219,7 +215,7 @@ async def _add_member(
 
 
 async def _remove_member(
-    client: httpx.AsyncClient,
+    client: AsyncClient,
     display: str,
     open_id: str,
     document_token: str,

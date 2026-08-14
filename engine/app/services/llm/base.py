@@ -65,7 +65,7 @@ class LLMClient(ABC):
         tools: list[ToolDefinition] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Send a completion request and return the full response."""
 
@@ -79,7 +79,7 @@ class LLMClient(ABC):
         on_chunk: ChunkCallback | None = None,
         on_tool_delta: ToolCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> LLMResponse:
         """Send a streaming request and return the aggregated response."""
 

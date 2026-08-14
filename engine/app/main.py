@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.core.events import close_redis
-from app.core.json_types import is_any_list, object_list_from_row
+from app.core.json_types import is_any_list, json_loads_value, object_list_from_row
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
 from app.core.middleware import TraceIdMiddleware
 from app.db.session import bind_crud_connection
@@ -147,7 +147,7 @@ async def _start_ss_local() -> None:
             if not raw:
                 logger.warning(f"[Proxy] {cfg_file} exists but is empty - skipping proxy")
                 return
-            parsed = json.loads(raw)
+            parsed = json_loads_value(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(f"[Proxy] Failed to parse {cfg_file}: {exc} - skipping proxy")
             return

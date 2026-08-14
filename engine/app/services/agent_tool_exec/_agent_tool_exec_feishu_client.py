@@ -1,17 +1,25 @@
 from __future__ import annotations
 
-import importlib
 import re
 import uuid
 
+from httpx import AsyncClient, Response
+
 from app.config import get_settings
+from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
 from app.dao.channel_config_dao import channel_config_dao
 
-from .registry import ToolArgumentValue
+
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
+
+
+def _tenant_domain(data: JsonObject) -> str:
+    return json_as_str_or(json_object_from(json_object_from(data.get("data")).get("tenant")).get("domain"))
 
 
 async def _get_feishu_credentials(agent_id: uuid.UUID) -> tuple[str, str]:
@@ -32,14 +40,14 @@ async def _get_feishu_credentials(agent_id: uuid.UUID) -> tuple[str, str]:
 
 async def _get_feishu_tenant_doc_url(tenant_token: str, doc_token: str, doc_type: str = "docx") -> str:
     try:
-        async with _httpx_module().AsyncClient(timeout=10) as client:
+        async with _httpx_client(timeout=10) as client:
             resp = await client.get(
                 "https://open.feishu.cn/open-apis/tenant/v2/tenant/query",
                 headers={"Authorization": f"Bearer {tenant_token}"},
             )
-        data = resp.json()
+        data = _response_mapping(resp)
         if data.get("code") == 0:
-            domain = data.get("data", {}).get("tenant", {}).get("domain", "")
+            domain = _tenant_domain(data)
             if domain:
                 return f"https://{domain}/{doc_type}/{doc_token}"
     except Exception:
@@ -49,14 +57,14 @@ async def _get_feishu_tenant_doc_url(tenant_token: str, doc_token: str, doc_type
 
 async def _get_feishu_bitable_url(tenant_token: str, app_token: str, table_id: str = "") -> str:
     try:
-        async with _httpx_module().AsyncClient(timeout=10) as client:
+        async with _httpx_client(timeout=10) as client:
             resp = await client.get(
                 "https://open.feishu.cn/open-apis/tenant/v2/tenant/query",
                 headers={"Authorization": f"Bearer {tenant_token}"},
             )
-        data = resp.json()
+        data = _response_mapping(resp)
         if data.get("code") == 0:
-            domain = data.get("data", {}).get("tenant", {}).get("domain", "")
+            domain = _tenant_domain(data)
             if domain:
                 base_url = f"https://{domain}/base/{app_token}"
                 if table_id:
@@ -104,10 +112,11 @@ def _parse_feishu_url(url: str) -> dict[str, str]:
     return result
 
 
-def _check_feishu_err(resp: dict[str, ToolArgumentValue]) -> str | None:
-    code = resp.get("code")
+def _check_feishu_err(resp: object) -> str | None:
+    data = json_object_from(resp)
+    code = data.get("code")
     if code != 0:
-        msg = str(resp.get("msg", ""))
+        msg = str(data.get("msg", ""))
         msg_lower = msg.lower()
         perm_codes = {99991663, 10006, 99991661, 99991668, 91403, 1063001, 1063004}
         perm_keywords = ("permission", "forbidden", "no access", "access denied", "403")

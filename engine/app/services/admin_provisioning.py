@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from app.core.security import hash_password_async

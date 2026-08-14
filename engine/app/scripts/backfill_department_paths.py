@@ -7,6 +7,7 @@ Usage:
 
 import asyncio
 
+from app.core.json_types import str_from_row, uuid_from_row, uuid_from_row_opt
 from app.core.logging import logger
 from app.dao.org_department_dao import org_department_dao
 from app.db.pool import close_pool, init_pool
@@ -20,7 +21,7 @@ async def main():
         # Prefer explicit list of provider ids (active + inactive) for full backfill.
         async with connection_ctx() as db:
             rows = await db.fetchall("SELECT id FROM identity_providers")
-            provider_ids = [row["id"] for row in rows]
+            provider_ids = [uuid_from_row(row["id"]) for row in rows]
 
         logger.info(f"Found {len(provider_ids)} providers to backfill")
 
@@ -46,12 +47,13 @@ async def main():
                     {"provider_id": provider_id},
                 )
             for row in member_rows:
-                new_path = path_map.get(row["department_id"], "") if row["department_id"] else ""
-                if (row.get("department_path") or "") != new_path:
+                department_id = uuid_from_row_opt(row.get("department_id"))
+                new_path = path_map.get(department_id, "") if department_id is not None else ""
+                if str_from_row(row.get("department_path")) != new_path:
                     async with connection_ctx() as db:
                         await db.execute(
                             "UPDATE org_members SET department_path = %(path)s WHERE id = %(id)s",
-                            {"path": new_path, "id": row["id"]},
+                            {"path": new_path, "id": uuid_from_row(row["id"])},
                         )
                     updated_members += 1
 

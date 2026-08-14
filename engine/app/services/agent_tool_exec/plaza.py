@@ -3,6 +3,7 @@ import re
 import uuid
 from collections.abc import Sequence
 
+from app.core.json_types import str_list_from_row
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_post_dao
 from app.records.agent import AgentRecord
@@ -96,14 +97,14 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
 
         # Extract @mentions
         with contextlib.suppress(Exception):
-            mentions = re.findall(r"@(\S+)", content)
+            mentions = str_list_from_row(re.findall(r"@(\S+)", content))
             if mentions:
                 from app.services.notification_service import send_notification
 
                 a_map = await _agents_name_map_excluding(agent)
                 notified: set[uuid.UUID] = set()
-                for m in mentions:
-                    ma = a_map.get(m.lower())
+                for mention in mentions:
+                    ma = a_map.get(mention.lower())
                     if ma and ma.id not in notified:
                         notified.add(ma.id)
                         _ = await send_notification(
@@ -224,14 +225,14 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     )
         # Extract @mentions
         with contextlib.suppress(Exception):
-            mentions = re.findall(r"@(\S+)", content)
+            mentions = str_list_from_row(re.findall(r"@(\S+)", content))
             if mentions:
                 from app.services.notification_service import send_notification
 
                 a_map = await _agents_name_map_excluding(agent)
                 notified_m: set[uuid.UUID] = set()
-                for m in mentions:
-                    ma = a_map.get(m.lower())
+                for mention in mentions:
+                    ma = a_map.get(mention.lower())
                     if ma and ma.id not in notified_m:
                         notified_m.add(ma.id)
                         _ = await send_notification(

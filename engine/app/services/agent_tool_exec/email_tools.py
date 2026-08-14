@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.core.json_types import JsonObject
 from app.core.tool_types import ToolConfigSchema
@@ -39,7 +39,7 @@ def _string_list_argument(arguments: ToolArguments, name: str) -> list[str] | No
 
 
 def _decrypt_sensitive_fields(
-    config: JsonObject, config_schema: Mapping[str, Any] | ToolConfigSchema | None = None
+    config: JsonObject, config_schema: ToolConfigSchema | Mapping[str, object] | None = None
 ) -> JsonObject:
     """Decrypt sensitive fields in config dict.
 
@@ -57,11 +57,15 @@ def _decrypt_sensitive_fields(
 
     sensitive_keys = set(SENSITIVE_FIELD_KEYS)
     if config_schema:
-        for field in config_schema.get("fields", []):
-            if field.get("type") == "password":
-                key = field.get("key", "")
-                if key:
-                    sensitive_keys.add(key)
+        fields = config_schema.get("fields", [])
+        if isinstance(fields, list):
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                if field.get("type") == "password":
+                    key = field.get("key", "")
+                    if isinstance(key, str) and key:
+                        sensitive_keys.add(key)
 
     for key in sensitive_keys:
         if result.get(key):

@@ -1,10 +1,19 @@
 """aio-sandbox backend."""
 
 import time
-from typing import Any, override
+from typing import override
 
 import httpx
 
+from app.core.json_types import (
+    is_any_list,
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+)
 from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
@@ -66,7 +75,7 @@ class AioSandboxBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using aio-sandbox."""
         start_time = time.time()
@@ -118,7 +127,7 @@ class AioSandboxBackend(BaseSandboxBackend):
                         error=f"aio-sandbox error: HTTP {response.status_code} - {response.text[:200]}",
                     )
 
-                result = response.json()
+                result = json_object_from_response(response)
 
                 # Parse response
                 # Shell: {"success": true, "data": {"output": "...", "exit_code": 0}}
@@ -126,37 +135,44 @@ class AioSandboxBackend(BaseSandboxBackend):
 
                 stdout = ""
                 stderr = ""
-                success = result.get("success", True)
+                success = json_as_bool(result.get("success"), True)
                 error_msg = None
                 exit_code = 0
 
-                data = result.get("data", {})
+                data = json_object_from(result.get("data"))
 
                 if language == "python":
                     # Jupyter format - outputs is a list
                     if data and "outputs" in data:
-                        outputs = data["outputs"]
-                        text_parts = []
-                        for out in outputs:
-                            if out.get("output_type") == "stream" and out.get("name") == "stdout":
-                                text_parts.append(out.get("text", ""))
-                            elif out.get("output_type") == "error":
-                                stderr += (
-                                    out.get("traceback", [""])[0] if out.get("traceback") else out.get("evalue", "")
-                                )
+                        outputs_raw: object = data.get("outputs")
+                        text_parts: list[str] = []
+                        for out_item in outputs_raw if is_any_list(outputs_raw) else []:
+                            out_raw: object = out_item
+                            out = json_object_from(out_raw)
+                            output_type = json_as_str(out.get("output_type"))
+                            if output_type == "stream" and json_as_str(out.get("name")) == "stdout":
+                                text_parts.append(json_as_str_or(out.get("text")))
+                            elif output_type == "error":
+                                traceback_raw: object = out.get("traceback")
+                                if is_any_list(traceback_raw) and traceback_raw:
+                                    traceback_items = list[object](traceback_raw)
+                                    first = traceback_items[0]
+                                    stderr += first if isinstance(first, str) else ""
+                                else:
+                                    stderr += json_as_str_or(out.get("evalue"))
                         stdout = "".join(text_parts)
 
-                    if data.get("status") != "ok":
+                    if json_as_str(data.get("status")) != "ok":
                         success = False
                         exit_code = 1
                 else:
                     # Shell format
                     if data:
-                        stdout = data.get("output", "")
-                        exit_code = data.get("exit_code", 0)
+                        stdout = json_as_str_or(data.get("output"))
+                        exit_code = json_as_int(data.get("exit_code"), 0)
 
                     if not success:
-                        error_msg = data.get("output", "Command failed")
+                        error_msg = json_as_str(data.get("output")) or "Command failed"
 
                 return ExecutionResult(
                     success=success,

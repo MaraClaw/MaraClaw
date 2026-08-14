@@ -1,7 +1,8 @@
 """Smithery Connect execution and recovery helpers."""
 
 import uuid
-from typing import Any
+
+from app.core.json_types import JsonObject, json_as_str, json_loads_value
 
 from .registry import ToolArguments, ToolArgumentValue
 
@@ -102,14 +103,14 @@ async def _execute_via_smithery_connect(
 
             # Smithery Connect returns SSE format: "event: message\ndata: {...}\n"
             raw = tool_resp.text
-            data: dict[str, Any] | None = None
+            data: JsonObject | None = None
 
             # Parse SSE response
             for line in raw.split("\n"):
                 line = line.strip()
                 if line.startswith("data: "):
                     try:
-                        parsed = json_mod.loads(line[6:])
+                        parsed = json_loads_value(line[6:])
                         data = parsed if isinstance(parsed, dict) else None
                         break
                     except json_mod.JSONDecodeError:
@@ -118,7 +119,7 @@ async def _execute_via_smithery_connect(
             # Fallback: try parsing as plain JSON
             if data is None:
                 try:
-                    parsed = json_mod.loads(raw)
+                    parsed = json_loads_value(raw)
                     if not isinstance(parsed, dict):
                         return f"❌ Unexpected response from Smithery: {raw[:300]}"
                     data = parsed
@@ -127,7 +128,9 @@ async def _execute_via_smithery_connect(
 
             if "error" in data:
                 err = data["error"]
-                msg: str = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                msg = json_as_str(err.get("message")) if isinstance(err, dict) else str(err)
+                if not msg:
+                    msg = str(err)
                 # Check if error indicates auth/connection issue
                 auth_keywords = ["auth", "unauthorized", "forbidden", "expired", "not found", "connection"]
                 if any(kw in msg.lower() for kw in auth_keywords):
@@ -140,18 +143,15 @@ async def _execute_via_smithery_connect(
             if isinstance(result, str):
                 return result
 
-            raw_blocks: Any = result.get("content") if isinstance(result, dict) else None
-            if not isinstance(raw_blocks, list):
-                content_blocks: list[Any] = []
-            else:
-                content_blocks = list(raw_blocks)
+            raw_blocks = result.get("content") if isinstance(result, dict) else None
+            content_blocks = list[object](raw_blocks) if isinstance(raw_blocks, list) else []
             texts: list[str] = []
             for block in content_blocks:
                 if isinstance(block, str):
                     texts.append(block)
                 elif isinstance(block, dict):
                     if block.get("type") == "text":
-                        text: Any = block.get("text", "")
+                        text = block.get("text", "")
                         texts.append(text if isinstance(text, str) else str(text))
                     elif block.get("type") == "image":
                         texts.append(f"[Image: {block.get('mimeType', 'image')}]")

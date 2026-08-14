@@ -16,6 +16,7 @@ from typing import TypedDict
 
 import httpx
 
+from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.storage import store_agent_upload
@@ -127,8 +128,8 @@ async def _get_media_download_url(access_token: str, download_code: str, robot_c
                 headers={"x-acs-dingtalk-access-token": access_token},
                 json={"downloadCode": download_code, "robotCode": robot_code},
             )
-            data = resp.json()
-            url = data.get("downloadUrl")
+            data = json_object_from_response(resp)
+            url = json_as_str(data.get("downloadUrl"))
             if url:
                 return url
             logger.error(f"[DingTalk] Failed to get download URL: {data}")
@@ -355,9 +356,9 @@ async def _upload_dingtalk_media(
                 upload_url,
                 files={"media": (file_p.name, file_bytes)},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             # Legacy API returns media_id (snake_case), new API returns mediaId
-            media_id = data.get("media_id") or data.get("mediaId")
+            media_id = json_as_str(data.get("media_id")) or json_as_str(data.get("mediaId"))
             if media_id and data.get("errcode", 0) == 0:
                 logger.info(f"[DingTalk] Uploaded {media_type} '{file_p.name}' -> mediaId={media_id[:20]}...")
                 return media_id
@@ -455,7 +456,7 @@ async def _send_dingtalk_media_message(
                     },
                 )
 
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code >= 400 or data.get("errcode"):
                 logger.error(f"[DingTalk] Send media failed: {data}")
                 return False
@@ -558,8 +559,14 @@ class DingTalkStreamManager:
                 try:
                     # Parse the raw data
                     incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
-                    parsed_data: object = message.data if isinstance(message.data, dict) else json.loads(message.data)
-                    if not isinstance(parsed_data, dict):
+                    if isinstance(message.data, dict):
+                        parsed_data = json_object_from(message.data)
+                    elif isinstance(message.data, (str, bytes, bytearray)):
+                        loaded = json_loads_value(message.data)
+                        if not isinstance(loaded, dict):
+                            raise ValueError("DingTalk callback payload must be an object")
+                        parsed_data = json_object_from(loaded)
+                    else:
                         raise ValueError("DingTalk callback payload must be an object")
                     msg_data = _parse_dingtalk_message(parsed_data)
 

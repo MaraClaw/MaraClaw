@@ -1,10 +1,11 @@
 """CodeSandbox API-based sandbox backend."""
 
 import time
-from typing import Any, override
+from typing import override
 
 import httpx
 
+from app.core.json_types import json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
@@ -68,7 +69,7 @@ class CodeSandboxBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using CodeSandbox API."""
         start_time = time.time()
@@ -116,12 +117,12 @@ class CodeSandboxBackend(BaseSandboxBackend):
                         error=f"CodeSandbox API error: {response.status_code}",
                     )
 
-                result = response.json()
+                result = json_object_from_response(response)
 
                 # Extract output
-                stdout = result.get("output", "") or ""
-                stderr = result.get("errors", "") or ""
-                exit_code = result.get("exitCode", 0)
+                stdout = json_as_str_or(result.get("output"))
+                stderr = json_as_str_or(result.get("errors"))
+                exit_code = json_as_int(result.get("exitCode"))
 
                 # Truncate output
                 stdout = stdout[:10000]

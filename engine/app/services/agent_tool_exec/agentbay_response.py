@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from app.services.agentbay_client import AgentBayResponseValue
-
-
-def _agentbay_response_text(value: AgentBayResponseValue, fallback: str) -> str:
+def _agentbay_response_text(value: object, fallback: str) -> str:
     return value if isinstance(value, str) else fallback
 
 
-def _agentbay_response_list(value: AgentBayResponseValue) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
+def _agentbay_response_list(value: object) -> list[object]:
+    return list[object](value) if isinstance(value, list) else []

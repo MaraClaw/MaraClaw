@@ -1,7 +1,7 @@
 """OAuth handoff helpers for gogcli inside OpenClaw containers."""
 
 from collections.abc import Iterable, Sequence
-from typing import Final, Protocol, ClassVar
+from typing import ClassVar, Final, Protocol
 
 from anyio.to_thread import run_sync
 from pydantic import BaseModel, ConfigDict

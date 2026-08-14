@@ -12,10 +12,10 @@ from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
-from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
 from app.services.chat_persist import persist_chat_message
+from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100

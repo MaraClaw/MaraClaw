@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
 
 from app.core.json_types import JsonObject, mapping_from_row
+from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime.executions import (
     build_execution_runtime_trigger,
     claim_pending_trigger_executions,
@@ -14,7 +14,6 @@ from app.services.trigger_runtime.executions import (
 )
 from app.services.trigger_runtime.keys import build_scheduled_execution_key
 from app.services.trigger_runtime.queue import enqueue_trigger_execution
-from app.records.trigger import AgentTriggerRecord
 
 
 def runtime_execution_payload(trigger: AgentTriggerRecord) -> JsonObject:
@@ -48,8 +47,10 @@ async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> Non
     )
 
 
-async def claim_ready_trigger_invocations(now: datetime) -> tuple[dict[uuid.UUID, list[Any]], set[uuid.UUID]]:
-    fired_by_agent: dict[uuid.UUID, list[Any]] = {}
+async def claim_ready_trigger_invocations(
+    now: datetime,
+) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    fired_by_agent: dict[uuid.UUID, list[AgentTriggerRecord]] = {}
     force_invoke_agents: set[uuid.UUID] = set()
 
     claimed_executions = await claim_pending_trigger_executions()

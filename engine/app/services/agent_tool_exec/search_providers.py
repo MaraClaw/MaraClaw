@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-import importlib
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
-import httpx
+from httpx import AsyncClient, Response
 
-from app.core.json_types import JsonObject, json_as_str
-
-
-def _httpx_module():
-    return importlib.import_module("httpx")
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _nested_mapping(value: object) -> JsonObject:
@@ -42,13 +36,21 @@ async def _search_duckduckgo(query: str, max_results: int) -> str:
         )
 
     results = []
-    blocks = re.findall(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
-        + r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
-        resp.text,
-        re.DOTALL,
+    blocks = list[object](
+        re.findall(
+            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+            + r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+            resp.text,
+            re.DOTALL,
+        )
     )
-    for url, title, snippet in blocks[:max_results]:
+    for block in blocks[:max_results]:
+        if not isinstance(block, tuple) or len(block) != 3:
+            continue
+        url_raw, title_raw, snippet_raw = block
+        if not isinstance(url_raw, str) or not isinstance(title_raw, str) or not isinstance(snippet_raw, str):
+            continue
+        url, title, snippet = url_raw, title_raw, snippet_raw
         title = re.sub(r"<[^>]+>", "", title).strip()
         snippet = re.sub(r"<[^>]+>", "", snippet).strip()
         if "uddg=" in url:
@@ -65,7 +67,7 @@ async def _get_jina_api_key() -> str:
     try:
         from app.dao.system_setting_dao import system_setting_dao
 
-        value: object = await system_setting_dao.get_value("jina_api_key", {})
+        value = await system_setting_dao.get_value("jina_api_key", {})
         if isinstance(value, dict):
             api_key = json_as_str(value.get("api_key"))
             if api_key:

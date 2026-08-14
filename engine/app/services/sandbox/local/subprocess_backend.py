@@ -7,9 +7,9 @@ import shutil
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict, override, ClassVar
+from typing import ClassVar, NotRequired, TypedDict, override
 
 from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
@@ -94,6 +94,18 @@ _DANGEROUS_NODE_ALWAYS = [
 ]
 
 _DANGEROUS_NODE_NETWORK = ["require('http')", "require('https')", "require('net')"]
+
+
+def _execute_kwarg(kwargs: Mapping[str, object], name: str) -> object:
+    return kwargs[name] if name in kwargs else None
+
+
+async def _emit_output(on_output: object, text: str, label: str) -> None:
+    if not callable(on_output):
+        return
+    maybe = on_output(text, label)
+    if isinstance(maybe, Awaitable):
+        await maybe
 
 
 def _check_code_safety(language: str, code: str, allow_network: bool = False) -> str | None:
@@ -432,11 +444,11 @@ class SubprocessBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code in a subprocess."""
-        on_output: Any = kwargs.get("on_output")
-        agent_id: Any = kwargs.get("agent_id")
+        on_output = _execute_kwarg(kwargs, "on_output")
+        agent_id = _execute_kwarg(kwargs, "agent_id")
         start_time = time.time()
 
         # Validate language
@@ -560,7 +572,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     if on_output:
                         try:
                             text = chunk.decode("utf-8", errors="replace")
-                            await on_output(text, label)
+                            await _emit_output(on_output, text, label)
                         except Exception as exc:
                             logger.debug(f"[Subprocess] Output callback failed: {exc}")
 

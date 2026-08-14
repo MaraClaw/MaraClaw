@@ -14,13 +14,13 @@ from app.config import get_settings
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao import llm_model_dao
+from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.llm import get_model_api_key
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
-from app.records.agent import AgentRecord
 
 settings = get_settings()
 

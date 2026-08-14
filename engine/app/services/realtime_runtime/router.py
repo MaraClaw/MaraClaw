@@ -7,13 +7,14 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import Any, assert_never
+from typing import assert_never
 
 from fastapi import WebSocket
 from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.core.events import get_redis
+from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
 
 settings = get_settings()
@@ -67,9 +68,10 @@ class RealtimeRouter:
         return connection_id
 
     async def unregister_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
-        connection_id = getattr(websocket.state, "realtime_connection_id", None)
-        if not connection_id:
+        connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
+        if not isinstance(connection_id_raw, str) or not connection_id_raw:
             return
+        connection_id = connection_id_raw
         redis = await get_redis()
         async with redis.pipeline(transaction=True) as pipe:
             _ = pipe.srem(self._agent_index_key(agent_id), connection_id)
@@ -172,14 +174,19 @@ class RealtimeRouter:
             await pubsub.subscribe(self._instance_channel())
             subscribed = True
             while True:
-                message: dict[str, Any] | None = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
-                )
-                if not message:
+                message_raw = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if not message_raw:
                     await asyncio.sleep(0.05)
                     continue
                 try:
-                    data = json.loads(message["data"])
+                    message = dict[str, object](message_raw)
+                    payload_raw = message.get("data")
+                    if isinstance(payload_raw, (bytes, bytearray)):
+                        data = json_loads_object(bytes(payload_raw))
+                    elif isinstance(payload_raw, str):
+                        data = json_loads_object(payload_raw)
+                    else:
+                        data = json_object_from(payload_raw)
                     await deliver_local(
                         agent_id=data["agent_id"],
                         payload=data["message"],
@@ -204,11 +211,17 @@ class RealtimeRouter:
         stale_ids: list[str] = []
         for connection_id in connection_ids:
             connection_id_text = _redis_text(connection_id)
-            data = await redis_client.hgetall(self._connection_key(connection_id_text))
-            if not data:
+            presence_raw: object = await redis_client.hgetall(self._connection_key(connection_id_text))
+            if not presence_raw or not isinstance(presence_raw, dict):
                 stale_ids.append(connection_id_text)
                 continue
-            records.append({_redis_text(key): _redis_text(value) for key, value in data.items()})
+            records.append(
+                {
+                    _redis_text(key): _redis_text(value)
+                    for key, value in presence_raw.items()
+                    if isinstance(key, (str, bytes)) and isinstance(value, (str, bytes))
+                }
+            )
         if stale_ids:
             _ = await redis_client.srem(self._agent_index_key(agent_id), *stale_ids)
         return records

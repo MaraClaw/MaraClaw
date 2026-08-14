@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Final, Protocol, ClassVar
+from typing import ClassVar, Final, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict

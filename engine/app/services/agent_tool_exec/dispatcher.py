@@ -3,9 +3,10 @@ from __future__ import annotations
 import importlib
 import json
 import uuid
-from types import ModuleType
-from typing import Final
+from pathlib import Path
+from typing import Final, Protocol, TypeIs
 
+from app.core.json_types import json_as_bool, json_as_str, json_as_str_or
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import (
@@ -29,28 +30,162 @@ _TOOL_AUTONOMY_MAP: Final = {
 }
 
 
-def _mcp_tools_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.mcp_tools")
+class _McpToolsModule(Protocol):
+    async def _discover_resources(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+    async def _import_mcp_server(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+    async def _execute_mcp_tool(
+        self, tool_name: str, arguments: ToolArguments, agent_id: uuid.UUID | None = None
+    ) -> str: ...
 
 
-def _okr_read_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_read")
+class _OkrReadModule(Protocol):
+    async def _get_okr(self, agent_id: uuid.UUID | None, arguments: ToolArguments) -> str: ...
+
+    async def _get_my_okr(self, agent_id: uuid.UUID | None, arguments: ToolArguments) -> str: ...
+
+    async def _get_okr_settings_tool(self, agent_id: uuid.UUID | None) -> str: ...
 
 
-def _okr_write_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_write")
+class _OkrWriteModule(Protocol):
+    async def _update_kr_content(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _update_kr_progress(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _create_objective(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _create_key_result(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _update_objective(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
+
+    async def _update_any_kr_progress(
+        self, agent_id: uuid.UUID | None, user_id: uuid.UUID | None, arguments: ToolArguments
+    ) -> str: ...
 
 
-def _okr_reports_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_reports")
+class _OkrReportsModule(Protocol):
+    async def _collect_okr_progress(self, agent_id: uuid.UUID | None) -> str: ...
+
+    async def _generate_okr_report(self, agent_id: uuid.UUID | None, arguments: ToolArguments) -> str: ...
+
+    async def _generate_monthly_okr_report(self, agent_id: uuid.UUID | None) -> str: ...
+
+    async def _upsert_member_daily_report(self, agent_id: uuid.UUID | None, arguments: ToolArguments) -> str: ...
 
 
-def _deploy_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_deploy")
+class _DeployModule(Protocol):
+    async def _vercel_deploy(self, agent_id: uuid.UUID, ws: Path, arguments: ToolArguments) -> str: ...
+
+    async def _vercel_list_deployments(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+    async def _vercel_get_deploy_logs(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
 
 
-def _deploy_ops_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_deploy_ops")
+class _DeployOpsModule(Protocol):
+    async def _vercel_set_env(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+    async def _vercel_manage_domain(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+    async def _neon_create_database(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+
+def _has_callables(value: object, *names: str) -> bool:
+    return all(callable(getattr(value, name, None)) for name in names)
+
+
+def _is_mcp_tools_module(value: object) -> TypeIs[_McpToolsModule]:
+    return _has_callables(value, "_discover_resources", "_import_mcp_server", "_execute_mcp_tool")
+
+
+def _is_okr_read_module(value: object) -> TypeIs[_OkrReadModule]:
+    return _has_callables(value, "_get_okr", "_get_my_okr", "_get_okr_settings_tool")
+
+
+def _is_okr_write_module(value: object) -> TypeIs[_OkrWriteModule]:
+    return _has_callables(
+        value,
+        "_update_kr_content",
+        "_update_kr_progress",
+        "_create_objective",
+        "_create_key_result",
+        "_update_objective",
+        "_update_any_kr_progress",
+    )
+
+
+def _is_okr_reports_module(value: object) -> TypeIs[_OkrReportsModule]:
+    return _has_callables(
+        value,
+        "_collect_okr_progress",
+        "_generate_okr_report",
+        "_generate_monthly_okr_report",
+        "_upsert_member_daily_report",
+    )
+
+
+def _is_deploy_module(value: object) -> TypeIs[_DeployModule]:
+    return _has_callables(value, "_vercel_deploy", "_vercel_list_deployments", "_vercel_get_deploy_logs")
+
+
+def _is_deploy_ops_module(value: object) -> TypeIs[_DeployOpsModule]:
+    return _has_callables(value, "_vercel_set_env", "_vercel_manage_domain", "_neon_create_database")
+
+
+def _load_exec_module(name: str) -> object:
+    return importlib.import_module(name)
+
+
+def _mcp_tools_module() -> _McpToolsModule:
+    module = _load_exec_module("app.services.agent_tool_exec.mcp_tools")
+    if not _is_mcp_tools_module(module):
+        raise TypeError("mcp_tools module is missing required handlers")
+    return module
+
+
+def _okr_read_module() -> _OkrReadModule:
+    module = _load_exec_module("app.services.agent_tool_exec._agent_tool_exec_okr_read")
+    if not _is_okr_read_module(module):
+        raise TypeError("okr_read module is missing required handlers")
+    return module
+
+
+def _okr_write_module() -> _OkrWriteModule:
+    module = _load_exec_module("app.services.agent_tool_exec._agent_tool_exec_okr_write")
+    if not _is_okr_write_module(module):
+        raise TypeError("okr_write module is missing required handlers")
+    return module
+
+
+def _okr_reports_module() -> _OkrReportsModule:
+    module = _load_exec_module("app.services.agent_tool_exec._agent_tool_exec_okr_reports")
+    if not _is_okr_reports_module(module):
+        raise TypeError("okr_reports module is missing required handlers")
+    return module
+
+
+def _deploy_module() -> _DeployModule:
+    module = _load_exec_module("app.services.agent_tool_exec._agent_tool_exec_deploy")
+    if not _is_deploy_module(module):
+        raise TypeError("deploy module is missing required handlers")
+    return module
+
+
+def _deploy_ops_module() -> _DeployOpsModule:
+    module = _load_exec_module("app.services.agent_tool_exec._agent_tool_exec_deploy_ops")
+    if not _is_deploy_ops_module(module):
+        raise TypeError("deploy_ops module is missing required handlers")
+    return module
 
 
 async def _execute_tool_direct(
@@ -151,12 +286,16 @@ async def execute_tool(
                     action_type,
                     {"tool": tool_name, "args": str(arguments)[:200], "requested_by": str(user_id)},
                 )
-                if not result_check.get("allowed"):
-                    level = result_check.get("level", "L3")
+                if not json_as_bool(result_check.get("allowed")):
+                    level = json_as_str_or(result_check.get("level"), "L3")
                     logger.info(f"[Autonomy] Tool {tool_name} denied, level: {level}")
                     if level == "L3":
-                        return f"⏳ This action requires approval. An approval request has been sent. Please wait for approval before retrying. (Approval ID: {result_check.get('approval_id', 'N/A')})"
-                    return f"❌ Action denied: {result_check.get('message', 'unknown reason')}"
+                        approval_id = json_as_str(result_check.get("approval_id")) or "N/A"
+                        return (
+                            "⏳ This action requires approval. An approval request has been sent. "
+                            + f"Please wait for approval before retrying. (Approval ID: {approval_id})"
+                        )
+                    return f"❌ Action denied: {json_as_str_or(result_check.get('message'), 'unknown reason')}"
         except Exception as error:
             logger.exception(f"[Autonomy] Check failed: {error}")
             return f"⚠️ Autonomy check failed ({error}). Operation blocked for safety. Please retry or contact admin."

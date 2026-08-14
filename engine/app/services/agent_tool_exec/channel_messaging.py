@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 from collections.abc import Awaitable, Callable
-from types import ModuleType
-from typing import Any
 
 from app.core.logging import logger
 from app.core.permissions import evaluate_human_relationship_status
@@ -14,13 +11,10 @@ from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.channels.types import outbound_provider_key
 
+from . import channel_providers
 from .registry import ToolArguments
 
 ChannelSender = Callable[[uuid.UUID, str, str, OrgMemberRecord], Awaitable[str]]
-
-
-def _channel_providers() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.channel_providers")
 
 
 def _normalize_provider_type(value: str | None) -> str | None:
@@ -28,16 +22,22 @@ def _normalize_provider_type(value: str | None) -> str | None:
 
 
 def _outbound_senders() -> dict[str, ChannelSender]:
-    providers = _channel_providers()
+    send_feishu: ChannelSender = channel_providers._send_feishu_channel_message
+    send_dingtalk: ChannelSender = channel_providers._send_dingtalk_message
+    send_wecom: ChannelSender = channel_providers._send_wecom_message
+    send_slack: ChannelSender = channel_providers._send_slack_message
+    send_teams: ChannelSender = channel_providers._send_teams_channel_message
+    send_wechat: ChannelSender = channel_providers._send_wechat_channel_message
+    send_google: ChannelSender = channel_providers._send_google_chat_message
     return {
-        "feishu": providers._send_feishu_channel_message,
-        "dingtalk": providers._send_dingtalk_message,
-        "wecom": providers._send_wecom_message,
-        "slack": providers._send_slack_message,
-        "teams": providers._send_teams_channel_message,
-        "microsoft_teams": providers._send_teams_channel_message,
-        "wechat": providers._send_wechat_channel_message,
-        "google_chat": providers._send_google_chat_message,
+        "feishu": send_feishu,
+        "dingtalk": send_dingtalk,
+        "wecom": send_wecom,
+        "slack": send_slack,
+        "teams": send_teams,
+        "microsoft_teams": send_teams,
+        "wechat": send_wechat,
+        "google_chat": send_google,
     }
 
 

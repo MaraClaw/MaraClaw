@@ -9,6 +9,7 @@ import time
 
 import httpx
 
+from app.core.json_types import json_as_int, json_as_str, json_object_from_response
 from app.core.logging import logger
 
 
@@ -58,9 +59,9 @@ class DingTalkTokenManager:
                         "https://api.dingtalk.com/v1.0/oauth2/accessToken",
                         json={"appKey": app_key, "appSecret": app_secret},
                     )
-                    data = resp.json()
-                    token = data.get("accessToken")
-                    expires_in = data.get("expireIn", 7200)
+                    data = json_object_from_response(resp)
+                    token = json_as_str(data.get("accessToken"))
+                    expires_in = json_as_int(data.get("expireIn"), 7200)
 
                     if token:
                         self._cache[local_key] = (token, time.time() + expires_in)

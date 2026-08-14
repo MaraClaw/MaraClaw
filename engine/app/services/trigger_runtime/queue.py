@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from typing import Any
 from uuid import uuid4
 
 from app.core.json_types import JsonObject
 from app.dao.trigger_dao import trigger_execution_dao
-from app.records.trigger import TriggerExecutionRecord
-from app.records.trigger import AgentTriggerRecord
+from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 
 
 async def enqueue_trigger_execution(

@@ -13,6 +13,14 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from app.core.json_types import (
+    JsonObject,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    mapping_from_row,
+)
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 
@@ -102,13 +110,15 @@ async def send_wechat_text_message(
                     },
                 },
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code >= 400:
                 raise RuntimeError(f"WeChat sendmessage failed: {resp.text[:300]}")
             ret = data.get("ret", 0)
             errcode = data.get("errcode", 0)
             if ret not in (0, None) or errcode not in (0, None):
-                raise RuntimeError(data.get("errmsg") or f"WeChat sendmessage failed: ret={ret}, errcode={errcode}")
+                raise RuntimeError(
+                    json_as_str(data.get("errmsg")) or f"WeChat sendmessage failed: ret={ret}, errcode={errcode}"
+                )
 
 
 def update_wechat_context_cache(
@@ -118,8 +128,8 @@ def update_wechat_context_cache(
     context_token: str,
     conv_id: str,
 ) -> dict[str, Any]:
-    extra = dict(extra_config or {})
-    cache = dict(extra.get(WECHAT_CONTEXT_CACHE_KEY) or {})
+    extra = json_object_from(extra_config)
+    cache = json_object_from(extra.get(WECHAT_CONTEXT_CACHE_KEY))
     cache[from_user_id] = {
         "context_token": context_token,
         "conv_id": conv_id,
@@ -128,12 +138,12 @@ def update_wechat_context_cache(
     if len(cache) > WECHAT_CONTEXT_CACHE_LIMIT:
         ordered = sorted(
             cache.items(),
-            key=lambda item: str((item[1] or {}).get("updated_at") or ""),
+            key=lambda item: json_as_str_or(json_object_from(item[1]).get("updated_at")),
             reverse=True,
         )
-        cache = dict(ordered[:WECHAT_CONTEXT_CACHE_LIMIT])
+        cache = json_object_from(dict(ordered[:WECHAT_CONTEXT_CACHE_LIMIT]))
     extra[WECHAT_CONTEXT_CACHE_KEY] = cache
-    return extra
+    return mapping_from_row(extra)
 
 
 def get_wechat_context_entry(
@@ -141,9 +151,9 @@ def get_wechat_context_entry(
     *,
     from_user_id: str,
 ) -> dict[str, Any] | None:
-    cache = dict((extra_config or {}).get(WECHAT_CONTEXT_CACHE_KEY) or {})
+    cache = json_object_from(json_object_from(extra_config).get(WECHAT_CONTEXT_CACHE_KEY))
     entry = cache.get(from_user_id)
-    return dict[str, Any](entry) if isinstance(entry, dict) else None
+    return mapping_from_row(entry) if isinstance(entry, dict) else None
 
 
 async def remember_wechat_context(
@@ -212,7 +222,7 @@ class WeChatPollManager:
         configured_agent_ids: set[uuid.UUID] = set()
         configs = await channel_config_dao.list_configured("wechat")
         for cfg in configs:
-            token = str((cfg.extra_config or {}).get("bot_token") or "").strip()
+            token = json_as_str_or(json_object_from(cfg.extra_config).get("bot_token")).strip()
             if token:
                 configured_agent_ids.add(cfg.agent_id)
 
@@ -237,11 +247,11 @@ class WeChatPollManager:
                     logger.info(f"[WeChat] Channel config missing for agent {agent_id}, stopping poller")
                     return
 
-                extra = config.extra_config or {}
-                token = str(extra.get("bot_token") or "").strip()
-                base_url = str(extra.get("baseurl") or WECHAT_ILINK_BASE_URL).strip()
-                route_tag = str(extra.get("route_tag") or "").strip() or None
-                cursor = str(extra.get("get_updates_buf") or "")
+                extra = json_object_from(config.extra_config)
+                token = json_as_str_or(extra.get("bot_token")).strip()
+                base_url = json_as_str_or(extra.get("baseurl"), WECHAT_ILINK_BASE_URL).strip()
+                route_tag = json_as_str_or(extra.get("route_tag")).strip() or None
+                cursor = json_as_str_or(extra.get("get_updates_buf"))
 
                 if not token:
                     logger.info(f"[WeChat] No bot token for agent {agent_id}, stopping poller")
@@ -256,15 +266,17 @@ class WeChatPollManager:
                         await self._update_extra(agent_id, {"session_expired": False})
                     retry_delay = 2
 
-                    new_cursor = str(data.get("get_updates_buf") or "")
+                    new_cursor = json_as_str_or(data.get("get_updates_buf"))
                     if new_cursor and new_cursor != cursor:
                         await self._update_extra(agent_id, {"get_updates_buf": new_cursor})
 
-                    for msg in list[Any](data.get("msgs", []) or []):
-                        try:
-                            await process_wechat_message(agent_id, msg, config)
-                        except Exception as exc:
-                            logger.error(f"[WeChat] Failed to process message for {agent_id}: {exc}")
+                    msgs = data.get("msgs")
+                    if isinstance(msgs, list):
+                        for msg in msgs:
+                            try:
+                                await process_wechat_message(agent_id, msg, config)
+                            except Exception as exc:
+                                logger.error(f"[WeChat] Failed to process message for {agent_id}: {exc}")
                 except WeChatSessionExpiredError:
                     logger.warning(f"[WeChat] Session expired for agent {agent_id}")
                     await self._set_connected(agent_id, False)
@@ -282,7 +294,7 @@ class WeChatPollManager:
             await self._set_connected(agent_id, False)
             raise
 
-    async def _fetch_updates(self, *, token: str, base_url: str, cursor: str, route_tag: str | None) -> dict[str, Any]:
+    async def _fetch_updates(self, *, token: str, base_url: str, cursor: str, route_tag: str | None) -> JsonObject:
         async with httpx.AsyncClient(timeout=40) as client:
             resp = await client.post(
                 f"{base_url.rstrip('/')}/ilink/bot/getupdates",
@@ -294,25 +306,27 @@ class WeChatPollManager:
                     },
                 },
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if resp.status_code >= 400:
                 raise RuntimeError(f"WeChat getupdates HTTP {resp.status_code}: {str(data)[:300]}")
             ret = data.get("ret", 0)
             errcode = data.get("errcode", 0)
             if ret == -14 or errcode == -14:
-                raise WeChatSessionExpiredError(data.get("errmsg") or "session expired")
+                raise WeChatSessionExpiredError(json_as_str(data.get("errmsg")) or "session expired")
             if ret not in (0, None) or errcode not in (0, None):
-                raise RuntimeError(data.get("errmsg") or f"WeChat getupdates failed: ret={ret}, errcode={errcode}")
+                raise RuntimeError(
+                    json_as_str(data.get("errmsg")) or f"WeChat getupdates failed: ret={ret}, errcode={errcode}"
+                )
             return data
 
     async def _load_config(self, agent_id: uuid.UUID):
         return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
 
-    async def _update_extra(self, agent_id: uuid.UUID, updates: dict[str, Any]) -> None:
+    async def _update_extra(self, agent_id: uuid.UUID, updates: JsonObject) -> None:
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
         if not config:
             return
-        extra = dict(config.extra_config or {})
+        extra = json_object_from(config.extra_config)
         extra.update(updates)
         _ = await channel_config_dao.update(db_obj=config, obj_in={"extra_config": extra})
 

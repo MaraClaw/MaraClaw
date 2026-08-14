@@ -5,7 +5,7 @@ import time
 from collections.abc import Coroutine
 from contextlib import AbstractAsyncContextManager
 from types import ModuleType
-from typing import Any, Protocol, TypeGuard, override
+from typing import Protocol, TypeGuard, override
 
 from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
@@ -124,7 +124,7 @@ class E2bBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using E2B cloud sandbox."""
         start_time = time.time()

@@ -4,10 +4,20 @@ import importlib
 import uuid
 from contextlib import suppress
 from types import ModuleType
+from typing import Protocol, TypeIs
 
+from app.core.json_types import datetime_from_row
 from app.dao.chat_dao import chat_session_dao
 from app.db.session import connection_ctx
 from app.services.agent_tool_exec.registry import ToolArgumentValue
+
+
+class _CroniterModule(Protocol):
+    def croniter(self, expr: str) -> object: ...
+
+
+def _is_croniter_module(value: object) -> TypeIs[_CroniterModule]:
+    return callable(getattr(value, "croniter", None))
 
 
 def _validate_trigger_config(ttype: str, config: dict[str, ToolArgumentValue]) -> str | None:
@@ -17,7 +27,9 @@ def _validate_trigger_config(ttype: str, config: dict[str, ToolArgumentValue]) -
         if not expr:
             return '❌ cron trigger requires config.expr, e.g. {"expr": "0 9 * * *"}'
         try:
-            croniter_module = importlib.import_module("croniter")
+            croniter_module: object = importlib.import_module("croniter")
+            if not _is_croniter_module(croniter_module):
+                raise TypeError("croniter is unavailable")
             croniter_module.croniter(expr)
         except Exception:
             return f"❌ Invalid cron expression: '{expr}'"
@@ -48,8 +60,9 @@ async def _snapshot_latest_message(
                 + "ORDER BY m.created_at DESC LIMIT 1",
                 {"agent_id": agent_id},
             )
-            if value:
-                config["_since_ts"] = value.isoformat()
+            created = datetime_from_row(value)
+            if created:
+                config["_since_ts"] = created.isoformat()
 
 
 async def _record_origin_metadata(

@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import json_loads_value, mapping_from_row
 from app.core.logging import logger, new_trace_id
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
@@ -174,11 +174,9 @@ async def _tick():
             for t in agent_triggers:
                 cfg = mapping_from_row(t.config)
                 if isinstance(cfg, str):
-                    import json
-
                     try:
-                        cfg = json.loads(cfg)
-                    except json.JSONDecodeError, TypeError:
+                        cfg = mapping_from_row(json_loads_value(cfg))
+                    except ValueError, TypeError:
                         cfg = {}
                 if cfg.get("_execution_id"):
                     continue

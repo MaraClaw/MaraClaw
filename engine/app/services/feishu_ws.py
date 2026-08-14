@@ -7,10 +7,10 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol, TypeIs
+from typing import Protocol, TypeIs
 from unittest.mock import patch
 
-from app.core.json_types import JsonObject, json_as_str_or, mapping_from_row
+from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 
@@ -65,7 +65,7 @@ def _is_awaitable(value: object) -> TypeIs[Awaitable[object]]:
     return hasattr(value, "__await__")
 
 
-def _construct_ws_client(client_cls: object, *args: object, **kwargs: Any) -> object:
+def _construct_ws_client(client_cls: object, *args: object, **kwargs: object) -> object:
     if not callable(client_cls):
         raise TypeError("lark-oapi ws Client is unavailable")
     return client_cls(*args, **kwargs)
@@ -89,25 +89,23 @@ def _feishu_event_body(data: object) -> JsonObject | None:
             return _json_object(data)
         body_dict: JsonObject = {}
         if hasattr(data, "header"):
-            header_obj: object = getattr(data, "header")
+            header_obj: object = getattr(data, "header", None)
             header = _header_mapping(header_obj)
             if "event_type" not in header:
-                header["event_type"] = str(getattr(header_obj, "event_type", "im.message.receive_v1"))
+                header["event_type"] = "im.message.receive_v1"
             body_dict["header"] = header
         else:
             body_dict["header"] = {"event_type": "im.message.receive_v1"}
 
         if hasattr(data, "event"):
-            event_raw: object = getattr(data, "event")
+            event_raw: object = getattr(data, "event", None)
             body_dict["event"] = _json_object(event_raw) if isinstance(event_raw, dict) else mapping_from_row(event_raw)
         else:
             content_raw: object = getattr(data, "content", None)
             if isinstance(content_raw, str):
                 try:
-                    loaded: object = json.loads(content_raw)
-                    body_dict["event"] = (
-                        _json_object(loaded) if isinstance(loaded, dict) else {"content": content_raw}
-                    )
+                    loaded = json_loads_object(content_raw)
+                    body_dict["event"] = loaded if loaded else {"content": content_raw}
                 except json.JSONDecodeError:
                     body_dict["event"] = {"content": content_raw}
 
@@ -116,14 +114,12 @@ def _feishu_event_body(data: object) -> JsonObject | None:
         return body_dict
 
     if isinstance(raw_body, (bytes, bytearray)):
-        loaded_body: object = json.loads(raw_body.decode("utf-8"))
-        return _json_object(loaded_body)
+        return json_loads_object(bytes(raw_body))
     decode = getattr(raw_body, "decode", None)
     if callable(decode):
         text_obj: object = decode("utf-8")
         text = text_obj if isinstance(text_obj, str) else str(text_obj)
-        loaded_body = json.loads(text)
-        return _json_object(loaded_body)
+        return json_loads_object(text)
     return {}
 
 
@@ -153,7 +149,7 @@ def _make_no_proxy_connect(orig_connect: Callable[..., object]) -> Callable[[], 
         """Wraps websockets.connect to inject proxy=None, preventing macOS
         system-proxy interference with long-lived SSE / WebSocket connections."""
 
-        def __init__(self, *args: object, **kwargs: Any) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             _ = kwargs.setdefault("proxy", None)
             started: object = orig_connect(*args, **kwargs)
             if not _is_awaitable(started):
@@ -447,9 +443,8 @@ class FeishuWSManager:
         configs = await channel_config_dao.list_configured("feishu")
 
         for config in configs:
-            extra = config.extra_config or {}
-            mode_raw: object = extra.get("connection_mode", "webhook")
-            mode = json_as_str_or(mode_raw, "webhook")
+            extra = json_object_from(config.extra_config)
+            mode = json_as_str_or(extra.get("connection_mode"), "webhook")
             if mode == "websocket":
                 if config.app_id and config.app_secret:
                     await self.start_client(config.agent_id, config.app_id, config.app_secret, stop_existing=False)

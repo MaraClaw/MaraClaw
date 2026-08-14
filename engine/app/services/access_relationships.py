@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from app.core.permissions import get_agent_accessible_user_ids
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.user_dao import user_dao
-from app.services.registration_service import registration_service
 from app.records.agent import AgentRecord
+from app.services.registration_service import registration_service
 
 
 async def ensure_access_granted_platform_relationships(

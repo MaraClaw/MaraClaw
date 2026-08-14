@@ -1,7 +1,7 @@
 """Sandbox configuration models."""
 
 from enum import StrEnum
-from typing import TypedDict, ClassVar
+from typing import ClassVar, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 

@@ -2,11 +2,21 @@
 
 import asyncio
 import uuid
-from typing import Any, ClassVar, override
+from collections.abc import Awaitable
+from typing import ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_bool, json_as_str, json_as_str_or
+from app.core.json_types import (
+    JsonObject,
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.core.logging import logger
 from app.records.identity import IdentityProviderRecord
 
@@ -45,8 +55,8 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                 self.FEISHU_APP_TOKEN_URL,
                 json={"app_id": self.app_id, "app_secret": self.app_secret},
             )
-            data = resp.json()
-            return data.get("tenant_access_token") or data.get("app_access_token") or ""
+            data = json_object_from_response(resp)
+            return json_as_str_or(data.get("tenant_access_token")) or json_as_str_or(data.get("app_access_token"))
 
     @override
     async def fetch_departments(self) -> list[ExternalDepartment]:
@@ -67,9 +77,9 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
         async with httpx.AsyncClient() as client:
             sem = asyncio.Semaphore(15)  # Limit concurrent requests to avoid rate limits
 
-            async def fetch_children(parent_id: str):
+            async def fetch_children(parent_id: str) -> None:
                 page_token = ""
-                tasks = []
+                tasks: list[Awaitable[None]] = []
                 while True:
                     params = {
                         "department_id_type": "open_department_id",
@@ -85,18 +95,15 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                             params=params,
                             headers={"Authorization": f"Bearer {token}"},
                         )
-                    data = resp.json()
+                    data = json_object_from_response(resp)
 
                     if data.get("code") != 0:
                         logger.error(f"Feishu fetch departments list error for parent {parent_id}: {data}")
                         break
 
-                    res_data_raw = data.get("data", {})
-                    res_data: dict[str, Any] = dict[str, Any](res_data_raw) if isinstance(res_data_raw, dict) else {}
-                    items: list[dict[str, Any]] = [
-                        dict[str, Any](item) for item in (res_data.get("items", []) or []) if isinstance(item, dict)
-                    ]
-                    for item in items:
+                    res_data = json_object_from(data.get("data"))
+                    for item_raw in object_list_from_row(res_data.get("items")):
+                        item = json_object_from(item_raw)
                         dept_id = json_as_str(item.get("open_department_id"))
                         if not dept_id:
                             continue
@@ -106,9 +113,9 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
 
                         dept = ExternalDepartment(
                             external_id=dept_id,
-                            name=item.get("name", ""),
+                            name=json_as_str_or(item.get("name")),
                             parent_external_id=parent_external,
-                            member_count=item.get("member_count", 0),
+                            member_count=json_as_int(item.get("member_count")),
                             raw_data=item,
                         )
                         all_depts.append(dept)
@@ -116,13 +123,12 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                         # Recursively fetch children for this department
                         tasks.append(fetch_children(dept_id))
 
-                    page_token = res_data.get("page_token", "")
+                    page_token = json_as_str_or(res_data.get("page_token"))
                     if not page_token:
                         break
 
                 if tasks:
-                    _gathered: list[Any] = list(await asyncio.gather(*tasks))
-                    del _gathered
+                    _ = await asyncio.gather(*tasks)
 
             await fetch_children("0")
 
@@ -168,11 +174,11 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                     params=params,
                     headers={"Authorization": f"Bearer {token}"},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
 
                 if data.get("code") != 0:
                     error_code = data.get("code")
-                    error_msg = data.get("msg", "")
+                    error_msg = json_as_str_or(data.get("msg"))
                     logger.error(
                         f"Feishu fetch users error for dept {department_external_id}: "
                         + f"code={error_code}, msg={error_msg}"
@@ -200,16 +206,13 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                         )
                     raise RuntimeError(guidance)
 
-                res_data_raw = data.get("data", {})
-                res_data: dict[str, Any] = dict[str, Any](res_data_raw) if isinstance(res_data_raw, dict) else {}
-                items: list[dict[str, Any]] = [
-                    dict[str, Any](item) for item in (res_data.get("items", []) or []) if isinstance(item, dict)
-                ]
-                for item in items:
+                res_data = json_object_from(data.get("data"))
+                for item_raw in object_list_from_row(res_data.get("items")):
+                    item = json_object_from(item_raw)
                     # Collect all departments the user belongs to
-                    raw_dept_ids = item.get("department_ids", [])
+                    raw_dept_ids = item.get("department_ids")
                     department_ids = (
-                        [str(did) for did in raw_dept_ids]
+                        [str(did) for did in list[object](raw_dept_ids)]
                         if isinstance(raw_dept_ids, list) and raw_dept_ids
                         else [department_external_id]
                     )
@@ -221,29 +224,28 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
 
                     # For Feishu, a user is considered inactive if they are explicitly frozen or resigned.
                     # Merely not being activated (is_activated=False) shouldn't hide them from the org chart.
-                    status_raw = item.get("status", {})
-                    feishu_status: dict[str, Any] = dict[str, Any](status_raw) if isinstance(status_raw, dict) else {}
-                    is_frozen = json_as_bool(feishu_status.get("is_frozen", False))
-                    is_resigned = json_as_bool(feishu_status.get("is_resigned", False))
+                    feishu_status = json_object_from(item.get("status"))
+                    is_frozen = json_as_bool(feishu_status.get("is_frozen"))
+                    is_resigned = json_as_bool(feishu_status.get("is_resigned"))
                     member_status = "inactive" if (is_frozen or is_resigned) else "active"
 
                     user = ExternalUser(
                         external_id=external_id,
-                        open_id=item.get("open_id", ""),
-                        unionid=item.get("union_id", ""),
-                        name=item.get("name", ""),
-                        email=item.get("email", ""),
-                        avatar_url=item.get("avatar_url", ""),
-                        title=item.get("title", ""),
+                        open_id=json_as_str_or(item.get("open_id")),
+                        unionid=json_as_str_or(item.get("union_id")),
+                        name=json_as_str_or(item.get("name")),
+                        email=json_as_str_or(item.get("email")),
+                        avatar_url=json_as_str_or(item.get("avatar_url")),
+                        title=json_as_str_or(item.get("title")),
                         department_external_id=department_external_id,
                         department_ids=department_ids,
-                        mobile=item.get("mobile", ""),
+                        mobile=json_as_str_or(item.get("mobile")),
                         status=member_status,
                         raw_data=item,
                     )
                     users.append(user)
 
-                page_token = res_data.get("page_token", "")
+                page_token = json_as_str_or(res_data.get("page_token"))
                 if not page_token:
                     break
 

@@ -2,30 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
 import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-import httpx
 
-from app.core.json_types import JsonObject, json_as_str
+from httpx import AsyncClient, Response
+
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response, json_value_from_response
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
+    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
-
-
-def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+def _response_mapping(response: Response) -> JsonObject:
+    return json_object_from_response(response)
 
 
 def _nested_mapping(value: object) -> JsonObject:
@@ -241,7 +236,7 @@ async def _vercel_get_deploy_logs(agent_id: uuid.UUID, arguments: ToolArguments)
         try:
             res = await client.get(f"https://api.vercel.com/v2/deployments/{deployment_id}/events", headers=headers)
             if res.status_code == 200:
-                events_raw: object = res.json()
+                events_raw: object = json_value_from_response(res)
                 events: list[object] = []
                 if isinstance(events_raw, list):
                     events = list(events_raw)

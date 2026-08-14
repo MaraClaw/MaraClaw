@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Iterable
-from typing import Any, override
+from typing import Protocol, TypeIs, override
 
 from anyio import fail_after
 from anyio.to_thread import run_sync
@@ -11,22 +11,66 @@ from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
 
+
+class DockerImageApi(Protocol):
+    def exists(self, image: str) -> bool: ...
+
+    def pull(self, image: str) -> object: ...
+
+
+class DockerContainerApi(Protocol):
+    def wait(self, container: object) -> object: ...
+
+    def logs(self, container: object, stream: bool = False) -> str | Iterable[object]: ...
+
+    def remove(self, container: object, force: bool = True) -> None: ...
+
+
+class DockerClientLike(Protocol):
+    image: DockerImageApi
+    container: DockerContainerApi
+
+    def info(self) -> object: ...
+
+    def run(
+        self,
+        image: str,
+        command: list[str],
+        *,
+        detach: bool,
+        memory: str,
+        cpu_period: int,
+        cpu_quota: int,
+        networks: list[str],
+        envs: dict[str, str],
+    ) -> object: ...
+
+
+class DockerClientFactory(Protocol):
+    def __call__(self) -> DockerClientLike: ...
+
+
+def _is_docker_factory(value: object) -> TypeIs[DockerClientFactory]:
+    return callable(value)
+
+
 # Lazy import python-on-whales to make it optional
-_docker_client_cls = None
+_docker_client_cls: DockerClientFactory | None = None
 
 
-def _get_docker():
+def _get_docker() -> DockerClientFactory:
     """Lazy load python-on-whales Docker client."""
     global _docker_client_cls
     if _docker_client_cls is None:
         try:
             from python_on_whales import DockerClient
-
-            _docker_client_cls = DockerClient
         except ImportError as exc:
             raise ImportError(
                 "python-on-whales package is required for docker backend. Install it with: uv add python-on-whales"
             ) from exc
+        if not _is_docker_factory(DockerClient):
+            raise ImportError("python-on-whales DockerClient is not callable")
+        _docker_client_cls = DockerClient
     return _docker_client_cls
 
 
@@ -59,10 +103,10 @@ class DockerBackend(BaseSandboxBackend):
 
     def __init__(self, config: SandboxConfig):
         self.config: SandboxConfig = config
-        self._client: Any = None
+        self._client: DockerClientLike | None = None
 
     @property
-    def client(self):
+    def client(self) -> DockerClientLike:
         """Lazy load docker client."""
         if self._client is None:
             docker_client_cls = _get_docker()
@@ -95,7 +139,7 @@ class DockerBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> ExecutionResult:
         """Execute code inside a docker container."""
         start_time = time.time()
@@ -219,6 +263,10 @@ def _decode_log(log: bytes | str) -> str:
     return log
 
 
+def _is_log_pair(item: object) -> TypeIs[tuple[object, object]]:
+    return isinstance(item, tuple) and len(item) == 2
+
+
 def _collect_logs(logs: str | Iterable[object]) -> tuple[str, str]:
     if isinstance(logs, str):
         return logs[:10000], ""
@@ -228,10 +276,8 @@ def _collect_logs(logs: str | Iterable[object]) -> tuple[str, str]:
         if isinstance(item, (bytes, str)):
             stdout_parts.append(_decode_log(item))
             continue
-        if not (isinstance(item, tuple) and len(item) == 2):
+        if not _is_log_pair(item):
             continue
-        stream_name: Any
-        content: Any
         stream_name, content = item
         if stream_name == "stdout" and isinstance(content, (bytes, str)):
             stdout_parts.append(_decode_log(content))
@@ -240,9 +286,10 @@ def _collect_logs(logs: str | Iterable[object]) -> tuple[str, str]:
     return "".join(stdout_parts)[:10000], "".join(stderr_parts)[:5000]
 
 
-def _normalize_exit_code(result: int | dict[str, int]) -> int:
-    if isinstance(result, int):
+def _normalize_exit_code(result: object) -> int:
+    if isinstance(result, int) and not isinstance(result, bool):
         return result
     if isinstance(result, dict):
-        return int(result.get("StatusCode", 1))
+        status = result.get("StatusCode", 1)
+        return status if isinstance(status, int) and not isinstance(status, bool) else 1
     return 1

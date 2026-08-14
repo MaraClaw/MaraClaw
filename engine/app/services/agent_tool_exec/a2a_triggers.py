@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
+from app.core.json_types import datetime_from_row
 from app.core.logging import logger
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
@@ -51,8 +52,9 @@ async def _create_on_message_trigger(
                 + "ORDER BY m.created_at DESC LIMIT 1",
                 {"agent_id": agent_id},
             )
-            if value:
-                config["_since_ts"] = value.isoformat()
+            created = datetime_from_row(value)
+            if created:
+                config["_since_ts"] = created.isoformat()
 
     existing = await agent_trigger_dao.get_by_agent_and_name(agent_id, trigger_name)
     if existing:

@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, TypedDict
+from typing import ClassVar, TypedDict
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    int_from_row,
+    mapping_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 from app.dao import identity_provider_dao
 from app.dao.org_department_dao import org_department_dao
 from app.db.session import connection_ctx
@@ -32,7 +39,7 @@ class OrgSyncDepartmentMixin:
     """Shared department persistence behavior for organization sync adapters."""
 
     config: JsonObject
-    provider: IdentityProviderRecord | Any | None
+    provider: IdentityProviderRecord | None
     provider_type: ClassVar[str]
     tenant_id: uuid.UUID | None
 
@@ -76,15 +83,15 @@ class OrgSyncDepartmentMixin:
                 {"provider_id": provider_id},
             )
 
-        dept_map: dict[uuid.UUID, DepartmentCountNode] = {
-            row["id"]: {
-                "parent_id": row["parent_id"],
-                "direct": int(row["member_count"] or 0),
+        dept_map: dict[uuid.UUID, DepartmentCountNode] = {}
+        for raw_row in rows:
+            row = mapping_from_row(raw_row)
+            dept_map[uuid_from_row(row.get("id"))] = {
+                "parent_id": uuid_from_row_opt(row.get("parent_id")),
+                "direct": int_from_row(row.get("member_count")),
                 "total": 0,
                 "children": [],
             }
-            for row in rows
-        }
         root_ids: list[uuid.UUID] = []
         for d_id, d_data in dept_map.items():
             parent_id = d_data["parent_id"]
@@ -107,14 +114,14 @@ class OrgSyncDepartmentMixin:
         for d_id, d_data in dept_map.items():
             await org_department_dao.set_member_count(d_id, d_data["total"])
 
-    async def _ensure_provider(self, db: object | None) -> Any:
+    async def _ensure_provider(self, db: object | None) -> IdentityProviderRecord:
         """Ensure IdentityProvider record exists."""
         del db
         if self.provider:
             return self.provider
 
         provider_id = getattr(self, "provider_id", None)
-        if provider_id:
+        if isinstance(provider_id, uuid.UUID):
             self.provider = await identity_provider_dao.get(provider_id)
             if self.provider:
                 return self.provider
@@ -133,17 +140,19 @@ class OrgSyncDepartmentMixin:
                     {"ptype": self.provider_type},
                 )
             if row:
-                self.provider = IdentityProviderRecord.from_row(row)
+                self.provider = IdentityProviderRecord.from_row(mapping_from_row(row))
                 return self.provider
 
             provider = await identity_provider_dao.create(
-                obj_in={
-                    "provider_type": self.provider_type,
-                    "name": self.provider_type.capitalize(),
-                    "is_active": True,
-                    "config": self.config,
-                    "tenant_id": self.tenant_id,
-                }
+                obj_in=mapping_from_row(
+                    {
+                        "provider_type": self.provider_type,
+                        "name": self.provider_type.capitalize(),
+                        "is_active": True,
+                        "config": self.config,
+                        "tenant_id": self.tenant_id,
+                    }
+                )
             )
             self.provider = provider
             return provider
@@ -170,30 +179,34 @@ class OrgSyncDepartmentMixin:
         if existing:
             _ = await org_department_dao.update(
                 db_obj=existing,
-                obj_in={
-                    "name": dept.name,
-                    "member_count": dept.member_count,
-                    "path": path,
-                    "external_id": dept.external_id,
-                    "provider_id": provider.id,
-                    "parent_id": parent_id,
-                    "status": "active",
-                    "synced_at": now,
-                },
+                obj_in=mapping_from_row(
+                    {
+                        "name": dept.name,
+                        "member_count": dept.member_count,
+                        "path": path,
+                        "external_id": dept.external_id,
+                        "provider_id": provider.id,
+                        "parent_id": parent_id,
+                        "status": "active",
+                        "synced_at": now,
+                    }
+                ),
             )
         else:
             _ = await org_department_dao.create(
-                obj_in={
-                    "external_id": dept.external_id,
-                    "provider_id": provider.id,
-                    "name": dept.name,
-                    "parent_id": parent_id,
-                    "path": path,
-                    "member_count": dept.member_count,
-                    "tenant_id": self.tenant_id,
-                    "status": "active",
-                    "synced_at": now,
-                }
+                obj_in=mapping_from_row(
+                    {
+                        "external_id": dept.external_id,
+                        "provider_id": provider.id,
+                        "name": dept.name,
+                        "parent_id": parent_id,
+                        "path": path,
+                        "member_count": dept.member_count,
+                        "tenant_id": self.tenant_id,
+                        "status": "active",
+                        "synced_at": now,
+                    }
+                )
             )
 
     async def _rebuild_department_paths(self, db: object | None, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
@@ -220,13 +233,13 @@ class OrgSyncDepartmentMixin:
                 "SELECT id, department_id, department_path FROM org_members WHERE provider_id = %(provider_id)s",
                 {"provider_id": provider_id},
             )
-            for member in members:
-                if member["department_id"]:
-                    new_path = dept_path_map.get(member["department_id"], member["department_path"] or "")
-                else:
-                    new_path = member["department_path"] or ""
-                if new_path != (member["department_path"] or ""):
+            for raw_member in members:
+                member = mapping_from_row(raw_member)
+                department_id = uuid_from_row_opt(member.get("department_id"))
+                current_path = str_from_row(member.get("department_path"))
+                new_path = dept_path_map.get(department_id, current_path) if department_id else current_path
+                if new_path != current_path:
                     await conn.execute(
                         "UPDATE org_members SET department_path = %(path)s WHERE id = %(id)s",
-                        {"path": new_path, "id": member["id"]},
+                        {"path": new_path, "id": uuid_from_row(member.get("id"))},
                     )

@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from typing import Protocol
 
 from app.config import get_settings
+from app.core.json_types import json_as_str, json_as_str_or, json_loads_object
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.records.chat import ChatMessageRecord
@@ -57,7 +58,7 @@ ANTHROPIC_API_PROVIDERS = {"anthropic"}
 
 def get_model_api_key(model: _EncryptedModel) -> str:
     """Decrypt the model's API key, with backward compatibility for plaintext keys."""
-    raw = getattr(model, "api_key_encrypted", None) or ""
+    raw = model.api_key_encrypted or ""
     if not raw:
         return ""
     try:
@@ -109,8 +110,8 @@ def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -
     for msg in messages:
         if msg.role == "tool_call":
             try:
-                tc_data = _json.loads(msg.content)
-                tc_name = tc_data.get("name", "unknown")
+                tc_data = json_loads_object(msg.content)
+                tc_name = json_as_str_or(tc_data.get("name"), "unknown")
                 tc_args = tc_data.get("args", {})
                 tc_result = tc_data.get("result", "")
                 tc_id = f"call_{msg.id}"  # synthetic tool_call_id
@@ -129,8 +130,9 @@ def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -
                         }
                     ],
                 }
-                if tc_data.get("reasoning_content"):
-                    asst_msg["reasoning_content"] = tc_data["reasoning_content"]
+                reasoning_content = json_as_str(tc_data.get("reasoning_content"))
+                if reasoning_content:
+                    asst_msg["reasoning_content"] = reasoning_content
                 result.append(asst_msg)
 
                 # Tool result message

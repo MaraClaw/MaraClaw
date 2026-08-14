@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.core.logging import logger
 
@@ -25,9 +25,9 @@ def _float_input(value: ToolArgumentValue | None) -> str | int | float:
 def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None, int | None, str]:
     if not isinstance(screen_data, dict):
         return None, None, ""
-    width_raw: Any = screen_data.get("width")
-    height_raw: Any = screen_data.get("height")
-    dpi: Any = screen_data.get("dpiScalingFactor")
+    width_raw: object = screen_data.get("width")
+    height_raw: object = screen_data.get("height")
+    dpi: object = screen_data.get("dpiScalingFactor")
     try:
         width = int(width_raw) if width_raw is not None else None
         height = int(height_raw) if height_raw is not None else None

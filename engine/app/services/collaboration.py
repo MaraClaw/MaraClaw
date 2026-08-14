@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao

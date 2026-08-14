@@ -3,11 +3,19 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, override
+from typing import ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_str_or
+from app.core.json_types import (
+    JsonObject,
+    json_as_bool,
+    json_as_int,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
@@ -55,11 +63,11 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                 self.DINGTALK_TOKEN_URL,
                 params={"appkey": self.app_key, "appsecret": self.app_secret},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if data.get("errcode") != 0:
-                raise RuntimeError(f"DingTalk token error: {data.get('errmsg') or data}")
-            token = data.get("access_token") or ""
-            expires_in = int(data.get("expires_in") or 7200)
+                raise RuntimeError(f"DingTalk token error: {json_as_str_or(data.get('errmsg')) or data}")
+            token = json_as_str_or(data.get("access_token"))
+            expires_in = json_as_int(data.get("expires_in"), 7200)
             self._access_token = token
             # refresh a bit earlier
             self._token_expires_at = datetime.now(UTC) + timedelta(seconds=max(expires_in - 60, 60))
@@ -94,30 +102,40 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     params={"access_token": token},
                     json={"dept_id": parent_id},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if data.get("errcode") != 0:
-                    raise RuntimeError(f"DingTalk department list error: {data.get('errmsg') or data}")
+                    raise RuntimeError(f"DingTalk department list error: {json_as_str_or(data.get('errmsg')) or data}")
 
                 result = data.get("result")
-                items: list[dict[str, Any]] = []
                 if isinstance(result, list):
-                    items = [dict[str, Any](item) for item in result if isinstance(item, dict)]
-                elif isinstance(result, dict):
-                    raw_items = result.get("department", []) or []
-                    items = [dict[str, Any](item) for item in raw_items if isinstance(item, dict)]
+                    items = [json_object_from(item) for item in object_list_from_row(result)]
+                else:
+                    result_obj = json_object_from(result)
+                    items = [json_object_from(item) for item in object_list_from_row(result_obj.get("department"))]
 
                 for item in items:
                     raw_dept_id = item.get("dept_id")
                     if raw_dept_id is None:
                         continue
-                    dept_id = int(raw_dept_id)
+                    if isinstance(raw_dept_id, int) and not isinstance(raw_dept_id, bool):
+                        dept_id = raw_dept_id
+                    elif isinstance(raw_dept_id, str) and raw_dept_id.strip():
+                        dept_id = int(raw_dept_id)
+                    else:
+                        continue
                     dept_name = json_as_str_or(item.get("name"))
                     # Use actual parent_id from API response to preserve real hierarchy
                     raw_parent_id = item.get("parent_id")
-                    if dept_id == 1 or not raw_parent_id or int(raw_parent_id) == dept_id:
+                    if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool):
+                        parent_int: int | None = raw_parent_id
+                    elif isinstance(raw_parent_id, str) and raw_parent_id.strip():
+                        parent_int = int(raw_parent_id)
+                    else:
+                        parent_int = None
+                    if dept_id == 1 or not parent_int or parent_int == dept_id:
                         parent_external = None  # Root has no parent
                     else:
-                        parent_external = str(int(raw_parent_id))
+                        parent_external = str(parent_int)
                     external_id = str(dept_id)
                     dept_index[external_id] = (dept_name, parent_external)
                     all_depts.append(
@@ -125,7 +143,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                             external_id=external_id,
                             name=dept_name,
                             parent_external_id=parent_external,
-                            member_count=item.get("member_count", 0) or 0,
+                            member_count=json_as_int(item.get("member_count")),
                             raw_data=item,
                         )
                     )
@@ -165,21 +183,18 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     params={"access_token": token},
                     json={"dept_id": dept_id, "cursor": cursor, "size": 100},
                 )
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if data.get("errcode") != 0:
-                    raise RuntimeError(f"DingTalk user list error: {data.get('errmsg') or data}")
+                    raise RuntimeError(f"DingTalk user list error: {json_as_str_or(data.get('errmsg')) or data}")
 
-                result_raw = data.get("result", {}) or {}
-                result: dict[str, Any] = dict[str, Any](result_raw) if isinstance(result_raw, dict) else {}
-                items: list[dict[str, Any]] = [
-                    dict[str, Any](item) for item in (result.get("list", []) or []) if isinstance(item, dict)
-                ]
-                for item in items:
+                result = json_object_from(data.get("result"))
+                for item_raw in object_list_from_row(result.get("list")):
+                    item = json_object_from(item_raw)
                     external_id = json_as_str_or(item.get("userid")) or json_as_str_or(item.get("user_id"))
                     # Get user's actual department list from DingTalk data
-                    dept_id_list = item.get("dept_id_list", [])
+                    dept_id_list = item.get("dept_id_list")
                     department_ids = (
-                        [str(did) for did in dept_id_list]
+                        [str(did) for did in list[object](dept_id_list)]
                         if isinstance(dept_id_list, list) and dept_id_list
                         else [department_external_id]
                     )
@@ -188,24 +203,29 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     last_dept_path = self._dept_path_map.get(last_dept_id, "")
                     user = ExternalUser(
                         external_id=external_id,
-                        unionid=item.get("unionid", "") or "",
-                        open_id=item.get("openid", "") or "",
-                        name=item.get("name", ""),
-                        email=item.get("email", "") or "",
-                        avatar_url=item.get("avatar", "") or "",
-                        title=item.get("title", "") or "",
+                        unionid=json_as_str_or(item.get("unionid")),
+                        open_id=json_as_str_or(item.get("openid")),
+                        name=json_as_str_or(item.get("name")),
+                        email=json_as_str_or(item.get("email")),
+                        avatar_url=json_as_str_or(item.get("avatar")),
+                        title=json_as_str_or(item.get("title")),
                         department_external_id=last_dept_id,
                         department_path=last_dept_path,
                         department_ids=department_ids,
-                        mobile=item.get("mobile", "") or "",
-                        status="active" if item.get("active", True) else "inactive",
+                        mobile=json_as_str_or(item.get("mobile")),
+                        status="active" if json_as_bool(item.get("active"), True) else "inactive",
                         raw_data=item,
                     )
                     users.append(user)
 
                 if not result.get("has_more"):
                     break
-                cursor = int(result.get("next_cursor") or 0)
+                next_cursor = result.get("next_cursor") or 0
+                cursor = (
+                    int(next_cursor)
+                    if isinstance(next_cursor, str | int) and not isinstance(next_cursor, bool)
+                    else 0
+                )
 
         return users
 

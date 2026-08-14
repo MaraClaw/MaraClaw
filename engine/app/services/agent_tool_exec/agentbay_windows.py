@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.core.logging import logger
 
@@ -129,7 +129,7 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
 
             title_norm, candidates = _agentbay_normalize_text(title), []
             raw_windows = windows_result.get("windows", [])
-            windows: list[Any] = raw_windows if isinstance(raw_windows, list) else []
+            windows = list[object](raw_windows) if isinstance(raw_windows, list) else []
             for window in windows:
                 if not isinstance(window, dict):
                     continue
@@ -143,7 +143,7 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
                     else SequenceMatcher(None, title_norm, candidate_norm).ratio()
                 )
                 if score >= 0.35:
-                    item: dict[str, Any] = dict(window)
+                    item = dict[str, object](window)
                     item["match_score"] = round(score, 3)
                     candidates.append(item)
             candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)

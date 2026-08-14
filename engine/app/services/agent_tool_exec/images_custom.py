@@ -1,10 +1,35 @@
 import importlib
 import json
-from typing import Any
+from typing import Protocol, TypeIs
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    is_json_object,
+    is_json_value,
+    json_as_str,
+    json_loads_value,
+    json_object_from,
+    json_object_from_response,
+    json_value_from_response,
+)
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArgumentValue
+
+
+class _ImageHttpResponse(Protocol):
+    def raise_for_status(self) -> object: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+
+class _ImageHttpClient(Protocol):
+    async def get(self, url: str, timeout: float = 60) -> _ImageHttpResponse: ...
+
+
+def _is_image_http_client(value: object) -> TypeIs[_ImageHttpClient]:
+    return callable(getattr(value, "get", None))
 
 
 def _json_path_get(data: JsonValue, path: str) -> JsonValue:
@@ -51,13 +76,16 @@ def _render_json_template(template_json: str, variables: dict[str, str]) -> dict
 
     candidates.extend(text.replace('\\"', '"') for text in tuple(candidates) if '\\"' in text)
 
-    template = None
+    template: JsonValue | None = None
     for text in candidates:
         try:
-            parsed = json.loads(text)
-            if isinstance(parsed, str):
-                parsed = json.loads(parsed)
-            template = parsed
+            parsed_raw = json_loads_value(text)
+            if isinstance(parsed_raw, str):
+                parsed_raw = json_loads_value(parsed_raw)
+            if not is_json_value(parsed_raw):
+                parse_errors.append("Request body template is not valid JSON.")
+                continue
+            template = parsed_raw
             break
         except Exception as e:
             parse_errors.append(str(e))
@@ -144,7 +172,7 @@ def _find_first_image_reference(data: JsonValue) -> JsonValue:
     return walk(data)
 
 
-async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: Any) -> bytes:
+async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: object) -> bytes:
     import base64
 
     if isinstance(image_ref, dict):
@@ -160,6 +188,8 @@ async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: Any) ->
         return base64.b64decode(encoded)
 
     if image_ref.startswith(("http://", "https://")):
+        if not _is_image_http_client(client):
+            raise TypeError("HTTP client is unavailable")
         img_resp = await client.get(image_ref, timeout=60)
         img_resp.raise_for_status()
         return img_resp.content
@@ -217,30 +247,30 @@ async def _generate_image_custom_api(
     }
     if extra_headers_json.strip():
         try:
-            extra_headers = json.loads(extra_headers_json)
+            extra_raw = json_loads_value(extra_headers_json)
         except Exception as e:
             raise ValueError(f"Invalid extra_headers_json: {e}") from e
-        if not isinstance(extra_headers, dict):
+        if not is_json_object(extra_raw):
             raise ValueError("extra_headers_json must be a JSON object.")
-        extra_header_items: dict[str, Any] = dict(extra_headers)
-        headers.update({str(k): str(v) for k, v in extra_header_items.items() if v is not None})
+        headers.update({str(k): str(v) for k, v in extra_raw.items() if v is not None})
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
         if resp.status_code < 200 or resp.status_code >= 300:
             try:
-                err_body = resp.json()
+                err_body = json_object_from_response(resp)
                 err_msg = (
-                    err_body.get("error", {}).get("message")
-                    if isinstance(err_body.get("error"), dict)
-                    else err_body.get("message")
-                ) or resp.text[:300]
+                    json_as_str(json_object_from(err_body.get("error")).get("message"))
+                    or json_as_str(err_body.get("message"))
+                    or resp.text[:300]
+                )
             except Exception:
                 err_msg = resp.text[:300]
             raise ValueError(f"Custom image API error ({resp.status_code}): {err_msg}")
 
         try:
-            data: JsonValue = resp.json()
+            data_raw = json_value_from_response(resp)
+            data: JsonValue = data_raw if is_json_value(data_raw) else None
         except Exception as e:
             raise ValueError("Custom image API returned non-JSON response.") from e
 

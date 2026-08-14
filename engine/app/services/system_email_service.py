@@ -17,9 +17,22 @@ from email.utils import formataddr, make_msgid
 from typing import TypedDict
 
 from app.core.email import send_smtp_email
+from app.core.json_types import json_as_str, json_object_from
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _setting_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float | str):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 class EmailTemplate(TypedDict):
@@ -65,21 +78,24 @@ async def resolve_email_config_async(
 
     # Try platform-level config in DB
     try:
-        v = await system_setting_dao.get_value("system_email_platform", {})
+        v_raw: object = await system_setting_dao.get_value("system_email_platform", {})
+        v = json_object_from(v_raw)
         if v:
             if v.get("SYSTEM_EMAIL_ENABLED") is False and not include_disabled:
                 return None
             if v.get("SYSTEM_EMAIL_FROM_ADDRESS") and v.get("SYSTEM_SMTP_HOST"):
+                port_raw: object = v.get("SYSTEM_SMTP_PORT", 465)
+                timeout_raw: object = v.get("SYSTEM_SMTP_TIMEOUT_SECONDS", 15)
                 return SystemEmailConfig(
                     from_address=str(v.get("SYSTEM_EMAIL_FROM_ADDRESS", "")).strip(),
                     from_name=str(v.get("SYSTEM_EMAIL_FROM_NAME", "MaraClaw")).strip() or "MaraClaw",
                     smtp_host=str(v.get("SYSTEM_SMTP_HOST", "")).strip(),
-                    smtp_port=int(v.get("SYSTEM_SMTP_PORT", 465)),
+                    smtp_port=_setting_int(port_raw),
                     smtp_username=str(v.get("SYSTEM_SMTP_USERNAME", "")).strip()
                     or str(v.get("SYSTEM_EMAIL_FROM_ADDRESS", "")).strip(),
                     smtp_password=str(v.get("SYSTEM_SMTP_PASSWORD", "")),
                     smtp_ssl=bool(v.get("SYSTEM_SMTP_SSL", True)),
-                    smtp_timeout_seconds=max(1, int(v.get("SYSTEM_SMTP_TIMEOUT_SECONDS", 15))),
+                    smtp_timeout_seconds=max(1, _setting_int(timeout_raw)),
                 )
     except Exception as e:
         logger.warning(f"Error resolving platform email config: {e}")
@@ -247,15 +263,19 @@ async def _load_templates_from_db(templates: EmailTemplates) -> EmailTemplates:
     from app.dao import system_setting_dao
 
     try:
-        saved = await system_setting_dao.get_value("email_templates", {})
+        saved_raw: object = await system_setting_dao.get_value("email_templates", {})
+        saved = json_object_from(saved_raw)
         if saved:
             for key in templates:
-                if key in saved and isinstance(saved[key], dict):
-                    # Only override subject/body if present and non-empty
-                    if saved[key].get("subject"):
-                        templates[key]["subject"] = saved[key]["subject"]
-                    if saved[key].get("body"):
-                        templates[key]["body"] = saved[key]["body"]
+                entry = json_object_from(saved.get(key))
+                if not entry:
+                    continue
+                subject = json_as_str(entry.get("subject"))
+                if subject:
+                    templates[key]["subject"] = subject
+                body = json_as_str(entry.get("body"))
+                if body:
+                    templates[key]["body"] = body
     except Exception as e:
         logger.warning(f"Error loading email templates from DB: {e}")
 

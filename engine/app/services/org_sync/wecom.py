@@ -6,7 +6,13 @@ from typing import ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    object_list_from_row,
+)
 from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
@@ -52,9 +58,9 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                 self.WECOM_TOKEN_URL,
                 params={"corpid": corp_id, "corpsecret": secret},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if data.get("errcode") == 0:
-                return data.get("access_token") or ""
+                return json_as_str_or(data.get("access_token"))
             raise RuntimeError(f"[WeCom] gettoken failed for corpid={corp_id}: {data}")
 
     @property
@@ -99,21 +105,25 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                 # id omitted → returns all departments
                 params={"access_token": token},
             )
-            data = resp.json()
+            data = json_object_from_response(resp)
             if data.get("errcode") != 0:
-                raise RuntimeError(f"WeCom department list error: {data.get('errmsg') or data}")
+                raise RuntimeError(f"WeCom department list error: {json_as_str_or(data.get('errmsg')) or data}")
 
             # simplelist response: {"department_id": [{"id":x, "parentid":x, "name":…, "order":…}]}
-            items = data.get("department_id", []) or data.get("department", [])
-            for item in items:
-                dept_id = str(item.get("id"))
+            items_raw = data.get("department_id") or data.get("department")
+            for item_raw in object_list_from_row(items_raw):
+                item = json_object_from(item_raw)
+                raw_id = item.get("id")
+                if raw_id is None:
+                    continue
+                dept_id = str(raw_id)
                 parentid = item.get("parentid", 0)
                 parent_id = str(parentid) if parentid and parentid != 0 else None
 
                 all_depts.append(
                     ExternalDepartment(
                         external_id=dept_id,
-                        name=item.get("name", ""),
+                        name=json_as_str_or(item.get("name")),
                         parent_external_id=parent_id,
                         member_count=0,  # simplelist does not return member count
                         raw_data=item,
@@ -159,12 +169,13 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                     params["cursor"] = cursor
 
                 resp = await client.get(self.WECOM_USER_LIST_ID_URL, params=params)
-                data = resp.json()
+                data = json_object_from_response(resp)
                 if data.get("errcode") != 0:
-                    raise RuntimeError(f"WeCom user/list_id error: {data.get('errmsg') or data}")
+                    raise RuntimeError(f"WeCom user/list_id error: {json_as_str_or(data.get('errmsg')) or data}")
 
-                for entry in data.get("dept_user", []):
-                    uid = entry.get("userid", "")
+                for entry_raw in object_list_from_row(data.get("dept_user")):
+                    entry = json_object_from(entry_raw)
+                    uid = json_as_str_or(entry.get("userid"))
                     if not uid:
                         continue
                     # Use userid as the name placeholder so link_identity() knows
@@ -173,13 +184,13 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                         ExternalUser(
                             external_id=uid,
                             name=uid,  # placeholder - enriched on first SSO login
-                            open_id=entry.get("open_userid", ""),
+                            open_id=json_as_str_or(entry.get("open_userid")),
                             department_external_id=department_external_id,
                             department_ids=[department_external_id],
                         )
                     )
 
-                cursor = data.get("next_cursor", "")
+                cursor = json_as_str_or(data.get("next_cursor"))
                 if not cursor:
                     break
 

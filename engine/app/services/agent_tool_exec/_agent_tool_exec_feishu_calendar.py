@@ -3,20 +3,65 @@ from __future__ import annotations
 import importlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Protocol, TypeIs
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_str
+from app.core.json_types import JsonObject, is_json_object, json_as_str, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
-from app.services.feishu_service import FeishuService
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
 
-def _calendar_support():
-    return importlib.import_module("app.services.agent_tool_exec.feishu_calendar_support")
+class _CalendarSupport(Protocol):
+    def _to_unix(self, value: str | None, default: datetime) -> str: ...
+
+    def _to_iso(self, value: str | None, default: datetime) -> str: ...
+
+    def _format_calendar_items(self, items: list[dict[str, ToolArgumentValue]]) -> list[str]: ...
+
+    async def _calendar_write_context(self, agent_id: uuid.UUID, user_email: str) -> tuple[object, str, str, str]: ...
+
+    async def _calendar_attendees(
+        self, agent_id: uuid.UUID, arguments: ToolArguments, token: str, user_email: str
+    ) -> tuple[list[str], list[str]]: ...
+
+
+class _TenantTokenService(Protocol):
+    async def get_tenant_access_token(self, app_id: str | None = None, app_secret: str | None = None) -> str: ...
+
+
+class _FeishuServiceModule(Protocol):
+    feishu_service: _TenantTokenService
+
+
+def _has_callables(value: object, *names: str) -> bool:
+    return all(callable(getattr(value, name, None)) for name in names)
+
+
+def _is_calendar_support(value: object) -> TypeIs[_CalendarSupport]:
+    return _has_callables(
+        value,
+        "_to_unix",
+        "_to_iso",
+        "_format_calendar_items",
+        "_calendar_write_context",
+        "_calendar_attendees",
+    )
+
+
+def _is_feishu_service_module(value: object) -> TypeIs[_FeishuServiceModule]:
+    service: object = getattr(value, "feishu_service", None)
+    return callable(getattr(service, "get_tenant_access_token", None))
+
+
+def _calendar_support() -> _CalendarSupport:
+    module: object = importlib.import_module("app.services.agent_tool_exec.feishu_calendar_support")
+    if not _is_calendar_support(module):
+        raise TypeError("feishu_calendar_support module is missing required helpers")
+    return module
 
 
 def _to_unix(value: str | None, default: datetime) -> str:
@@ -41,31 +86,33 @@ async def _calendar_attendees(
     return await _calendar_support()._calendar_attendees(agent_id, arguments, token, user_email)
 
 
-def _feishu_service() -> FeishuService:
-    return importlib.import_module("app.services.feishu_service").feishu_service
+def _feishu_service() -> _TenantTokenService:
+    module: object = importlib.import_module("app.services.feishu_service")
+    if not _is_feishu_service_module(module):
+        raise TypeError("feishu_service is unavailable")
+    return module.feishu_service
 
 
-def _httpx_module():
-    return importlib.import_module("httpx")
-
-
-def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
-    return _httpx_module().AsyncClient(**kwargs)
+def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
 
 
 def _response_mapping(response: httpx.Response) -> JsonObject:
-    raw: object = response.json()
-    return raw if isinstance(raw, dict) else {}
+    return json_object_from_response(response)
 
 
 def _nested_mapping(value: object) -> JsonObject:
-    return value if isinstance(value, dict) else {}
+    return json_object_from(value)
 
 
 def _object_items(value: object) -> list[dict[str, ToolArgumentValue]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    items: list[dict[str, ToolArgumentValue]] = []
+    for raw in list[object](value):
+        if is_json_object(raw):
+            items.append(raw)
+    return items
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
