@@ -56,25 +56,25 @@ def _user(
 
 
 def _tenant(**kwargs):
-    defaults = dict(
-        id=uuid.uuid4(),
-        name="Acme",
-        slug="acme-abc",
-        im_provider="web_only",
-        timezone="UTC",
-        country_region="001",
-        is_active=True,
-        sso_enabled=False,
-        sso_domain=None,
-        a2a_async_enabled=True,
-        default_model_id=None,
-        created_at=_NOW,
-        default_message_limit=50,
-        default_message_period="permanent",
-        default_max_agents=2,
-        default_agent_ttl_hours=0,
-        im_config=None,
-    )
+    defaults = {
+        "id": uuid.uuid4(),
+        "name": "Acme",
+        "slug": "acme-abc",
+        "im_provider": "web_only",
+        "timezone": "UTC",
+        "country_region": "001",
+        "is_active": True,
+        "sso_enabled": False,
+        "sso_domain": None,
+        "a2a_async_enabled": True,
+        "default_model_id": None,
+        "created_at": _NOW,
+        "default_message_limit": 50,
+        "default_message_period": "permanent",
+        "default_max_agents": 2,
+        "default_agent_ttl_hours": 0,
+        "im_config": None,
+    }
     defaults.update(kwargs)
     return TenantRecord(**{k: defaults[k] for k in TenantRecord.__dataclass_fields__ if k in defaults})
 
@@ -387,6 +387,10 @@ async def test_transfer_requires_correct_password_then_moves(monkeypatch):
     monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=dest))
     monkeypatch.setattr("app.services.org_membership.consume_invitation_code", AsyncMock())
+    monkeypatch.setattr(
+        "app.core.security.load_identity_for_password",
+        AsyncMock(return_value=SimpleNamespace(password_hash="hashed")),
+    )
     monkeypatch.setattr("app.core.security.verify_password_async", AsyncMock(side_effect=[False, True]))
     monkeypatch.setattr("app.core.security.create_access_token", lambda *a, **k: "tok")
     moved = _user(role="member", tenant_id=dest.id)
@@ -1174,3 +1178,479 @@ async def test_logo_and_repair_error_branches(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(name="N"), _user())
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_tenants_client_ip_and_lookup_by_email(monkeypatch):
+    req = MagicMock(spec=Request)
+    req.client = None
+    assert await tenants_api.get_client_ip(req) is None
+    req.client = SimpleNamespace(host="203.0.113.9")
+    assert await tenants_api.get_client_ip(req) == "203.0.113.9"
+
+    match = _tenant(name="Acme", slug="acme")
+    fallback = _tenant(name="OpenClaw", slug="openclaw")
+    monkeypatch.setattr("app.services.org_membership.lookup_tenant_by_email_domain", AsyncMock(return_value=match))
+    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
+    out = await tenants_api.lookup_org_by_email("ada@acme.com")
+    assert out.match is not None
+    assert out.match.slug == "acme"
+    assert out.fallback is not None
+    assert out.fallback.slug == "openclaw"
+
+    from app.services.org_membership import DefaultOrgUnavailableError
+
+    monkeypatch.setattr("app.services.org_membership.lookup_tenant_by_email_domain", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "app.services.org_membership.get_fallback_org",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("missing")),
+    )
+    empty = await tenants_api.lookup_org_by_email("nobody@example.com")
+    assert empty.match is None
+    assert empty.fallback is None
+
+
+@pytest.mark.asyncio
+async def test_join_default_and_suggested_remaining_branches(monkeypatch):
+    from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError
+
+    fallback = _tenant(name="OpenClaw", slug="openclaw")
+    member = _user(role="member", tenant_id=None)
+    attached = _user(role="member", tenant_id=fallback.id)
+    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
+    monkeypatch.setattr("app.services.org_membership.attach_user_to_org", AsyncMock(return_value=attached))
+    monkeypatch.setattr("app.core.security.create_access_token", lambda *a, **k: "tok")
+    joined = await tenants_api.join_default_org(member)
+    assert joined.access_token == "tok"
+    assert joined.tenant.id == fallback.id
+
+    with pytest.raises(HTTPException) as already:
+        await tenants_api.join_default_org(_user(role="member", tenant_id=uuid.uuid4()))
+    assert already.value.status_code == 409
+
+    monkeypatch.setattr(
+        "app.services.org_membership.get_fallback_org",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("no default")),
+    )
+    with pytest.raises(HTTPException) as missing:
+        await tenants_api.join_default_org(_user(role="member", tenant_id=None))
+    assert missing.value.status_code == 503
+
+    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
+    monkeypatch.setattr(
+        "app.services.org_membership.attach_user_to_org",
+        AsyncMock(side_effect=AlreadyInOrgError("already")),
+    )
+    with pytest.raises(HTTPException) as conflict:
+        await tenants_api.join_default_org(_user(role="member", tenant_id=None))
+    assert conflict.value.status_code == 409
+
+    suggested = _tenant()
+    with pytest.raises(HTTPException) as in_org:
+        await tenants_api.join_suggested_org(
+            tenants_api.SuggestedJoinRequest(),
+            _user(role="member", tenant_id=uuid.uuid4()),
+        )
+    assert in_org.value.status_code == 409
+
+    monkeypatch.setattr("app.services.org_membership.lookup_tenant_for_verified_email", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as no_match:
+        await tenants_api.join_suggested_org(tenants_api.SuggestedJoinRequest(), _user(role="member", tenant_id=None))
+    assert no_match.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=suggested),
+    )
+    with pytest.raises(HTTPException) as mismatch:
+        await tenants_api.join_suggested_org(
+            tenants_api.SuggestedJoinRequest(tenant_id=uuid.uuid4()),
+            _user(role="member", tenant_id=None),
+        )
+    assert mismatch.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.attach_user_to_org",
+        AsyncMock(side_effect=AlreadyInOrgError("already")),
+    )
+    with pytest.raises(HTTPException) as suggested_conflict:
+        await tenants_api.join_suggested_org(
+            tenants_api.SuggestedJoinRequest(tenant_id=suggested.id),
+            _user(role="member", tenant_id=None),
+        )
+    assert suggested_conflict.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_join_company_invitation_without_org_and_attach_conflict(monkeypatch):
+    from app.services.org_membership import AlreadyInOrgError
+
+    tenant = _tenant()
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=None)),
+    )
+    with pytest.raises(HTTPException) as no_org:
+        await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), _user(role="member"))
+    assert no_org.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=tenant.id)),
+    )
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        "app.services.org_membership.attach_user_to_org",
+        AsyncMock(side_effect=AlreadyInOrgError("already")),
+    )
+    with pytest.raises(HTTPException) as conflict:
+        await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), _user(role="member"))
+    assert conflict.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_transfer_remaining_error_and_tenant_id_paths(monkeypatch):
+    from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, InvitationError
+
+    dest = _tenant()
+    source = _tenant()
+    member = _user(role="member", tenant_id=source.id)
+    member.identity = SimpleNamespace(id=member.identity_id, password_hash="hashed")
+    monkeypatch.setattr(
+        "app.core.security.load_identity_for_password",
+        AsyncMock(return_value=SimpleNamespace(password_hash="hashed")),
+    )
+    monkeypatch.setattr("app.core.security.verify_password_async", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.core.security.create_access_token", lambda *a, **k: "tok")
+
+    with pytest.raises(HTTPException) as no_tenant:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            _user(role="member", tenant_id=None),
+        )
+    assert no_tenant.value.status_code == 400
+
+    monkeypatch.setattr("app.core.security.load_identity_for_password", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as no_identity:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            member,
+        )
+    assert no_identity.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.core.security.load_identity_for_password",
+        AsyncMock(return_value=SimpleNamespace(password_hash="hashed")),
+    )
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(side_effect=InvitationError("bad code")),
+    )
+    with pytest.raises(HTTPException) as bad_invite:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            member,
+        )
+    assert bad_invite.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=dest.id)),
+    )
+    with pytest.raises(HTTPException) as mismatch:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X", tenant_id=uuid.uuid4()),
+            member,
+        )
+    assert mismatch.value.status_code == 403
+
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=None)),
+    )
+    with pytest.raises(HTTPException) as invite_no_org:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            member,
+        )
+    assert invite_no_org.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.require_active_invitation",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=dest.id)),
+    )
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as missing_dest:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            member,
+        )
+    assert missing_dest.value.status_code == 400
+
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=source))
+    with pytest.raises(HTTPException) as same_org:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", invitation_code="X"),
+            member,
+        )
+    assert same_org.value.status_code == 400
+
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=dest))
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=dest),
+    )
+    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "app.services.org_membership.transfer_user_to_org",
+        AsyncMock(return_value=_user(role="member", tenant_id=dest.id)),
+    )
+    moved = await tenants_api.transfer_organization(
+        tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
+        member,
+    )
+    assert moved.access_token == "tok"
+
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.services.org_membership.get_fallback_org",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("none")),
+    )
+    with pytest.raises(HTTPException) as not_allowed:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
+            member,
+        )
+    assert not_allowed.value.status_code == 403
+
+    monkeypatch.setattr(
+        "app.services.org_membership.lookup_tenant_for_verified_email",
+        AsyncMock(return_value=dest),
+    )
+    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=dest))
+    monkeypatch.setattr(
+        "app.services.org_membership.transfer_user_to_org",
+        AsyncMock(side_effect=AlreadyInOrgError("already")),
+    )
+    with pytest.raises(HTTPException) as transfer_conflict:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
+            member,
+        )
+    assert transfer_conflict.value.status_code == 403
+
+    monkeypatch.setattr(
+        "app.services.org_membership.transfer_user_to_org",
+        AsyncMock(side_effect=DefaultOrgUnavailableError("gone")),
+    )
+    with pytest.raises(HTTPException) as unavailable:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
+            member,
+        )
+    assert unavailable.value.status_code == 400
+
+    with pytest.raises(HTTPException) as no_target:
+        await tenants_api.transfer_organization(tenants_api.TransferRequest(password="secret1"), member)
+    assert no_target.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_resolve_domain_port_and_slug_fallbacks(monkeypatch):
+    tenant = _tenant(is_active=True, sso_enabled=True, sso_domain="http://1.2.3.4")
+    monkeypatch.setattr(tenants_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get_by_sso_domain_exact", AsyncMock(return_value=None))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get_by_sso_domain_like", AsyncMock(return_value=tenant))
+    resolved = await tenants_api.resolve_tenant_by_domain("1.2.3.4:3009")
+    assert resolved["id"] == tenant.id
+
+    slug_tenant = _tenant(is_active=True, sso_enabled=True, slug="acme")
+    monkeypatch.setattr(tenants_api.tenant_dao, "get_by_sso_domain_like", AsyncMock(return_value=None))
+    monkeypatch.setattr(tenants_api.tenant_dao, "get_by_slug", AsyncMock(return_value=slug_tenant))
+    by_slug = await tenants_api.resolve_tenant_by_domain("acme.maraclaw.ai")
+    assert by_slug["slug"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_email_domain_crud_and_get_tenant_missing(monkeypatch):
+    from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
+    from app.services.org_membership import DomainClaimedError, InvalidEmailDomainError
+
+    tenant = _tenant()
+    pa = _user(role="platform_admin")
+    domain = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant.id, domain="acme.com", is_default=True, created_at=_NOW)
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(tenant_email_domain_dao, "list_for_tenant", AsyncMock(return_value=[domain]))
+    listed = await tenants_api.list_email_domains(tenant.id, pa)
+    assert listed[0].domain == "acme.com"
+
+    monkeypatch.setattr("app.services.org_membership.add_email_domain", AsyncMock(return_value=domain))
+    monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
+    created = await tenants_api.create_email_domain(
+        tenant.id, tenants_api.EmailDomainCreate(domain="acme.com", is_default=True), pa, "10.0.0.1"
+    )
+    assert created.domain == "acme.com"
+
+    monkeypatch.setattr(
+        "app.services.org_membership.add_email_domain",
+        AsyncMock(side_effect=InvalidEmailDomainError("bad")),
+    )
+    with pytest.raises(HTTPException) as invalid:
+        await tenants_api.create_email_domain(tenant.id, tenants_api.EmailDomainCreate(domain="nope"), pa, None)
+    assert invalid.value.status_code == 400
+
+    monkeypatch.setattr(
+        "app.services.org_membership.add_email_domain",
+        AsyncMock(side_effect=DomainClaimedError("taken")),
+    )
+    with pytest.raises(HTTPException) as claimed:
+        await tenants_api.create_email_domain(tenant.id, tenants_api.EmailDomainCreate(domain="acme.com"), pa, None)
+    assert claimed.value.status_code == 409
+
+    monkeypatch.setattr("app.services.org_membership.set_default_email_domain", AsyncMock(return_value=domain))
+    patched = await tenants_api.patch_email_domain(
+        tenant.id, domain.id, tenants_api.EmailDomainPatch(is_default=True), pa, None
+    )
+    assert patched.is_default is True
+    with pytest.raises(HTTPException) as clear:
+        await tenants_api.patch_email_domain(
+            tenant.id, domain.id, tenants_api.EmailDomainPatch(is_default=False), pa, None
+        )
+    assert clear.value.status_code == 400
+    monkeypatch.setattr("app.services.org_membership.set_default_email_domain", AsyncMock(side_effect=KeyError("x")))
+    with pytest.raises(HTTPException) as missing_domain:
+        await tenants_api.patch_email_domain(
+            tenant.id, domain.id, tenants_api.EmailDomainPatch(is_default=True), pa, None
+        )
+    assert missing_domain.value.status_code == 404
+
+    monkeypatch.setattr("app.services.org_membership.delete_email_domain", AsyncMock())
+    await tenants_api.remove_email_domain(tenant.id, domain.id, pa, None)
+    monkeypatch.setattr("app.services.org_membership.delete_email_domain", AsyncMock(side_effect=KeyError("x")))
+    with pytest.raises(HTTPException) as missing_delete:
+        await tenants_api.remove_email_domain(tenant.id, domain.id, pa, None)
+    assert missing_delete.value.status_code == 404
+
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as missing_tenant:
+        await tenants_api.get_tenant(tenant.id, pa)
+    assert missing_tenant.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_provisioning_taken_and_assignment_guards(monkeypatch):
+    from app.db.errors import UniqueViolationError
+
+    monkeypatch.setattr(
+        provisioning.identity_dao, "get_by_email", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+    )
+    with pytest.raises(AdminEmailTakenError):
+        await provisioning.create_additional_platform_admin(admin_email="pa@acme.com", admin_password="secret1")
+
+    monkeypatch.setattr(provisioning.identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(provisioning.identity_dao, "is_username_taken", AsyncMock(return_value=False))
+    monkeypatch.setattr(provisioning, "hash_password_async", AsyncMock(return_value="h"))
+    monkeypatch.setattr(
+        provisioning.identity_dao, "create_identity", AsyncMock(side_effect=UniqueViolationError("dup"))
+    )
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        with pytest.raises(AdminEmailTakenError):
+            await provisioning.create_additional_platform_admin(admin_email="pa@acme.com", admin_password="secret1")
+
+    actor = _user(role="member")
+    target = _user(role="member")
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_role_change(actor=actor, target=target, new_role="member")
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_role_change(actor=_user(role="org_admin"), target=target, new_role="nope")
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_assignment(
+            actor=_user(), target=_user(is_genesis=True), tenant_id=uuid.uuid4(), role="member"
+        )
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_assignment(actor=_user(), target=target, tenant_id=uuid.uuid4(), role="org_admin")
+
+    pa = _user(role="platform_admin")
+    same = _user(role="member", tenant_id=uuid.uuid4())
+    unchanged = await provisioning.apply_user_role_change(actor=pa, target=same, new_role="member")
+    assert unchanged.id == same.id
+
+    genesis_target = _user(role="member", is_genesis=True)
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_role_change(actor=pa, target=genesis_target, new_role="org_admin")
+
+    monkeypatch.setattr(provisioning, "is_genesis_platform_admin", AsyncMock(return_value=False))
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_role_change(actor=pa, target=target, new_role="platform_admin")
+
+    org = _user(role="org_admin", tenant_id=uuid.uuid4())
+    monkeypatch.setattr(provisioning, "is_genesis_org_admin", AsyncMock(return_value=False))
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_role_change(actor=org, target=target, new_role="org_admin")
+
+    last_pa = _user(role="platform_admin", is_active=True)
+    monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=1))
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning._assert_not_last_active_admin(last_pa, leaving_role="platform_admin")
+    last_oa = _user(role="org_admin", tenant_id=uuid.uuid4(), is_active=True)
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning._assert_not_last_active_admin(last_oa, leaving_role="org_admin")
+    inactive = _user(role="platform_admin", is_active=False)
+    await provisioning._assert_not_last_active_admin(inactive, leaving_role="platform_admin")
+
+
+@pytest.mark.asyncio
+async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
+    from app.services import platform_admin_seeder as seeder, tenant_provisioning as tp
+
+    monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", AsyncMock(return_value=None))
+    with pytest.raises(seeder.PlatformAdminSeedError):
+        await seeder._require_maraclaw()
+
+    monkeypatch.setattr(seeder.identity_dao, "is_username_taken", AsyncMock(return_value=True))
+    generated = await seeder._unique_username("admin@example.com")
+    assert generated.startswith("admin_")
+
+    identity = SimpleNamespace(id=uuid.uuid4(), email="gpa@x.com", password_hash="h")
+    user = _user(role="platform_admin")
+    user.identity = SimpleNamespace(id=identity.id, email="gpa@x.com", password_hash=None)
+    user.identity_id = identity.id
+    monkeypatch.setattr(seeder.identity_dao, "get", AsyncMock(return_value=identity))
+    rehydrated = await seeder._rehydrate_identity_hash(user)
+    assert rehydrated.identity.password_hash == "h"
+    assert seeder._has_login_credentials(rehydrated) is True
+    assert seeder._has_login_credentials(_user()) is False
+
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
+    earliest = _user(role="platform_admin", is_genesis=False)
+    monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=earliest))
+    monkeypatch.setattr(
+        seeder.user_dao,
+        "update",
+        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+    )
+    found = await seeder._find_genesis_membership()
+    assert found is not None
+    assert found.is_genesis is True
+
+    empty_slug = tp.slugify_tenant_name("   ")
+    assert "-" in empty_slug
+
+    monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
+    with pytest.raises(AdminEmailTakenError):
+        await tp.create_tenant_with_org_admin(name="Acme", admin_email="oa@acme.com", admin_password="secret1")
+
+    monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(tp.identity_dao, "is_username_taken", AsyncMock(return_value=True))
+    monkeypatch.setattr(tp, "hash_password_async", AsyncMock(return_value="h"))
+    monkeypatch.setattr(tp.tenant_dao, "create", AsyncMock(side_effect=RuntimeError("stop-after-username")))
+    with patch.object(tp, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        with pytest.raises(RuntimeError):
+            await tp.create_tenant_with_org_admin(name="Acme", admin_email="oa@acme.com", admin_password="secret1")

@@ -32,9 +32,7 @@ def _user(*, role: str, user_id=None, tenant_id=None, identity=None, is_active=T
 async def test_is_genesis_platform_admin_uses_persisted_flag():
     genesis_id = uuid.uuid4()
     assert (
-        await provisioning.is_genesis_platform_admin(
-            _user(role="platform_admin", user_id=genesis_id, is_genesis=True)
-        )
+        await provisioning.is_genesis_platform_admin(_user(role="platform_admin", user_id=genesis_id, is_genesis=True))
         is True
     )
     assert await provisioning.is_genesis_platform_admin(_user(role="platform_admin")) is False
