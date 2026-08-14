@@ -6,11 +6,11 @@ PRODUCTION_STAGE: Final = "FROM python:3.14.6-slim-trixie AS production"
 APT_INSTALL: Final = "apt-get install -y --no-install-recommends"
 APPROVED_DIRECT_PINS: Final = (
     "curl=8.14.1-2+deb13u4",
-    "chromium=150.0.7871.181-1~deb13u1",
+    "chromium=151.0.7922.137-1~deb13u1",
 )
 REGRESSION_CASES: Final = (
     ("curl=8.14.1-2+deb13u4", "curl=8.14.1-2+deb13u3", "stale curl pin"),
-    ("chromium=150.0.7871.181-1~deb13u1", "chromium=150.0.7871.124-1~deb13u1", "stale Chromium pin"),
+    ("chromium=151.0.7922.137-1~deb13u1", "chromium=150.0.7871.181-1~deb13u1", "stale Chromium pin"),
     ("curl=8.14.1-2+deb13u4", "", "missing curl direct entry"),
     ("curl=8.14.1-2+deb13u4", "curl", "unpinned curl direct entry"),
     (
@@ -19,8 +19,8 @@ REGRESSION_CASES: Final = (
         "duplicate curl direct entry",
     ),
     (
-        "chromium=150.0.7871.181-1~deb13u1",
-        "chromium=150.0.7871.181-1",
+        "chromium=151.0.7922.137-1~deb13u1",
+        "chromium=151.0.7922.137-1",
         "non-security Chromium replacement",
     ),
 )
@@ -61,7 +61,7 @@ def test_production_dockerfile_rejects_direct_package_pin_regressions() -> None:
     source = (
         DOCKERFILE.read_text(encoding="utf-8")
         .replace("curl=8.14.1-2+deb13u3", APPROVED_DIRECT_PINS[0], 1)
-        .replace("chromium=150.0.7871.124-1~deb13u1", APPROVED_DIRECT_PINS[1], 1)
+        .replace("chromium=150.0.7871.181-1~deb13u1", APPROVED_DIRECT_PINS[1], 1)
     )
     for needle, replacement, regression in REGRESSION_CASES:
         candidate = source.replace(needle, replacement, 1)
