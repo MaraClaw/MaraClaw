@@ -384,10 +384,17 @@ async def list_audit_logs(
 @router.get("/stats")
 async def get_enterprise_stats(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)):
     """Get enterprise dashboard statistics, optionally scoped to a tenant."""
-    _ = current_user
-    tid: uuid.UUID | None = (
-        (uuid.UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id) if tenant_id else current_user.tenant_id
-    )
+    if tenant_id and current_user.role != "platform_admin" and str(current_user.tenant_id) != tenant_id:
+        raise HTTPException(status_code=403, detail="Cannot access other tenant's stats")
+
+    if current_user.role != "platform_admin":
+        if current_user.tenant_id is None:
+            raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+        tid: uuid.UUID | None = current_user.tenant_id
+    elif tenant_id:
+        tid = uuid.UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id
+    else:
+        tid = current_user.tenant_id
 
     if tid:
         total_agents = await agent_dao.count_for_tenant(tid)
