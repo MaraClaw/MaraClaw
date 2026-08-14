@@ -53,6 +53,36 @@ process.stdout.write(`${process.version}\\n${acorn.version}:${ast.type}:${ast.bo
     assert result.stderr == ""
 
 
+def test_classifier_classifies_has_hooks_if_block_with_run_after_tool_call(
+    tmp_path: Path,
+) -> None:
+    # Given - OpenClaw 2026.7.1-2 ships this gated after_tool_call shape
+    target = _write_target(
+        tmp_path,
+        "selection-hook.js",
+        """const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+  const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : void 0;
+  const hookEvent = {
+    toolName,
+    durationMs
+  };
+  hookRunnerAfter.runAfterToolCall(hookEvent, { toolName }).catch((err) => {
+    ctx.log.warn(String(err));
+  });
+}
+""",
+    )
+
+    # When
+    result = run_classifier(target)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "unpatched\n"
+    assert result.stderr == ""
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

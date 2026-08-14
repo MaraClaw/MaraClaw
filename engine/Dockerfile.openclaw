@@ -1,16 +1,17 @@
 ARG OPENCLAW_BASE_IMAGE=node:26.7.0-bookworm-slim
 FROM ${OPENCLAW_BASE_IMAGE}
 
-ARG TENCENTDB_PLUGIN_VERSION=0.3.6
-ARG OPENCLAW_VERSION=2026.7.1
-ARG OPENCLAW_SHA256=sha256:67ad539d9915efb63d5f294beeb9290b7172d23c92d8052110a9c8355f783458
+ARG TENCENTDB_PLUGIN_VERSION=1.0.1
+ARG OPENCLAW_VERSION=2026.7.1-2
+ARG OPENCLAW_SHA256=sha256:5bb525f36f471a41239615d321c441778c7e1c007018ed6d84b795be77803276
 ARG TINI_VERSION=0.19.0-1+b3
 ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
 ARG CURL_VERSION=7.88.1-10+deb12u15
 ARG LIBCURL4_VERSION=7.88.1-10+deb12u15
 ARG BASH_VERSION=5.2.15-2+b13
-ARG GOGCLI_VERSION=0.35.0
-ARG GOGCLI_SHA256=sha256:6db242904741e280e5e62ff9249fe76c075bad5cc6c06d841e011622803dce34
+ARG LIBICU72_VERSION=72.1-3+deb12u1
+ARG GOGCLI_VERSION=0.36.0
+ARG GOGCLI_SHA256=sha256:f68e3c35c9364dea5a4e515d13a23ab30ded46401c90d89e2953dca395d7fe42
 
 USER root
 RUN apt-get update \
@@ -19,6 +20,7 @@ RUN apt-get update \
     "ca-certificates=${CA_CERTIFICATES_VERSION}" \
     "curl=${CURL_VERSION}" \
     "libcurl4=${LIBCURL4_VERSION}" \
+    "libicu72=${LIBICU72_VERSION}" \
     "tini=${TINI_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
     && npm pack "openclaw@${OPENCLAW_VERSION}" --pack-destination /tmp \
@@ -33,7 +35,7 @@ RUN apt-get update \
     -o /tmp/gogcli.tar.gz \
     && printf '%s  %s\n' "${GOGCLI_SHA256#sha256:}" /tmp/gogcli.tar.gz > /tmp/gogcli.tar.gz.sha256 \
     && sha256sum -c /tmp/gogcli.tar.gz.sha256 \
-    && tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin gog \
+    && tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin ./gog \
     && chmod 0755 /usr/local/bin/gog \
     && rm -f /tmp/gogcli.tar.gz /tmp/gogcli.tar.gz.sha256 \
     && gog --version \
