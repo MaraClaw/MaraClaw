@@ -422,20 +422,34 @@ async def test_ensure_platform_admin_elevates_when_password_matches(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_login_identifier_lookup_is_email_case_insensitive():
+    import inspect
+
+    from app.dao.identity_dao import IdentityDAO
+
+    source = inspect.getsource(IdentityDAO.get_by_login_identifier)
+    assert "lower(email)" in source
+
+
+@pytest.mark.asyncio
 async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     from app.services import platform_admin_seeder as seeder
 
     settings = SimpleNamespace(PLATFORM_ADMIN_EMAIL="x@y.com", PLATFORM_ADMIN_PASSWORD="secret")
     identity = _identity_record()
     admin = _user_record(identity)
+    warned = []
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock())
+    monkeypatch.setattr(seeder.logger, "warning", lambda *args, **kwargs: warned.append(args))
 
     result = await seeder.ensure_platform_admin()
     assert result is admin
     seeder.identity_dao.get_by_email.assert_not_awaited()
+    assert warned
+    assert "does not match genesis platform admin" in warned[0][0]
 
 
 @pytest.mark.asyncio

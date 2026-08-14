@@ -186,10 +186,22 @@ async def ensure_platform_admin() -> UserRecord:
     """
     existing = await _load_genesis_with_credentials()
     if existing is not None:
-        logger.info(
-            "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
-            existing.id,
-        )
+        settings = get_settings()
+        env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
+        actual = (getattr(getattr(existing, "identity", None), "email", None) or "").strip().lower()
+        if env_email and actual and env_email != actual:
+            logger.warning(
+                "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
+                "env seed skipped because the database already has usable credentials. "
+                "Sign in with the genesis email (admin console).",
+                env_email,
+                actual,
+            )
+        else:
+            logger.info(
+                "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
+                existing.id,
+            )
         return existing
 
     settings = get_settings()
