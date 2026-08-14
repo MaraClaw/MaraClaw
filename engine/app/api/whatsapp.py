@@ -6,12 +6,12 @@ import hashlib
 import hmac
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -29,28 +29,6 @@ router = APIRouter(tags=["whatsapp"])
 WHATSAPP_TEXT_LIMIT = 4096
 DEFAULT_WHATSAPP_API_VERSION = "v23.0"
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
-class WhatsAppText(TypedDict, total=False):
-    body: str
-
-
-class WhatsAppButton(TypedDict, total=False):
-    text: str
-
-
-class WhatsAppReply(TypedDict, total=False):
-    title: str
-
-
-class WhatsAppInteractive(TypedDict, total=False):
-    button_reply: WhatsAppReply
-    list_reply: WhatsAppReply
-
-
-class WhatsAppMessage(TypedDict, total=False):
-    type: str
-    text: WhatsAppText
-    button: WhatsAppButton
-    interactive: WhatsAppInteractive
 
 
 class WhatsAppChannelPayload(TypedDict, total=False):
@@ -84,23 +62,19 @@ def _verify_signature(app_secret: str, body: bytes, signature: str | None) -> bo
     return hmac.compare_digest(expected, signature)
 
 
-def _extract_message_text(message: WhatsAppMessage) -> str:
-    msg_type = message.get("type")
+def _extract_message_text(message: JsonObject) -> str:
+    msg_type = json_as_str_or(message.get("type"))
     if msg_type == "text":
-        text = message.get("text")
-        return ((text.get("body") if text else "") or "").strip()
+        return json_as_str_or(json_object_from(message.get("text")).get("body")).strip()
     if msg_type == "button":
-        button = message.get("button")
-        return ((button.get("text") if button else "") or "").strip()
+        return json_as_str_or(json_object_from(message.get("button")).get("text")).strip()
     if msg_type == "interactive":
-        interactive = message.get("interactive")
+        interactive = json_object_from(message.get("interactive"))
         if not interactive:
             return ""
-        button_reply = interactive.get("button_reply")
-        list_reply = interactive.get("list_reply")
-        return (
-            (button_reply.get("title") if button_reply else "") or (list_reply.get("title") if list_reply else "") or ""
-        ).strip()
+        button_reply = json_object_from(interactive.get("button_reply"))
+        list_reply = json_object_from(interactive.get("list_reply"))
+        return (json_as_str_or(button_reply.get("title")) or json_as_str_or(list_reply.get("title"))).strip()
     return ""
 
 
@@ -242,18 +216,26 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
     if app_secret and not _verify_signature(app_secret, body, signature):
         return Response(status_code=401)
 
-    payload: dict[str, Any] = await request.json()
-    for entry in payload.get("entry", []) or []:
-        for change in entry.get("changes", []) or []:
-            value = change.get("value") or {}
-            messages = value.get("messages") or []
-            contacts = value.get("contacts") or []
+    payload = json_loads_object(body)
+    entries = payload.get("entry")
+    for entry_raw in entries if isinstance(entries, list) else []:
+        entry = json_object_from(entry_raw)
+        changes = entry.get("changes")
+        for change_raw in changes if isinstance(changes, list) else []:
+            change = json_object_from(change_raw)
+            value = json_object_from(change.get("value"))
+            messages = value.get("messages")
+            contacts = value.get("contacts")
             contact_name = ""
-            if contacts:
-                contact_name = str((contacts[0].get("profile") or {}).get("name") or "").strip()
+            contact_items = contacts if isinstance(contacts, list) else []
+            message_items = messages if isinstance(messages, list) else []
+            if contact_items:
+                profile = json_object_from(json_object_from(contact_items[0]).get("profile"))
+                contact_name = json_as_str_or(profile.get("name")).strip()
 
-            for message in messages:
-                message_id = str(message.get("id") or "").strip()
+            for message_raw in message_items:
+                message = json_object_from(message_raw)
+                message_id = json_as_str_or(message.get("id")).strip()
                 from app.services.channels import dedup as channel_dedup
 
                 if message_id and await channel_dedup.already_processed_shared("whatsapp", message_id):
@@ -262,7 +244,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     await channel_dedup.mark_processed_shared("whatsapp", message_id)
 
                 user_text = _extract_message_text(message)
-                sender_phone = str(message.get("from") or "").strip()
+                sender_phone = json_as_str_or(message.get("from")).strip()
                 if not user_text or not sender_phone:
                     continue
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from typing import Protocol, ClassVar
+from typing import ClassVar, Protocol
 
 from app.core.logging.levels import CRITICAL, DEBUG, ERROR, INFO, SUCCESS, TRACE, WARNING
 from app.core.logging.record import LogRecord

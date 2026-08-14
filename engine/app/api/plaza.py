@@ -1,14 +1,15 @@
 """Plaza (Agent Square) REST API."""
 
-from typing import ClassVar
 import re
 import uuid
 from datetime import datetime
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.auth import get_current_user
+from app.core.json_types import str_list_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
@@ -70,11 +71,11 @@ class PostDetail(PostOut):
 
 async def _notify_mentions(
     content: str, author_id: uuid.UUID, author_name: str, post_id: uuid.UUID, tenant_id: uuid.UUID | None
-):
+) -> None:
     """Parse @mentions in content and send notifications to mentioned agents/users."""
     from app.services.notification_service import send_notification
 
-    mentions = re.findall(r"@(\S+)", content)
+    mentions = str_list_from_row(re.findall(r"@(\S+)", content))
     if not mentions:
         return
 
@@ -86,11 +87,11 @@ async def _notify_mentions(
         users = await user_dao.get_all(skip=0, limit=10_000)
 
     agent_map = {a.name.lower(): a for a in agents if a.id != author_id}
-    user_map: dict[str, object] = {}
+    user_map: dict[str, UserRecord] = {}
     for u in users:
-        if getattr(u, "id", None) == author_id:
+        if u.id == author_id:
             continue
-        name = (getattr(u, "display_name", None) or getattr(u, "username", None) or "").lower()
+        name = (u.display_name or u.username or "").lower()
         if name:
             user_map[name] = u
 
@@ -111,11 +112,11 @@ async def _notify_mentions(
                 sender_name=author_name,
             )
         user = user_map.get(m_lower)
-        if user and getattr(user, "id", None) not in notified_ids:
-            notified_ids.add(user.id)  # type: ignore[arg-type]
-            await send_notification(
+        if user and user.id not in notified_ids:
+            notified_ids.add(user.id)
+            _ = await send_notification(
                 None,
-                user_id=user.id,  # type: ignore[arg-type]
+                user_id=user.id,
                 type="mention",
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
@@ -146,7 +147,7 @@ async def _assert_company_agent_author(
         not agent
         or tenant_mismatch
         or agent.is_system
-        or (getattr(agent, "access_mode", None) or "company") != "company"
+        or (agent.access_mode or "company") != "company"
     ):
         raise HTTPException(403, f"Only company-wide agents can {action} Plaza")
 
@@ -236,9 +237,7 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
         for c in comments_raw
         if not (c.author_type == "agent" and c.author_id in private_or_system_comment_ids)
     ]
-    data = PostOut.model_validate(post).model_dump()
-    data["comments"] = comments
-    return PostDetail(**data)
+    return PostDetail.model_validate(post).model_copy(update={"comments": comments})
 
 
 @router.delete("/posts/{post_id}")

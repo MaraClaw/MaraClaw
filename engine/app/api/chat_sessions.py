@@ -9,7 +9,14 @@ from typing import ClassVar, NotRequired, TypedDict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from app.core.json_types import JsonValue
+from app.core.json_types import (
+    JsonValue,
+    is_json_value,
+    json_as_str_or,
+    json_loads_object,
+    json_loads_value,
+    str_from_row,
+)
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao import agent_dao
@@ -110,7 +117,7 @@ async def list_sessions(
                     {"ids": user_ids},
                 )
             for row in rows:
-                user_names[str(row["id"])] = row["display"] or "Unknown"
+                user_names[str(row["id"])] = str_from_row(row.get("display"), "Unknown") or "Unknown"
 
         agent_ids_to_fetch: set[uuid.UUID] = set()
         for s in sessions:
@@ -125,7 +132,7 @@ async def list_sessions(
                     {"ids": list(agent_ids_to_fetch)},
                 )
             for row in rows:
-                agent_names[str(row["id"])] = row["name"] or "Agent"
+                agent_names[str(row["id"])] = str_from_row(row.get("name"), "Agent") or "Agent"
 
         for session in sessions:
             count = message_counts.get(str(session.id), 0)
@@ -324,7 +331,7 @@ async def get_session_messages(
                     {"ids": participant_ids},
                 )
             for row in rows:
-                sender_cache[str(row["id"])] = row["display_name"] or "Unknown"
+                sender_cache[str(row["id"])] = str_from_row(row.get("display_name"), "Unknown") or "Unknown"
 
     out: list[ChatMessageEntry] = []
     for m in messages:
@@ -337,13 +344,13 @@ async def get_session_messages(
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             try:
-                data = json.loads(m.content)
+                data = json_loads_object(m.content)
                 entry["content"] = ""
-                entry["toolName"] = data.get("name") or data.get("tool_name") or ""
-                entry["toolArgs"] = data.get("args") or data.get("arguments")
-                entry["toolStatus"] = data.get("status", "done")
-                entry["toolResult"] = data.get("result", "")
-                entry["toolThinking"] = data.get("reasoning_content", "")
+                entry["toolName"] = json_as_str_or(data.get("name")) or json_as_str_or(data.get("tool_name"))
+                entry["toolArgs"] = data.get("args") if data.get("args") is not None else data.get("arguments")
+                entry["toolStatus"] = json_as_str_or(data.get("status"), "done")
+                entry["toolResult"] = json_as_str_or(data.get("result"))
+                entry["toolThinking"] = json_as_str_or(data.get("reasoning_content"))
             except json.JSONDecodeError, TypeError, AttributeError:
                 entry["content"] = m.content
             if sender_name:
@@ -400,12 +407,11 @@ def _split_inline_tools(content: str) -> list[ChatMessageEntry]:
 
         tool_name = match.group(1)
         args_str = match.group(2)
-        tool_args = None
+        tool_args: JsonValue | None = None
         if args_str:
             try:
-                import json
-
-                tool_args = json.loads(args_str.strip())
+                loaded = json_loads_value(args_str.strip())
+                tool_args = loaded if is_json_value(loaded) else {"raw": args_str.strip()}
             except Exception:
                 tool_args = {"raw": args_str.strip()}
 

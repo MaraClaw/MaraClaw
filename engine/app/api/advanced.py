@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, int_from_row
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_admin, get_current_user
 from app.dao.agent_dao import agent_dao
@@ -217,27 +217,24 @@ async def get_agent_metrics(agent_id: uuid.UUID, current_user: UserRecord = Depe
 
     # Approval + audit stats via raw SQL (no dedicated DAO yet)
     async with connection_ctx() as conn:
-        _total_approvals = int(
+        _total_approvals = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM approval_requests WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            or 0
         )
-        _pending_approvals = int(
+        _pending_approvals = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM approval_requests WHERE agent_id = %(agent_id)s AND status = 'pending'",
                 {"agent_id": agent_id},
             )
-            or 0
         )
         cutoff = datetime.now(UTC) - timedelta(hours=24)
-        _recent_actions = int(
+        _recent_actions = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM audit_logs WHERE agent_id = %(agent_id)s AND created_at >= %(cutoff)s",
                 {"agent_id": agent_id, "cutoff": cutoff},
             )
-            or 0
         )
 
     # Container status

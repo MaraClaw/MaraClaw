@@ -17,7 +17,9 @@ from app.core.json_types import (
     is_json_object,
     json_as_str,
     json_as_str_or,
+    json_loads_value,
     json_object_from,
+    json_object_from_response,
     mapping_from_row,
 )
 from app.core.logging import logger
@@ -94,14 +96,28 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
 
     if use_managed_identity:
         try:
+            from typing import Protocol, cast
+
+            class _AzureToken(Protocol):
+                token: object
+                expires_on: object
+
+            class _AzureCredential(Protocol):
+                async def get_token(self, scope: str) -> _AzureToken: ...
+
+                async def close(self) -> object: ...
+
+            class _AzureIdentityAio(Protocol):
+                DefaultAzureCredential: type[_AzureCredential]
+
             import importlib
 
-            azure_identity = importlib.import_module("azure.identity.aio")
+            azure_identity = cast(_AzureIdentityAio, importlib.import_module("azure.identity.aio"))
             credential = azure_identity.DefaultAzureCredential()
             scope = "https://api.botframework.com/.default"
             token = await credential.get_token(scope)
-            access_token_raw: object = getattr(token, "token", None)
-            expires_on_raw: object = getattr(token, "expires_on", None)
+            access_token_raw: object = token.token
+            expires_on_raw: object = token.expires_on
             if not isinstance(access_token_raw, str) or not isinstance(expires_on_raw, (int, float)):
                 return None
 
@@ -112,7 +128,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
             logger.info(
                 f"Teams: Successfully obtained access token via managed identity for agent {agent_id}, expires at {expires_on_raw}"
             )
-            await credential.close()
+            _ = await credential.close()
             return access_token_raw
         except ImportError:
             logger.error("Teams: azure-identity package not installed. Install it with: pip install azure-identity")
@@ -145,7 +161,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
             if resp.status_code != 200:
                 error_body = resp.text
                 try:
-                    error_code, error_description = _oauth_error_fields(resp.json())
+                    error_code, error_description = _oauth_error_fields(json_object_from_response(resp))
                     logger.error(
                         f"Teams: OAuth token request failed for agent {agent_id}: status={resp.status_code}, error={error_code}, description={error_description}"
                     )
@@ -155,7 +171,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
                     )
                 logger.error(f"Teams: Token URL={token_url}, tenant_id={tenant_id}, client_id={app_id[:20]}...")
                 return None
-            token_data = json_object_from(resp.json())
+            token_data = json_object_from_response(resp)
             access_token = token_data.get("access_token")
             expires_in = token_data.get("expires_in")
             if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
@@ -171,7 +187,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
         error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
         try:
             if hasattr(e, "response") and e.response:
-                error_code, error_description = _oauth_error_fields(e.response.json())
+                error_code, error_description = _oauth_error_fields(json_object_from_response(e.response))
                 logger.error(
                     f"Teams: OAuth token HTTP error for agent {agent_id}: status={e.response.status_code}, error={error_code}, description={error_description}"
                 )
@@ -235,7 +251,7 @@ async def _send_teams_message_single_chunk(
             if resp.status_code != 200:
                 error_body = resp.text
                 try:
-                    error_code, error_description = _oauth_error_fields(resp.json())
+                    error_code, error_description = _oauth_error_fields(json_object_from_response(resp))
                     logger.error(
                         f"Teams: Failed to send message: status={resp.status_code}, error={error_code}, description={error_description}"
                     )
@@ -252,7 +268,7 @@ async def _send_teams_message_single_chunk(
         error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
         try:
             if hasattr(e, "response") and e.response:
-                error_code, error_description = _oauth_error_fields(e.response.json())
+                error_code, error_description = _oauth_error_fields(json_object_from_response(e.response))
                 logger.error(
                     f"Teams: HTTP error sending message: status={e.response.status_code}, error={error_code}, description={error_description}"
                 )
@@ -365,7 +381,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
     try:
         body_bytes = await request.body()
         try:
-            parsed_body: object = json.loads(body_bytes)
+            parsed_body = json_loads_value(body_bytes)
         except json.JSONDecodeError as e:
             logger.error(f"Teams: Failed to parse JSON body: {e}, body={body_bytes[:200]}")
             return Response(status_code=400, content="Invalid JSON")
@@ -555,7 +571,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         else:
             use_mi = bool(_extra_config(config).get("use_managed_identity", False))
             logger.warning(
-                f"[Teams] Cannot send reply - missing credentials "
+                "[Teams] Cannot send reply - missing credentials "
                 + f"(managed_identity={use_mi}, app_id={bool(config.app_id)}, "
                 + f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
             )

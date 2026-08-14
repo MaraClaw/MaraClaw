@@ -3,8 +3,9 @@ from datetime import datetime
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
@@ -121,8 +122,9 @@ async def update_user_quota(
     if user.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot modify users outside your organization")
 
-    updates = data.model_dump(exclude_unset=True)
-    if "quota_message_period" in updates and updates["quota_message_period"] not in (
+    updates = object_mapping_from(data.model_dump(exclude_unset=True))
+    period = json_as_str(updates.get("quota_message_period"))
+    if "quota_message_period" in updates and period not in (
         "permanent",
         "daily",
         "weekly",

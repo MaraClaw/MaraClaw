@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import time
 from contextvars import ContextVar, Token
-from typing import Any
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -111,12 +110,14 @@ async def cache_delete(*keys: str) -> None:
         logger.debug("redis_cache delete skipped: {}", type(exc).__name__)
 
 
-async def cache_get_json(key: str) -> Any | None:
+async def cache_get_json(key: str) -> object | None:
     raw = await cache_get(key)
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        from app.core.json_types import json_loads_value
+
+        return json_loads_value(raw)
     except TypeError, ValueError:
         return None
 

@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypedDict, overload
+from typing import TypedDict, overload
 from xml.parsers.expat import ExpatError, ParserCreate
 
 import httpx
@@ -24,7 +24,15 @@ from Crypto.Cipher import AES
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    json_object_from_response,
+    mapping_from_row,
+)
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import create_access_token, get_current_user
@@ -214,9 +222,9 @@ async def serve_wecom_verify_file(filename: str):
     providers = await identity_provider_dao.list_active_by_type("wecom")
 
     for provider in providers:
-        config = provider.config or {}
+        config = json_object_from(provider.config)
         verify_files = config.get("wecom_verify_files")
-        content = verify_files.get(filename) if isinstance(verify_files, dict) else None
+        content = json_object_from(verify_files).get(filename) if isinstance(verify_files, dict) else None
         if isinstance(content, str):
             logger.info(f"[WeCom Verify] Serving {filename} for tenant {provider.tenant_id}")
             return Response(content=content, media_type="text/plain")
@@ -320,7 +328,8 @@ async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
         raise HTTPException(status_code=404, detail="WeCom not configured")
 
     config_out = ChannelConfigOut.model_validate(config)
-    if (config.extra_config or {}).get("connection_mode") == "websocket":
+    extra = json_object_from(config.extra_config)
+    if extra.get("connection_mode") == "websocket":
         config_out.is_connected = wecom_stream_manager.status().get(str(agent_id), False)
     else:
         config_out.is_connected = False
@@ -477,8 +486,8 @@ async def _process_wecom_kf_event(
                 "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
                 params={"corpid": config.app_id, "corpsecret": config.app_secret},
             )
-            token_data = tok_resp.json()
-            access_token = token_data.get("access_token")
+            token_data = json_object_from_response(tok_resp)
+            access_token = json_as_str(token_data.get("access_token"))
             if not access_token:
                 return
 
@@ -500,36 +509,40 @@ async def _process_wecom_kf_event(
                 sync_resp = await client.post(
                     f"https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg?access_token={access_token}", json=payload
                 )
-                sync_data = sync_resp.json()
+                sync_data = json_object_from_response(sync_resp)
                 if sync_data.get("errcode") != 0:
                     logger.error(f"[WeCom KF] sync_msg error: {sync_data}")
                     break
 
-                has_more = sync_data.get("has_more", 0)
-                current_cursor = sync_data.get("next_cursor", "")
+                has_more = json_as_int(sync_data.get("has_more"))
+                current_cursor = json_as_str_or(sync_data.get("next_cursor"))
 
-                for msg in sync_data.get("msg_list", []):
-                    if msg.get("origin") == 3 and msg.get("msgtype") == "text":
+                msg_list = sync_data.get("msg_list")
+                for raw_msg in msg_list if isinstance(msg_list, list) else []:
+                    msg = json_object_from(raw_msg)
+                    if json_as_int(msg.get("origin")) == 3 and json_as_str(msg.get("msgtype")) == "text":
                         mid = msg.get("msgid")
                         from app.services.channels import dedup as channel_dedup
 
                         if mid and await channel_dedup.already_processed_shared("wecom_kf", str(mid)):
                             continue
-                        if msg.get("send_time", 0) > 0 and (current_ts - msg.get("send_time", 0) > 86400):
+                        send_time = json_as_int(msg.get("send_time"))
+                        if send_time > 0 and (current_ts - send_time > 86400):
                             continue
                         if mid:
                             await channel_dedup.mark_processed_shared("wecom_kf", str(mid))
-                        text = msg.get("text", {}).get("content", "").strip()
+                        text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
                         if text:
-                            logger.info(f"[WeCom KF] Found msg from {msg.get('external_userid')}: {text[:20]}...")
+                            external_userid = json_as_str_or(msg.get("external_userid"))
+                            logger.info(f"[WeCom KF] Found msg from {external_userid}: {text[:20]}...")
                             await _process_wecom_text(
                                 agent_id,
                                 config,
-                                msg.get("external_userid"),
+                                external_userid,
                                 text,
                                 is_kf=True,
-                                open_kfid=msg.get("open_kfid"),
-                                kf_msg_id=mid,
+                                open_kfid=json_as_str(msg.get("open_kfid")),
+                                kf_msg_id=json_as_str(mid),
                             )
                 if not has_more:
                     break
@@ -566,7 +579,7 @@ async def _process_wecom_text(
     # The channel_user_service resolves display names from OrgMember records
     # (populated by org-sync or enriched on first SSO login). No need to
     # make an extra API call here - it fails with 48009 when IP is not whitelisted.
-    extra_info = {"unionid": from_user}
+    extra_info = mapping_from_row({"unionid": from_user})
 
     # Resolve channel user via unified service (uses OrgMember + SSO patterns)
     platform_user = await channel_user_service.resolve_channel_user(
@@ -628,15 +641,14 @@ async def _process_wecom_text(
     logger.info(f"[WeCom] LLM reply: {reply_text[:100]}")
 
     # Send reply via WeCom API
-    wecom_agent_id = (config.extra_config or {}).get("wecom_agent_id", "")
-    wecom_agent_id_str = wecom_agent_id if isinstance(wecom_agent_id, str) else ""
+    wecom_agent_id_str = json_as_str_or(json_object_from(config.extra_config).get("wecom_agent_id"))
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             tok_resp = await client.get(
                 "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
                 params={"corpid": config.app_id, "corpsecret": config.app_secret},
             )
-            access_token = tok_resp.json().get("access_token", "")
+            access_token = json_as_str_or(json_object_from_response(tok_resp).get("access_token"))
             if access_token:
                 if is_kf and open_kfid:
                     # For KF messages, need to bridge/trans state first then send via kf/send_msg
@@ -644,7 +656,7 @@ async def _process_wecom_text(
                         f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={access_token}",
                         json={"open_kfid": open_kfid, "external_userid": from_user, "service_state": 1},
                     )
-                    logger.info(f"[WeCom KF] trans state result: {res_state.json()}")
+                    logger.info(f"[WeCom KF] trans state result: {json_object_from_response(res_state)}")
                     res_send = await client.post(
                         f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={access_token}",
                         json={
@@ -654,7 +666,7 @@ async def _process_wecom_text(
                             "text": {"content": reply_text},
                         },
                     )
-                    logger.info(f"[WeCom KF] send_msg result: {res_send.json()}")
+                    logger.info(f"[WeCom KF] send_msg result: {json_object_from_response(res_send)}")
                 else:
                     # Default legacy Send as text
                     _ = await client.post(

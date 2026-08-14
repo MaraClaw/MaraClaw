@@ -1,7 +1,7 @@
 """Agent relationship management API - human + agent-to-agent."""
 
 import uuid
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -111,6 +111,9 @@ class AgentRelationshipBatchIn(BaseModel):
     relationships: list[AgentRelationshipIn]
 
 
+type HumanCandidateRow = tuple[OrgMemberRecord, str | None, str | None, uuid.UUID | None]
+
+
 def _dedupe_human_relationships(items: list[RelationshipIn]) -> list[RelationshipIn]:
     deduped: dict[str, RelationshipIn] = {}
     for item in items:
@@ -133,7 +136,7 @@ def _dedupe_agent_relationships(items: list[AgentRelationshipIn], agent_id: uuid
 @router.get("/")
 async def get_relationships(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Get all human relationships for this agent."""
     source_agent, _access_level = await check_agent_access(current_user, agent_id)
     if await ensure_access_granted_platform_relationships(
@@ -148,7 +151,7 @@ async def get_relationships(
         None,
         [r.member for r in rows if r.member],
     )
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, object]] = []
     for r in rows:
         linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
         out.append(
@@ -187,7 +190,7 @@ async def search_human_relationship_candidates(
         raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
 
     search_text = (search or "").strip()
-    access_mode = getattr(agent, "access_mode", None) or "company"
+    access_mode = agent.access_mode or "company"
 
     allowed_user_ids: list[uuid.UUID] | None = None
     if access_mode != "company":
@@ -202,8 +205,8 @@ async def search_human_relationship_candidates(
         limit=200,
     )
 
-    deduped_filtered: list[tuple[Any, str | None, str | None, uuid.UUID | None]] = []
-    by_user_id: dict[uuid.UUID, tuple[Any, str | None, str | None, uuid.UUID | None]] = {}
+    deduped_filtered: list[HumanCandidateRow] = []
+    by_user_id: dict[uuid.UUID, HumanCandidateRow] = {}
     for member, provider_name, provider_type, linked_user_id in rows:
         row = (member, provider_name, provider_type, linked_user_id)
         if not linked_user_id:
@@ -311,7 +314,7 @@ async def save_relationships(
                 "member_id": member_id,
                 "relation": r.relation,
                 "description": r.description,
-                "created_by_user_id": getattr(existing, "created_by_user_id", None) or current_user.id,
+                "created_by_user_id": (existing.created_by_user_id if existing else None) or current_user.id,
                 "updated_by_user_id": current_user.id,
             }
         )
@@ -342,7 +345,7 @@ async def delete_relationship(
 @router.get("/agent-candidates")
 async def search_visible_agents(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Search manageable agent candidates for relationship creation."""
     source_agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -363,7 +366,7 @@ async def search_visible_agents(
             "role_description": agent.role_description or "",
             "avatar_url": agent.avatar_url or "",
             "creator_id": str(agent.creator_id),
-            "access_mode": getattr(agent, "access_mode", None) or "company",
+            "access_mode": agent.access_mode or "company",
             "can_manage": True,
         }
         for agent in agents
@@ -373,11 +376,11 @@ async def search_visible_agents(
 @router.get("/agents")
 async def get_agent_relationships(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Get all agent-to-agent relationships."""
     _ = await check_agent_access(current_user, agent_id)
     rels = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, object]] = []
     for r in rels:
         status_info = await evaluate_agent_relationship_status(None, r, current_user_id=current_user.id)
         out.append(
@@ -393,7 +396,7 @@ async def get_agent_relationships(
                     "name": r.target_agent.name,
                     "role_description": r.target_agent.role_description or "",
                     "avatar_url": r.target_agent.avatar_url or "",
-                    "access_mode": getattr(r.target_agent, "access_mode", None) or "company",
+                    "access_mode": r.target_agent.access_mode or "company",
                 }
                 if r.target_agent
                 else None,
@@ -405,7 +408,7 @@ async def get_agent_relationships(
 @router.get("/agents/candidates")
 async def get_agent_relationship_candidates(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Backward-compatible alias for searchable agent candidates."""
     return await search_visible_agents(
         agent_id=agent_id,
@@ -452,7 +455,7 @@ async def save_agent_relationships(
                 "target_agent_id": target_id,
                 "relation": r.relation,
                 "description": r.description,
-                "created_by_user_id": getattr(existing, "created_by_user_id", None) or current_user.id,
+                "created_by_user_id": (existing.created_by_user_id if existing else None) or current_user.id,
                 "updated_by_user_id": current_user.id,
             }
         )

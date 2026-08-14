@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import TypeIs, TypedDict
+from typing import TypedDict, TypeIs
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -19,6 +19,8 @@ from app.core.json_types import (
     JsonValue,
     json_as_str,
     json_as_str_or,
+    json_loads_object,
+    json_object_from_response,
     mapping_from_row,
     object_list_from_row,
 )
@@ -35,10 +37,10 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatMessageRecord
 from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
-from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback, ToolCallbackData
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut, TokenResponse, UserOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.feishu_service import feishu_service
+from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback, ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import truncate_messages_with_pair_integrity
@@ -59,8 +61,7 @@ def _json_object(value: object) -> JsonObject:
 
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
-    raw: object = resp.json()
-    return _json_object(raw)
+    return json_object_from_response(resp)
 
 
 def _app_access_token(resp: httpx.Response) -> str:
@@ -290,10 +291,9 @@ def _build_llm_history_from_chat_messages(history_messages: Iterable[ChatMessage
     for msg in history_messages:
         if msg.role == "tool_call":
             try:
-                payload_raw: object = _json.loads(msg.content or "{}")
+                payload = json_loads_object(msg.content or "{}")
             except Exception:
-                payload_raw = {}
-            payload = _json_object(payload_raw)
+                payload = {}
 
             # Support both local schema (tool_name/arguments) and remote schema (name/args)
             tool_name = json_as_str_or(payload.get("tool_name") or payload.get("name"), "unknown_tool")
@@ -541,8 +541,7 @@ async def feishu_event_webhook(
     request: Request,
 ) -> JsonObject:
     """Handle Feishu event callback for a specific agent's bot."""
-    raw_body: object = await request.json()
-    body = _json_object(raw_body)
+    body = json_loads_object(await request.body())
 
     # Handle verification challenge
     if "challenge" in body:
@@ -603,8 +602,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
         if msg_type == "post":
             import json as _json_post
 
-            _post_raw: object = _json_post.loads(json_as_str_or(message.get("content"), "{}"))
-            _post_body = _json_object(_post_raw)
+            _post_body = json_loads_object(json_as_str_or(message.get("content"), "{}"))
             # Feishu post content: {"title": "...", "content": [[{"tag":"text","text":"..."},...],...]}
             # The content may be nested under a locale key like "zh_cn"
             _paragraphs_raw: object = _post_body.get("content", [])
@@ -689,8 +687,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
             import json
             import re
 
-            content_raw: object = json.loads(json_as_str_or(message.get("content"), "{}"))
-            content = _json_object(content_raw)
+            content = json_loads_object(json_as_str_or(message.get("content"), "{}"))
             user_text = json_as_str_or(content.get("text"), "")
 
             # Strip @mention tags (e.g. @_user_1) from group messages
@@ -777,8 +774,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                                     _existing: JsonObject = {}
                                     if await asyncio.to_thread(_cache.exists):
                                         try:
-                                            _existing_raw: object = _cj.loads(await asyncio.to_thread(_cache.read_text))
-                                            _existing = _json_object(_existing_raw)
+                                            _existing = json_loads_object(await asyncio.to_thread(_cache.read_text))
                                         except (OSError, _cj.JSONDecodeError) as _cache_error:
                                             logger.warning(f"[Feishu] Contact cache read failed: {_cache_error}")
                                     # Key by user_id when available (tenant-stable), fallback to open_id
@@ -900,7 +896,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                     llm_user_text = (
                         llm_user_text
                         + f"\n\n[System notice: The user just uploaded a file to the workspace at `{_ws_rel_path}`. "
-                        + f"If the user's instruction refers to this article, file, or document, "
+                        + "If the user's instruction refers to this article, file, or document, "
                         + f'call read_document(path="{_ws_rel_path}") immediately to read it. Do not use list_files to verify it first; read it directly.]'
                     )
                     logger.info(f"[Feishu] Injected recent file hint: {_ws_rel_path}")
@@ -1286,8 +1282,7 @@ async def _handle_feishu_file(
 
     msg_type = json_as_str_or(message.get("message_type"), "file")
     message_id = json_as_str_or(message.get("message_id"), "")
-    content_raw: object = json.loads(json_as_str_or(message.get("content"), "{}"))
-    content = _json_object(content_raw)
+    content = json_loads_object(json_as_str_or(message.get("content"), "{}"))
 
     # Extract file key and name
     if msg_type == "image":

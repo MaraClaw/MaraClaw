@@ -6,10 +6,11 @@ import asyncio
 import json
 import uuid
 from contextvars import ContextVar, Token
-from typing import Protocol, ClassVar
+from typing import ClassVar, Protocol
 
 from app.config import get_settings
 from app.core.events import get_redis
+from app.core.json_types import json_loads_object
 from app.core.logging import logger
 from app.records.agent import AgentRecord
 
@@ -76,7 +77,7 @@ def _dec_key(agent_id: uuid.UUID, user_id: uuid.UUID) -> str:
 
 
 def _tenant_token(user: _UserLike) -> str:
-    tenant_id = getattr(user, "tenant_id", None)
+    tenant_id = user.tenant_id
     return str(tenant_id) if tenant_id is not None else ""
 
 
@@ -84,30 +85,32 @@ async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
     """Return a cached manage/use level, or None on miss / Redis disabled / error."""
     if _ttl_seconds() <= 0:
         return None
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        return None
+    user_id = user.id
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
         pipe = client.pipeline()
         _ = pipe.get(_ver_key(agent_id))
         _ = pipe.get(_dec_key(agent_id, user_id))
-        ver_raw, payload = await asyncio.wait_for(pipe.execute(), timeout=_redis_wait_seconds())
+        results = list[object](await asyncio.wait_for(pipe.execute(), timeout=_redis_wait_seconds()))
     except Exception as exc:
         logger.debug("access_cache miss (redis): {}", type(exc).__name__)
         return None
-    if not payload:
+    if len(results) < 2:
+        logger.debug("access_cache miss")
+        return None
+    ver_raw, payload = results[0], results[1]
+    if not isinstance(payload, (str, bytes, bytearray)):
         logger.debug("access_cache miss")
         return None
     try:
-        data = json.loads(payload)
-    except TypeError, ValueError:
+        data = json_loads_object(payload)
+    except (TypeError, ValueError):
         return None
     current_ver = str(ver_raw or "0")
     if str(data.get("ver") or "0") != current_ver:
         logger.debug("access_cache miss (ver)")
         return None
-    if data.get("user_role") != getattr(user, "role", None):
+    if data.get("user_role") != user.role:
         return None
     if data.get("user_tenant_id") != _tenant_token(user):
         return None
@@ -140,9 +143,7 @@ async def set_cached_level(
 ) -> None:
     if _ttl_seconds() <= 0 or level not in {"manage", "use"}:
         return
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        return
+    user_id = user.id
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
         ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id)), timeout=_redis_wait_seconds())
@@ -153,7 +154,7 @@ async def set_cached_level(
         payload = json.dumps(
             {
                 "level": level,
-                "user_role": getattr(user, "role", None),
+                "user_role": user.role,
                 "user_tenant_id": _tenant_token(user),
                 "ver": current,
             }
@@ -220,9 +221,7 @@ async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
         _ = await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_redis_wait_seconds())
         ttl = max(_ttl_seconds() * 40, 3600)
-        expire = getattr(client, "expire", None)
-        if expire is not None:
-            await asyncio.wait_for(expire(_ver_key(agent_id), ttl), timeout=_redis_wait_seconds())
+        _ = await asyncio.wait_for(client.expire(_ver_key(agent_id), ttl), timeout=_redis_wait_seconds())
     except Exception as exc:
         logger.debug("access_cache bump skipped: {}", type(exc).__name__)
 

@@ -1,7 +1,7 @@
 """gogcli integration endpoints for agent containers."""
 
 import uuid
-from typing import Annotated, Final, ClassVar
+from typing import Annotated, ClassVar, Final
 
 from anyio.to_thread import run_sync
 from fastapi import APIRouter, Depends, HTTPException, status

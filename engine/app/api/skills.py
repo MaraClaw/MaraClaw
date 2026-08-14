@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str, mapping_from_row
 from app.core.logging import logger
 from app.core.security import get_current_admin, get_current_user, require_role
 from app.dao.skill_dao import skill_dao, skill_file_dao
@@ -67,9 +67,9 @@ async def _get_tenant_setting(tenant_id: str | None, key: str) -> str:
                     "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                     {"tenant_id": _uuid.UUID(tenant_id), "key": key},
                 )
-                if row and isinstance(row.get("value"), dict):
-                    token = row["value"].get("token")
-                    if isinstance(token, str):
+                if row:
+                    token = json_as_str(mapping_from_row(row.get("value")).get("token"))
+                    if token:
                         return token
         except Exception as error:
             logger.warning(f"[Skills] Failed to retrieve tenant setting: {error}")
@@ -154,7 +154,7 @@ async def _fetch_clawhub_skill_archive(
                     params=params,
                     headers=_clawhub_headers_for_base(api_key, base_url),
                 )
-            content_type = resp.headers.get("content-type", "")
+            content_type = resp.headers["content-type"] if "content-type" in resp.headers else ""  # noqa: SIM401
             if resp.status_code == 404:
                 last_error = f"Skill '{slug}' not found on ClawHub at {base_url}"
                 continue

@@ -6,13 +6,19 @@ SQL. Privilege fields are version-gated: writers INCR after commit.
 
 from __future__ import annotations
 
-import uuid
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.json_types import is_str_dict
+from app.core.json_types import (
+    is_json_object,
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+)
 from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
@@ -30,7 +36,7 @@ _MEMO_KIND = "session_user"
 
 
 def _ttl() -> int:
-    return int(getattr(get_settings(), "USER_SESSION_CACHE_TTL_SECONDS", 20) or 0)
+    return get_settings().USER_SESSION_CACHE_TTL_SECONDS or 0
 
 
 def _sess_key(user_id: UUID) -> str:
@@ -67,9 +73,9 @@ def _parse_dt(value: object) -> datetime | None:
     return None
 
 
-def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, Any]:
+def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, object]:
     identity = user.identity
-    ident_payload: dict[str, Any] | None = None
+    ident_payload: dict[str, object] | None = None
     if identity is not None:
         ident_payload = {
             "id": str(identity.id),
@@ -108,29 +114,30 @@ def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, Any]
     }
 
 
-def _from_snapshot(data: dict[str, Any]) -> UserRecord | None:
-    raw_user = data.get("user")
-    if not is_str_dict(raw_user):
+def _from_snapshot(data: object) -> UserRecord | None:
+    payload = json_object_from(data)
+    raw_user = payload.get("user")
+    if not is_json_object(raw_user):
         return None
     user_id = _parse_uuid(raw_user.get("id"))
     if user_id is None:
         return None
     identity = None
-    raw_ident = data.get("identity")
-    if is_str_dict(raw_ident) and raw_ident.get("id") is not None:
+    raw_ident = payload.get("identity")
+    if is_json_object(raw_ident) and raw_ident.get("id") is not None:
         ident_id = _parse_uuid(raw_ident.get("id"))
         if ident_id is None:
             return None
         identity = IdentityRecord(
             id=ident_id,
-            email=raw_ident.get("email"),
-            phone=raw_ident.get("phone"),
-            username=raw_ident.get("username"),
+            email=json_as_str(raw_ident.get("email")),
+            phone=json_as_str(raw_ident.get("phone")),
+            username=json_as_str(raw_ident.get("username")),
             password_hash=None,
-            is_active=bool(raw_ident.get("is_active", True)),
-            is_platform_admin=bool(raw_ident.get("is_platform_admin", False)),
-            email_verified=bool(raw_ident.get("email_verified", False)),
-            must_change_password=bool(raw_ident.get("must_change_password", False)),
+            is_active=json_as_bool(raw_ident.get("is_active"), True),
+            is_platform_admin=json_as_bool(raw_ident.get("is_platform_admin")),
+            email_verified=json_as_bool(raw_ident.get("email_verified")),
+            must_change_password=json_as_bool(raw_ident.get("must_change_password")),
             created_at=_parse_dt(raw_ident.get("created_at")),
             updated_at=_parse_dt(raw_ident.get("updated_at")),
         )
@@ -138,21 +145,21 @@ def _from_snapshot(data: dict[str, Any]) -> UserRecord | None:
         id=user_id,
         identity_id=_parse_uuid(raw_user.get("identity_id")),
         tenant_id=_parse_uuid(raw_user.get("tenant_id")),
-        display_name=raw_user.get("display_name") or "",
-        avatar_url=raw_user.get("avatar_url"),
-        title=raw_user.get("title"),
-        role=raw_user.get("role") or "member",
-        is_active=bool(raw_user.get("is_active", True)),
-        registration_source=raw_user.get("registration_source"),
+        display_name=json_as_str_or(raw_user.get("display_name")),
+        avatar_url=json_as_str(raw_user.get("avatar_url")),
+        title=json_as_str(raw_user.get("title")),
+        role=json_as_str_or(raw_user.get("role"), "member") or "member",
+        is_active=json_as_bool(raw_user.get("is_active"), True),
+        registration_source=json_as_str(raw_user.get("registration_source")),
         created_at=_parse_dt(raw_user.get("created_at")),
         updated_at=_parse_dt(raw_user.get("updated_at")),
-        quota_message_limit=int(raw_user.get("quota_message_limit") or 50),
-        quota_message_period=raw_user.get("quota_message_period") or "permanent",
+        quota_message_limit=json_as_int(raw_user.get("quota_message_limit"), 50),
+        quota_message_period=json_as_str_or(raw_user.get("quota_message_period"), "permanent") or "permanent",
         quota_messages_used=0,
         quota_period_start=None,
-        quota_max_agents=int(raw_user.get("quota_max_agents") or 2),
-        quota_agent_ttl_hours=int(raw_user.get("quota_agent_ttl_hours") or 0),
-        is_genesis=bool(raw_user.get("is_genesis", False)),
+        quota_max_agents=json_as_int(raw_user.get("quota_max_agents"), 2),
+        quota_agent_ttl_hours=json_as_int(raw_user.get("quota_agent_ttl_hours")),
+        is_genesis=json_as_bool(raw_user.get("is_genesis")),
         identity=identity,
     )
 
@@ -175,22 +182,22 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
         return memo
     if _ttl() <= 0:
         return None
-    payload = await cache_get_json(_sess_key(user_id))
-    if not is_str_dict(payload):
+    cached: object = await cache_get_json(_sess_key(user_id))
+    if not is_json_object(cached):
         return None
     user_ver = await read_version(user_version_key(user_id))
     ident_id = None
-    raw_ident = payload.get("identity")
-    if is_str_dict(raw_ident):
+    raw_ident = cached.get("identity")
+    if is_json_object(raw_ident):
         ident_id = _parse_uuid(raw_ident.get("id"))
     ident_ver = await read_version(identity_version_key(ident_id)) if ident_id else "0"
-    if str(payload.get("u_ver") or "0") != user_ver:
+    if str(cached.get("u_ver") or "0") != user_ver:
         logger.debug("session_cache miss (user ver)")
         return None
-    if str(payload.get("i_ver") or "0") != ident_ver:
+    if str(cached.get("i_ver") or "0") != ident_ver:
         logger.debug("session_cache miss (ident ver)")
         return None
-    user = _from_snapshot(payload)
+    user = _from_snapshot(cached)
     if user is None:
         return None
     memo_set(_MEMO_KIND, user_id, user)
@@ -250,7 +257,7 @@ async def bump_identity_session(identity_id: UUID | None) -> None:
         await cache_delete(_sess_key(member.id))
 
 
-async def bump_user_sessions(user_ids: list[UUID | uuid.UUID | Any]) -> None:
+async def bump_user_sessions(user_ids: Sequence[object]) -> None:
     for item in user_ids:
         parsed = item if isinstance(item, UUID) else _parse_uuid(item)
         if parsed is not None:

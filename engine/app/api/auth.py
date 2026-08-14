@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from pydantic import BaseModel
 
 from app.config import Settings
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str, object_mapping_from
 from app.core.logging import logger
 from app.core.security import (
     create_access_token,
@@ -86,15 +86,18 @@ async def check_duplicate(
     username: str | None = Query(None, description="Username to check"),
 ) -> dict[str, Any]:
     """Check if email or username already exists."""
-    result: dict[str, Any] = {"email_exists": False, "username_exists": False, "conflicts": []}
-
-    if email and await identity_dao.get_by_email(email):
-        result["email_exists"] = True
-        result["conflicts"].append({"type": "email", "scope": "global", "message": "Email already registered"})
-
-    if username and await identity_dao.get_by_username(username):
-        result["username_exists"] = True
-        result["conflicts"].append({"type": "username", "scope": "global", "message": "Username already taken"})
+    conflicts: list[dict[str, str]] = []
+    email_exists = bool(email and await identity_dao.get_by_email(email))
+    username_exists = bool(username and await identity_dao.get_by_username(username))
+    if email_exists:
+        conflicts.append({"type": "email", "scope": "global", "message": "Email already registered"})
+    if username_exists:
+        conflicts.append({"type": "username", "scope": "global", "message": "Username already taken"})
+    result: dict[str, Any] = {
+        "email_exists": email_exists,
+        "username_exists": username_exists,
+        "conflicts": conflicts,
+    }
 
     result["has_conflict"] = result["email_exists"] or result["username_exists"]
     return result
@@ -308,7 +311,7 @@ async def register_init(
 @router.post("/register/sso", response_model=TokenResponse)
 async def register_sso(
     data: SSORegisterRequest,
-):
+) -> TokenResponse:
     """SSO registration - completely separate from normal registration flow.
 
     This endpoint handles OAuth-based registration/login via external providers.
@@ -368,7 +371,7 @@ async def register_sso(
 
 async def _handle_normal_register(
     data: UserRegister, background_tasks: BackgroundTasks, settings: Settings
-) -> Any:
+) -> RegisterInitResponse:
     """Legacy normal registration handler."""
     logger.info(f"[REGISTER_LEGACY] email={data.email}")
 
@@ -457,7 +460,7 @@ async def _handle_normal_register(
     )
 
 
-async def _handle_sso_register(data: UserRegister):
+async def _handle_sso_register(data: UserRegister) -> TokenResponse:
     """Legacy SSO registration handler - delegates to new SSO endpoint logic."""
     # Redirect to new SSO flow
     if not data.provider or not data.provider_code:
@@ -731,25 +734,27 @@ async def update_me(
     current_user: UserRecord = Depends(get_current_user),
 ):
     """Update current user profile."""
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
     user = await user_dao.get_with_identity(current_user.id)
     if not user or not user.identity:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Validate username uniqueness if changing
-    if "username" in update_data and update_data["username"] != user.identity.username:
-        existing = await user_dao.get_by_identity_username(update_data["username"])
+    username = json_as_str(update_data.get("username"))
+    if username is not None and username != user.identity.username:
+        existing = await user_dao.get_by_identity_username(username)
         if existing:
             raise HTTPException(status_code=409, detail="Username already taken")
 
     # Email is a global identity claim. Changing it requires re-verification.
-    if "email" in update_data and update_data["email"] != user.identity.email:
-        taken = await identity_dao.get_by_email(update_data["email"])
+    email = json_as_str(update_data.get("email"))
+    if email is not None and email != user.identity.email:
+        taken = await identity_dao.get_by_email(email)
         if taken is not None and taken.id != user.identity.id:
             raise HTTPException(status_code=409, detail="Email already registered")
         existing = await user_dao.get_by_email_and_tenant(
-            email=update_data["email"],
+            email=email,
             tenant_id=user.tenant_id,
             exclude_user_id=user.id,
         )
@@ -757,9 +762,10 @@ async def update_me(
             raise HTTPException(status_code=409, detail="Email already registered")
 
     # Validate mobile uniqueness within tenant if changing
-    if "primary_mobile" in update_data and update_data["primary_mobile"] != user.identity.phone:
+    primary_mobile = json_as_str(update_data.get("primary_mobile"))
+    if primary_mobile is not None and primary_mobile != user.identity.phone:
         existing = await user_dao.get_by_phone_and_tenant(
-            phone=update_data["primary_mobile"],
+            phone=primary_mobile,
             tenant_id=user.tenant_id,
             exclude_user_id=user.id,
         )

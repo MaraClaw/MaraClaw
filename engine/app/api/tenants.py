@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, int_from_row, json_as_bool, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.agent_dao import agent_dao
 from app.dao.system_setting_dao import system_setting_dao
@@ -572,12 +572,12 @@ async def get_my_tenant_token_usage(current_user: UserRecord = Depends(get_curre
     row = await agent_dao.token_usage_for_tenant(current_user.tenant_id)
 
     def bucket(total: int, cache_read: int, cache_creation: int) -> TokenUsageBucket:
-        total = int(total or 0)
-        cache_read = int(cache_read or 0)
+        total = int_from_row(total)
+        cache_read = int_from_row(cache_read)
         return {
             "total_tokens": total,
             "cache_read_tokens": cache_read,
-            "cache_creation_tokens": int(cache_creation or 0),
+            "cache_creation_tokens": int_from_row(cache_creation),
             "cache_hit_rate": round(cache_read / total, 4) if total > 0 else 0.0,
         }
 
@@ -716,7 +716,7 @@ async def update_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
     # SSO configuration is managed exclusively by the company's own org_admin
     # via the Enterprise Settings page. Platform admins should not override it here.
@@ -724,18 +724,14 @@ async def update_tenant(
         update_data.pop("sso_enabled", None)
         update_data.pop("sso_domain", None)
 
-    audit_changes = {}
+    audit_changes: dict[str, dict[str, object]] = {}
     if "is_active" in update_data:
-        identity_is_platform_admin = bool(
-            getattr(current_user, "is_platform_admin", False)
-            or getattr(getattr(current_user, "identity", None), "is_platform_admin", False)
-        )
-        if current_user.role != "platform_admin" and not identity_is_platform_admin:
+        if current_user.role != "platform_admin" and not current_user.is_platform_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Only a platform admin can disable or enable a company",
             )
-        new_active = bool(update_data.pop("is_active"))
+        new_active = json_as_bool(update_data.pop("is_active"))
         try:
             _ = await set_tenant_active(tenant, is_active=new_active)
         except DefaultOrgUnavailableError as exc:
@@ -928,10 +924,8 @@ async def delete_tenant(
     agent-level data → agents → OKR/org data → users → tenant.
     """
     # ── Auth check ──────────────────────────────────────────────────────────
-    is_platform_admin = getattr(current_user, "role", None) == "platform_admin"
-    is_own_org_admin = getattr(current_user, "role", None) == "org_admin" and str(current_user.tenant_id) == str(
-        tenant_id
-    )
+    is_platform_admin = current_user.role == "platform_admin"
+    is_own_org_admin = current_user.role == "org_admin" and str(current_user.tenant_id) == str(tenant_id)
     if not is_platform_admin and not is_own_org_admin:
         raise HTTPException(
             status_code=403, detail="Only the org admin of this company (or a platform admin) can delete it"

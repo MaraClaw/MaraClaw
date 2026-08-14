@@ -10,6 +10,7 @@ from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.core.json_types import json_loads_value, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -74,11 +75,12 @@ async def configure_google_chat_channel(
         client_email = client_email or str(sa_json.get("client_email") or "").strip()
     elif isinstance(sa_json, str) and sa_json.strip():
         try:
-            parsed = json.loads(sa_json)
+            parsed_raw = json_loads_value(sa_json)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=422, detail="service_account_json must be valid JSON") from exc
-        if not isinstance(parsed, dict):
+        if not isinstance(parsed_raw, dict):
             raise HTTPException(status_code=422, detail="service_account_json must be a JSON object")
+        parsed = json_object_from(parsed_raw)
         if "private_key" not in parsed or "client_email" not in parsed:
             raise HTTPException(
                 status_code=422,

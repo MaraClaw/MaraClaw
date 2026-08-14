@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.core.json_types import json_loads_value
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
 from app.core.security import encrypt_data, get_current_user
@@ -200,7 +201,7 @@ async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "bro
     interaction APIs will work. Without this, get_browser_snapshot_base64() returns
     None ("Browser not initialized") and all CDP-based interactions fail silently.
     """
-    from app.services.agentbay_client import _AGENTBAY_SESSION_TIMEOUT, AgentBayClient, _agentbay_sessions
+    from app.services.agentbay_client import _AGENTBAY_SESSION_TIMEOUT, _agentbay_sessions
 
     now = datetime.now(UTC)
 
@@ -1150,7 +1151,7 @@ let browser;
 
     cookies_json_str: str = cookies_line[0].split("COOKIES_EXPORT:", 1)[1].strip()
     try:
-        cookies_raw: object = json.loads(cookies_json_str)
+        cookies_raw = json_loads_value(cookies_json_str)
     except json.JSONDecodeError:
         logger.warning("[TakeControl] Failed to parse exported cookies JSON")
         return 0

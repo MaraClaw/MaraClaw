@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.config import get_settings
+from app.core.json_types import (
+    is_json_object,
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+    mapping_from_row,
+)
 from app.core.redis_cache import bump_version, cache_delete, cache_get_json, cache_key, cache_set_json, read_version
 from app.records.tenant import TenantRecord
 
 
 def _ttl() -> int:
-    return int(getattr(get_settings(), "TENANT_CACHE_TTL_SECONDS", 60) or 0)
+    return get_settings().TENANT_CACHE_TTL_SECONDS or 0
 
 
 def _row_key(tenant_id: UUID) -> str:
@@ -45,14 +53,14 @@ def _parse_dt(value: object) -> datetime | None:
     return None
 
 
-def _dump(tenant: TenantRecord, ver: str) -> dict[str, Any]:
+def _dump(tenant: TenantRecord, ver: str) -> dict[str, object]:
     return {
         "ver": ver,
         "id": str(tenant.id),
         "name": tenant.name,
         "slug": tenant.slug,
         "im_provider": tenant.im_provider,
-        "im_config": tenant.im_config,
+        "im_config": json_object_from(tenant.im_config) if tenant.im_config else None,
         "is_active": tenant.is_active,
         "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
         "default_message_limit": tenant.default_message_limit,
@@ -75,48 +83,52 @@ def _dump(tenant: TenantRecord, ver: str) -> dict[str, Any]:
     }
 
 
-def _load(data: dict[str, Any]) -> TenantRecord | None:
-    tenant_id = _parse_uuid(data.get("id"))
-    if tenant_id is None or not data.get("name") or not data.get("slug"):
+def _load(data: object) -> TenantRecord | None:
+    payload = json_object_from(data)
+    tenant_id = _parse_uuid(payload.get("id"))
+    name = json_as_str(payload.get("name"))
+    slug = json_as_str(payload.get("slug"))
+    if tenant_id is None or not name or not slug:
         return None
+    im_raw = payload.get("im_config")
     return TenantRecord(
         id=tenant_id,
-        name=str(data["name"]),
-        slug=str(data["slug"]),
-        im_provider=data.get("im_provider") or "web_only",
-        im_config=data.get("im_config") if isinstance(data.get("im_config"), dict) else None,
-        is_active=bool(data.get("is_active", True)),
-        created_at=_parse_dt(data.get("created_at")),
-        default_message_limit=int(data.get("default_message_limit") or 50),
-        default_message_period=data.get("default_message_period") or "permanent",
-        default_max_agents=int(data.get("default_max_agents") or 2),
-        default_agent_ttl_hours=int(data.get("default_agent_ttl_hours") or 0),
-        default_max_llm_calls_per_day=int(data.get("default_max_llm_calls_per_day") or 1000),
-        min_heartbeat_interval_minutes=int(data.get("min_heartbeat_interval_minutes") or 240),
-        timezone=data.get("timezone") or "UTC",
-        country_region=data.get("country_region") or "001",
-        sso_enabled=bool(data.get("sso_enabled", False)),
-        sso_domain=data.get("sso_domain"),
-        default_max_triggers=int(data.get("default_max_triggers") or 20),
-        min_poll_interval_floor=int(data.get("min_poll_interval_floor") or 5),
-        max_webhook_rate_ceiling=int(data.get("max_webhook_rate_ceiling") or 5),
-        a2a_async_enabled=bool(data.get("a2a_async_enabled", True)),
-        default_model_id=_parse_uuid(data.get("default_model_id")),
-        is_system=bool(data.get("is_system", False)),
-        is_default_end_user_org=bool(data.get("is_default_end_user_org", False)),
+        name=name,
+        slug=slug,
+        im_provider=json_as_str_or(payload.get("im_provider"), "web_only") or "web_only",
+        im_config=mapping_from_row(im_raw) if is_json_object(im_raw) else None,
+        is_active=json_as_bool(payload.get("is_active"), True),
+        created_at=_parse_dt(payload.get("created_at")),
+        default_message_limit=json_as_int(payload.get("default_message_limit"), 50),
+        default_message_period=json_as_str_or(payload.get("default_message_period"), "permanent") or "permanent",
+        default_max_agents=json_as_int(payload.get("default_max_agents"), 2),
+        default_agent_ttl_hours=json_as_int(payload.get("default_agent_ttl_hours")),
+        default_max_llm_calls_per_day=json_as_int(payload.get("default_max_llm_calls_per_day"), 1000),
+        min_heartbeat_interval_minutes=json_as_int(payload.get("min_heartbeat_interval_minutes"), 240),
+        timezone=json_as_str_or(payload.get("timezone"), "UTC") or "UTC",
+        country_region=json_as_str_or(payload.get("country_region"), "001") or "001",
+        sso_enabled=json_as_bool(payload.get("sso_enabled")),
+        sso_domain=json_as_str(payload.get("sso_domain")),
+        default_max_triggers=json_as_int(payload.get("default_max_triggers"), 20),
+        min_poll_interval_floor=json_as_int(payload.get("min_poll_interval_floor"), 5),
+        max_webhook_rate_ceiling=json_as_int(payload.get("max_webhook_rate_ceiling"), 5),
+        a2a_async_enabled=json_as_bool(payload.get("a2a_async_enabled"), True),
+        default_model_id=_parse_uuid(payload.get("default_model_id")),
+        is_system=json_as_bool(payload.get("is_system")),
+        is_default_end_user_org=json_as_bool(payload.get("is_default_end_user_org")),
     )
 
 
 async def get_cached_tenant(tenant_id: UUID) -> TenantRecord | None:
     if _ttl() <= 0:
         return None
-    payload = await cache_get_json(_row_key(tenant_id))
-    if not isinstance(payload, dict):
+    cached: object = await cache_get_json(_row_key(tenant_id))
+    if not is_json_object(cached):
         return None
     current = await read_version(_ver_key(tenant_id))
-    if str(payload.get("ver") or "0") != current:
+    if str(cached.get("ver") or "0") != current:
         return None
-    return _load(payload)
+    return _load(cached)
 
 
 async def peek_tenant_version(tenant_id: UUID) -> str:

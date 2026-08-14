@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
 from app.config import get_settings
+from app.core.json_types import json_as_str_or, json_object_from_response
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
@@ -66,7 +67,7 @@ async def create_wechat_qrcode(
             params={"bot_type": 3},
             headers=_build_qrcode_headers(route_tag),
         )
-        payload = resp.json()
+        payload = json_object_from_response(resp)
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=str(payload)[:300])
         return payload
@@ -89,16 +90,16 @@ async def get_wechat_qrcode_status(
                 **_build_qrcode_headers(route_tag),
             },
         )
-        payload = resp.json()
+        payload = json_object_from_response(resp)
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=str(payload)[:300])
 
     if payload.get("status") == "confirmed":
         existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
         extra: dict[str, Any] = {
-            "bot_token": payload.get("bot_token", ""),
-            "ilink_user_id": payload.get("ilink_user_id", ""),
-            "baseurl": payload.get("baseurl") or WECHAT_ILINK_BASE_URL,
+            "bot_token": json_as_str_or(payload.get("bot_token")),
+            "ilink_user_id": json_as_str_or(payload.get("ilink_user_id")),
+            "baseurl": json_as_str_or(payload.get("baseurl")) or WECHAT_ILINK_BASE_URL,
             "get_updates_buf": "",
             "channel_version": WECHAT_CHANNEL_VERSION,
             "session_expired": False,
@@ -151,7 +152,8 @@ async def get_wechat_qrcode_image(agent_id: uuid.UUID, url: str, current_user: U
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail="Failed to fetch WeChat QR image")
 
-    media_type = resp.headers.get("content-type", "image/png").split(";")[0].strip() or "image/png"
+    media_type_header = resp.headers["content-type"] if "content-type" in resp.headers else "image/png"  # noqa: SIM401
+    media_type = media_type_header.split(";")[0].strip() or "image/png"
     return Response(content=resp.content, media_type=media_type)
 
 

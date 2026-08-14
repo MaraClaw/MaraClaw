@@ -70,7 +70,7 @@ async def list_visible_agents(
 
 def is_company_visible_agent(agent: _AgentLike) -> bool:
     """Return whether an agent participates in company-public surfaces."""
-    return (getattr(agent, "access_mode", None) or "company") == "company"
+    return (agent.access_mode or "company") == "company"
 
 
 def _is_admin(user: _UserLike) -> bool:
@@ -94,14 +94,14 @@ def decide_agent_access(
 
 
 def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | None | _NeedPerms:
-    if getattr(agent, "tenant_id", None) != getattr(user, "tenant_id", None):
+    if agent.tenant_id != user.tenant_id:
         return None
-    if getattr(agent, "creator_id", None) == getattr(user, "id", None):
+    if agent.creator_id == user.id:
         return "manage"
-    access_mode = getattr(agent, "access_mode", None) or "company"
+    access_mode = agent.access_mode or "company"
     if _is_admin(user) and access_mode != "private":
         return "manage"
-    company_level = getattr(agent, "company_access_level", None)
+    company_level = agent.company_access_level
     if access_mode == "company" and company_level:
         return company_level
     return _NEED_PERMS
@@ -110,9 +110,9 @@ def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | Non
 def _access_from_permissions(
     user: _UserLike, agent: _AgentLike, permissions: Sequence[AgentPermissionRecord]
 ) -> str | None:
-    access_mode = getattr(agent, "access_mode", None) or "company"
+    access_mode = agent.access_mode or "company"
     if access_mode == "company":
-        company_level = getattr(agent, "company_access_level", None) or next(
+        company_level = agent.company_access_level or next(
             (perm.access_level for perm in permissions if perm.scope_type == "company"),
             "use",
         )
@@ -174,7 +174,7 @@ async def user_can_manage_agent_id(
 async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -> set[uuid.UUID]:
     """Return platform users who can access an agent under current policy."""
     del db
-    access_mode = getattr(agent, "access_mode", None) or "company"
+    access_mode = agent.access_mode or "company"
     ids: set[uuid.UUID] = set()
     if agent.creator_id:
         ids.add(agent.creator_id)
@@ -195,7 +195,7 @@ async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -
 def _agent_available(agent: AgentRecord | None) -> tuple[bool, str | None]:
     if not agent:
         return False, "target_not_found"
-    if getattr(agent, "status", None) in ("stopped", "error"):
+    if agent.status in ("stopped", "error"):
         return False, f"target_status_{agent.status}"
     if is_agent_expired(agent):
         return False, "target_expired"
@@ -211,7 +211,7 @@ async def evaluate_agent_relationship_status(
     """Compute the effective status for an Agent -> Agent relationship."""
     del db
     source = await agent_dao.get(rel.agent_id)
-    target = getattr(rel, "target_agent", None)
+    target = rel.target_agent
     if target is None:
         target = await agent_dao.get(rel.target_agent_id)
 
@@ -236,7 +236,7 @@ async def evaluate_agent_relationship_status(
             "access_status_reason": reason or "target_unavailable",
         }
 
-    created_by_user_id = getattr(rel, "created_by_user_id", None)
+    created_by_user_id = rel.created_by_user_id
     if created_by_user_id:
         if await user_can_manage_agent_id(None, created_by_user_id, source) and await user_can_manage_agent_id(
             None, created_by_user_id, target
@@ -252,7 +252,7 @@ async def evaluate_agent_relationship_status(
             "access_status_reason": "relationship_creator_no_longer_manages_both_agents",
         }
 
-    target_mode = getattr(target, "access_mode", None) or "company"
+    target_mode = target.access_mode or "company"
     if target_mode == "company":
         return {
             "access_allowed": True,
@@ -295,8 +295,7 @@ async def evaluate_human_relationship_status(
     del db
     if source_agent is None:
         source_agent = await agent_dao.get(rel.agent_id)
-    # Works for ORM instances (relationship attr) and plain records (no member attr).
-    member = getattr(rel, "member", None)
+    member = rel.member
     if member is None:
         member = await org_member_dao.get(rel.member_id)
 
@@ -343,11 +342,10 @@ async def check_agent_access(
     ``db`` is optional and ignored (legacy dual-stack parameter).
     """
     del db
-    user_id = getattr(user, "id", None)
-    if user_id is not None:
-        memo = access_cache.memo_get(user_id, agent_id)
-        if memo is not None:
-            return memo
+    user_id = user.id
+    memo = access_cache.memo_get(user_id, agent_id)
+    if memo is not None:
+        return memo
 
     agent = await agent_dao.get(agent_id)
     if not agent:
@@ -355,8 +353,7 @@ async def check_agent_access(
 
     cached = await access_cache.get_cached_level(user, agent_id)
     if cached is not None:
-        if user_id is not None:
-            access_cache.memo_set(user_id, agent_id, agent, cached)
+        access_cache.memo_set(user_id, agent_id, agent, cached)
         return agent, cached
 
     observed_ver = await access_cache.read_acl_version(agent_id)
@@ -365,8 +362,7 @@ async def check_agent_access(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
 
     await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed_ver)
-    if user_id is not None:
-        access_cache.memo_set(user_id, agent_id, agent, level)
+    access_cache.memo_set(user_id, agent_id, agent, level)
     return agent, level
 
 
@@ -377,5 +373,5 @@ def is_agent_creator(user: _UserLike, agent: _AgentLike) -> bool:
 
 def is_agent_expired(agent: _AgentLike) -> bool:
     """Return True if the agent is manually marked expired or its expires_at is in the past."""
-    expires_at = getattr(agent, "expires_at", None)
-    return bool(getattr(agent, "is_expired", False) or (expires_at and datetime.now(UTC) > expires_at))
+    expires_at = agent.expires_at
+    return bool(agent.is_expired or (expires_at and datetime.now(UTC) > expires_at))

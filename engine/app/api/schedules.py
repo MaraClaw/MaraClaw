@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.json_types import json_as_bool, json_as_str_or, mapping_from_row, object_mapping_from
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
 from app.core.security import get_current_user
 from app.dao.schedule_dao import agent_schedule_dao
@@ -108,10 +109,10 @@ async def update_schedule(
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    updates = data.model_dump(exclude_unset=True)
+    updates = object_mapping_from(data.model_dump(exclude_unset=True))
     if "cron_expr" in updates or "is_enabled" in updates:
-        is_enabled = updates.get("is_enabled", sched.is_enabled)
-        cron_expr = updates.get("cron_expr", sched.cron_expr)
+        is_enabled = sched.is_enabled if "is_enabled" not in updates else json_as_bool(updates["is_enabled"], sched.is_enabled)
+        cron_expr = sched.cron_expr if "cron_expr" not in updates else json_as_str_or(updates["cron_expr"], sched.cron_expr)
         updates["next_run_at"] = compute_next_run(cron_expr) if is_enabled else None
 
     updated = await agent_schedule_dao.update(db_obj=sched, obj_in=updates)
@@ -184,15 +185,14 @@ async def get_schedule_history(
     history: list[dict[str, Any]] = []
     schedule_id_str = str(schedule_id)
     for log in rows:
-        detail: dict[str, Any] = log.get("detail_json") or {}
-        if not isinstance(detail, dict):
-            detail = dict(detail) if detail else {}
+        detail = mapping_from_row(log.get("detail_json"))
         if detail.get("schedule_id") != schedule_id_str:
             continue
+        created_at = log.get("created_at")
         history.append(
             {
                 "id": str(log["id"]),
-                "created_at": log["created_at"].isoformat() if log.get("created_at") else None,
+                "created_at": created_at.isoformat() if isinstance(created_at, datetime) else None,
                 "summary": log.get("summary"),
                 "instruction": detail.get("instruction", ""),
                 "reply": detail.get("reply", ""),

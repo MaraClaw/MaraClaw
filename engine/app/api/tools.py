@@ -1,12 +1,22 @@
 """Tool management API - CRUD for tools and per-agent assignments."""
 
 import uuid
-from typing import Any
+from collections.abc import Mapping
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    datetime_from_row,
+    json_as_str_or,
+    json_object_from,
+    mapping_from_row,
+    object_mapping_from,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
@@ -17,11 +27,10 @@ from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.records.tool import AgentToolRecord, ToolRecord
 from app.records.user import UserRecord
-from app.services.email_service import EmailConfig
+from app.services.email_service import EmailConfig, EmailConnectionResult
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     encrypt_sensitive_fields,
-    get_sensitive_keys,
     get_tenant_tool_configs,
     get_tool_company_config,
     mask_sensitive_fields,
@@ -52,9 +61,9 @@ async def _load_agent_tool_assignments(agent_id: uuid.UUID) -> dict[str, AgentTo
 
 
 def _tool_record_visible_to_agent(
-    tool: ToolRecord | Any,
+    tool: ToolRecord,
     agent_tenant_id: uuid.UUID | None,
-    assignments: dict[str, AgentToolRecord | Any],
+    assignments: dict[str, AgentToolRecord],
 ) -> bool:
     """Pure visibility check for tools against an agent tenant boundary."""
     if str(tool.id) in assignments:
@@ -85,15 +94,11 @@ def _require_catalog_manager(current_user: UserRecord) -> None:
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
-def _get_sensitive_keys(config_schema: dict[str, Any] | None = None) -> set[str]:
-    return get_sensitive_keys(config_schema)
-
-
-def _encrypt_sensitive_fields(config: JsonObject, config_schema: dict[str, Any] | None = None) -> JsonObject:
+def _encrypt_sensitive_fields(config: JsonObject, config_schema: Mapping[str, object] | None = None) -> JsonObject:
     return encrypt_sensitive_fields(config, config_schema)
 
 
-def _decrypt_sensitive_fields(config: JsonObject, config_schema: dict[str, Any] | None = None) -> JsonObject:
+def _decrypt_sensitive_fields(config: JsonObject, config_schema: Mapping[str, object] | None = None) -> JsonObject:
     return decrypt_sensitive_fields(config, config_schema)
 
 
@@ -105,7 +110,7 @@ class ToolCreate(BaseModel):
     type: str = "mcp"
     category: str = "custom"
     icon: str = "🔧"
-    parameters_schema: dict[str, Any] = {"type": "object", "properties": {}}
+    parameters_schema: JsonObject = {"type": "object", "properties": {}}
     mcp_server_url: str | None = None
     mcp_server_name: str | None = None
     mcp_tool_name: str | None = None
@@ -122,7 +127,7 @@ class ToolUpdate(BaseModel):
     enabled: bool | None = None
     mcp_server_url: str | None = None
     mcp_server_name: str | None = None
-    parameters_schema: dict[str, Any] | None = None
+    parameters_schema: JsonObject | None = None
     is_default: bool | None = None
     config: JsonObject | None = None
     tenant_id: str | None = None
@@ -141,17 +146,17 @@ class CategoryConfigUpdate(BaseModel):
 @router.get("")
 async def list_tools(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """List platform tools scoped by tenant (builtin + tenant-specific)."""
     target_tenant_id = _resolve_target_tenant_id(current_user, tenant_id)
     tools = await tool_dao.list_platform_for_tenant(target_tenant_id)
     builtin_configs = await get_tenant_tool_configs(
         target_tenant_id,
-        [t for t in tools if getattr(t, "source", None) == "builtin"],
+        [t for t in tools if t.source == "builtin"],
     )
-    response: list[dict[str, Any]] = []
+    response: list[dict[str, object]] = []
     for t in tools:
-        if getattr(t, "source", None) == "builtin":
+        if t.source == "builtin":
             raw_config = builtin_configs.get(t.name, {})
         else:
             raw_config = await get_tool_company_config(db, t, target_tenant_id)
@@ -295,7 +300,7 @@ async def delete_tool(tool_id: uuid.UUID, current_user: UserRecord = Depends(get
 @router.get("/agents/{agent_id}")
 async def get_agent_tools(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Get tools for a specific agent with their enabled status."""
     from app.services.agent_tools import _agent_has_feishu
 
@@ -328,11 +333,11 @@ async def get_agent_tools(
         if backfilled:
             logger.info(f"[Tools] Backfilled {backfilled} AgentTool records for agent={agent_id}")
 
-    result: list[dict[str, Any]] = []
+    result: list[dict[str, object]] = []
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
-        if (t.config or {}).get("okr_agent_only") and not is_system_agent:
+        if json_object_from(t.config).get("okr_agent_only") and not is_system_agent:
             continue
         tid = str(t.id)
         at = assignments.get(tid)
@@ -397,7 +402,7 @@ class MCPTestRequest(BaseModel):
 async def check_mcp_connection(
     data: MCPTestRequest,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Test connection to an MCP server and list available tools.
 
     Supports two authentication modes:
@@ -430,7 +435,7 @@ class MCPServerUpdate(BaseModel):
 @router.put("/mcp-server")
 async def update_mcp_server(
     data: MCPServerUpdate, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Bulk-update the Server URL and API Key for all tools from an MCP server.
 
     All tools sharing the same mcp_server_name under the target tenant are
@@ -454,9 +459,9 @@ async def update_mcp_server(
         )
 
     for tool in tools:
-        updates: dict[str, Any] = {"mcp_server_url": data.server_url}
+        updates: dict[str, object] = {"mcp_server_url": data.server_url}
         if data.api_key is not None:
-            current_config = dict(tool.config or {})
+            current_config = json_object_from(tool.config)
             current_config["api_key"] = data.api_key
             updates["config"] = _encrypt_sensitive_fields(current_config, tool.config_schema)
         _ = await tool_dao.update(db_obj=tool, obj_in=updates)
@@ -470,32 +475,37 @@ async def update_mcp_server(
 @router.get("/agent-installed")
 async def list_agent_installed_tools(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Admin endpoint: list user-installed tools scoped by tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     rows = await agent_tool_dao.list_agent_installed(tid)
-    return [
-        {
-            "agent_tool_id": str(row["agent_tool_id"]),
-            "agent_id": str(row["agent_id"]),
-            "tool_id": str(row["tool_id"]),
-            "tool_name": row["tool_name"],
-            "tool_display_name": row["tool_display_name"],
-            "description": row["description"],
-            "type": row["type"],
-            "category": row["category"],
-            "source": row["source"],
-            "mcp_server_name": row["mcp_server_name"],
-            "mcp_server_url": row["mcp_server_url"],
-            "mcp_tool_name": row["mcp_tool_name"],
-            "installed_by_agent_id": str(row["installed_by_agent_id"]) if row["installed_by_agent_id"] else None,
-            "installed_by_agent_name": row["installed_by_agent_name"],
-            "enabled": row["enabled"],
-            "configured": bool(row["config"] and len(row["config"]) > 0),
-            "installed_at": row["installed_at"].isoformat() if row["installed_at"] else None,
-        }
-        for row in rows
-    ]
+    out: list[dict[str, object]] = []
+    for row in rows:
+        mapping = object_mapping_from(row)
+        installed_at = datetime_from_row(mapping.get("installed_at"))
+        installed_by = uuid_from_row_opt(mapping.get("installed_by_agent_id"))
+        out.append(
+            {
+                "agent_tool_id": str(uuid_from_row(mapping["agent_tool_id"])),
+                "agent_id": str(uuid_from_row(mapping["agent_id"])),
+                "tool_id": str(uuid_from_row(mapping["tool_id"])),
+                "tool_name": str_from_row(mapping.get("tool_name")),
+                "tool_display_name": str_from_row(mapping.get("tool_display_name")),
+                "description": str_from_row(mapping.get("description")),
+                "type": str_from_row(mapping.get("type")),
+                "category": str_from_row(mapping.get("category")),
+                "source": str_from_row(mapping.get("source")),
+                "mcp_server_name": str_from_row(mapping.get("mcp_server_name")) or None,
+                "mcp_server_url": str_from_row(mapping.get("mcp_server_url")) or None,
+                "mcp_tool_name": str_from_row(mapping.get("mcp_tool_name")) or None,
+                "installed_by_agent_id": str(installed_by) if installed_by else None,
+                "installed_by_agent_name": str_from_row(mapping.get("installed_by_agent_name")) or None,
+                "enabled": bool(mapping.get("enabled")),
+                "configured": bool(mapping_from_row(mapping.get("config"))),
+                "installed_at": installed_at.isoformat() if installed_at else None,
+            }
+        )
+    return out
 
 
 @router.delete("/agent-tool/{agent_tool_id}")
@@ -524,7 +534,7 @@ class AgentToolConfigUpdate(BaseModel):
 @router.get("/agents/{agent_id}/tool-config/{tool_id}")
 async def get_agent_tool_config(
     agent_id: uuid.UUID, tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Get merged tool config (global defaults + agent overrides) and config_schema.
 
     Both configs are decrypted before returning. Global sensitive fields are
@@ -539,7 +549,7 @@ async def get_agent_tool_config(
 
     schema = tool.config_schema
     raw_global = await get_tool_company_config(db, tool, agent.tenant_id)
-    raw_agent = _decrypt_sensitive_fields(at.config if at else {}, schema)
+    raw_agent = _decrypt_sensitive_fields(json_object_from(at.config if at else {}), schema)
 
     masked_global = mask_sensitive_fields(raw_global, schema)
     masked_agent = mask_sensitive_fields(raw_agent or {}, schema)
@@ -597,7 +607,7 @@ async def update_agent_tool_config(
 @router.get("/agents/{agent_id}/with-config")
 async def get_agent_tools_with_config(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Get agent's enabled tools with per-agent config info and config_schema for settings UI.
 
     Both global_config and agent_config are decrypted before returning.
@@ -627,11 +637,11 @@ async def get_agent_tools_with_config(
         "jina_read": ("jina_api_key", "api_key"),
     }
 
-    result: list[dict[str, Any]] = []
+    result: list[dict[str, object]] = []
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
-        if (t.config or {}).get("okr_agent_only") and not is_system_agent2:
+        if json_object_from(t.config).get("okr_agent_only") and not is_system_agent2:
             continue
         tid = str(t.id)
         at = assignments.get(tid)
@@ -645,15 +655,14 @@ async def get_agent_tools_with_config(
             ss_key, ss_field = system_settings_tool_map[t.name]
             if ss_key not in system_keys_cache:
                 try:
-                    value = await system_setting_dao.get_value(ss_key, {})
-                    system_value = value.get(ss_field, "") if isinstance(value, dict) else ""
-                    system_keys_cache[ss_key] = system_value if isinstance(system_value, str) else ""
+                    value = json_object_from(await system_setting_dao.get_value(ss_key, {}))
+                    system_keys_cache[ss_key] = json_as_str_or(value.get(ss_field))
                 except Exception:
                     system_keys_cache[ss_key] = ""
             if system_keys_cache[ss_key]:
                 raw_global["api_key"] = system_keys_cache[ss_key]
 
-        raw_agent = _decrypt_sensitive_fields((at.config if at else {}) or {}, t.config_schema)
+        raw_agent = _decrypt_sensitive_fields(json_object_from(at.config if at else {}), t.config_schema)
         masked_global = mask_sensitive_fields(raw_global, t.config_schema)
 
         result.append(
@@ -690,7 +699,7 @@ class EmailTestRequest(BaseModel):
 async def check_email_connection(
     data: EmailTestRequest,
     current_user: UserRecord = Depends(get_current_user),
-) -> Any:
+) -> EmailConnectionResult:
     """Test IMAP and SMTP email connections with provided config."""
     from app.services.email_service import test_connection
 
@@ -703,7 +712,7 @@ async def check_email_connection(
 @router.get("/email-providers")
 async def get_email_providers(
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Get list of supported email provider presets with help text."""
     from app.services.email_service import EMAIL_PROVIDERS
 
@@ -723,7 +732,7 @@ async def get_email_providers(
 @router.get("/agents/{agent_id}/category-config/{category}")
 async def get_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Get shared configuration for a tool category.
 
     Returns both global_config (company-level, from Tool.config) and
@@ -744,7 +753,7 @@ async def get_category_config(
         primary_tool_name=primary_tool_name,
     )
     raw_global: JsonObject = {}
-    cat_schema: dict[str, Any] | None = None
+    cat_schema: Mapping[str, object] | None = None
     for ct in all_cat_tools:
         company_config = await get_tool_company_config(db, ct, agent.tenant_id)
         if company_config:
@@ -764,7 +773,7 @@ async def get_category_config(
         config_id = str(config.id)
         full_agent: JsonObject = {
             "api_key": config.app_secret,
-            **(config.extra_config or {}),
+            **json_object_from(config.extra_config),
         }
         raw_agent = _decrypt_sensitive_fields(full_agent)
         raw_agent = {k: v for k, v in raw_agent.items() if v is not None}
@@ -804,8 +813,8 @@ async def update_category_config(
 
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=category)
     if existing:
-        updates: dict[str, Any] = {
-            "extra_config": {**(existing.extra_config or {}), **extra},
+        updates: dict[str, object] = {
+            "extra_config": {**json_object_from(existing.extra_config), **extra},
             "is_configured": True,
         }
         if app_secret:
@@ -851,7 +860,7 @@ async def delete_category_config(
 @router.post("/agents/{agent_id}/category-config/{category}/test")
 async def check_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     if category == "atlassian":
         from app.api.atlassian import check_atlassian_channel
 

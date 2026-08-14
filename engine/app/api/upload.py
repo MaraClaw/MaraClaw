@@ -4,7 +4,6 @@ import asyncio
 import base64
 import os
 import uuid
-
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile

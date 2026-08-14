@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str, object_mapping_from
 from app.dao.trigger_dao import agent_trigger_dao
 from app.records.user import UserRecord
 
@@ -80,9 +80,15 @@ async def update_trigger(
     if not trigger:
         raise HTTPException(404, "Trigger not found")
 
-    updates = body.model_dump(exclude_unset=True)
-    if "expires_at" in updates and updates["expires_at"] is not None:
-        updates["expires_at"] = datetime.fromisoformat(updates["expires_at"])
+    updates = object_mapping_from(body.model_dump(exclude_unset=True))
+    expires_at = updates.get("expires_at")
+    if expires_at is not None:
+        if isinstance(expires_at, datetime):
+            updates["expires_at"] = expires_at
+        else:
+            expires_text = json_as_str(expires_at)
+            if expires_text is not None:
+                updates["expires_at"] = datetime.fromisoformat(expires_text)
     if updates:
         _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
 

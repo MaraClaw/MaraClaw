@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, object_mapping_from, str_from_row, uuid_from_row
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
@@ -754,7 +754,7 @@ async def create_objective(body: ObjectiveCreate, user: UserRecord = Depends(get
                         resolved_owner_id = candidate
                         logger.info(
                             f"[create_objective] Channel-only OrgMember {candidate} "
-                            + f"has no user_id - storing OrgMember.id as owner_id"
+                            + "has no user_id - storing OrgMember.id as owner_id"
                         )
                 else:
                     raise HTTPException(
@@ -1243,28 +1243,34 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> d
 
     if not okr_agent_id_val or (not tracked_user_ids and not tracked_agent_ids):
         for row in await agent_dao.list_id_name_avatar_active_nonsystem(_require_tenant_id(user)):
-            tracked_agent_ids.append(str(row["id"]))
-            if row["id"] not in covered_ids:
+            mapping = object_mapping_from(row)
+            row_id = uuid_from_row(mapping["id"])
+            agent_id = str(row_id)
+            tracked_agent_ids.append(agent_id)
+            if row_id not in covered_ids:
                 members_without_okr.append(
                     {
-                        "id": str(row["id"]),
+                        "id": agent_id,
                         "type": "agent",
-                        "display_name": row["name"] or "",
-                        "avatar_url": row["avatar_url"] or "",
+                        "display_name": str_from_row(mapping.get("name")),
+                        "avatar_url": str_from_row(mapping.get("avatar_url")) or "",
                         "channel": None,
                         "channel_user_id": None,
                     }
                 )
 
         for row in await user_dao.list_id_name_avatar_for_tenant(_require_tenant_id(user)):
-            tracked_user_ids.append(str(row["id"]))
-            if row["id"] not in covered_ids:
+            mapping = object_mapping_from(row)
+            row_id = uuid_from_row(mapping["id"])
+            user_id = str(row_id)
+            tracked_user_ids.append(user_id)
+            if row_id not in covered_ids:
                 members_without_okr.append(
                     {
-                        "id": str(row["id"]),
+                        "id": user_id,
                         "type": "user",
-                        "display_name": row["display_name"] or "",
-                        "avatar_url": row["avatar_url"] or "",
+                        "display_name": str_from_row(mapping.get("display_name")),
+                        "avatar_url": str_from_row(mapping.get("avatar_url")) or "",
                         "channel": None,
                         "channel_user_id": None,
                     }
@@ -1458,14 +1464,14 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
             if display:
                 username_hint = (
                     f'\n  Platform account: "{display}"'
-                    + f"  (use this as the recipient identifier in send_platform_message)"
+                    + "  (use this as the recipient identifier in send_platform_message)"
                 )
 
         member_block = (
             f"--- Member {index}: {org_member.name} ---\n"
             + f"  Type: Channel member{username_hint}\n"
             + f"  How to send: {channel_hint}\n"
-            + f"  Recent chat history (last 3 messages):\n"
+            + "  Recent chat history (last 3 messages):\n"
             + f"{history_str}"
         )
         members_to_contact.append(member_block)
@@ -1477,16 +1483,16 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
         member_block = (
             f"--- Member {index}: {agent_member.name} [Agent] ---\n"
             + f'  STEP 1 → send_message_to_agent(agent_name="{agent_member.name}",\n'
-            + f'             message="[OKR Agent] Based on the company OKRs, describe your primary Objectives and Key Results '
+            + '             message="[OKR Agent] Based on the company OKRs, describe your primary Objectives and Key Results '
             + f'for this period ({ps.isoformat()} ~ {pe.isoformat()}).")\n'
-            + f"  STEP 2 → Read the reply carefully from the tool result.\n"
-            + f"  STEP 3 → Call this EXACTLY (use the UUID below verbatim, do NOT invent one):\n"
-            + f'    create_objective(title="<their objective>", owner_type="agent",\n'
+            + "  STEP 2 → Read the reply carefully from the tool result.\n"
+            + "  STEP 3 → Call this EXACTLY (use the UUID below verbatim, do NOT invent one):\n"
+            + '    create_objective(title="<their objective>", owner_type="agent",\n'
             + f'                    owner_id="{agent_member.id}",\n'
             + f'                    period_start="{ps.isoformat()}", period_end="{pe.isoformat()}")\n'
-            + f"  STEP 4 → For EACH Key Result they mentioned:\n"
-            + f'    create_key_result(objective_id="<id from STEP 3 result>",\n'
-            + f'                     title="<KR title>", target_value=<number>, unit="<unit if stated>")'
+            + "  STEP 4 → For EACH Key Result they mentioned:\n"
+            + '    create_key_result(objective_id="<id from STEP 3 result>",\n'
+            + '                     title="<KR title>", target_value=<number>, unit="<unit if stated>")'
         )
         members_to_contact.append(member_block)
         index += 1

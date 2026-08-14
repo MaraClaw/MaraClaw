@@ -9,6 +9,7 @@ from typing import TypedDict
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.core.permissions import check_agent_access, is_agent_expired
 from app.core.security import load_user_from_access_token
@@ -492,7 +493,7 @@ class WebSocketChatHandler:
             await self.websocket.send_json({"type": "done", "role": "assistant", "content": self.welcome_message})
 
         while True:
-            data = _json_object_payload(await self.websocket.receive_json())
+            data = _json_object_payload(json_loads_value(await self.websocket.receive_text()))
 
             # Set a unique trace ID for this specific message processing.
             trace_id = str(uuid.uuid4())[:12]
@@ -905,7 +906,7 @@ class WebSocketChatHandler:
             queued_messages: list[RealtimeMessage] = []
             while not llm_task.done():
                 try:
-                    msg = _json_object_payload(await asyncio.wait_for(self.websocket.receive_json(), timeout=0.5))
+                    msg = _json_object_payload(json_loads_value(await asyncio.wait_for(self.websocket.receive_text(), timeout=0.5)))
                     if msg.get("type") == "abort":
                         logger.info("[WS] Abort received, cancelling LLM task")
                         _ = llm_task.cancel()

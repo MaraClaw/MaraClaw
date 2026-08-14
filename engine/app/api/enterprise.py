@@ -11,7 +11,16 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    int_from_row,
+    json_as_int,
+    json_as_str_or,
+    json_object_from,
+    object_mapping_from,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 from app.core.logging import logger
 from app.core.security import encrypt_data, get_current_admin, get_current_user
 from app.dao.agent_dao import agent_dao
@@ -390,8 +399,10 @@ async def get_enterprise_stats(tenant_id: str | None = None, current_user: UserR
         from app.db.session import connection_ctx
 
         async with connection_ctx() as conn:
-            total_agents = int(await conn.fetchval("SELECT COUNT(*) FROM agents") or 0)
-            running_agents = int(await conn.fetchval("SELECT COUNT(*) FROM agents WHERE status = 'running'") or 0)
+            total_agents = int_from_row(await conn.fetchval("SELECT COUNT(*) FROM agents"))
+            running_agents = int_from_row(
+                await conn.fetchval("SELECT COUNT(*) FROM agents WHERE status = 'running'")
+            )
         total_users = await user_dao.count_active()
         pending_approvals = await approval_request_dao.count_pending()
 
@@ -451,7 +462,7 @@ async def update_tenant_quotas(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    updates = data.model_dump(exclude_unset=True)
+    updates = object_mapping_from(data.model_dump(exclude_unset=True))
     adjusted_count = 0
     floor = updates.get("min_heartbeat_interval_minutes")
     if updates:
@@ -460,7 +471,7 @@ async def update_tenant_quotas(
     if floor is not None:
         from app.services.quota_guard import enforce_heartbeat_floor
 
-        adjusted_count = await enforce_heartbeat_floor(tenant.id, floor=floor, db=None)
+        adjusted_count = await enforce_heartbeat_floor(tenant.id, floor=json_as_int(floor), db=None)
 
     return {
         "message": "Tenant quotas updated",
@@ -1062,21 +1073,26 @@ async def list_org_departments(
         provider_id=uuid.UUID(provider_id) if provider_id else None,
     )
 
-    return {
-        "items": [
+    items: list[dict[str, object]] = []
+    for row in rows:
+        mapping = object_mapping_from(row)
+        provider_id_val = uuid_from_row_opt(mapping.get("provider_id"))
+        parent_id_val = uuid_from_row_opt(mapping.get("parent_id"))
+        items.append(
             {
-                "id": str(row["id"]),
-                "external_id": row.get("external_id"),
-                "provider_id": str(row["provider_id"]) if row.get("provider_id") else None,
-                "provider_name": row.get("provider_name") if row.get("provider_id") else None,
-                "provider_type": row.get("provider_type") if row.get("provider_id") else None,
-                "name": row.get("name"),
-                "parent_id": str(row["parent_id"]) if row.get("parent_id") else None,
-                "path": row.get("path"),
-                "member_count": row.get("member_count"),
+                "id": str(uuid_from_row(mapping["id"])),
+                "external_id": mapping.get("external_id"),
+                "provider_id": str(provider_id_val) if provider_id_val else None,
+                "provider_name": mapping.get("provider_name") if provider_id_val else None,
+                "provider_type": mapping.get("provider_type") if provider_id_val else None,
+                "name": mapping.get("name"),
+                "parent_id": str(parent_id_val) if parent_id_val else None,
+                "path": mapping.get("path"),
+                "member_count": mapping.get("member_count"),
             }
-            for row in rows
-        ],
+        )
+    return {
+        "items": items,
         "total_member": total_member,
     }
 
@@ -1168,9 +1184,9 @@ async def wecom_org_sync_verify(
     if not provider:
         return _Response(status_code=404)
 
-    config = provider.config or {}
-    token = config.get("verify_token", "")
-    aes_key = config.get("verify_aes_key", "")
+    config = json_object_from(provider.config)
+    token = json_as_str_or(config.get("verify_token"))
+    aes_key = json_as_str_or(config.get("verify_aes_key"))
 
     if not isinstance(token, str) or not isinstance(aes_key, str) or not token or not aes_key:
         logger.warning(
