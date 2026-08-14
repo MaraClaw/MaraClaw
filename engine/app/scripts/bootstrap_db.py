@@ -332,8 +332,7 @@ async def main() -> None:
             except Exception as exc:
                 if _is_ignorable_error(exc, _IGNORABLE):
                     print(
-                        f"[bootstrap] Patch already present: {sql.strip()[:80]} "
-                        + f"({_unwrap_pg_error(exc)})",
+                        f"[bootstrap] Patch already present: {sql.strip()[:80]} " + f"({_unwrap_pg_error(exc)})",
                         flush=True,
                     )
                     continue

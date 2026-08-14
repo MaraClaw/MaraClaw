@@ -143,12 +143,7 @@ async def _assert_company_agent_author(
     tenant_mismatch = False
     if effective_tenant_id and agent:
         tenant_mismatch = str(agent.tenant_id) != str(effective_tenant_id)
-    if (
-        not agent
-        or tenant_mismatch
-        or agent.is_system
-        or (agent.access_mode or "company") != "company"
-    ):
+    if not agent or tenant_mismatch or agent.is_system or (agent.access_mode or "company") != "company":
         raise HTTPException(403, f"Only company-wide agents can {action} Plaza")
 
 

@@ -64,9 +64,7 @@ class GogcliAuthStatusResponse(BaseModel):
     detail: str
 
 
-async def _get_gogcli_manage_agent(
-    db: object | None, current_user: UserRecord, agent_id: uuid.UUID
-) -> AgentRecord:
+async def _get_gogcli_manage_agent(db: object | None, current_user: UserRecord, agent_id: uuid.UUID) -> AgentRecord:
     """Return a gogcli-enabled agent after enforcing manage/admin access."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level == "manage" or current_user.role in GOGCLI_ADMIN_ROLES:

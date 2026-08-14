@@ -28,6 +28,6 @@ class ParticipantRecord:
             type=str_from_row(row["type"]),
             ref_id=uuid_from_row(row["ref_id"]),
             display_name=str_from_row(row["display_name"]),
-            avatar_url=str_from_row(row["avatar_url"]) or None,
+            avatar_url=str_from_row(row.get("avatar_url")) or None,
             created_at=datetime_from_row(row.get("created_at")),
         )

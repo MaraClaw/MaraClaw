@@ -195,7 +195,7 @@ class AutonomyService:
             if isinstance(args_raw, str):
                 try:
                     arguments = object_from_literal(args_raw)
-                except (ValueError, SyntaxError, json.JSONDecodeError):
+                except ValueError, SyntaxError, json.JSONDecodeError:
                     return "Execution failed: approved action arguments must be a JSON object"
             else:
                 arguments = args_raw

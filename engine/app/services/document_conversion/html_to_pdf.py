@@ -48,9 +48,7 @@ def _cdp_nested(message: JsonObject, *keys: str) -> object:
     return current
 
 
-async def convert_html_to_pdf(
-    src_file: Path, tgt_file: Path, target_path: str, arguments: Mapping[str, object]
-) -> str:
+async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, arguments: Mapping[str, object]) -> str:
     try:
         await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
         chrome_pdf_error: Exception | None = None

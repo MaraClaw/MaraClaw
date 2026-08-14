@@ -331,8 +331,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         """Drop directory links when a member leaves this organization."""
         async with self.session() as db:
             await db.execute(
-                "UPDATE org_members SET user_id = NULL "
-                + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s",
+                "UPDATE org_members SET user_id = NULL " + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s",
                 {"user_id": user_id, "tenant_id": tenant_id},
             )
 

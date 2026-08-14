@@ -137,7 +137,9 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             }
         )
 
-    async def is_email_taken_in_tenant(self, email: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None) -> bool:
+    async def is_email_taken_in_tenant(
+        self, email: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None
+    ) -> bool:
         params: dict[str, Any] = {"email": email, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
@@ -151,7 +153,9 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             )
             return value is not None
 
-    async def is_phone_taken_in_tenant(self, phone: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None) -> bool:
+    async def is_phone_taken_in_tenant(
+        self, phone: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None
+    ) -> bool:
         params: dict[str, Any] = {"phone": phone, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:

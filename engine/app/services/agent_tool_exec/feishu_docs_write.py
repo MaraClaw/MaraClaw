@@ -44,8 +44,14 @@ def _feishu_service() -> _FeishuDocsService:
     return module.feishu_service
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: httpx.Response) -> JsonObject:

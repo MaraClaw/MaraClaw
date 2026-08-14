@@ -340,9 +340,7 @@ async def seed_builtin_tools():
                     if json_as_str(field.get("type")) == "password" and (key := json_as_str(field.get("key")))
                 }
                 config = json_object_from(tool.config)
-                clean_config: JsonObject = {
-                    key: config[key] for key in config if key not in sensitive_keys
-                }
+                clean_config: JsonObject = {key: config[key] for key in config if key not in sensitive_keys}
                 if clean_config != tool.config:
                     _ = await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})
             if migrated:

@@ -172,7 +172,7 @@ async def collect_all_focus_updates(
             error_count += 1
 
     summary = (
-        f"Focus file collection complete.\n"
+        "Focus file collection complete.\n"
         + f"  KRs updated: {updated_count}\n"
         + f"  Agents without focus.md: {skipped_count}\n"
         + f"  Errors: {error_count}\n"

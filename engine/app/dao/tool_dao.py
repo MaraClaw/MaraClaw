@@ -271,7 +271,10 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 + "GROUP BY t.category ORDER BY COUNT(*) DESC LIMIT %(limit)s",
                 {"limit": limit},
             )
-            return [{"category": row["category"] or "uncategorized", "count": int_from_row(row.get("count"))} for row in rows]
+            return [
+                {"category": row["category"] or "uncategorized", "count": int_from_row(row.get("count"))}
+                for row in rows
+            ]
 
     async def list_defaults(self) -> Sequence[ToolRecord]:
         async with self.session() as db:

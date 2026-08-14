@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import importlib
 import re
 import uuid
-from typing import Final
+from typing import Final, cast
 
 from httpx import AsyncClient, Response
 
-from app.core.json_types import JsonObject, json_as_str, json_object_from_response
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response, object_attr
 from app.services import agent_tools
-from app.services.feishu_service import FeishuService, feishu_service
+from app.services.feishu_service import FeishuService
 
 from .registry import ToolArguments, tool_arg_str_or
 
@@ -27,11 +28,18 @@ _TYPE_LABELS: Final = {
 
 
 def _feishu_service() -> FeishuService:
-    return feishu_service
+    module = importlib.import_module("app.services.feishu_service")
+    return cast(FeishuService, object_attr(module, "feishu_service"))
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:

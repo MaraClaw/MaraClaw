@@ -88,9 +88,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
             )
             return [AgentRelationshipRecord.from_row(row) for row in rows]
 
-    async def get_active_for_agent_by_feishu_id(
-        self, agent_id: UUID, feishu_id: str
-    ) -> AgentRelationshipRecord | None:
+    async def get_active_for_agent_by_feishu_id(self, agent_id: UUID, feishu_id: str) -> AgentRelationshipRecord | None:
         """Relationship + active org member matching external_id or open_id."""
         async with self.session() as db:
             row = await db.fetchone(

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import importlib
 import json
 import uuid
+from typing import cast
 
-from app.core.json_types import json_as_str_or, json_object_from
+from app.core.json_types import json_as_str_or, json_object_from, object_attr
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments
-from app.services.feishu_service import FeishuService, feishu_service
+from app.services.feishu_service import FeishuService
 
 
 def _feishu_service() -> FeishuService:
-    return feishu_service
+    module = importlib.import_module("app.services.feishu_service")
+    return cast(FeishuService, object_attr(module, "feishu_service"))
 
 
 async def _feishu_approval_create(agent_id: uuid.UUID, arguments: ToolArguments) -> str:

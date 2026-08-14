@@ -192,7 +192,9 @@ async def get_tool_company_config(db: object | None, tool: ToolRecord | Any, ten
     return decrypt_sensitive_fields(getattr(tool, "config", None) or {}, getattr(tool, "config_schema", None))
 
 
-def mask_sensitive_fields(config: Mapping[str, JsonValue], config_schema: Mapping[str, Any] | ToolConfigSchema | None = None) -> JsonObject:
+def mask_sensitive_fields(
+    config: Mapping[str, JsonValue], config_schema: Mapping[str, Any] | ToolConfigSchema | None = None
+) -> JsonObject:
     masked: JsonObject = dict(config)
     for key in get_sensitive_keys(config_schema):
         value = masked.get(key)

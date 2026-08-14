@@ -939,9 +939,7 @@ class GitHubAuthProvider(BaseAuthProvider):
                 emails_resp = await client.get(self.GITHUB_EMAILS_URL, headers=headers)
                 emails_raw = json_value_from_response(emails_resp)
                 if emails_resp.status_code == 200 and isinstance(emails_raw, list):
-                    emails: list[AuthProviderPayload] = [
-                        item for item in list[object](emails_raw) if _is_payload(item)
-                    ]
+                    emails: list[AuthProviderPayload] = [item for item in list[object](emails_raw) if _is_payload(item)]
                     primary = next((item for item in emails if item.get("primary")), None)
                     verified = next((item for item in emails if item.get("verified")), None)
                     fallback: AuthProviderPayload = primary or verified or (emails[0] if emails else {})

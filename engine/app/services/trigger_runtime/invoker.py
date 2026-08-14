@@ -238,9 +238,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
                         agent_id=agent_id,
                         user_id=agent.creator_id,
                         role="tool_call",
-                        content=_json.dumps(
-                            {"name": tool_name, "result": result_str}, ensure_ascii=False, default=str
-                        ),
+                        content=_json.dumps({"name": tool_name, "result": result_str}, ensure_ascii=False, default=str),
                         conversation_id=str(session_id),
                         participant_id=agent_participant_id,
                     )

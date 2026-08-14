@@ -97,7 +97,7 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
         url_note = ""
 
     return (
-        f"Published successfully!\n\n"
+        "Published successfully!\n\n"
         + f"Public URL: {url}\n"
         + f"Title: {title}\n\n"
         + f"Anyone can access this page without logging in.{url_note}"

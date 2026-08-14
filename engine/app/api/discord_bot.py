@@ -222,7 +222,7 @@ async def _send_discord_followup(application_id: str, bot_token: str, interactio
                 )
 
 
-@router.post("/channel/discord/{agent_id}/webhook")
+@router.post("/channel/discord/{agent_id}/webhook", response_model=None)
 async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> Response | JsonObject:
     """Handle Discord Interaction webhooks (PING + slash commands)."""
     body_bytes = await request.body()

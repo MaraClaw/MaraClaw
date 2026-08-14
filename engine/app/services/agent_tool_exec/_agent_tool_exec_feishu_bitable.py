@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import importlib
 import json
 import uuid
 from dataclasses import dataclass
+from typing import cast
 
-from app.core.json_types import JsonObject, json_loads_object, json_loads_value
+from app.core.json_types import JsonObject, json_loads_object, json_loads_value, object_attr
 from app.services import agent_tools
-from app.services.feishu_service import FeishuService, feishu_service
+from app.services.feishu_service import FeishuService
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
@@ -31,7 +33,8 @@ class _RecordWrite:
 
 
 def _feishu_service() -> FeishuService:
-    return feishu_service
+    module = importlib.import_module("app.services.feishu_service")
+    return cast(FeishuService, object_attr(module, "feishu_service"))
 
 
 def _nested_mapping(value: object) -> JsonObject:

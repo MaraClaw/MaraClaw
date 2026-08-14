@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 class _HasTimezone(Protocol):
     timezone: str | None
 
+
 # Common timezones for frontend dropdown
 COMMON_TIMEZONES = [
     "UTC",

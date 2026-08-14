@@ -222,9 +222,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     break
                 next_cursor = result.get("next_cursor") or 0
                 cursor = (
-                    int(next_cursor)
-                    if isinstance(next_cursor, str | int) and not isinstance(next_cursor, bool)
-                    else 0
+                    int(next_cursor) if isinstance(next_cursor, str | int) and not isinstance(next_cursor, bool) else 0
                 )
 
         return users

@@ -187,6 +187,4 @@ async def _generate_image_google(api_key: str, model: str, base_url: str, prompt
                 if b64:
                     return base64.b64decode(b64)
 
-        raise ValueError(
-            f"No image (inlineData) found in Gemini response parts. " + f"Parts: {part_summaries}"
-        )
+        raise ValueError("No image (inlineData) found in Gemini response parts. " + f"Parts: {part_summaries}")

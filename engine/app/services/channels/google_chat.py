@@ -35,9 +35,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
 
-CHAT_CERTS_URL = (
-    "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com"
-)
+CHAT_CERTS_URL = "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com"
 CHAT_API_BASE = "https://chat.googleapis.com/v1"
 CHAT_ISSUER = "chat@system.gserviceaccount.com"
 ALLOWED_TOKEN_URIS = frozenset({"https://oauth2.googleapis.com/token"})

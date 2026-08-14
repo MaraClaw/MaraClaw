@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import uuid
-from typing import TypedDict
+from typing import TypedDict, cast
 
-from httpx import AsyncClient, Response
+from httpx import Response
 
 from app.core.json_types import (
     JsonObject,
@@ -12,10 +13,11 @@ from app.core.json_types import (
     json_as_str_or,
     json_object_from,
     json_object_from_response,
+    object_attr,
     object_list_from_row,
 )
 from app.services import agent_tools
-from app.services.feishu_service import FeishuService, feishu_service
+from app.services.feishu_service import FeishuService
 
 from . import feishu_docs_legacy as _legacy, feishu_docs_write as _write
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
@@ -36,11 +38,18 @@ _FW_RIGHT_PAREN = "\uff09"
 
 
 def _feishu_service() -> FeishuService:
-    return feishu_service
+    module = importlib.import_module("app.services.feishu_service")
+    return cast(FeishuService, object_attr(module, "feishu_service"))
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:

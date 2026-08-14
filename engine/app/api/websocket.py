@@ -54,11 +54,7 @@ type RealtimeMessage = dict[str, object]
 def _json_object_payload(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
-    result: dict[str, object] = {}
-    for key, item in value.items():
-        if isinstance(key, str):
-            result[key] = item
-    return result
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _payload_str(value: object, default: str = "") -> str:
@@ -906,7 +902,9 @@ class WebSocketChatHandler:
             queued_messages: list[RealtimeMessage] = []
             while not llm_task.done():
                 try:
-                    msg = _json_object_payload(json_loads_value(await asyncio.wait_for(self.websocket.receive_text(), timeout=0.5)))
+                    msg = _json_object_payload(
+                        json_loads_value(await asyncio.wait_for(self.websocket.receive_text(), timeout=0.5))
+                    )
                     if msg.get("type") == "abort":
                         logger.info("[WS] Abort received, cancelling LLM task")
                         _ = llm_task.cancel()

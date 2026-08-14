@@ -10,7 +10,14 @@ from urllib.parse import urlparse
 
 from croniter import croniter
 
-from app.core.json_types import JsonObject, JsonValue, json_value_from_response, str_from_row, uuid_from_row
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    is_json_object,
+    json_value_from_response,
+    str_from_row,
+    uuid_from_row,
+)
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
@@ -41,10 +48,12 @@ def _is_json_value(value: object) -> TypeIs[JsonValue]:
 
 
 def _json_config(value: object) -> JsonObject:
+    if is_json_object(value):
+        return value
     if not isinstance(value, dict):
         return {}
     result: JsonObject = {}
-    for key, item in value.items():
+    for key, item in dict[object, object](value).items():
         if isinstance(key, str) and _is_json_value(item):
             result[key] = item
     return result

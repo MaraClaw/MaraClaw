@@ -166,7 +166,9 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
 
 
 @router.post("/report")
-async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db: object | None = None):
+async def report_result(
+    body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db: object | None = None
+):
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")

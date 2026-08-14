@@ -93,8 +93,14 @@ def _feishu_service() -> _TenantTokenService:
     return module.feishu_service
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: httpx.Response) -> JsonObject:
@@ -108,11 +114,7 @@ def _nested_mapping(value: object) -> JsonObject:
 def _object_items(value: object) -> list[dict[str, ToolArgumentValue]]:
     if not isinstance(value, list):
         return []
-    items: list[dict[str, ToolArgumentValue]] = []
-    for raw in list[object](value):
-        if is_json_object(raw):
-            items.append(raw)
-    return items
+    return [raw for raw in list[object](value) if is_json_object(raw)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:

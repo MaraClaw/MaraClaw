@@ -11,7 +11,7 @@ from python_on_whales import ClientNotFoundError, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, json_loads_object
+from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.dao import llm_model_dao
 from app.records.agent import AgentRecord
@@ -32,7 +32,7 @@ class ContainerStatus(TypedDict):
 
 class InspectedContainerStatus(ContainerStatus, total=False):
     ports: JsonObject | None
-    created: datetime | None
+    created: str | datetime | None
 
 
 class AgentManager:
@@ -394,12 +394,14 @@ class AgentManager:
             network = getattr(container, "network_settings", None)
             ports = getattr(network, "ports", None)
             created = getattr(container, "created", None)
-            return {
+            created_value: str | datetime | None = created if isinstance(created, (str, datetime)) else None
+            status: InspectedContainerStatus = {
                 "running": bool(getattr(state, "running", False)),
                 "status": str(getattr(state, "status", None) or agent.status),
-                "ports": ports if isinstance(ports, dict) else None,
-                "created": created if isinstance(created, datetime) else None,
+                "ports": json_object_from(ports) if isinstance(ports, dict) else None,
+                "created": created_value,
             }
+            return status
         except NoSuchContainer:
             return {"running": False, "status": "not_found"}
         except ClientNotFoundError, DockerException:

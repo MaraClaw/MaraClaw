@@ -93,7 +93,7 @@ def decide_agent_access(
     return early
 
 
-def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | None | _NeedPerms:
+def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | _NeedPerms | None:
     if agent.tenant_id != user.tenant_id:
         return None
     if agent.creator_id == user.id:
@@ -333,9 +333,7 @@ async def evaluate_human_relationship_status(
     }
 
 
-async def check_agent_access(
-    user: _UserLike, agent_id: uuid.UUID, db: object | None = None
-) -> tuple[AgentRecord, str]:
+async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, db: object | None = None) -> tuple[AgentRecord, str]:
     """Check if a user has access to a specific agent.
 
     Returns (agent, access_level) where access_level is 'manage' or 'use'.
@@ -373,5 +371,6 @@ def is_agent_creator(user: _UserLike, agent: _AgentLike) -> bool:
 
 def is_agent_expired(agent: _AgentLike) -> bool:
     """Return True if the agent is manually marked expired or its expires_at is in the past."""
-    expires_at = agent.expires_at
-    return bool(agent.is_expired or (expires_at and datetime.now(UTC) > expires_at))
+    expires_at = getattr(agent, "expires_at", None)
+    is_expired = bool(getattr(agent, "is_expired", False))
+    return bool(is_expired or (expires_at and datetime.now(UTC) > expires_at))

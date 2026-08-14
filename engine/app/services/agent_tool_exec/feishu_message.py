@@ -89,7 +89,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             status_info = await evaluate_human_relationship_status(None, direct_relationship)
             if status_info["access_status"] != "active":
                 return (
-                    f"❌ Relationship to recipient is not active "
+                    "❌ Relationship to recipient is not active "
                     + f"({status_info['access_status_reason'] or 'restricted'})"
                 )
             try:

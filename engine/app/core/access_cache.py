@@ -17,6 +17,7 @@ from app.records.agent import AgentRecord
 _POLICY_VERSION_KEY = "aclver:{agent_id}"
 _DECISION_KEY = "acl:v1:{agent_id}:{user_id}"
 
+
 class _UserLike(Protocol):
     id: uuid.UUID
     role: str
@@ -104,7 +105,7 @@ async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
         return None
     try:
         data = json_loads_object(payload)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     current_ver = str(ver_raw or "0")
     if str(data.get("ver") or "0") != current_ver:

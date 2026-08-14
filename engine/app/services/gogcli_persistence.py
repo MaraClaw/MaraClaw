@@ -62,7 +62,9 @@ async def get_gogcli_credential_state(db: object | None, agent_id: UUID) -> Gogc
     return await gogcli_credential_state_dao.get_by_agent(agent_id)
 
 
-async def upsert_gogcli_keyring_password(db: object | None, agent_id: UUID, password: str) -> GogcliCredentialStateRecord:
+async def upsert_gogcli_keyring_password(
+    db: object | None, agent_id: UUID, password: str
+) -> GogcliCredentialStateRecord:
     """Persist an encrypted gogcli file-keyring password for one agent."""
     now = datetime.now(UTC)
     encrypted_password = encrypt_data(password, settings.SECRET_KEY)

@@ -13,11 +13,7 @@ from app.services.document_conversion.chrome_runtime import cleanup_temporary_pa
 def _object_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
-    result: dict[str, object] = {}
-    for key, item in value.items():
-        if isinstance(key, str):
-            result[key] = item
-    return result
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _object_list(value: object) -> list[object]:
@@ -38,7 +34,9 @@ def _as_int(value: object, default: int) -> int:
         return raw
     if isinstance(raw, float | str):
         return int(raw)
-    raise TypeError(f"int() argument must be a string, a bytes-like object or a real number, not '{type(raw).__name__}'")
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(raw).__name__}'"
+    )
 
 
 def _as_float(value: object, default: float) -> float:
@@ -49,9 +47,7 @@ def _as_float(value: object, default: float) -> float:
         return float(raw)
     if isinstance(raw, str):
         return float(raw)
-    raise TypeError(
-        f"float() argument must be a string or a real number, not '{type(raw).__name__}'"
-    )
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(raw).__name__}'")
 
 
 async def render_html_to_pptx(
@@ -210,8 +206,7 @@ async def render_html_to_pptx(
             if not value:
                 return None
             matches = [
-                match.group(0)
-                for match in re.finditer(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b|rgba?\([^)]+\)", value)
+                match.group(0) for match in re.finditer(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b|rgba?\([^)]+\)", value)
             ]
             if not matches:
                 return parse_color(value, backdrop)
@@ -571,7 +566,9 @@ async def render_html_to_pptx(
                         src = _as_str(item.get("src"))
                         p = image_path(src)
                         if p:
-                            _ = slide.shapes.add_picture(str(p), Inches(x), Inches(y), width=Inches(w), height=Inches(h))
+                            _ = slide.shapes.add_picture(
+                                str(p), Inches(x), Inches(y), width=Inches(w), height=Inches(h)
+                            )
                     elif kind == "text":
                         text = _as_str(item.get("text")).strip()
                         if not text:

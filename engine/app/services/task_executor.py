@@ -115,7 +115,9 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
         if task_type == "supervision":
             # Supervision tasks stay active; just log the result
             _ = await task_dao.update(db_obj=task, obj_in={"status": "pending"})
-            _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"})
+            _ = await task_log_dao.create(
+                obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"}
+            )
         else:
             _ = await task_dao.update(
                 db_obj=task,

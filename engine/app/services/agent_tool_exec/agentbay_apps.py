@@ -146,7 +146,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
                         if isinstance(data, (dict, list, str, int, float, bool))
                         else str(data)
                     )
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     data_str = str(data)
             else:
                 data_str = ""
@@ -177,8 +177,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
                 installed_note = f"\n\nInstalled apps were checked, but no confident match was found for `{cmd}`. Use agentbay_computer_get_installed_apps and then pass the returned start_cmd to this tool."
             else:
                 installed_note = (
-                    "\n\nCould not check installed apps: "
-                    + f"{_response_error(installed_result.get('error_message'))}"
+                    "\n\nCould not check installed apps: " + f"{_response_error(installed_result.get('error_message'))}"
                 )
         except Exception as e:
             logger.debug(f"[AgentBay] Installed app fallback failed: {e}")

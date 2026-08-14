@@ -1301,9 +1301,7 @@ async def _handle_feishu_file(
     # Resolve workspace upload dir
     # Download the file
     try:
-        file_bytes = await feishu_service.download_message_resource(
-            app_id, app_secret, message_id, file_key, res_type
-        )
+        file_bytes = await feishu_service.download_message_resource(app_id, app_secret, message_id, file_key, res_type)
         _, workspace_path, _save_path = await store_agent_upload(
             agent_id,
             filename,
@@ -1679,9 +1677,7 @@ async def _download_post_images(
     app_secret = config.app_secret or ""
     for ik in image_keys:
         try:
-            file_bytes = await feishu_service.download_message_resource(
-                app_id, app_secret, message_id, ik, "image"
-            )
+            file_bytes = await feishu_service.download_message_resource(app_id, app_secret, message_id, ik, "image")
             _, workspace_path, _ = await store_agent_upload(
                 agent_id,
                 f"image_{ik[-8:]}.jpg",
@@ -1785,9 +1781,7 @@ async def _call_llm_with_config(
             timeout=_timeout,
         )
     except TimeoutError:
-        logger.error(
-            f"[LLM] Call timed out after {_timeout}s (agent_id={agent_id}, model={model.model})"
-        )
+        logger.error(f"[LLM] Call timed out after {_timeout}s (agent_id={agent_id}, model={model.model})")
         if fallback_model:
             _fb_timeout = _get_llm_timeout(fallback_model)
             logger.info(

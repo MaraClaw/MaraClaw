@@ -453,7 +453,7 @@ async def import_mcp_from_smithery(
             clean_id = server_id.lstrip("@")
             for s in servers:
                 qualified = s.get("qualifiedName")
-                if qualified == clean_id or qualified == server_id:
+                if qualified in (clean_id, server_id):
                     server_info = s
                     break
             if not server_info and servers:
@@ -471,7 +471,7 @@ async def import_mcp_from_smithery(
     if not server_info.get("remote"):
         return (
             f"⚠️ **{display_name}** (`{qualified_name}`) does not support remote hosting via Smithery Connect.\n"
-            + f"This server requires local installation and cannot be imported automatically.\n"
+            + "This server requires local installation and cannot be imported automatically.\n"
             + f"🔗 {json_as_str_or(server_info.get('homepage'))}"
         )
 
@@ -523,9 +523,9 @@ async def import_mcp_from_smithery(
         auth_url = json_as_str(conn_result.get("auth_url"))
         if auth_url:
             auth_message = (
-                f"\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
+                "\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
                 + f"{auth_url}\n"
-                + f"The tool will be available after authorization is complete."
+                + "The tool will be available after authorization is complete."
             )
 
     # Step 3.6: Override registry-advertised schema with the runtime server's

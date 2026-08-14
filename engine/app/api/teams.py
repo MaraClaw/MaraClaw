@@ -351,7 +351,10 @@ async def get_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
 
 @router.get("/agents/{agent_id}/teams-channel/webhook-url")
 async def get_teams_webhook_url(
-    agent_id: uuid.UUID, request: Request, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    request: Request,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ):
     """Get the Microsoft Teams webhook URL for an agent."""
     _ = await check_agent_access(current_user, agent_id)
@@ -374,6 +377,7 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 # ─── Event Webhook ──────────────────────────────────────
+
 
 @router.post("/channel/teams/{agent_id}/webhook")
 async def teams_event_webhook(agent_id: uuid.UUID, request: Request):

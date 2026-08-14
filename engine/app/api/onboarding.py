@@ -114,7 +114,8 @@ async def _create_personal_assistant(
     boundaries = data.boundaries.strip()
     bio = (
         "A private assistant for daily coordination, notes, follow-ups, drafts, and light planning. "
-        + f"{personality_note}" + (f" Boundaries: {boundaries}" if boundaries else "")
+        + f"{personality_note}"
+        + (f" Boundaries: {boundaries}" if boundaries else "")
     )
 
     obj_in: dict[str, Any] = {

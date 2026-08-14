@@ -10,7 +10,7 @@ from typing import Protocol, TypeIs, cast
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from httpx import AsyncClient, Response, TimeoutException
+from httpx import Response, TimeoutException
 
 from app.services.agent_tool_exec.registry import ToolArguments
 
@@ -27,8 +27,14 @@ def _is_trafilatura_module(value: object) -> TypeIs[_TrafilaturaModule]:
     return callable(getattr(value, "extract", None))
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _search_providers_module():

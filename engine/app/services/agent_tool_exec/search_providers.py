@@ -3,13 +3,19 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
-from httpx import AsyncClient, Response
+from httpx import Response
 
 from app.core.json_types import JsonObject, json_as_str, json_object_from_response
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:

@@ -1,10 +1,10 @@
 """Pydantic schemas for request/response validation."""
 
-from typing import ClassVar
 import uuid
 from datetime import datetime
+from typing import ClassVar
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.json_types import JsonObject
 

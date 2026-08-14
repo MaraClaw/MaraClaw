@@ -66,7 +66,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         if target_agent.is_expired or (target_agent.expires_at and datetime.now(UTC) >= target_agent.expires_at):
             return (
                 f"⚠️ {target_agent.name} is currently unavailable - their service period has ended. "
-                + f"Please contact the platform administrator."
+                + "Please contact the platform administrator."
             )
 
         rels = await agent_agent_relationship_dao.list_for_agent(from_agent_id)
@@ -74,14 +74,14 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         if not rel:
             return (
                 f"❌ You do not have a relationship with {target_agent.name}. Only agents in your relationship list "
-                + f"can receive files. Ask your administrator to add a relationship if needed."
+                + "can receive files. Ask your administrator to add a relationship if needed."
             )
         status_info = await evaluate_agent_relationship_status(None, rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_agent.name} is not active "
                 + f"({status_info['access_status_reason'] or 'restricted'}). "
-                + f"Ask a manager of both agents to review Relationships."
+                + "Ask a manager of both agents to review Relationships."
             )
 
         target_name = target_agent.name

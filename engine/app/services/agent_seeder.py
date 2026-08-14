@@ -414,7 +414,9 @@ async def seed_okr_agent():
             }
         )
 
-    _ = await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
+    _ = await agent_permission_dao.create(
+        obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"}
+    )
 
     await agent_manager.initialize_agent_files(okr_agent)
     _ = await store_agent_bytes(
@@ -754,7 +756,9 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
             }
         )
 
-    _ = await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
+    _ = await agent_permission_dao.create(
+        obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"}
+    )
 
     settings = await okr_settings_dao.get_or_create(tenant_id)
     _ = await okr_settings_dao.update(db_obj=settings, obj_in={"okr_agent_id": okr_agent.id})

@@ -152,7 +152,9 @@ class SkillDAO(BaseDAO[SkillRecord]):
             for frow in file_rows:
                 rec = SkillFileRecord.from_row(frow)
                 files_by_skill.setdefault(rec.skill_id, []).append(rec)
-            return [SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows]
+            return [
+                SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows
+            ]
 
     async def list_default_ids(self) -> set[UUID]:
         async with self.session() as db:
@@ -188,7 +190,9 @@ class SkillDAO(BaseDAO[SkillRecord]):
             for frow in file_rows:
                 rec = SkillFileRecord.from_row(frow)
                 files_by_skill.setdefault(rec.skill_id, []).append(rec)
-            return [SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows]
+            return [
+                SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows
+            ]
 
     async def list_files(self, skill_id: UUID) -> Sequence[SkillFileRecord]:
         return await skill_file_dao.list_for_skill(skill_id)

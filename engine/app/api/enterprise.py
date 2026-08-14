@@ -400,9 +400,7 @@ async def get_enterprise_stats(tenant_id: str | None = None, current_user: UserR
 
         async with connection_ctx() as conn:
             total_agents = int_from_row(await conn.fetchval("SELECT COUNT(*) FROM agents"))
-            running_agents = int_from_row(
-                await conn.fetchval("SELECT COUNT(*) FROM agents WHERE status = 'running'")
-            )
+            running_agents = int_from_row(await conn.fetchval("SELECT COUNT(*) FROM agents WHERE status = 'running'"))
         total_users = await user_dao.count_active()
         pending_approvals = await approval_request_dao.count_pending()
 

@@ -61,7 +61,9 @@ async def get_agent_activity(
 
 
 @router.get("/agents/{agent_id}/chat-history/conversations")
-async def list_conversations(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
+async def list_conversations(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[dict[str, Any]]:
     """List all conversation partners for this agent (web users + other agents)."""
     _ = await check_agent_access(current_user, agent_id)
 

@@ -1,6 +1,5 @@
 """Organization structure sync service (provider-based only)."""
 
-
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.identity_provider_dao import identity_provider_dao

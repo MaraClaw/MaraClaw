@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from httpx import AsyncClient, Response
+from httpx import Response
 
 from app.core.json_types import JsonObject, json_as_str, json_object_from_response, json_value_from_response
 from app.core.logging import logger
@@ -15,8 +15,14 @@ from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:
@@ -164,19 +170,19 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
             quota_summary = await agent_tools._get_vercel_quota_summary(token)
             if status == "READY":
                 return (
-                    f"✅ **Deployment triggered successfully!**\n\n"
+                    "✅ **Deployment triggered successfully!**\n\n"
                     + f"- **URL**: https://{dep_url}\n"
-                    + f"- **Status**: READY (Active)\n"
+                    + "- **Status**: READY (Active)\n"
                     + f"- **Project Name**: {project_name}\n"
                     + f"- **Deployment ID**: {dep_id}\n"
-                    + f"- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
+                    + "- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
                     + f"{quota_summary}"
                 )
             return (
                 f"⚠️ **Deployment state**: {status}\n"
                 + f"- **URL**: https://{dep_url}\n"
                 + f"- **Deployment ID**: {dep_id}\n"
-                + f"- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
+                + "- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
                 + f"{quota_summary}"
             )
         except Exception as e:

@@ -169,7 +169,11 @@ async def fetch_clawhub_json(
             elif response.status_code == 429:
                 last_error = f"ClawHub rate limit exceeded at {base_url}"
             elif response.status_code == 200 and "json" in response.headers.get("content-type", ""):
-                payload = _parse_clawhub_payload(json_object_from(json_value_from_response(response)))
+                raw = json_value_from_response(response)
+                if not isinstance(raw, dict):
+                    last_error = f"ClawHub API returned invalid JSON payload from {base_url}"
+                    continue
+                payload = _parse_clawhub_payload(json_object_from(raw))
                 if payload is not None:
                     return payload, base_url
                 last_error = f"ClawHub API returned invalid JSON payload from {base_url}"
@@ -243,7 +247,11 @@ async def fetch_github_directory(
             raise HTTPException(502, f"GitHub API error: {response.status_code}")
         raw_items = json_value_from_response(response)
         items: list[object] = (
-            [raw_items] if isinstance(raw_items, dict) else list[object](raw_items) if isinstance(raw_items, list) else []
+            [raw_items]
+            if isinstance(raw_items, dict)
+            else list[object](raw_items)
+            if isinstance(raw_items, list)
+            else []
         )
         if not isinstance(raw_items, (dict, list)):
             raise HTTPException(502, "GitHub API returned invalid payload")

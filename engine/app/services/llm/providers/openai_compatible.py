@@ -153,11 +153,7 @@ class OpenAICompatibleClient(LLMClient):
                         }
                     )
                 elif isinstance(msg.content, list):
-                    narrowed_blocks: list[JsonObject] = []
-                    for part in msg.content:
-                        if isinstance(part, dict):
-                            narrowed_blocks.append(json_object_from(part))
-                    content_blocks = narrowed_blocks
+                    content_blocks = [json_object_from(part) for part in msg.content if isinstance(part, dict)]
                     _ = self._mark_last_text_block_cacheable(content_blocks)
 
                 if msg.dynamic_content:

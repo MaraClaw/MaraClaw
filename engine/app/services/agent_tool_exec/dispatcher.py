@@ -480,7 +480,7 @@ async def execute_tool(
                         user_id=user_id,
                         role="assistant",
                         content=(
-                            f"⚠️ [System notice] Digital employee tool call failed.\n"
+                            "⚠️ [System notice] Digital employee tool call failed.\n"
                             + f"Tool: `{tool_name}`\n"
                             + f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
                             + f"Error: {result}"

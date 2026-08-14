@@ -584,7 +584,11 @@ async def download_file(
 
 @router.put("/content")
 async def write_file(
-    agent_id: uuid.UUID, path: str, data: FileWrite, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    path: str,
+    data: FileWrite,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ) -> dict[str, Any]:
     """Write content to a file (create or overwrite)."""
     _ = await check_agent_access(current_user, agent_id)
@@ -625,7 +629,10 @@ async def write_file(
 
 @router.post("/locks")
 async def lock_file(
-    agent_id: uuid.UUID, data: FileLockBody, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    data: FileLockBody,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ):
     """Acquire or refresh a short-lived human editing lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
@@ -642,7 +649,9 @@ async def lock_file(
 
 
 @router.delete("/locks")
-async def unlock_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None):
+async def unlock_file(
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+):
     """Release the current user's edit lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
     await release_edit_lock(db, agent_id=agent_id, path=path, user_id=current_user.id)
@@ -679,7 +688,10 @@ async def get_file_revisions(
 
 @router.post("/restore")
 async def restore_file_revision(
-    agent_id: uuid.UUID, data: RestoreRevisionBody, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    data: RestoreRevisionBody,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ) -> dict[str, Any]:
     """Restore a file to a previous revision's after-content."""
     _ = await check_agent_access(current_user, agent_id)
@@ -759,8 +771,8 @@ async def import_skill_to_agent(
 
     try:
         skill_id = uuid.UUID(body.skill_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid skill id")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid skill id") from exc
     skill = await skill_dao.get(skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")

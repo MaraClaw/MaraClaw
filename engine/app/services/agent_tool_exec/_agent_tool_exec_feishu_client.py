@@ -3,15 +3,21 @@ from __future__ import annotations
 import re
 import uuid
 
-from httpx import AsyncClient, Response
+from httpx import Response
 
 from app.config import get_settings
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
 from app.dao.channel_config_dao import channel_config_dao
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:

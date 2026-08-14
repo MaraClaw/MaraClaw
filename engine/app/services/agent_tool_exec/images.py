@@ -110,7 +110,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
             size = json_as_int(result.get("size"))
             size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f}MB"
             return (
-                f"✅ Image uploaded successfully!\n\n"
+                "✅ Image uploaded successfully!\n\n"
                 + f"**CDN URL**: {cdn_url}\n"
                 + f"**File ID**: {file_id}\n"
                 + f"**Size**: {size_str}\n"
@@ -226,14 +226,14 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
         return (
             f"✅ Image generated and saved to: {save_path}\n"
             + f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
-            + f"Display this image to the user using this exact markdown:\n"
+            + "Display this image to the user using this exact markdown:\n"
             + f"![generated image]({api_image_path})"
         )
     except httpx.TimeoutException:
         logger.error(f"[GenerateImage] Timeout ({provider}): took longer than 120 seconds or network unreachable.")
         return (
             f"❌ Image generation failed ({provider}): API request timed out after 120 seconds. "
-            + f"This is usually caused by network issues or the model taking too long to generate."
+            + "This is usually caused by network issues or the model taking too long to generate."
         )
     except Exception as e:
         err_msg = str(e) or type(e).__name__

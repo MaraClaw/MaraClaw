@@ -49,7 +49,10 @@ async def list_collaborators(
 
 @router.post("/agents/{agent_id}/collaborate/delegate")
 async def delegate_task(
-    agent_id: uuid.UUID, data: DelegateRequest, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    data: DelegateRequest,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ):
     """Delegate a task from one agent to another."""
     _ = await check_agent_access(current_user, agent_id)
@@ -63,7 +66,10 @@ async def delegate_task(
 
 @router.post("/agents/{agent_id}/collaborate/message")
 async def send_inter_agent_message(
-    agent_id: uuid.UUID, data: InterAgentMessage, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    data: InterAgentMessage,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ):
     """Send a message between agents."""
     _ = await check_agent_access(current_user, agent_id)
@@ -206,7 +212,9 @@ async def handover_agent(
 
 
 @router.get("/agents/{agent_id}/metrics")
-async def get_agent_metrics(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
+async def get_agent_metrics(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, Any]:
     """Get observability metrics for an agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
 

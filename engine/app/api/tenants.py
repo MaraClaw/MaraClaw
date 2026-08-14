@@ -441,7 +441,9 @@ async def transfer_organization(
         except InvitationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if data.tenant_id and str(code_obj.tenant_id) != str(data.tenant_id):
-            raise HTTPException(status_code=403, detail="This invitation code does not belong to the required organization.")
+            raise HTTPException(
+                status_code=403, detail="This invitation code does not belong to the required organization."
+            )
         if code_obj.tenant_id is None:
             raise HTTPException(status_code=400, detail="Invitation code has no organization")
         target = await tenant_dao.get(code_obj.tenant_id)
@@ -910,9 +912,7 @@ async def repair_genesis_org_admin(
 
 
 @router.delete("/{tenant_id}")
-async def delete_tenant(
-    tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Permanently delete a company and ALL its data.
 
     Only the org_admin of the specified tenant (or a platform_admin) may call

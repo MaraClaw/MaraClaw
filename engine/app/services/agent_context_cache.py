@@ -35,7 +35,7 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
         return None
     try:
         data = json_loads_object(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return raw
     if data and "v" in data:
         if str(data.get("ver") or "0") != current_ver:

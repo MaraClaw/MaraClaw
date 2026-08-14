@@ -51,7 +51,9 @@ class ScheduleOut(BaseModel):
 
 
 @router.get("/", response_model=list[ScheduleOut])
-async def list_schedules(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> list[ScheduleOut]:
+async def list_schedules(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[ScheduleOut]:
     """List all schedules for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     schedules = await agent_schedule_dao.list_for_agent(agent_id)
@@ -111,8 +113,12 @@ async def update_schedule(
 
     updates = object_mapping_from(data.model_dump(exclude_unset=True))
     if "cron_expr" in updates or "is_enabled" in updates:
-        is_enabled = sched.is_enabled if "is_enabled" not in updates else json_as_bool(updates["is_enabled"], sched.is_enabled)
-        cron_expr = sched.cron_expr if "cron_expr" not in updates else json_as_str_or(updates["cron_expr"], sched.cron_expr)
+        is_enabled = (
+            sched.is_enabled if "is_enabled" not in updates else json_as_bool(updates["is_enabled"], sched.is_enabled)
+        )
+        cron_expr = (
+            sched.cron_expr if "cron_expr" not in updates else json_as_str_or(updates["cron_expr"], sched.cron_expr)
+        )
         updates["next_run_at"] = compute_next_run(cron_expr) if is_enabled else None
 
     updated = await agent_schedule_dao.update(db_obj=sched, obj_in=updates)

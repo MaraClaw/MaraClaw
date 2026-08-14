@@ -12,7 +12,7 @@ from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue, ToolOutputCallback, register
 from app.services.focus_service import ensure_focus_item
 
-from . import trigger_helpers as _TRIGGER_HELPERS
+from . import trigger_helpers
 
 MAX_TRIGGERS_PER_AGENT = 20
 VALID_TRIGGER_TYPES: Final = {"cron", "once", "interval", "poll", "on_message", "webhook"}
@@ -55,17 +55,15 @@ async def _handle_set_trigger(
         logger.warning(f"[Trigger] Failed to ensure Focus item for trigger {name}: {error}")
         focus_ref = focus_ref or name
 
-    validation_error = _TRIGGER_HELPERS._validate_trigger_config(ttype, config)
+    validation_error = trigger_helpers._validate_trigger_config(ttype, config)
     if validation_error:
         return validation_error
     if ttype == "on_message":
-        await _TRIGGER_HELPERS._snapshot_latest_message(agent_tools, agent_id, config)
+        await trigger_helpers._snapshot_latest_message(agent_tools, agent_id, config)
     elif ttype == "webhook":
         config["token"] = secrets.token_urlsafe(8)
 
-    await _TRIGGER_HELPERS._record_origin_metadata(
-        agent_tools, agent_id, config, session_id=session_id, user_id=user_id
-    )
+    await trigger_helpers._record_origin_metadata(agent_tools, agent_id, config, session_id=session_id, user_id=user_id)
 
     try:
         agent = await agent_dao.get(agent_id)
@@ -114,7 +112,7 @@ async def _handle_set_trigger(
             obj_in["expires_at"] = datetime.now(UTC) + timedelta(days=7)
         _ = await agent_trigger_dao.create(obj_in=obj_in)
 
-        await _TRIGGER_HELPERS._write_trigger_audit(
+        await trigger_helpers._write_trigger_audit(
             "trigger_created",
             {"name": name, "type": ttype, "reason": reason[:100]},
             agent_id=agent_id,
@@ -163,7 +161,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
             changes.append("reason updated")
         _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
 
-        await _TRIGGER_HELPERS._write_trigger_audit(
+        await trigger_helpers._write_trigger_audit(
             "trigger_updated",
             {"name": name, "changes": "; ".join(changes)},
             agent_id=agent_id,
@@ -187,7 +185,7 @@ async def _handle_cancel_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
 
         _ = await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
 
-        await _TRIGGER_HELPERS._write_trigger_audit("trigger_cancelled", {"name": name}, agent_id=agent_id)
+        await trigger_helpers._write_trigger_audit("trigger_cancelled", {"name": name}, agent_id=agent_id)
         return f"✅ Trigger '{name}' cancelled. It will no longer fire."
     except Exception as error:
         return f"❌ Failed to cancel trigger: {error}"

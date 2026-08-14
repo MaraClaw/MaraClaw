@@ -1,11 +1,11 @@
 """Application configuration."""
 
-from typing import ClassVar
 import os
 import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict

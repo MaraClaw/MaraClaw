@@ -46,9 +46,7 @@ class _EventHandler(Protocol):
 
 
 class _EventHandlerBuilder(Protocol):
-    def register_p2_customized_event(
-        self, name: str, handler: Callable[[object], None]
-    ) -> _EventHandlerBuilder: ...
+    def register_p2_customized_event(self, name: str, handler: Callable[[object], None]) -> _EventHandlerBuilder: ...
 
     def build(self) -> _EventHandler: ...
 
@@ -214,9 +212,7 @@ class FeishuWSManager:
             try:
                 logger.info(f"[Feishu WS] Received event: {data}")
                 if _feishu_event_body(data) is None:
-                    logger.warning(
-                        f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
-                    )
+                    logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
                     return
 
                 loop = asyncio.get_running_loop()
@@ -252,9 +248,7 @@ class FeishuWSManager:
         try:
             body_dict = _feishu_event_body(data)
             if body_dict is None:
-                logger.warning(
-                    f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
-                )
+                logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
                 return
 
             event_type = json_as_str_or(_json_object(body_dict.get("header")).get("event_type"), "unknown")

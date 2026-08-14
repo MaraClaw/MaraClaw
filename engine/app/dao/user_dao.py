@@ -181,7 +181,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def get_with_identity(self, user_id: UUID) -> UserRecord | None:
         try:
             uid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             uid = None
         observed_user_ver = "0"
         if uid is not None:
@@ -342,7 +342,9 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return [UserRecord.from_row(row) for row in rows]
 
-    async def list_org_admins_for_tenant(self, tenant_id: UUID, *, include_identity: bool = True) -> Sequence[UserRecord]:
+    async def list_org_admins_for_tenant(
+        self, tenant_id: UUID, *, include_identity: bool = True
+    ) -> Sequence[UserRecord]:
         async with self.session() as db:
             if include_identity:
                 rows = await db.fetchall(
@@ -501,9 +503,7 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return [
                 name
-                for name in (
-                    str_from_row(row.get("display_name")) or str_from_row(row.get("username")) for row in rows
-                )
+                for name in (str_from_row(row.get("display_name")) or str_from_row(row.get("username")) for row in rows)
                 if name
             ]
 

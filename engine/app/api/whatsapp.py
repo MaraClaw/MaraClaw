@@ -319,7 +319,9 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     try:
                         fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                         if fresh:
-                            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
+                            _ = await chat_session_dao.update(
+                                db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)}
+                            )
                     except ValueError, TypeError:
                         pass
                 except Exception as exc:

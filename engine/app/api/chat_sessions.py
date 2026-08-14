@@ -248,7 +248,10 @@ async def create_session(
 
 @router.patch("/{agent_id}/sessions/{session_id}")
 async def rename_session(
-    agent_id: uuid.UUID, session_id: uuid.UUID, body: PatchSessionIn, current_user: UserRecord = Depends(get_current_user)
+    agent_id: uuid.UUID,
+    session_id: uuid.UUID,
+    body: PatchSessionIn,
+    current_user: UserRecord = Depends(get_current_user),
 ):
     """Rename a session. Owner, agent creator, or admin may rename others' sessions."""
     agent, _ = await check_agent_access(current_user, agent_id)
@@ -264,7 +267,9 @@ async def rename_session(
 
 
 @router.delete("/{agent_id}/sessions/{session_id}", status_code=204)
-async def delete_session(agent_id: uuid.UUID, session_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def delete_session(
+    agent_id: uuid.UUID, session_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+):
     """Delete a chat session and its messages. Owner, agent creator, or admin may delete others' sessions."""
     agent, _ = await check_agent_access(current_user, agent_id)
     session = await chat_session_dao.get_for_agent(session_id, agent_id)

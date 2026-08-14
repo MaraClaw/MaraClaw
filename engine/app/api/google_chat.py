@@ -243,7 +243,7 @@ async def _process_message_event(
             logger.exception("[GoogleChat] Failed async delivery for agent %s", agent_id)
 
 
-@router.post("/channel/google-chat/{agent_id}/webhook")
+@router.post("/channel/google-chat/{agent_id}/webhook", response_model=None)
 async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | dict[str, Any]:
     """HTTP endpoint for a Google Chat app (interaction events).
 

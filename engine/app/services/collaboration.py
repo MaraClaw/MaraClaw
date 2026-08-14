@@ -40,7 +40,12 @@ class CollaborationService:
     """
 
     async def delegate_task(
-        self, db: object | None, from_agent_id: uuid.UUID, to_agent_id: uuid.UUID, task_title: str, task_description: str
+        self,
+        db: object | None,
+        from_agent_id: uuid.UUID,
+        to_agent_id: uuid.UUID,
+        task_title: str,
+        task_description: str,
     ) -> DelegatedTaskResult:
         """Agent A delegates a task to Agent B."""
         from_agent = await agent_dao.get(from_agent_id)
@@ -104,7 +109,12 @@ class CollaborationService:
         ]
 
     async def send_message_between_agents(
-        self, db: object | None, from_agent_id: uuid.UUID, to_agent_id: uuid.UUID, message: str, msg_type: str = "notify"
+        self,
+        db: object | None,
+        from_agent_id: uuid.UUID,
+        to_agent_id: uuid.UUID,
+        message: str,
+        msg_type: str = "notify",
     ) -> MessageDeliveryResult:
         """Send an inter-agent message.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from httpx import AsyncClient, Response
+from httpx import Response
 
 from app.core.json_types import JsonObject, json_as_str, json_object_from_response
 from app.core.logging import logger
@@ -10,8 +10,14 @@ from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_client(*, timeout: float = 5.0, follow_redirects: bool = False) -> AsyncClient:
-    return AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+def _httpx_module():
+    import httpx
+
+    return httpx
+
+
+def _httpx_client(*args: object, **kwargs: object):
+    return _httpx_module().AsyncClient(*args, **kwargs)
 
 
 def _response_mapping(response: Response) -> JsonObject:
@@ -225,8 +231,8 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
                     elif len(orgs) > 1:
                         org_list_str = "\n".join([f"- {o.get('name')} (ID: `{o.get('id')}`)" for o in orgs])
                         return (
-                            f"⚠️ **Multiple Neon organizations/spaces detected**.\n"
-                            + f"Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
+                            "⚠️ **Multiple Neon organizations/spaces detected**.\n"
+                            + "Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
                             + f"{org_list_str}"
                         )
             except Exception as e:
@@ -251,10 +257,10 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
             if not connection_uri:
                 connection_uri = f"postgresql://alex:password@ep-cool-breeze-12345.us-east-1.neon.tech/{database_name}?sslmode=require"
             return (
-                f"✅ **Neon database created successfully!**\n\n"
+                "✅ **Neon database created successfully!**\n\n"
                 + f"- **Project ID**: {proj_id}\n"
                 + f"- **Region**: {region}\n"
                 + f"- **DATABASE_URL**: {connection_uri}\n\n"
-                + f"Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
+                + "Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
             )
         return f"❌ Failed to create Neon project: {res.text}"

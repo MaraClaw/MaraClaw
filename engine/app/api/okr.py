@@ -1053,7 +1053,8 @@ async def upsert_member_daily_report(
         source=body.source,
     )
     member_map = {
-        (member.member_type, str(member.member_id)): member for member in await list_tracked_okr_members(_require_tenant_id(user))
+        (member.member_type, str(member.member_id)): member
+        for member in await list_tracked_okr_members(_require_tenant_id(user))
     }
     member_meta = member_map.get((report.member_type, str(report.member_id)))
     return MemberDailyReportOut(
@@ -1155,7 +1156,9 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> d
     company_okr_exists = await okr_objective_dao.company_exists_for_period(
         _require_tenant_id(user), period_start=ps, period_end=pe
     )
-    covered_ids = await okr_objective_dao.list_owner_ids_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
+    covered_ids = await okr_objective_dao.list_owner_ids_for_period(
+        _require_tenant_id(user), period_start=ps, period_end=pe
+    )
 
     okr_agent_id_val: uuid.UUID | None = settings.okr_agent_id
     okr_agent_id_str: str | None = str(okr_agent_id_val) if okr_agent_id_val else None
@@ -1384,7 +1387,9 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
             "OKR Agent not found. Please ensure OKR is enabled and the agent has been seeded.",
         )
 
-    covered_ids = await okr_objective_dao.list_owner_ids_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
+    covered_ids = await okr_objective_dao.list_owner_ids_for_period(
+        _require_tenant_id(user), period_start=ps, period_end=pe
+    )
     company_okrs = await okr_objective_dao.list_for_period(
         _require_tenant_id(user), period_start=ps, period_end=pe, owner_types=["company"]
     )

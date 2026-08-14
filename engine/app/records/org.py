@@ -45,7 +45,7 @@ class OrgMemberRecord:
             name_translit_full=str_from_row(row["name_translit_full"]) or None,
             name_translit_initial=str_from_row(row["name_translit_initial"]) or None,
             email=str_from_row(row["email"]) or None,
-            avatar_url=str_from_row(row["avatar_url"]) or None,
+            avatar_url=str_from_row(row.get("avatar_url")) or None,
             title=str_from_row(row.get("title")),
             department_id=uuid_from_row_opt(row.get("department_id")),
             department_path=str_from_row(row.get("department_path")),
