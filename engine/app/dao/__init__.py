@@ -39,6 +39,7 @@ from app.dao.system_setting_dao import system_setting_dao
 from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.tenant_dao import tenant_dao
+from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.dao.user_dao import user_dao
@@ -90,6 +91,7 @@ __all__ = [
     "task_dao",
     "task_log_dao",
     "tenant_dao",
+    "tenant_email_domain_dao",
     "tool_dao",
     "trigger_execution_dao",
     "user_dao",

@@ -156,6 +156,8 @@ CREATE TABLE IF NOT EXISTS tenants (
 	max_webhook_rate_ceiling INTEGER NOT NULL DEFAULT 5, 
 	a2a_async_enabled BOOLEAN NOT NULL DEFAULT true, 
 	default_model_id UUID, 
+	is_system BOOLEAN NOT NULL DEFAULT false, 
+	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
@@ -163,6 +165,30 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_sso_domain ON tenants (sso_domain);
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
+	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;
+
+CREATE TABLE IF NOT EXISTS tenant_email_domains (
+	id UUID NOT NULL,
+	tenant_id UUID NOT NULL,
+	domain VARCHAR(255) NOT NULL,
+	is_default BOOLEAN NOT NULL DEFAULT false,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_domain ON tenant_email_domains (domain);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_default
+	ON tenant_email_domains (tenant_id) WHERE is_default IS TRUE;
+
+CREATE INDEX IF NOT EXISTS ix_tenant_email_domains_tenant_id ON tenant_email_domains (tenant_id);
 
 DO $$ BEGIN
 	ALTER TABLE llm_models ADD CONSTRAINT llm_models_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants (id);
@@ -384,6 +410,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
 	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin';
+
+-- One tenant membership per identity. Dirty DBs with duplicates skip the index.
+DO $$
+BEGIN
+	CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
+		ON users (identity_id) WHERE tenant_id IS NOT NULL;
+EXCEPTION
+	WHEN unique_violation THEN
+		RAISE NOTICE 'Skipping ux_users_identity_single_tenant; duplicate tenant memberships exist';
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 

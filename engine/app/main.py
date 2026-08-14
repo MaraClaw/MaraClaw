@@ -250,15 +250,14 @@ async def lifespan(app: FastAPI):
         logger.info("[startup] seeding...")
 
         try:
-            from app.dao.tenant_dao import tenant_dao
+            from app.services.system_org_seeder import SystemOrgSeedError, ensure_system_orgs
 
-            _existing = await tenant_dao.get_by_slug("default")
-            if not _existing:
-                await tenant_dao.create(obj_in={"name": "Default", "slug": "default", "im_provider": "web_only"})
-                logger.info("[startup] Default company created")
-
+            await ensure_system_orgs()
+        except SystemOrgSeedError:
+            logger.error("[startup] System organization seed failed: no default end-user org")
+            raise
         except Exception as e:
-            logger.warning(f"[startup] Default company seed or A2A enable failed: {e}")
+            logger.warning(f"[startup] System organization seed failed: {e}")
 
         # Genesis platform admin credentials must exist in the database, or
         # PLATFORM_ADMIN_* env vars seed them. Fail closed otherwise.
