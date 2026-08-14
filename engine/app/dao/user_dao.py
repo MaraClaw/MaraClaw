@@ -183,6 +183,28 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return [row["id"] for row in rows]
 
+    async def deactivate_for_tenant(self, tenant_id: Any) -> int:
+        """Deactivate org members. Does not flip ``identities.is_active``."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE users SET is_active = FALSE, updated_at = now() "
+                "WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
+                "AND role <> %(platform_admin)s RETURNING id",
+                {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
+            )
+            return len(rows)
+
+    async def reactivate_for_tenant(self, tenant_id: Any) -> int:
+        """Restore members deactivated with the tenant. Does not touch platform admins."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE users SET is_active = TRUE, updated_at = now() "
+                "WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
+                "AND role <> %(platform_admin)s RETURNING id",
+                {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
+            )
+            return len(rows)
+
     async def list_active_for_tenant(
         self,
         tenant_id: Any,

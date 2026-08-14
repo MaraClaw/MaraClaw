@@ -187,6 +187,7 @@ addopts = [
     "--cov=app.services.admin_provisioning",
     "--cov=app.services.admin_audit",
     "--cov=app.services.tenant_provisioning",
+    "--cov=app.services.tenant_lifecycle",
     "--cov=app.services.platform_admin_seeder",
     "--cov=app.dao.admin_audit_dao",
     "--cov=app.core.security",

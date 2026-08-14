@@ -13,7 +13,7 @@ from typing import TypedDict
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 
 from app.core.json_types import JsonObject
 from app.core.security import get_current_user, require_role
@@ -30,7 +30,9 @@ from app.services.admin_provisioning import (
     assert_join_may_rewrite_membership,
     is_genesis_platform_admin,
 )
+from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
 from app.services.storage import ensure_local_path, get_storage_backend, normalize_storage_key
+from app.services.tenant_lifecycle import set_tenant_active, tenant_can_be_disabled
 from app.services.tenant_provisioning import (
     AdminEmailTakenError,
     GenesisOrgAdminExistsError,
@@ -83,6 +85,11 @@ class TenantOut(BaseModel):
     is_default_end_user_org: bool = False
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def can_disable(self) -> bool:
+        return tenant_can_be_disabled(self)
 
 
 class EmailDomainOut(BaseModel):
@@ -208,6 +215,8 @@ async def create_tenant(
         )
     except AdminEmailTakenError as exc:
         raise HTTPException(status_code=409, detail="Admin email is already registered") from exc
+    except DomainClaimedError as exc:
+        raise HTTPException(status_code=409, detail="Email domain is already claimed") from exc
 
     await write_admin_audit(
         actor=current_user,
@@ -711,23 +720,35 @@ async def update_tenant(
         update_data.pop("sso_enabled", None)
         update_data.pop("sso_domain", None)
 
-    if update_data.get("is_active") is False:
-        from app.services.org_membership import DefaultOrgUnavailableError, assert_may_deactivate_tenant
-
+    audit_changes = {}
+    if "is_active" in update_data:
+        identity_is_platform_admin = bool(
+            getattr(current_user, "is_platform_admin", False)
+            or getattr(getattr(current_user, "identity", None), "is_platform_admin", False)
+        )
+        if current_user.role != "platform_admin" and not identity_is_platform_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Only a platform admin can disable or enable a company",
+            )
+        new_active = bool(update_data.pop("is_active"))
         try:
-            assert_may_deactivate_tenant(tenant, making_active=False)
+            await set_tenant_active(tenant, is_active=new_active)
         except DefaultOrgUnavailableError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_changes["is_active"] = field_change(tenant.is_active, new_active)
+        tenant = await tenant_dao.get(tenant_id) or tenant
 
-    updated = await tenant_dao.update(db_obj=tenant, obj_in=update_data)
-    if update_data:
+    updated = await tenant_dao.update(db_obj=tenant, obj_in=update_data) if update_data else tenant
+    audit_changes.update({key: field_change(getattr(tenant, key, None), value) for key, value in update_data.items()})
+    if audit_changes:
         await write_admin_audit(
             actor=current_user,
             action="tenant_update",
             target_type="tenant",
             target_id=tenant_id,
             tenant_id=tenant_id,
-            changes={key: field_change(getattr(tenant, key, None), value) for key, value in update_data.items()},
+            changes=audit_changes,
             ip_address=client_ip,
         )
     return TenantOut.model_validate(updated)

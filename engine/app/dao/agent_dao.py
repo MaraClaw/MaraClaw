@@ -549,8 +549,18 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def pause_running_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE agents SET status = 'paused', updated_at = NOW() "
+                "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
                 "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
+                {"tenant_id": tenant_id},
+            )
+            return len(rows)
+
+    async def disable_for_tenant(self, tenant_id: UUID) -> int:
+        """Stop every agent in the tenant (``paused`` is not a valid agent_status)."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
+                "WHERE tenant_id = %(tenant_id)s AND status <> 'stopped' RETURNING id",
                 {"tenant_id": tenant_id},
             )
             return len(rows)

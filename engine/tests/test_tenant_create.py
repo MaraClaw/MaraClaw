@@ -154,11 +154,13 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     monkeypatch.setattr("app.services.tenant_provisioning.participant_dao.create_for_user", AsyncMock())
 
     bind = AsyncMock()
+    claim = AsyncMock()
     from unittest.mock import patch
 
     with (
         patch("app.services.tenant_provisioning.connection_ctx") as ctx,
         patch("app.services.registration_service.registration_service.bind_org_member", bind),
+        patch("app.services.tenant_provisioning._claim_genesis_admin_email_domain", claim),
     ):
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -181,6 +183,49 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     assert user_kwargs["is_genesis"] is True
     bind.assert_awaited_once()
     assert bind.await_args.args[0].identity is identity
+    claim.assert_awaited_once_with(tenant_id, "orgadmin@acme.com")
+
+
+@pytest.mark.asyncio
+async def test_claim_genesis_admin_email_domain_defaults_host(monkeypatch):
+    from app.services.tenant_provisioning import _claim_genesis_admin_email_domain
+
+    add = AsyncMock()
+    monkeypatch.setattr("app.services.org_membership.add_email_domain", add)
+    tenant_id = uuid.uuid4()
+    await _claim_genesis_admin_email_domain(tenant_id, "techadmin@marathon.vn")
+    add.assert_awaited_once_with(tenant_id, "marathon.vn", is_default=True)
+
+
+@pytest.mark.asyncio
+async def test_claim_genesis_admin_email_domain_skips_invalid(monkeypatch):
+    from app.services.tenant_provisioning import _claim_genesis_admin_email_domain
+
+    add = AsyncMock()
+    monkeypatch.setattr("app.services.org_membership.add_email_domain", add)
+    await _claim_genesis_admin_email_domain(uuid.uuid4(), "not-an-email")
+    add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_tenant_rejects_claimed_admin_domain(monkeypatch):
+    from app.services.org_membership import DomainClaimedError
+
+    monkeypatch.setattr(
+        "app.api.tenants.create_tenant_with_org_admin",
+        AsyncMock(side_effect=DomainClaimedError("Email domain is already claimed")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await tenants_api.create_tenant(
+            tenants_api.TenantCreate(
+                name="Acme",
+                admin_email="techadmin@marathon.vn",
+                admin_password="temp-password",
+            ),
+            current_user=_platform_user(),
+        )
+    assert exc.value.status_code == 409
+    assert "domain" in str(exc.value.detail).lower()
 
 
 @pytest.mark.asyncio

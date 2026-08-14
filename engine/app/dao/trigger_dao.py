@@ -110,6 +110,17 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return int(value or 0)
 
+    async def disable_for_tenant(self, tenant_id: Any) -> int:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agent_triggers SET is_enabled = FALSE "
+                "WHERE is_enabled IS TRUE AND agent_id IN ("
+                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                ") RETURNING id",
+                {"tenant_id": tenant_id},
+            )
+            return len(rows)
+
 
 class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     """DAO for durable trigger execution queue rows."""
