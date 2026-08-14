@@ -1,9 +1,9 @@
 """DAO for gateway_messages (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
+from typing import ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -29,7 +29,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
 
     table: ClassVar[str] = "gateway_messages"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(GatewayMessageRecord.from_row)
+    record_factory = staticmethod(GatewayMessageRecord.from_row)
 
     async def list_pending(self, agent_id: UUID) -> Sequence[GatewayMessageRecord]:
         async with self.session() as db:

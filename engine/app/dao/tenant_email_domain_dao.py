@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import ClassVar
+from uuid import UUID
 
 from app.dao.base import BaseDAO
 from app.records.tenant_email_domain import TenantEmailDomainRecord
@@ -24,7 +23,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
 
     table: ClassVar[str] = "tenant_email_domains"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(TenantEmailDomainRecord.from_row)
+    record_factory = staticmethod(TenantEmailDomainRecord.from_row)
 
     async def get_by_domain(self, domain: str) -> TenantEmailDomainRecord | None:
         async with self.session() as db:

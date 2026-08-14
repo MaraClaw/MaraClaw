@@ -1,9 +1,9 @@
 """DAO for published_pages (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
+from typing import ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -25,7 +25,7 @@ _COLUMNS = (
 class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
     table: ClassVar[str] = "published_pages"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(PublishedPageRecord.from_row)
+    record_factory = staticmethod(PublishedPageRecord.from_row)
 
     async def get_by_short_id(self, short_id: str) -> PublishedPageRecord | None:
         async with self.session() as db:

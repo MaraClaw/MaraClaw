@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row
 
 
 @dataclass(slots=True)
@@ -18,6 +19,6 @@ class SystemSettingRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> SystemSettingRecord:
+    def from_row(cls, row: Mapping[str, object]) -> SystemSettingRecord:
         value = mapping_from_row(row.get("value") or {})
-        return cls(key=row["key"], value=value, updated_at=row.get("updated_at"))
+        return cls(key=str_from_row(row["key"]), value=value, updated_at=datetime_from_row(row.get("updated_at")))

@@ -1,8 +1,8 @@
 """DAO for user_tenant_onboardings (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 from app.dao.base import BaseDAO
@@ -25,7 +25,7 @@ _COLUMNS = (
 class UserTenantOnboardingDAO(BaseDAO[UserTenantOnboardingRecord]):
     table: ClassVar[str] = "user_tenant_onboardings"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(UserTenantOnboardingRecord.from_row)
+    record_factory = staticmethod(UserTenantOnboardingRecord.from_row)
 
     async def get_for_user_tenant(self, user_id: UUID, tenant_id: UUID) -> UserTenantOnboardingRecord | None:
         async with self.session() as db:

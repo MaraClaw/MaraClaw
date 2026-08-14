@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from app.core.json_types import mapping_from_row, str_list_from_row
+from app.core.json_types import (
+    datetime_from_row,
+    int_from_row,
+    mapping_from_row,
+    str_from_row,
+    str_list_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -24,15 +33,15 @@ class EnterpriseInfoRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> EnterpriseInfoRecord:
+    def from_row(cls, row: Mapping[str, object]) -> EnterpriseInfoRecord:
         content = mapping_from_row(row.get("content") or {})
         return cls(
-            id=row["id"],
-            info_type=row["info_type"],
+            id=uuid_from_row(row["id"]),
+            info_type=str_from_row(row["info_type"]),
             content=content,
-            version=int(row.get("version") or 1),
+            version=int_from_row(row.get("version"), 1),
             visible_roles=str_list_from_row(row.get("visible_roles") or []),
-            updated_by=row.get("updated_by"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            updated_by=uuid_from_row_opt(row.get("updated_by")),
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )

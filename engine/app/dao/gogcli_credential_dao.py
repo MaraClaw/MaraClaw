@@ -28,7 +28,7 @@ _COLUMNS = (
 class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
     table: ClassVar[str] = "gogcli_credential_states"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(GogcliCredentialStateRecord.from_row)
+    record_factory = staticmethod(GogcliCredentialStateRecord.from_row)
 
     async def get_by_agent(self, agent_id: UUID) -> GogcliCredentialStateRecord | None:
         async with self.session() as db:

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import uuid_list_from_rows
 from app.dao.base import BaseDAO
 from app.records.org_department import OrgDepartmentRecord
 
@@ -29,7 +30,7 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
 
     table: ClassVar[str] = "org_departments"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(OrgDepartmentRecord.from_row)
+    record_factory = staticmethod(OrgDepartmentRecord.from_row)
 
     async def get_by_external(self, *, external_id: str, provider_id: UUID) -> OrgDepartmentRecord | None:
         async with self.session() as db:
@@ -118,7 +119,7 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
                 "SELECT id FROM org_departments WHERE id = %(id)s OR path LIKE %(prefix)s",
                 {"id": department_id, "prefix": f"{dept.path}/%"},
             )
-            return [row["id"] for row in rows] or [department_id]
+            return uuid_list_from_rows(rows) or [department_id]
 
 
 org_department_dao = OrgDepartmentDAO()

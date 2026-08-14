@@ -24,7 +24,7 @@ _COLUMNS = (
 class EnterpriseInfoDAO(BaseDAO[EnterpriseInfoRecord]):
     table: ClassVar[str] = "enterprise_info"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(EnterpriseInfoRecord.from_row)
+    record_factory = staticmethod(EnterpriseInfoRecord.from_row)
 
     async def get_by_type(self, info_type: str) -> EnterpriseInfoRecord | None:
         async with self.session() as db:

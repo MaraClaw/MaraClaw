@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from collections.abc import Sequence
 from typing import Any, ClassVar
+from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.identity import IdentityProviderRecord
 
@@ -28,7 +28,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
 
     table: ClassVar[str] = "identity_providers"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(IdentityProviderRecord.from_row)
+    record_factory = staticmethod(IdentityProviderRecord.from_row)
 
     async def get_by_type_and_tenant(
         self,
@@ -194,7 +194,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
                 + "WHERE tenant_id = %(tenant_id)s AND sso_login_enabled IS TRUE AND is_active IS TRUE",
                 {"tenant_id": tenant_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def delete_nullifying_org_refs(self, provider_id: UUID) -> None:
         """Nullify org member/department FKs then delete the provider."""

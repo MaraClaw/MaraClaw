@@ -1,12 +1,13 @@
 """DAO for workspace_file_revisions and workspace_edit_locks (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.workspace import WorkspaceEditLockRecord, WorkspaceFileRevisionRecord
 
@@ -42,7 +43,7 @@ _LOCK_COLUMNS = (
 class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
     table: ClassVar[str] = "workspace_file_revisions"
     columns: ClassVar[tuple[str, ...]] = _REVISION_COLUMNS
-    record_factory: Any = staticmethod(WorkspaceFileRevisionRecord.from_row)
+    record_factory = staticmethod(WorkspaceFileRevisionRecord.from_row)
 
     async def get_for_agent(self, revision_id: UUID, agent_id: UUID) -> WorkspaceFileRevisionRecord | None:
         async with self.session() as db:
@@ -100,7 +101,7 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
 class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
     table: ClassVar[str] = "workspace_edit_locks"
     columns: ClassVar[tuple[str, ...]] = _LOCK_COLUMNS
-    record_factory: Any = staticmethod(WorkspaceEditLockRecord.from_row)
+    record_factory = staticmethod(WorkspaceEditLockRecord.from_row)
 
     async def get_for_path(self, agent_id: UUID, path: str) -> WorkspaceEditLockRecord | None:
         async with self.session() as db:
@@ -129,7 +130,7 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
                 + ") SELECT COUNT(*) FROM deleted",
                 {"now": now},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def delete_for_user_path(
         self,
@@ -157,7 +158,7 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         """Acquire or refresh a lock for (agent_id, path)."""
         async with self.session() as db:
             row = await db.fetchone(
-                f"INSERT INTO workspace_edit_locks "
+                "INSERT INTO workspace_edit_locks "
                 + "(agent_id, path, user_id, session_id, expires_at, heartbeat_count) "
                 + "VALUES (%(agent_id)s, %(path)s, %(user_id)s, %(session_id)s, %(expires_at)s, 1) "
                 + "ON CONFLICT (agent_id, path) DO UPDATE SET "

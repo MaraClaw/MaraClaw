@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO
@@ -58,7 +59,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
 
     table: ClassVar[str] = "tenants"
     columns: ClassVar[tuple[str, ...]] = _TENANT_COLUMNS
-    record_factory: Any = staticmethod(TenantRecord.from_row)
+    record_factory = staticmethod(TenantRecord.from_row)
 
     async def get(self, id: UUID) -> TenantRecord | None:
         cached = memo_get("tenant", id)
@@ -197,18 +198,18 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 "SELECT COUNT(*) FROM tenants WHERE created_at < %(before)s",
                 {"before": before},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
-    async def counts_by_created_day(self, start: object, end: object) -> dict[Any, int]:
+    async def counts_by_created_day(self, start: object, end: object) -> dict[str, int]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM tenants "
                 + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            counts: dict[Any, int] = {}
+            counts: dict[str, int] = {}
             for row in rows:
-                counts[str(row["d"])] = int(row["c"] or 0)
+                counts[str(row["d"])] = int_from_row(row["c"])
             return counts
 
     async def clear_sso_domain_except(self, keep_tenant_id: UUID) -> None:
@@ -221,7 +222,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 {"keep_tenant_id": keep_tenant_id},
             )
         for row in rows:
-            tenant_id = row["id"]
+            tenant_id = uuid_from_row(row["id"])
             memo_drop("tenant", tenant_id)
             await bump_tenant_cache(tenant_id)
 
@@ -237,8 +238,8 @@ class TenantDAO(BaseDAO[TenantRecord]):
     async def delete_cascade(self, tenant_id: UUID) -> None:
         """Delete a tenant and all dependent rows in FK-safe order."""
         params = {"tid": tenant_id}
-        user_ids: list[Any] = []
-        agent_ids: list[Any] = []
+        user_ids: list[UUID] = []
+        agent_ids: list[UUID] = []
         statements = [
             "DELETE FROM approval_requests WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             "DELETE FROM notifications WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
@@ -297,8 +298,8 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 "SELECT id FROM agents WHERE tenant_id = %(tid)s",
                 params,
             )
-            user_ids = [row["id"] for row in user_rows]
-            agent_ids = [row["id"] for row in agent_rows]
+            user_ids = [uuid_from_row(row["id"]) for row in user_rows]
+            agent_ids = [uuid_from_row(row["id"]) for row in agent_rows]
             for sql in statements:
                 await db.execute(sql, params)
         from app.core.access_cache import drop_agent_acl_version

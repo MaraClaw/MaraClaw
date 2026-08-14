@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -32,24 +34,24 @@ class OrgMemberRecord:
     synced_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> OrgMemberRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OrgMemberRecord:
         return cls(
-            id=row["id"],
-            name=row["name"],
-            open_id=row.get("open_id"),
-            unionid=row.get("unionid"),
-            external_id=row.get("external_id"),
-            provider_id=row.get("provider_id"),
-            name_translit_full=row.get("name_translit_full"),
-            name_translit_initial=row.get("name_translit_initial"),
-            email=row.get("email"),
-            avatar_url=row.get("avatar_url"),
-            title=row.get("title") or "",
-            department_id=row.get("department_id"),
-            department_path=row.get("department_path") or "",
-            phone=row.get("phone"),
-            status=row.get("status") or "active",
-            tenant_id=row.get("tenant_id"),
-            user_id=row.get("user_id"),
-            synced_at=row.get("synced_at"),
+            id=uuid_from_row(row["id"]),
+            name=str_from_row(row["name"]),
+            open_id=str_from_row(row["open_id"]) or None,
+            unionid=str_from_row(row["unionid"]) or None,
+            external_id=str_from_row(row["external_id"]) or None,
+            provider_id=uuid_from_row_opt(row.get("provider_id")),
+            name_translit_full=str_from_row(row["name_translit_full"]) or None,
+            name_translit_initial=str_from_row(row["name_translit_initial"]) or None,
+            email=str_from_row(row["email"]) or None,
+            avatar_url=str_from_row(row["avatar_url"]) or None,
+            title=str_from_row(row.get("title")),
+            department_id=uuid_from_row_opt(row.get("department_id")),
+            department_path=str_from_row(row.get("department_path")),
+            phone=str_from_row(row["phone"]) or None,
+            status=str_from_row(row.get("status"), "active") or "active",
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            user_id=uuid_from_row_opt(row.get("user_id")),
+            synced_at=datetime_from_row(row.get("synced_at")),
         )

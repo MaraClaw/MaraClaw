@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import (
+    datetime_from_row,
+    mapping_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 class AuthProviderType(StrEnum):
@@ -40,19 +47,19 @@ class IdentityRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> IdentityRecord:
+    def from_row(cls, row: Mapping[str, object]) -> IdentityRecord:
         return cls(
-            id=row["id"],
-            email=row.get("email"),
-            phone=row.get("phone"),
-            username=row.get("username"),
-            password_hash=row.get("password_hash"),
+            id=uuid_from_row(row["id"]),
+            email=str_from_row(row["email"]) or None,
+            phone=str_from_row(row["phone"]) or None,
+            username=str_from_row(row["username"]) or None,
+            password_hash=str_from_row(row["password_hash"]) or None,
             is_active=bool(row.get("is_active", True)),
             is_platform_admin=bool(row.get("is_platform_admin", False)),
             email_verified=bool(row.get("email_verified", False)),
             must_change_password=bool(row.get("must_change_password", False)),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )
 
 
@@ -71,16 +78,16 @@ class IdentityProviderRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> IdentityProviderRecord:
+    def from_row(cls, row: Mapping[str, object]) -> IdentityProviderRecord:
         config = mapping_from_row(row.get("config") or {})
         return cls(
-            id=row["id"],
-            provider_type=str(row["provider_type"]),
-            name=row["name"],
+            id=uuid_from_row(row["id"]),
+            provider_type=str_from_row(row["provider_type"]),
+            name=str_from_row(row["name"]),
             is_active=bool(row.get("is_active", True)),
             sso_login_enabled=bool(row.get("sso_login_enabled", False)),
             config=config,
-            tenant_id=row.get("tenant_id"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )

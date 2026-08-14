@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row, str_from_row
 from app.dao.base import BaseDAO
 from app.records.task import TaskLogRecord, TaskRecord
 
@@ -35,7 +36,7 @@ _LOG_COLUMNS = ("id", "task_id", "content", "created_at")
 class TaskDAO(BaseDAO[TaskRecord]):
     table: ClassVar[str] = "tasks"
     columns: ClassVar[tuple[str, ...]] = _TASK_COLUMNS
-    record_factory: Any = staticmethod(TaskRecord.from_row)
+    record_factory = staticmethod(TaskRecord.from_row)
 
     async def list_for_agent(
         self,
@@ -81,7 +82,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 f"SELECT COUNT(*) FROM tasks WHERE agent_id = %(agent_id)s{status_sql}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_active_supervision(self) -> Sequence[tuple[TaskRecord, str]]:
         """Return (task, agent_name) for active supervision tasks with a remind schedule."""
@@ -96,7 +97,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
             return [
                 (
                     TaskRecord.from_row({k: v for k, v in row.items() if k != "agent_name"}),
-                    row.get("agent_name") or "",
+                    str_from_row(row.get("agent_name")),
                 )
                 for row in rows
             ]
@@ -129,7 +130,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
 class TaskLogDAO(BaseDAO[TaskLogRecord]):
     table: ClassVar[str] = "task_logs"
     columns: ClassVar[tuple[str, ...]] = _LOG_COLUMNS
-    record_factory: Any = staticmethod(TaskLogRecord.from_row)
+    record_factory = staticmethod(TaskLogRecord.from_row)
 
     async def list_for_task(self, task_id: UUID) -> Sequence[TaskLogRecord]:
         async with self.session() as db:

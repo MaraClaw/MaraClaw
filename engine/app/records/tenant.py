@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+
+from app.core.json_types import (
+    datetime_from_row,
+    int_from_row,
+    mapping_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -38,33 +48,31 @@ class TenantRecord:
     is_default_end_user_org: bool = False
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> TenantRecord:
-        im_config = row.get("im_config")
-        if im_config is not None and not isinstance(im_config, dict):
-            im_config = dict(im_config)
+    def from_row(cls, row: Mapping[str, object]) -> TenantRecord:
+        im_config = mapping_from_row(row.get("im_config")) or None
         return cls(
-            id=row["id"],
-            name=row["name"],
-            slug=row["slug"],
-            im_provider=row.get("im_provider") or "web_only",
+            id=uuid_from_row(row["id"]),
+            name=str_from_row(row["name"]),
+            slug=str_from_row(row["slug"]),
+            im_provider=str_from_row(row.get("im_provider"), "web_only") or "web_only",
             im_config=im_config,
             is_active=bool(row.get("is_active", True)),
-            created_at=row.get("created_at"),
-            default_message_limit=int(row.get("default_message_limit") or 50),
-            default_message_period=row.get("default_message_period") or "permanent",
-            default_max_agents=int(row.get("default_max_agents") or 2),
-            default_agent_ttl_hours=int(row.get("default_agent_ttl_hours") or 0),
-            default_max_llm_calls_per_day=int(row.get("default_max_llm_calls_per_day") or 1000),
-            min_heartbeat_interval_minutes=int(row.get("min_heartbeat_interval_minutes") or 240),
-            timezone=row.get("timezone") or "UTC",
-            country_region=row.get("country_region") or "001",
+            created_at=datetime_from_row(row.get("created_at")),
+            default_message_limit=int_from_row(row.get("default_message_limit"), 50),
+            default_message_period=str_from_row(row.get("default_message_period"), "permanent") or "permanent",
+            default_max_agents=int_from_row(row.get("default_max_agents"), 2),
+            default_agent_ttl_hours=int_from_row(row.get("default_agent_ttl_hours")),
+            default_max_llm_calls_per_day=int_from_row(row.get("default_max_llm_calls_per_day"), 1000),
+            min_heartbeat_interval_minutes=int_from_row(row.get("min_heartbeat_interval_minutes"), 240),
+            timezone=str_from_row(row.get("timezone"), "UTC") or "UTC",
+            country_region=str_from_row(row.get("country_region"), "001") or "001",
             sso_enabled=bool(row.get("sso_enabled", False)),
-            sso_domain=row.get("sso_domain"),
-            default_max_triggers=int(row.get("default_max_triggers") or 20),
-            min_poll_interval_floor=int(row.get("min_poll_interval_floor") or 5),
-            max_webhook_rate_ceiling=int(row.get("max_webhook_rate_ceiling") or 5),
+            sso_domain=str_from_row(row["sso_domain"]) or None,
+            default_max_triggers=int_from_row(row.get("default_max_triggers"), 20),
+            min_poll_interval_floor=int_from_row(row.get("min_poll_interval_floor"), 5),
+            max_webhook_rate_ceiling=int_from_row(row.get("max_webhook_rate_ceiling"), 5),
             a2a_async_enabled=bool(row.get("a2a_async_enabled", True)),
-            default_model_id=row.get("default_model_id"),
+            default_model_id=uuid_from_row_opt(row.get("default_model_id")),
             is_system=bool(row.get("is_system", False)),
             is_default_end_user_org=bool(row.get("is_default_end_user_org", False)),
         )

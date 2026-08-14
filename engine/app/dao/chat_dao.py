@@ -7,6 +7,14 @@ from datetime import date, datetime
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
+from app.core.json_types import (
+    date_from_row,
+    datetime_from_row,
+    int_from_row,
+    str_from_row,
+    str_from_row_opt,
+    uuid_from_row_opt,
+)
 from app.dao.base import BaseDAO
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 
@@ -45,7 +53,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
 
     table: ClassVar[str] = "chat_sessions"
     columns: ClassVar[tuple[str, ...]] = _SESSION_COLUMNS
-    record_factory: Any = staticmethod(ChatSessionRecord.from_row)
+    record_factory = staticmethod(ChatSessionRecord.from_row)
 
     async def get_for_agent(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
         async with self.session() as db:
@@ -83,11 +91,13 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         if not patterns:
             return None
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT user_id FROM chat_sessions "
-                + "WHERE agent_id = %(agent_id)s AND external_conv_id = ANY(%(patterns)s) "
-                + "AND user_id IS NOT NULL LIMIT 1",
-                {"agent_id": agent_id, "patterns": list(patterns)},
+            return uuid_from_row_opt(
+                await db.fetchval(
+                    "SELECT user_id FROM chat_sessions "
+                    + "WHERE agent_id = %(agent_id)s AND external_conv_id = ANY(%(patterns)s) "
+                    + "AND user_id IS NOT NULL LIMIT 1",
+                    {"agent_id": agent_id, "patterns": list(patterns)},
+                )
             )
 
     async def get_agent_peer_session(
@@ -264,7 +274,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "GROUP BY conversation_id",
                 params,
             )
-            return {str(row["conversation_id"]): int(row["cnt"] or 0) for row in rows}
+            return {str(row["conversation_id"]): int_from_row(row.get("cnt")) for row in rows}
 
     async def unread_counts_for_user(
         self,
@@ -299,7 +309,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 """,
                 {"session_ids": list(session_ids), "user_id": user_id},
             )
-            return {str(row["session_id"]): int(row["cnt"] or 0) for row in rows}
+            return {str(row["session_id"]): int_from_row(row.get("cnt")) for row in rows}
 
     async def counts_by_created_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
@@ -308,7 +318,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
     async def dau_by_created_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
@@ -317,7 +327,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
     async def count_created_before(self, before: datetime) -> int:
         async with self.session() as db:
@@ -325,7 +335,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 "SELECT COUNT(*) FROM chat_sessions WHERE created_at < %(before)s",
                 {"before": before},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def count_created_since(self, since: datetime) -> int:
         async with self.session() as db:
@@ -333,7 +343,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 "SELECT COUNT(*) FROM chat_sessions WHERE created_at >= %(since)s",
                 {"since": since},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def channel_distribution_since(self, since: datetime) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
@@ -343,7 +353,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "GROUP BY source_channel ORDER BY COUNT(*) DESC",
                 {"since": since},
             )
-            return [{"channel": row["source_channel"], "count": int(row["count"] or 0)} for row in rows]
+            return [{"channel": row["source_channel"], "count": int_from_row(row.get("count"))} for row in rows]
 
     async def wau_mau_by_day(
         self,
@@ -384,8 +394,8 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                     "series_end": series_end,
                 },
             )
-            wau = {row["d"]: int(row["wau"] or 0) for row in rows}
-            mau = {row["d"]: int(row["mau"] or 0) for row in rows}
+            wau = {row["d"]: int_from_row(row.get("wau")) for row in rows}
+            mau = {row["d"]: int_from_row(row.get("mau")) for row in rows}
             return wau, mau
 
     async def retention_7d(self) -> tuple[int, int]:
@@ -419,7 +429,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             if not row:
                 return 0, 0
-            return int(row["last_week_total"] or 0), int(row["retained"] or 0)
+            return int_from_row(row.get("last_week_total")), int_from_row(row.get("retained"))
 
     async def churn_warnings(self) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
@@ -455,7 +465,9 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 {
                     "name": row["name"],
                     "total_tokens": row["total_tokens"],
-                    "last_active": row["last_active"].isoformat() if row["last_active"] else None,
+                    "last_active": (
+                        last_active.isoformat() if (last_active := datetime_from_row(row.get("last_active"))) else None
+                    ),
                     "days_inactive": row["days_inactive"],
                 }
                 for row in rows
@@ -467,7 +479,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
 
     table: ClassVar[str] = "chat_messages"
     columns: ClassVar[tuple[str, ...]] = _MESSAGE_COLUMNS
-    record_factory: Any = staticmethod(ChatMessageRecord.from_row)
+    record_factory = staticmethod(ChatMessageRecord.from_row)
 
     async def insert_message(
         self,
@@ -614,7 +626,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         *,
         conversation_prefix: str | None = None,
         group_by_user: bool = False,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Aggregate conversation stats for activity history listing."""
         params: dict[str, Any] = {"agent_id": agent_id}
         if group_by_user:
@@ -636,7 +648,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                 + f"GROUP BY {group_expr}",
                 params,
             )
-            return [dict(row) for row in rows]
+            return [{str(key): value for key, value in dict(row).items()} for row in rows]
 
     async def latest_contents(
         self,
@@ -681,9 +693,11 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                 """,
                 params,
             )
-        return {str(row["grp"]): (row.get("content") or "") for row in rows}
+        return {str(row["grp"]): str_from_row(row.get("content")) for row in rows}
 
-    async def message_stats_for_conversations(self, conversation_ids: Sequence[str]) -> dict[str, tuple[int, Any]]:
+    async def message_stats_for_conversations(
+        self, conversation_ids: Sequence[str]
+    ) -> dict[str, tuple[int, datetime | None]]:
         if not conversation_ids:
             return {}
         async with self.session() as db:
@@ -693,7 +707,10 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                 + "GROUP BY conversation_id",
                 {"ids": list(conversation_ids)},
             )
-        return {str(row["conversation_id"]): (int(row["cnt"] or 0), row.get("last_at")) for row in rows}
+        return {
+            str(row["conversation_id"]): (int_from_row(row.get("cnt")), datetime_from_row(row.get("last_at")))
+            for row in rows
+        }
 
     async def latest_content(
         self,
@@ -723,10 +740,11 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         order = "ASC" if ascending else "DESC"
         where = " AND ".join(clauses)
         async with self.session() as db:
-            return await db.fetchval(
+            value = await db.fetchval(
                 f"SELECT content FROM chat_messages WHERE {where} ORDER BY created_at {order} LIMIT 1",
                 params,
             )
+            return str_from_row_opt(value)
 
     async def message_stats_for_conversation(self, conversation_id: str) -> tuple[int, Any]:
         async with self.session() as db:
@@ -737,7 +755,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             if not row:
                 return 0, None
-            return int(row["cnt"] or 0), row.get("last_at")
+            return int_from_row(row.get("cnt")), row.get("last_at")
 
     async def delete_for_conversation(self, conversation_id: str) -> None:
         async with self.session() as db:

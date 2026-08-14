@@ -7,6 +7,14 @@ from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import (
+    int_from_row,
+    str_from_row,
+    str_from_row_opt,
+    uuid_from_row,
+    uuid_from_row_opt,
+    uuid_list_from_rows,
+)
 from app.core.session_cache import (
     bump_user_session,
     bump_user_sessions,
@@ -55,7 +63,7 @@ _IDENTITY_COLUMNS = (
 )
 
 
-def _user_record_from_row(row: dict[str, Any]) -> UserRecord:
+def _user_record_from_row(row: Mapping[str, object]) -> UserRecord:
     return UserRecord.from_row(row)
 
 
@@ -86,7 +94,7 @@ class UserDAO(BaseDAO[UserRecord]):
 
     table: ClassVar[str] = "users"
     columns: ClassVar[tuple[str, ...]] = _USER_COLUMNS
-    record_factory: Any = staticmethod(_user_record_from_row)
+    record_factory = staticmethod(_user_record_from_row)
 
     def _identity_select(self) -> str:
         return ", ".join(f"i.{col} AS i_{col}" for col in _IDENTITY_COLUMNS)
@@ -224,7 +232,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT id FROM users WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE",
                 {"tenant_id": tenant_id},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def deactivate_for_tenant(self, tenant_id: UUID) -> int:
         """Deactivate org members. Does not flip ``identities.is_active``."""
@@ -282,9 +290,11 @@ class UserDAO(BaseDAO[UserRecord]):
 
     async def display_name_for_id(self, user_id: UUID) -> str | None:
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT display_name FROM users WHERE id = %(id)s",
-                {"id": user_id},
+            return str_from_row_opt(
+                await db.fetchval(
+                    "SELECT display_name FROM users WHERE id = %(id)s",
+                    {"id": user_id},
+                )
             )
 
     async def first_by_role(self, role: str) -> UserRecord | None:
@@ -312,7 +322,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT COUNT(*) FROM users WHERE role = %(role)s",
                 {"role": role},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_by_role(self, role: str, *, include_identity: bool = True) -> Sequence[UserRecord]:
         async with self.session() as db:
@@ -361,7 +371,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def deactivate_unless_last_active(
         self, user_id: UUID, *, role: str, tenant_id: UUID | None = None
@@ -374,8 +384,8 @@ class UserDAO(BaseDAO[UserRecord]):
             params["tenant_id"] = tenant_id
         async with self.session() as db:
             row = await db.fetchone(
-                f"UPDATE users SET is_active = FALSE, updated_at = now() "
-                + f"WHERE id = %(user_id)s AND is_active IS TRUE AND ("
+                "UPDATE users SET is_active = FALSE, updated_at = now() "
+                + "WHERE id = %(user_id)s AND is_active IS TRUE AND ("
                 + f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
                 + f") > 1 RETURNING {self._select_list()}",
                 params,
@@ -419,7 +429,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT id, display_name FROM users WHERE id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
-            return {row["id"]: (row.get("display_name") or "") for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row(row.get("display_name")) for row in rows}
 
     async def list_id_name_avatar_for_tenant(self, tenant_id: UUID) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
@@ -457,7 +467,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT COUNT(*) FROM users WHERE tenant_id = %(tenant_id)s AND role = ANY(%(roles)s)",
                 {"tenant_id": tenant_id, "roles": ["org_admin", "platform_admin"]},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def find_by_username_or_display_name(
         self, name: str, *, tenant_id: UUID | None = None, include_identity: bool = True
@@ -488,7 +498,13 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "ORDER BY u.display_name NULLS LAST LIMIT %(limit)s",
                 {"tenant_id": tenant_id, "limit": limit},
             )
-            return [n for n in (row.get("display_name") or row.get("username") or "" for row in rows) if n]
+            return [
+                name
+                for name in (
+                    str_from_row(row.get("display_name")) or str_from_row(row.get("username")) for row in rows
+                )
+                if name
+            ]
 
     async def usernames_for_ids(self, user_ids: Sequence[UUID]) -> dict[UUID, str | None]:
         """Map user id -> identity username for batch enrichment."""
@@ -501,7 +517,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
-            return {row["id"]: row.get("username") for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row_opt(row.get("username")) for row in rows}
 
     async def list_active_admin_ids_for_tenant(self, tenant_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
@@ -510,7 +526,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "AND role IN ('platform_admin', 'org_admin')",
                 {"tenant_id": tenant_id},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def list_active_admins_for_tenant(self, tenant_id: UUID) -> Sequence[UserRecord]:
         """Active platform/org admins with identity loaded."""
@@ -534,7 +550,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
-            return {row["id"]: _user_from_joined_row(row) for row in rows}
+            return {uuid_from_row(row["id"]): _user_from_joined_row(row) for row in rows}
 
     async def count_active(self, *, tenant_id: UUID | None = None) -> int:
         params: dict[str, Any] = {}
@@ -547,7 +563,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 f"SELECT COUNT(*) FROM users WHERE is_active IS TRUE{tenant_sql}",
                 params or None,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def count_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
@@ -555,15 +571,17 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT COUNT(*) FROM users WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def first_org_admin_email(self, tenant_id: UUID) -> str | None:
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT i.email FROM users u JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
-                + "ORDER BY u.created_at ASC NULLS LAST LIMIT 1",
-                {"tenant_id": tenant_id},
+            return str_from_row_opt(
+                await db.fetchval(
+                    "SELECT i.email FROM users u JOIN identities i ON i.id = u.identity_id "
+                    + "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
+                    + "ORDER BY u.created_at ASC NULLS LAST LIMIT 1",
+                    {"tenant_id": tenant_id},
+                )
             )
 
     async def count_created_before(self, before: datetime) -> int:
@@ -572,7 +590,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT COUNT(*) FROM users WHERE created_at < %(before)s",
                 {"before": before},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def counts_by_created_day(self, start: datetime, end: datetime) -> dict[str, int]:
         async with self.session() as db:
@@ -583,17 +601,18 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             counts: dict[str, int] = {}
             for row in rows:
-                counts[str(row["d"])] = int(row["c"] or 0)
+                counts[str(row["d"])] = int_from_row(row.get("c"))
             return counts
 
-    async def fallback_tenant_for_identity(self, identity_id: UUID, *, exclude_tenant_id: UUID) -> Any | None:
+    async def fallback_tenant_for_identity(self, identity_id: UUID, *, exclude_tenant_id: UUID) -> UUID | None:
         async with self.session() as db:
-            return await db.fetchval(
+            value: object = await db.fetchval(
                 "SELECT tenant_id FROM users "
                 + "WHERE identity_id = %(identity_id)s AND tenant_id IS DISTINCT FROM %(exclude)s "
                 + "LIMIT 1",
                 {"identity_id": identity_id, "exclude": exclude_tenant_id},
             )
+        return uuid_from_row_opt(value)
 
 
 user_dao = UserDAO()

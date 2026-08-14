@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from app.core.json_types import is_str_dict
 from app.dao.base import BaseDAO
@@ -17,7 +17,7 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
     table: ClassVar[str] = "system_settings"
     pk: ClassVar[str] = "key"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(SystemSettingRecord.from_row)
+    record_factory = staticmethod(SystemSettingRecord.from_row)
 
     async def get_by_key(self, key: str) -> SystemSettingRecord | None:
         async with self.session() as db:
@@ -27,7 +27,7 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
             )
             return SystemSettingRecord.from_row(row) if row else None
 
-    async def get_value(self, key: str, default: Any = None) -> Any:
+    async def get_value(self, key: str, default: object = None) -> object:
         setting = await self.get_by_key(key)
         if setting is None:
             return default

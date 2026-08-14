@@ -1,10 +1,10 @@
 """DAO for agent_schedules (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -28,7 +28,7 @@ _COLUMNS = (
 class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
     table: ClassVar[str] = "agent_schedules"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AgentScheduleRecord.from_row)
+    record_factory = staticmethod(AgentScheduleRecord.from_row)
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[AgentScheduleRecord]:
         async with self.session() as db:

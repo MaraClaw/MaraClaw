@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.skill import SkillFileRecord, SkillRecord
 
@@ -25,7 +26,7 @@ _SKILL_COLUMNS = (
 _SKILL_FILE_COLUMNS = ("id", "skill_id", "path", "content")
 
 
-def _skill_from_row(row: dict[str, Any]) -> SkillRecord:
+def _skill_from_row(row: Mapping[str, object]) -> SkillRecord:
     return SkillRecord.from_row(row)
 
 
@@ -34,7 +35,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
 
     table: ClassVar[str] = "skills"
     columns: ClassVar[tuple[str, ...]] = _SKILL_COLUMNS
-    record_factory: Any = staticmethod(_skill_from_row)
+    record_factory = staticmethod(_skill_from_row)
 
     async def get_by_folder_name(
         self,
@@ -90,7 +91,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             )
             if not row:
                 return None
-            files = list(await skill_file_dao.list_for_skill(row["id"])) if with_files else []
+            files = list(await skill_file_dao.list_for_skill(uuid_from_row(row["id"]))) if with_files else []
             return SkillRecord.from_row(row, files=files)
 
     async def get_by_folder_for_tenant_scope(
@@ -113,7 +114,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             )
             if not row:
                 return None
-            files = list(await skill_file_dao.list_for_skill(row["id"])) if with_files else []
+            files = list(await skill_file_dao.list_for_skill(uuid_from_row(row["id"]))) if with_files else []
             return SkillRecord.from_row(row, files=files)
 
     async def replace_files(self, skill_id: UUID, files: Sequence[tuple[str, str]]) -> None:
@@ -150,12 +151,12 @@ class SkillDAO(BaseDAO[SkillRecord]):
             for frow in file_rows:
                 rec = SkillFileRecord.from_row(frow)
                 files_by_skill.setdefault(rec.skill_id, []).append(rec)
-            return [SkillRecord.from_row(row, files=files_by_skill.get(row["id"], [])) for row in skill_rows]
+            return [SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows]
 
     async def list_default_ids(self) -> set[UUID]:
         async with self.session() as db:
             rows = await db.fetchall("SELECT id FROM skills WHERE is_default IS TRUE")
-            return {row["id"] for row in rows}
+            return {uuid_from_row(row["id"]) for row in rows}
 
     async def list_ids_by_folder_names(self, folder_names: Sequence[str]) -> set[UUID]:
         if not folder_names:
@@ -165,7 +166,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 "SELECT id FROM skills WHERE folder_name = ANY(%(names)s)",
                 {"names": list(folder_names)},
             )
-            return {row["id"] for row in rows}
+            return {uuid_from_row(row["id"]) for row in rows}
 
     async def list_with_files_by_ids(self, skill_ids: Sequence[UUID]) -> Sequence[SkillRecord]:
         if not skill_ids:
@@ -186,7 +187,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             for frow in file_rows:
                 rec = SkillFileRecord.from_row(frow)
                 files_by_skill.setdefault(rec.skill_id, []).append(rec)
-            return [SkillRecord.from_row(row, files=files_by_skill.get(row["id"], [])) for row in skill_rows]
+            return [SkillRecord.from_row(row, files=files_by_skill.get(uuid_from_row(row["id"]), [])) for row in skill_rows]
 
     async def list_files(self, skill_id: UUID) -> Sequence[SkillFileRecord]:
         return await skill_file_dao.list_for_skill(skill_id)
@@ -258,7 +259,7 @@ class SkillFileDAO(BaseDAO[SkillFileRecord]):
 
     table: ClassVar[str] = "skill_files"
     columns: ClassVar[tuple[str, ...]] = _SKILL_FILE_COLUMNS
-    record_factory: Any = staticmethod(SkillFileRecord.from_row)
+    record_factory = staticmethod(SkillFileRecord.from_row)
 
     async def list_for_skill(self, skill_id: UUID) -> Sequence[SkillFileRecord]:
         async with self.session() as db:

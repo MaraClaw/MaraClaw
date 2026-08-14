@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from collections.abc import Sequence
 from typing import Any, ClassVar
+from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.invitation import InvitationCodeRecord
 
@@ -27,7 +27,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
 
     table: ClassVar[str] = "invitation_codes"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(InvitationCodeRecord.from_row)
+    record_factory = staticmethod(InvitationCodeRecord.from_row)
 
     async def get_active_by_code(self, code: str) -> InvitationCodeRecord | None:
         async with self.session() as db:
@@ -58,7 +58,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
                 f"SELECT COUNT(*) FROM invitation_codes WHERE tenant_id = %(tenant_id)s{search_sql}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_for_tenant(
         self,

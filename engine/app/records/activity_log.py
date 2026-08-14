@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -23,14 +24,14 @@ class AgentActivityLogRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> AgentActivityLogRecord:
+    def from_row(cls, row: Mapping[str, object]) -> AgentActivityLogRecord:
         detail = mapping_from_row(row.get("detail_json") or {})
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            action_type=row["action_type"],
-            summary=row.get("summary") or "",
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            action_type=str_from_row(row["action_type"]),
+            summary=str_from_row(row.get("summary")),
             detail_json=detail,
-            related_id=row.get("related_id"),
-            created_at=row.get("created_at"),
+            related_id=uuid_from_row_opt(row.get("related_id")),
+            created_at=datetime_from_row(row.get("created_at")),
         )

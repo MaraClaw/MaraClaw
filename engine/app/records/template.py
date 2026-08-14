@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from app.core.json_types import mapping_from_row, str_list_from_row
+from app.core.json_types import (
+    datetime_from_row,
+    mapping_from_row,
+    str_from_row,
+    str_list_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -30,24 +38,24 @@ class AgentTemplateRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> AgentTemplateRecord:
+    def from_row(cls, row: Mapping[str, object]) -> AgentTemplateRecord:
         default_skills = str_list_from_row(row.get("default_skills") or [])
         default_mcp_servers = str_list_from_row(row.get("default_mcp_servers") or [])
         default_autonomy_policy = mapping_from_row(row.get("default_autonomy_policy") or {})
         capability_bullets = str_list_from_row(row.get("capability_bullets") or [])
         return cls(
-            id=row["id"],
-            name=row["name"],
-            description=row.get("description") or "",
-            icon=row.get("icon") or "🤖",
-            category=row.get("category") or "general",
-            soul_template=row.get("soul_template") or "",
+            id=uuid_from_row(row["id"]),
+            name=str_from_row(row["name"]),
+            description=str_from_row(row.get("description")),
+            icon=str_from_row(row.get("icon"), "🤖") or "🤖",
+            category=str_from_row(row.get("category"), "general") or "general",
+            soul_template=str_from_row(row.get("soul_template")),
             default_skills=default_skills,
             default_mcp_servers=default_mcp_servers,
             default_autonomy_policy=default_autonomy_policy,
             capability_bullets=capability_bullets,
-            bootstrap_content=row.get("bootstrap_content"),
+            bootstrap_content=str_from_row(row["bootstrap_content"]) or None,
             is_builtin=bool(row.get("is_builtin", False)),
-            created_by=row.get("created_by"),
-            created_at=row.get("created_at"),
+            created_by=uuid_from_row_opt(row.get("created_by")),
+            created_at=datetime_from_row(row.get("created_at")),
         )

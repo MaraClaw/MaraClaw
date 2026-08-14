@@ -28,7 +28,7 @@ _COLUMNS = (
 class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
     table: ClassVar[str] = "admin_audit_logs"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AdminAuditLogRecord.from_row)
+    record_factory = staticmethod(AdminAuditLogRecord.from_row)
 
     async def list_recent(
         self,

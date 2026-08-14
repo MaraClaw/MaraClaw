@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -28,22 +30,22 @@ class ChatSessionRecord:
     last_message_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> ChatSessionRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ChatSessionRecord:
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            user_id=row["user_id"],
-            title=row.get("title") or "New Session",
-            source_channel=row.get("source_channel") or "web",
-            external_conv_id=row.get("external_conv_id"),
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            user_id=uuid_from_row(row["user_id"]),
+            title=str_from_row(row.get("title"), "New Session") or "New Session",
+            source_channel=str_from_row(row.get("source_channel"), "web") or "web",
+            external_conv_id=str_from_row(row["external_conv_id"]) or None,
             is_group=bool(row.get("is_group", False)),
-            group_name=row.get("group_name"),
-            participant_id=row.get("participant_id"),
-            peer_agent_id=row.get("peer_agent_id"),
+            group_name=str_from_row(row["group_name"]) or None,
+            participant_id=uuid_from_row_opt(row.get("participant_id")),
+            peer_agent_id=uuid_from_row_opt(row.get("peer_agent_id")),
             is_primary=bool(row.get("is_primary", False)),
-            last_read_at_by_user=row.get("last_read_at_by_user"),
-            created_at=row.get("created_at"),
-            last_message_at=row.get("last_message_at"),
+            last_read_at_by_user=datetime_from_row(row.get("last_read_at_by_user")),
+            created_at=datetime_from_row(row.get("created_at")),
+            last_message_at=datetime_from_row(row.get("last_message_at")),
         )
 
 
@@ -62,15 +64,15 @@ class ChatMessageRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> ChatMessageRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ChatMessageRecord:
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            user_id=row["user_id"],
-            role=row["role"],
-            content=row.get("content") or "",
-            conversation_id=row.get("conversation_id") or "web",
-            participant_id=row.get("participant_id"),
-            thinking=row.get("thinking"),
-            created_at=row.get("created_at"),
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            user_id=uuid_from_row(row["user_id"]),
+            role=str_from_row(row["role"]),
+            content=str_from_row(row.get("content")),
+            conversation_id=str_from_row(row.get("conversation_id"), "web") or "web",
+            participant_id=uuid_from_row_opt(row.get("participant_id")),
+            thinking=str_from_row(row["thinking"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
         )

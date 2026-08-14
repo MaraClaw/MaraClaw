@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import date_from_row, int_from_row
 from app.dao.base import BaseDAO
 from app.records.activity_log import AgentActivityLogRecord
 
@@ -24,7 +25,7 @@ _COLUMNS = (
 class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
     table: ClassVar[str] = "agent_activity_logs"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AgentActivityLogRecord.from_row)
+    record_factory = staticmethod(AgentActivityLogRecord.from_row)
 
     async def list_for_agent(
         self,
@@ -58,7 +59,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
                 + "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
     async def cache_read_by_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
@@ -67,7 +68,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
                 + "FROM daily_token_usage WHERE date >= %(start)s AND date <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
-            return {row["d"]: int(row["c"] or 0) for row in rows}
+            return {date_from_row(row["d"]): int_from_row(row.get("c")) for row in rows}
 
     async def sum_tokens_since(self, since: datetime | date) -> int:
         async with self.session() as db:
@@ -75,7 +76,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
                 "SELECT COALESCE(SUM(tokens_used), 0) FROM daily_token_usage WHERE date >= %(since)s",
                 {"since": since},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def upsert_daily_token_usage(
         self,

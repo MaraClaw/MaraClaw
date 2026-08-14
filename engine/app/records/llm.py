@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
+
+from app.core.json_types import (
+    datetime_from_row,
+    float_from_row,
+    int_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -29,21 +38,25 @@ class LLMModelRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> LLMModelRecord:
+    def from_row(cls, row: Mapping[str, object]) -> LLMModelRecord:
         return cls(
-            id=row["id"],
-            provider=row["provider"],
-            model=row["model"],
-            api_key_encrypted=row.get("api_key_encrypted") or "",
-            label=row.get("label") or "",
-            tenant_id=row.get("tenant_id"),
-            base_url=row.get("base_url"),
-            max_tokens_per_day=row.get("max_tokens_per_day"),
+            id=uuid_from_row(row["id"]),
+            provider=str_from_row(row["provider"]),
+            model=str_from_row(row["model"]),
+            api_key_encrypted=str_from_row(row.get("api_key_encrypted")),
+            label=str_from_row(row.get("label")),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            base_url=str_from_row(row["base_url"]) or None,
+            max_tokens_per_day=int_from_row(row["max_tokens_per_day"])
+            if row.get("max_tokens_per_day") is not None
+            else None,
             enabled=bool(row.get("enabled", True)),
             supports_vision=bool(row.get("supports_vision", False)),
-            temperature=row.get("temperature"),
-            request_timeout=row.get("request_timeout"),
-            max_output_tokens=row.get("max_output_tokens"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
+            temperature=float_from_row(row["temperature"]) if row.get("temperature") is not None else None,
+            request_timeout=int_from_row(row["request_timeout"]) if row.get("request_timeout") is not None else None,
+            max_output_tokens=int_from_row(row["max_output_tokens"])
+            if row.get("max_output_tokens") is not None
+            else None,
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
         )

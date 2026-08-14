@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, ClassVar
+from collections.abc import Mapping, Sequence
+from typing import ClassVar
 from uuid import UUID
 
+from app.core.json_types import str_from_row, uuid_from_row, uuid_from_row_opt
 from app.dao.base import BaseDAO
 from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.org import OrgMemberRecord
@@ -26,7 +27,7 @@ _COLUMNS = (
 class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
     table: ClassVar[str] = "agent_relationships"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AgentRelationshipRecord.from_row)
+    record_factory = staticmethod(AgentRelationshipRecord.from_row)
 
     async def list_related_user_ids(
         self,
@@ -48,7 +49,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "AND m.user_id = ANY(%(user_ids)s)",
                 {"agent_id": agent_id, "tenant_id": tenant_id, "user_ids": list(user_ids)},
             )
-            return {row["user_id"] for row in rows if row.get("user_id")}
+            return {uuid_from_row(row["user_id"]) for row in rows if row.get("user_id")}
 
     async def get_for_agent_and_member(self, agent_id: UUID, member_id: UUID) -> AgentRelationshipRecord | None:
         async with self.session() as db:
@@ -76,7 +77,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 "SELECT member_id FROM agent_relationships WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            return {row["member_id"] for row in rows if row.get("member_id")}
+            return {uuid_from_row(row["member_id"]) for row in rows if row.get("member_id")}
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[AgentRelationshipRecord]:
         async with self.session() as db:
@@ -185,36 +186,36 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
             return AgentRelationshipRecord.from_row(row) if row else None
 
 
-def _relationship_with_member(row: dict[str, Any], *, include_provider: bool = False) -> AgentRelationshipRecord:
+def _relationship_with_member(row: Mapping[str, object], *, include_provider: bool = False) -> AgentRelationshipRecord:
     member: OrgMemberRecord | None = None
     if row.get("m_id") is not None:
         member = OrgMemberRecord(
-            id=row["m_id"],
-            name=row["m_name"],
-            open_id=row.get("m_open_id"),
-            unionid=row.get("m_unionid"),
-            external_id=row.get("m_external_id"),
-            provider_id=row.get("m_provider_id"),
-            email=row.get("m_email"),
-            phone=row.get("m_phone"),
-            status=row.get("m_status") or "active",
-            tenant_id=row.get("m_tenant_id"),
-            user_id=row.get("m_user_id"),
-            avatar_url=row.get("m_avatar_url"),
-            title=row.get("m_title") or "",
-            department_id=row.get("m_department_id"),
-            department_path=row.get("m_department_path") or "",
+            id=uuid_from_row(row["m_id"]),
+            name=str_from_row(row["m_name"]),
+            open_id=str_from_row(row.get("m_open_id")) or None,
+            unionid=str_from_row(row.get("m_unionid")) or None,
+            external_id=str_from_row(row.get("m_external_id")) or None,
+            provider_id=uuid_from_row_opt(row.get("m_provider_id")),
+            email=str_from_row(row.get("m_email")) or None,
+            phone=str_from_row(row.get("m_phone")) or None,
+            status=str_from_row(row.get("m_status"), "active") or "active",
+            tenant_id=uuid_from_row_opt(row.get("m_tenant_id")),
+            user_id=uuid_from_row_opt(row.get("m_user_id")),
+            avatar_url=str_from_row(row.get("m_avatar_url")) or None,
+            title=str_from_row(row.get("m_title")) or "",
+            department_id=uuid_from_row_opt(row.get("m_department_id")),
+            department_path=str_from_row(row.get("m_department_path")) or "",
         )
     provider_name = row.get("provider_name") if include_provider else None
     provider_type = row.get("provider_type") if include_provider else None
     return AgentRelationshipRecord(
-        id=row["r_id"],
-        agent_id=row["r_agent_id"],
-        member_id=row["r_member_id"],
-        relation=row.get("r_relation") or "collaborator",
-        description=row.get("r_description") or "",
-        created_by_user_id=row.get("r_created_by_user_id"),
-        updated_by_user_id=row.get("r_updated_by_user_id"),
+        id=uuid_from_row(row["r_id"]),
+        agent_id=uuid_from_row(row["r_agent_id"]),
+        member_id=uuid_from_row(row["r_member_id"]),
+        relation=str_from_row(row.get("r_relation"), "collaborator") or "collaborator",
+        description=str_from_row(row.get("r_description")) or "",
+        created_by_user_id=uuid_from_row_opt(row.get("r_created_by_user_id")),
+        updated_by_user_id=uuid_from_row_opt(row.get("r_updated_by_user_id")),
         member=member,
         provider_name=provider_name if isinstance(provider_name, str) else None,
         provider_type=provider_type if isinstance(provider_type, str) else None,

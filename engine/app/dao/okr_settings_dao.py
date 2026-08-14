@@ -1,8 +1,8 @@
 """DAO for okr_settings (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
+from typing import ClassVar
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -30,7 +30,7 @@ class OKRSettingsDAO(BaseDAO[OKRSettingsRecord]):
     table: ClassVar[str] = "okr_settings"
     pk: ClassVar[str] = "tenant_id"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(OKRSettingsRecord.from_row)
+    record_factory = staticmethod(OKRSettingsRecord.from_row)
 
     async def get_by_tenant(self, tenant_id: UUID) -> OKRSettingsRecord | None:
         """Fetch OKR settings for a tenant."""

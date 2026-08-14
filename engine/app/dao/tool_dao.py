@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row, uuid_list_from_rows
 from app.dao.base import BaseDAO
 from app.records.tool import AgentToolRecord, ToolRecord
 
@@ -48,7 +49,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
 
     table: ClassVar[str] = "tools"
     columns: ClassVar[tuple[str, ...]] = _TOOL_COLUMNS
-    record_factory: Any = staticmethod(ToolRecord.from_row)
+    record_factory = staticmethod(ToolRecord.from_row)
 
     async def get_by_name(self, name: str) -> ToolRecord | None:
         async with self.session() as db:
@@ -76,7 +77,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 "SELECT id FROM tools WHERE name = ANY(%(names)s)",
                 {"names": list(names)},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def list_enabled_by_category(self, category: str) -> Sequence[ToolRecord]:
         async with self.session() as db:
@@ -167,7 +168,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                     + "  DELETE FROM tools WHERE type = 'mcp' AND tenant_id IS NULL RETURNING 1"
                     + ") SELECT COUNT(*) AS cnt FROM deleted"
                 )
-            return int(result["cnt"] if result else 0)
+            return int_from_row(result["cnt"] if result else 0)
 
     async def list_platform_for_tenant(self, tenant_id: UUID | None) -> Sequence[ToolRecord]:
         params: dict[str, Any] = {}
@@ -269,7 +270,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 + "GROUP BY t.category ORDER BY COUNT(*) DESC LIMIT %(limit)s",
                 {"limit": limit},
             )
-            return [{"category": row["category"] or "uncategorized", "count": int(row["count"] or 0)} for row in rows]
+            return [{"category": row["category"] or "uncategorized", "count": int_from_row(row.get("count"))} for row in rows]
 
     async def list_defaults(self) -> Sequence[ToolRecord]:
         async with self.session() as db:
@@ -317,7 +318,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
 
     table: ClassVar[str] = "agent_tools"
     columns: ClassVar[tuple[str, ...]] = _AGENT_TOOL_COLUMNS
-    record_factory: Any = staticmethod(AgentToolRecord.from_row)
+    record_factory = staticmethod(AgentToolRecord.from_row)
 
     async def get_assignment(self, agent_id: UUID, tool_id: UUID) -> AgentToolRecord | None:
         async with self.session() as db:
@@ -373,7 +374,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
     async def list_distinct_tool_ids(self) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall("SELECT DISTINCT tool_id FROM agent_tools")
-            return [row["tool_id"] for row in rows]
+            return uuid_list_from_rows(rows, "tool_id")
 
     async def list_agent_ids_with_enabled_tools(self, tool_ids: Sequence[UUID]) -> Sequence[UUID]:
         if not tool_ids:
@@ -383,7 +384,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
                 "SELECT DISTINCT agent_id FROM agent_tools WHERE tool_id = ANY(%(tool_ids)s) AND enabled IS TRUE",
                 {"tool_ids": list(tool_ids)},
             )
-            return [row["agent_id"] for row in rows]
+            return uuid_list_from_rows(rows, "agent_id")
 
     async def ensure_enabled(self, agent_id: UUID, tool_id: UUID) -> bool:
         """Create assignment if missing. Returns True when a new row was created."""

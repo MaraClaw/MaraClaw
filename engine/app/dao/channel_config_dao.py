@@ -1,11 +1,12 @@
 """DAO for channel_configs (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
+from typing import ClassVar
 from uuid import UUID
 
+from app.core.json_types import str_from_row
 from app.dao.base import BaseDAO
 from app.records.channel_config import ChannelConfigRecord
 
@@ -31,7 +32,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
 
     table: ClassVar[str] = "channel_configs"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(ChannelConfigRecord.from_row)
+    record_factory = staticmethod(ChannelConfigRecord.from_row)
 
     async def get_for_agent(
         self,
@@ -103,7 +104,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 + "AND is_configured IS TRUE",
                 {"agent_id": agent_id, "types": list(channel_types)},
             )
-            return {row["channel_type"] for row in rows if row.get("channel_type")}
+            return {str_from_row(row["channel_type"]) for row in rows if row.get("channel_type")}
 
 
 channel_config_dao = ChannelConfigDAO()

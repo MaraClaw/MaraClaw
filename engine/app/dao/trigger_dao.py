@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from datetime import datetime
 from typing import Any, ClassVar
+from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.db.errors import UniqueViolationError
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
@@ -53,7 +53,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
 
     table: ClassVar[str] = "agent_triggers"
     columns: ClassVar[tuple[str, ...]] = _TRIGGER_COLUMNS
-    record_factory: Any = staticmethod(AgentTriggerRecord.from_row)
+    record_factory = staticmethod(AgentTriggerRecord.from_row)
 
     async def list_for_agent(self, agent_id: UUID) -> list[AgentTriggerRecord]:
         async with self.session() as db:
@@ -111,7 +111,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                 "SELECT COUNT(*) FROM agent_triggers WHERE agent_id = %(agent_id)s AND is_enabled IS TRUE",
                 {"agent_id": agent_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def disable_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
@@ -130,7 +130,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
 
     table: ClassVar[str] = "trigger_executions"
     columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
-    record_factory: Any = staticmethod(TriggerExecutionRecord.from_row)
+    record_factory = staticmethod(TriggerExecutionRecord.from_row)
 
     async def try_enqueue(self, *, obj_in: dict[str, Any]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
@@ -150,7 +150,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
             raise ValueError("try_enqueue() requires at least one column value")
         params: dict[str, Any] = {}
         for col in cols:
-            value = data[col]
+            value: object = data[col]
             params[col] = as_jsonb(value) if isinstance(value, dict) else value
         col_sql = ", ".join(cols)
         val_sql = ", ".join(f"%({c})s" for c in cols)

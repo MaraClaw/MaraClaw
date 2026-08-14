@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
+from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 from app.records.identity import IdentityRecord
 
 
@@ -35,25 +36,25 @@ class UserRecord:
     identity: IdentityRecord | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any], *, identity: IdentityRecord | None = None) -> UserRecord:
+    def from_row(cls, row: Mapping[str, object], *, identity: IdentityRecord | None = None) -> UserRecord:
         return cls(
-            id=row["id"],
-            identity_id=row.get("identity_id"),
-            tenant_id=row.get("tenant_id"),
-            display_name=row.get("display_name") or "",
-            avatar_url=row.get("avatar_url"),
-            title=row.get("title"),
-            role=row.get("role") or "member",
+            id=uuid_from_row(row["id"]),
+            identity_id=uuid_from_row_opt(row.get("identity_id")),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
+            display_name=str_from_row(row.get("display_name")),
+            avatar_url=str_from_row(row["avatar_url"]) or None,
+            title=str_from_row(row["title"]) or None,
+            role=str_from_row(row.get("role"), "member") or "member",
             is_active=bool(row.get("is_active", True)),
-            registration_source=row.get("registration_source"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
-            quota_message_limit=int(row.get("quota_message_limit") or 50),
-            quota_message_period=row.get("quota_message_period") or "permanent",
-            quota_messages_used=int(row.get("quota_messages_used") or 0),
-            quota_period_start=row.get("quota_period_start"),
-            quota_max_agents=int(row.get("quota_max_agents") or 2),
-            quota_agent_ttl_hours=int(row.get("quota_agent_ttl_hours") or 0),
+            registration_source=str_from_row(row["registration_source"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
+            updated_at=datetime_from_row(row.get("updated_at")),
+            quota_message_limit=int_from_row(row.get("quota_message_limit"), 50),
+            quota_message_period=str_from_row(row.get("quota_message_period"), "permanent") or "permanent",
+            quota_messages_used=int_from_row(row.get("quota_messages_used")),
+            quota_period_start=datetime_from_row(row.get("quota_period_start")),
+            quota_max_agents=int_from_row(row.get("quota_max_agents"), 2),
+            quota_agent_ttl_hours=int_from_row(row.get("quota_agent_ttl_hours")),
             is_genesis=bool(row.get("is_genesis", False)),
             identity=identity,
         )

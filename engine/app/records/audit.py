@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -24,17 +25,17 @@ class ApprovalRequestRecord:
     resolved_by: UUID | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> ApprovalRequestRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ApprovalRequestRecord:
         details = mapping_from_row(row.get("details") or {})
         return cls(
-            id=row["id"],
-            agent_id=row["agent_id"],
-            action_type=row["action_type"],
+            id=uuid_from_row(row["id"]),
+            agent_id=uuid_from_row(row["agent_id"]),
+            action_type=str_from_row(row["action_type"]),
             details=details,
-            status=row.get("status") or "pending",
-            created_at=row.get("created_at"),
-            resolved_at=row.get("resolved_at"),
-            resolved_by=row.get("resolved_by"),
+            status=str_from_row(row.get("status"), "pending") or "pending",
+            created_at=datetime_from_row(row.get("created_at")),
+            resolved_at=datetime_from_row(row.get("resolved_at")),
+            resolved_by=uuid_from_row_opt(row.get("resolved_by")),
         )
 
 
@@ -56,20 +57,20 @@ class AdminAuditLogRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> AdminAuditLogRecord:
+    def from_row(cls, row: Mapping[str, object]) -> AdminAuditLogRecord:
         changes = mapping_from_row(row.get("changes") or {})
         details = mapping_from_row(row.get("details") or {})
         return cls(
-            id=row["id"],
-            actor_id=row.get("actor_id"),
-            actor_role=row.get("actor_role") or "",
-            actor_email=row.get("actor_email"),
-            action=row["action"],
-            target_type=row.get("target_type") or "",
-            target_id=row.get("target_id"),
-            tenant_id=row.get("tenant_id"),
+            id=uuid_from_row(row["id"]),
+            actor_id=uuid_from_row_opt(row.get("actor_id")),
+            actor_role=str_from_row(row.get("actor_role")),
+            actor_email=str_from_row(row["actor_email"]) or None,
+            action=str_from_row(row["action"]),
+            target_type=str_from_row(row.get("target_type")),
+            target_id=uuid_from_row_opt(row.get("target_id")),
+            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
             changes=changes,
             details=details,
-            ip_address=row.get("ip_address"),
-            created_at=row.get("created_at"),
+            ip_address=str_from_row(row["ip_address"]) or None,
+            created_at=datetime_from_row(row.get("created_at")),
         )

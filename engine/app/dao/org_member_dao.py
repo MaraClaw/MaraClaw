@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
+from uuid import UUID
 
+from app.core.json_types import (
+    int_from_row,
+    str_from_row,
+    str_from_row_opt,
+    uuid_from_row,
+    uuid_from_row_opt,
+    uuid_list_from_rows,
+)
 from app.dao.base import BaseDAO
 from app.records.org import OrgMemberRecord
 
@@ -37,7 +44,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
 
     table: ClassVar[str] = "org_members"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(OrgMemberRecord.from_row)
+    record_factory = staticmethod(OrgMemberRecord.from_row)
 
     async def find_unbound_by_email(self, email: str, tenant_id: UUID) -> OrgMemberRecord | None:
         async with self.session() as db:
@@ -298,7 +305,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 "SELECT id FROM org_members WHERE tenant_id = %(tenant_id)s AND status = 'active'",
                 {"tenant_id": tenant_id},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def names_for_ids(self, member_ids: Sequence[UUID]) -> dict[UUID, str]:
         if not member_ids:
@@ -308,13 +315,15 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 "SELECT id, name FROM org_members WHERE id = ANY(%(ids)s)",
                 {"ids": list(member_ids)},
             )
-            return {row["id"]: (row.get("name") or "") for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row(row.get("name")) for row in rows}
 
     async def get_user_id(self, member_id: UUID) -> UUID | None:
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT user_id FROM org_members WHERE id = %(id)s",
-                {"id": member_id},
+            return uuid_from_row_opt(
+                await db.fetchval(
+                    "SELECT user_id FROM org_members WHERE id = %(id)s",
+                    {"id": member_id},
+                )
             )
 
     async def unbind_user_from_tenant(self, user_id: UUID, tenant_id: UUID) -> None:
@@ -355,7 +364,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 f"SELECT COUNT(*) FROM org_members WHERE {where}",
                 params or None,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_active_filtered(
         self,
@@ -397,8 +406,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             return [
                 (
                     OrgMemberRecord.from_row(row),
-                    row.get("provider_name"),
-                    row.get("provider_type"),
+                    str_from_row_opt(row.get("provider_name")),
+                    str_from_row_opt(row.get("provider_type")),
                 )
                 for row in rows
             ]
@@ -475,9 +484,9 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             return [
                 (
                     OrgMemberRecord.from_row(row),
-                    row.get("provider_name"),
-                    row.get("provider_type"),
-                    row.get("linked_user_id"),
+                    str_from_row_opt(row.get("provider_name")),
+                    str_from_row_opt(row.get("provider_type")),
+                    uuid_from_row_opt(row.get("linked_user_id")),
                 )
                 for row in rows
             ]

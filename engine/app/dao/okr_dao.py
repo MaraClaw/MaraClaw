@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import date_from_row_opt, uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.okr import (
     CompanyReportRecord,
@@ -100,7 +101,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
 
     table: ClassVar[str] = "okr_objectives"
     columns: ClassVar[tuple[str, ...]] = _OBJECTIVE_COLUMNS
-    record_factory: Any = staticmethod(OKRObjectiveRecord.from_row)
+    record_factory = staticmethod(OKRObjectiveRecord.from_row)
 
     async def list_for_period(
         self,
@@ -144,10 +145,12 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
 
     async def earliest_period_start(self, tenant_id: UUID) -> date | None:
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT period_start FROM okr_objectives "
-                + "WHERE tenant_id = %(tenant_id)s ORDER BY period_start ASC LIMIT 1",
-                {"tenant_id": tenant_id},
+            return date_from_row_opt(
+                await db.fetchval(
+                    "SELECT period_start FROM okr_objectives "
+                    + "WHERE tenant_id = %(tenant_id)s ORDER BY period_start ASC LIMIT 1",
+                    {"tenant_id": tenant_id},
+                )
             )
 
     async def company_exists_for_period(self, tenant_id: UUID, *, period_start: date, period_end: date) -> bool:
@@ -183,7 +186,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
                     "period_end": period_end,
                 },
             )
-            return {row["owner_id"] for row in rows if row.get("owner_id") is not None}
+            return {uuid_from_row(row["owner_id"]) for row in rows if row.get("owner_id") is not None}
 
 
 class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
@@ -191,7 +194,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
 
     table: ClassVar[str] = "okr_key_results"
     columns: ClassVar[tuple[str, ...]] = _KR_COLUMNS
-    record_factory: Any = staticmethod(OKRKeyResultRecord.from_row)
+    record_factory = staticmethod(OKRKeyResultRecord.from_row)
 
     async def list_for_objective(self, objective_id: UUID) -> Sequence[OKRKeyResultRecord]:
         async with self.session() as db:
@@ -237,7 +240,7 @@ class OKRProgressLogDAO(BaseDAO[OKRProgressLogRecord]):
 
     table: ClassVar[str] = "okr_progress_logs"
     columns: ClassVar[tuple[str, ...]] = _PROGRESS_COLUMNS
-    record_factory: Any = staticmethod(OKRProgressLogRecord.from_row)
+    record_factory = staticmethod(OKRProgressLogRecord.from_row)
 
     async def delete_for_kr(self, kr_id: UUID) -> int:
         async with self.session() as db:
@@ -253,7 +256,7 @@ class WorkReportDAO(BaseDAO[WorkReportRecord]):
 
     table: ClassVar[str] = "work_reports"
     columns: ClassVar[tuple[str, ...]] = _WORK_REPORT_COLUMNS
-    record_factory: Any = staticmethod(WorkReportRecord.from_row)
+    record_factory = staticmethod(WorkReportRecord.from_row)
 
     async def list_for_tenant(
         self,
@@ -282,7 +285,7 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
 
     table: ClassVar[str] = "member_daily_reports"
     columns: ClassVar[tuple[str, ...]] = _MEMBER_DAILY_COLUMNS
-    record_factory: Any = staticmethod(MemberDailyReportRecord.from_row)
+    record_factory = staticmethod(MemberDailyReportRecord.from_row)
 
     async def get_for_member_date(
         self,
@@ -321,7 +324,7 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
 
     table: ClassVar[str] = "company_reports"
     columns: ClassVar[tuple[str, ...]] = _COMPANY_REPORT_COLUMNS
-    record_factory: Any = staticmethod(CompanyReportRecord.from_row)
+    record_factory = staticmethod(CompanyReportRecord.from_row)
 
     async def get_for_period(
         self,

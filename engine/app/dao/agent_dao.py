@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
+from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_list_from_rows
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.base import BaseDAO
 from app.records.agent import AgentPermissionRecord, AgentRecord
@@ -93,7 +94,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
 
     table: ClassVar[str] = "agents"
     columns: ClassVar[tuple[str, ...]] = _AGENT_COLUMNS
-    record_factory: Any = staticmethod(AgentRecord.from_row)
+    record_factory = staticmethod(AgentRecord.from_row)
 
     async def get(self, id: UUID) -> AgentRecord | None:
         cached = memo_get("agent", id)
@@ -244,7 +245,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def list_all_ids(self) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall("SELECT id FROM agents")
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def list_ids_for_creator(self, creator_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
@@ -252,7 +253,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT id FROM agents WHERE creator_id = %(creator_id)s",
                 {"creator_id": creator_id},
             )
-            return [row["id"] for row in rows]
+            return uuid_list_from_rows(rows)
 
     async def apply_token_counter_resets(self, agent: AgentRecord) -> AgentRecord | None:
         """Persist lazy daily/monthly token counter resets when needed."""
@@ -374,7 +375,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT COUNT(*) FROM agents WHERE creator_id = %(creator_id)s AND is_expired IS FALSE",
                 {"creator_id": creator_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def is_hidden_from_plaza(self, agent_id: UUID) -> bool:
         """True when agent is system or not company-public (excluded from plaza feed)."""
@@ -395,7 +396,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company')",
                 {"ids": list(agent_ids)},
             )
-            return {row["id"] for row in rows}
+            return {uuid_from_row(row["id"]) for row in rows}
 
     async def list_for_tenant(self, tenant_id: UUID) -> Sequence[AgentRecord]:
         async with self.session() as db:
@@ -513,7 +514,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         """Atomically add token counters; return the refreshed agent row."""
         async with self.session() as db:
             row = await db.fetchone(
-                f"UPDATE agents SET "
+                "UPDATE agents SET "
                 + "tokens_used_today = COALESCE(tokens_used_today, 0) + %(total)s, "
                 + "tokens_used_month = COALESCE(tokens_used_month, 0) + %(total)s, "
                 + "tokens_used_total = COALESCE(tokens_used_total, 0) + %(total)s, "
@@ -548,7 +549,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 f"SELECT COUNT(*) FROM agents WHERE tenant_id = %(tenant_id)s{status_sql}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def sum_tokens_for_tenant(self, tenant_id: UUID) -> tuple[int, int]:
         async with self.session() as db:
@@ -560,7 +561,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             if not row:
                 return 0, 0
-            return int(row["total"] or 0), int(row["cache_read"] or 0)
+            return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
     async def pause_running_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
@@ -570,7 +571,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"tenant_id": tenant_id},
             )
         for row in rows:
-            memo_drop("agent", row["id"])
+            memo_drop("agent", uuid_from_row(row["id"]))
         return len(rows)
 
     async def disable_for_tenant(self, tenant_id: UUID) -> int:
@@ -582,7 +583,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"tenant_id": tenant_id},
             )
         for row in rows:
-            memo_drop("agent", row["id"])
+            memo_drop("agent", uuid_from_row(row["id"]))
         return len(rows)
 
     async def token_usage_for_tenant(self, tenant_id: UUID) -> dict[str, int]:
@@ -613,7 +614,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     "cache_creation_month": 0,
                     "cache_creation_total": 0,
                 }
-            return {k: int(row[k] or 0) for k in row}
+            return {str(k): int_from_row(row.get(k)) for k in row}
 
     async def sum_tokens_created_before(self, before: datetime) -> tuple[int, int]:
         async with self.session() as db:
@@ -625,7 +626,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             if not row:
                 return 0, 0
-            return int(row["total"] or 0), int(row["cache_read"] or 0)
+            return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
     async def top_token_companies(self, *, limit: int = 20) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
@@ -642,8 +643,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return [
                 {
                     "name": row["name"],
-                    "total": int(row["total"] or 0),
-                    "cache_read": int(row["cache_read"] or 0),
+                    "total": int_from_row(row.get("total")),
+                    "cache_read": int_from_row(row.get("cache_read")),
                 }
                 for row in rows
             ]
@@ -660,8 +661,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {
                     "name": row["name"],
                     "company": row["tenant_name"],
-                    "tokens": int(row["tokens_used_total"] or 0),
-                    "cache_read_tokens": int(row["cache_read_tokens_total"] or 0),
+                    "tokens": int_from_row(row.get("tokens_used_total")),
+                    "cache_read_tokens": int_from_row(row.get("cache_read_tokens_total")),
                 }
                 for row in rows
             ]
@@ -684,7 +685,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "ORDER BY name",
                 {"model_id": model_id},
             )
-            return [row["name"] for row in rows if row.get("name")]
+            return [str_from_row(row.get("name")) for row in rows if row.get("name")]
 
     async def nullify_model_references(self, model_id: UUID) -> None:
         async with self.session() as db:
@@ -725,7 +726,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "SELECT id, name FROM agents WHERE id = ANY(%(ids)s)",
                 {"ids": list(agent_ids)},
             )
-            return {row["id"]: row["name"] for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row(row.get("name")) for row in rows}
 
 
 # Ordered cleanup before deleting the agents row (FK dependents).
@@ -761,7 +762,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
 
     table: ClassVar[str] = "agent_permissions"
     columns: ClassVar[tuple[str, ...]] = _PERM_COLUMNS
-    record_factory: Any = staticmethod(AgentPermissionRecord.from_row)
+    record_factory = staticmethod(AgentPermissionRecord.from_row)
 
     async def create(self, *, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
         created = await super().create(obj_in=obj_in)
@@ -794,7 +795,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
                 + "WHERE agent_id = %(agent_id)s AND scope_type = 'user' AND scope_id IS NOT NULL",
                 {"agent_id": agent_id},
             )
-            return [row["scope_id"] for row in rows if row.get("scope_id") is not None]
+            return [uuid_from_row(row["scope_id"]) for row in rows if row.get("scope_id") is not None]
 
     async def delete_for_agent(self, agent_id: UUID) -> None:
         async with self.session() as db:

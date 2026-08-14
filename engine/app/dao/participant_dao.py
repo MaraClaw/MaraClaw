@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
 from uuid import UUID
-
-from typing import Any, ClassVar
 
 from app.dao.base import BaseDAO
 from app.records.participant import ParticipantRecord
@@ -17,7 +16,7 @@ class ParticipantDAO(BaseDAO[ParticipantRecord]):
 
     table: ClassVar[str] = "participants"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(ParticipantRecord.from_row)
+    record_factory = staticmethod(ParticipantRecord.from_row)
 
     async def create_for_user(
         self,

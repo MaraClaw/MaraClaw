@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.template import AgentTemplateRecord
 
@@ -32,7 +33,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
 
     table: ClassVar[str] = "agent_templates"
     columns: ClassVar[tuple[str, ...]] = _TEMPLATE_COLUMNS
-    record_factory: Any = staticmethod(AgentTemplateRecord.from_row)
+    record_factory = staticmethod(AgentTemplateRecord.from_row)
 
     async def list_builtins(self) -> Sequence[AgentTemplateRecord]:
         async with self.session() as db:
@@ -57,7 +58,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
                 "SELECT COUNT(*) FROM agents WHERE template_id = %(template_id)s",
                 {"template_id": template_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_all_ordered(self) -> Sequence[AgentTemplateRecord]:
         async with self.session() as db:

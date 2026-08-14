@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import uuid_from_row_opt
 from app.dao.base import BaseDAO
 from app.records.llm import LLMModelRecord
 
@@ -33,7 +34,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
 
     table: ClassVar[str] = "llm_models"
     columns: ClassVar[tuple[str, ...]] = _LLM_COLUMNS
-    record_factory: Any = staticmethod(LLMModelRecord.from_row)
+    record_factory = staticmethod(LLMModelRecord.from_row)
 
     async def list_enabled(self, *, tenant_id: UUID | None = None) -> Sequence[LLMModelRecord]:
         params: dict[str, Any] = {}
@@ -51,11 +52,13 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
 
     async def first_enabled_id_for_tenant(self, tenant_id: UUID) -> UUID | None:
         async with self.session() as db:
-            return await db.fetchval(
-                "SELECT id FROM llm_models "
-                + "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
-                + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
-                {"tenant_id": tenant_id},
+            return uuid_from_row_opt(
+                await db.fetchval(
+                    "SELECT id FROM llm_models "
+                    + "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
+                    + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                    {"tenant_id": tenant_id},
+                )
             )
 
     async def list_for_tenant(self, tenant_id: UUID | None) -> Sequence[LLMModelRecord]:

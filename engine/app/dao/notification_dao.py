@@ -1,11 +1,12 @@
 """DAO for notifications (psycopg)."""
 
 from __future__ import annotations
-from typing import ClassVar, Any
 
 from collections.abc import Sequence
+from typing import ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.records.notification import NotificationRecord
 
@@ -29,7 +30,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
 
     table: ClassVar[str] = "notifications"
     columns: ClassVar[tuple[str, ...]] = _NOTIFICATION_COLUMNS
-    record_factory: Any = staticmethod(NotificationRecord.from_row)
+    record_factory = staticmethod(NotificationRecord.from_row)
 
     async def list_unread_for_agent(self, agent_id: UUID, *, limit: int = 10) -> Sequence[NotificationRecord]:
         async with self.session() as db:
@@ -84,7 +85,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 f"SELECT COUNT(*) FROM notifications WHERE {where}",
                 params,
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def mark_read(self, ids: Sequence[UUID]) -> None:
         if not ids:

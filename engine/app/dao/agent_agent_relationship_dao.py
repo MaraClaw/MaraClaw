@@ -26,7 +26,7 @@ _COLUMNS = (
 class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
     table: ClassVar[str] = "agent_agent_relationships"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AgentAgentRelationshipRecord.from_row)
+    record_factory = staticmethod(AgentAgentRelationshipRecord.from_row)
 
     async def exists(self, agent_id: UUID, target_agent_id: UUID) -> bool:
         async with self.session() as db:

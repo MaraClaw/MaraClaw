@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row, str_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.plaza import PlazaCommentRecord, PlazaLikeRecord, PlazaPostRecord
 
@@ -58,7 +59,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
 
     table: ClassVar[str] = "plaza_posts"
     columns: ClassVar[tuple[str, ...]] = _POST_COLUMNS
-    record_factory: Any = staticmethod(PlazaPostRecord.from_row)
+    record_factory = staticmethod(PlazaPostRecord.from_row)
 
     async def list_posts_recent(
         self,
@@ -123,7 +124,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 params,
             )
             today_posts = await db.fetchval(
-                f"SELECT COUNT(*) FROM plaza_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
+                "SELECT COUNT(*) FROM plaza_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
                 + f"AND {post_filter}",
                 params,
             )
@@ -135,11 +136,11 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 params,
             )
             return {
-                "total_posts": int(total_posts or 0),
-                "total_comments": int(total_comments or 0),
-                "today_posts": int(today_posts or 0),
+                "total_posts": int_from_row(total_posts),
+                "total_comments": int_from_row(total_comments),
+                "today_posts": int_from_row(today_posts),
                 "top_contributors": [
-                    {"name": row["author_name"], "type": row["author_type"], "posts": int(row["post_count"])}
+                    {"name": row["author_name"], "type": row["author_type"], "posts": int_from_row(row["post_count"])}
                     for row in top_rows
                 ],
             }
@@ -153,7 +154,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
     async def increment_comments_count(self, post_id: UUID) -> PlazaPostRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"UPDATE plaza_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
+                "UPDATE plaza_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
                 + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id},
             )
@@ -162,7 +163,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
     async def adjust_likes_count(self, post_id: UUID, delta: int) -> PlazaPostRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"UPDATE plaza_posts SET likes_count = GREATEST(COALESCE(likes_count, 0) + %(delta)s, 0) "
+                "UPDATE plaza_posts SET likes_count = GREATEST(COALESCE(likes_count, 0) + %(delta)s, 0) "
                 + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id, "delta": delta},
             )
@@ -174,7 +175,7 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
 
     table: ClassVar[str] = "plaza_comments"
     columns: ClassVar[tuple[str, ...]] = _COMMENT_COLUMNS
-    record_factory: Any = staticmethod(PlazaCommentRecord.from_row)
+    record_factory = staticmethod(PlazaCommentRecord.from_row)
 
     async def list_comments_for_post(
         self,
@@ -206,7 +207,7 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
                 "SELECT DISTINCT author_id, author_type FROM plaza_comments WHERE post_id = %(post_id)s",
                 {"post_id": post_id},
             )
-            return [(row["author_id"], row["author_type"]) for row in rows]
+            return [(uuid_from_row(row["author_id"]), str_from_row(row["author_type"])) for row in rows]
 
 
 class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
@@ -214,7 +215,7 @@ class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
 
     table: ClassVar[str] = "plaza_likes"
     columns: ClassVar[tuple[str, ...]] = _LIKE_COLUMNS
-    record_factory: Any = staticmethod(PlazaLikeRecord.from_row)
+    record_factory = staticmethod(PlazaLikeRecord.from_row)
 
     async def get_by_post_and_author(self, post_id: UUID, author_id: UUID) -> PlazaLikeRecord | None:
         async with self.session() as db:

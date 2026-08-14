@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
+from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
 from app.records.focus import AgentFocusItemRecord
@@ -30,7 +31,7 @@ _COLUMNS = (
 class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
     table: ClassVar[str] = "agent_focus_items"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
-    record_factory: Any = staticmethod(AgentFocusItemRecord.from_row)
+    record_factory = staticmethod(AgentFocusItemRecord.from_row)
 
     def _select_list(self, alias: str | None = None) -> str:
         # Map SQL column "metadata" into a consistent select list.
@@ -46,7 +47,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 "SELECT COUNT(*) FROM agent_focus_items WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def list_for_agent(self, agent_id: UUID, *, include_completed: bool = True) -> Sequence[AgentFocusItemRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
@@ -74,7 +75,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 "SELECT MAX(sort_order) FROM agent_focus_items WHERE agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
-            return int(value or 0)
+            return int_from_row(value)
 
     async def bulk_insert_ignore(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
@@ -95,7 +96,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                         data[col] = uuid4()
                     if col not in data:
                         continue
-                    val = data[col]
+                    val: object = data[col]
                     params[col] = as_jsonb(val) if isinstance(val, (dict, list)) else val
                 cols = [c for c in self.columns if c in params]
                 col_sql = ", ".join(cols)
