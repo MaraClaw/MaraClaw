@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
 from app.config import get_settings
-from app.core.json_types import json_as_str_or, json_object_from_response
+from app.core.json_types import http_header, json_as_str_or, json_object_from_response
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
@@ -152,7 +152,7 @@ async def get_wechat_qrcode_image(agent_id: uuid.UUID, url: str, current_user: U
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail="Failed to fetch WeChat QR image")
 
-    media_type_header = resp.headers["content-type"] if "content-type" in resp.headers else "image/png"  # noqa: SIM401
+    media_type_header = http_header(resp.headers, "content-type", "image/png")
     media_type = media_type_header.split(";")[0].strip() or "image/png"
     return Response(content=resp.content, media_type=media_type)
 

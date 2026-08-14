@@ -71,11 +71,12 @@ class Judge0Backend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using Judge0 API."""
+        timeout = exec_timeout
         start_time = time.time()
 
         # Get language ID

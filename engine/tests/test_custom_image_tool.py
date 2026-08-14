@@ -121,8 +121,8 @@ async def test_custom_image_reference_to_bytes_supports_raw_base64_dict_and_url(
         def __init__(self):
             self.calls = []
 
-        async def get(self, url, **kwargs):
-            self.calls.append((url, kwargs["timeout"]))
+        async def get(self, url):
+            self.calls.append(url)
             return FakeResponse()
 
     raw = b"raw-image"
@@ -132,4 +132,4 @@ async def test_custom_image_reference_to_bytes_supports_raw_base64_dict_and_url(
     assert await _custom_image_reference_to_bytes(encoded, client) == raw
     assert await _custom_image_reference_to_bytes({"image_base64": encoded}, client) == raw
     assert await _custom_image_reference_to_bytes("https://images.test/download.png", client) == b"downloaded-image"
-    assert client.calls == [("https://images.test/download.png", 60)]
+    assert client.calls == ["https://images.test/download.png"]

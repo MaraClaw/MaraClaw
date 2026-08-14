@@ -96,7 +96,7 @@ async def test_execute_runs_python_container_with_python_on_whales_kwargs():
     backend = make_backend(client, allow_network=True)
 
     # When
-    result = await backend.execute("print('hello')", "python", timeout=7)
+    result = await backend.execute("print('hello')", "python", exec_timeout=7)
 
     # Then
     assert result.success is True
@@ -134,7 +134,7 @@ async def test_execute_injects_proxy_env_when_network_allowed():
     )
 
     # When
-    result = await backend.execute("print('hello')", "python", timeout=5)
+    result = await backend.execute("print('hello')", "python", exec_timeout=5)
 
     # Then
     assert result.success is True
@@ -160,7 +160,7 @@ async def test_execute_omits_proxy_env_when_network_disallowed():
     )
 
     # When
-    result = await backend.execute("echo hi", "bash", timeout=5)
+    result = await backend.execute("echo hi", "bash", exec_timeout=5)
 
     # Then
     assert result.success is True
@@ -176,7 +176,7 @@ async def test_execute_preserves_no_network_semantics_when_network_is_disallowed
     backend = make_backend(client, allow_network=False)
 
     # When
-    result = await backend.execute("echo hi", "bash", timeout=5)
+    result = await backend.execute("echo hi", "bash", exec_timeout=5)
 
     # Then
     assert result.success is True
@@ -191,7 +191,7 @@ async def test_execute_pulls_image_when_image_is_missing():
     backend = make_backend(client)
 
     # When
-    result = await backend.execute("console.log('hi')", "node", timeout=5)
+    result = await backend.execute("console.log('hi')", "node", exec_timeout=5)
 
     # Then
     assert result.success is True
@@ -208,7 +208,7 @@ async def test_execute_unsupported_language_does_not_touch_docker_client(monkeyp
     backend = DockerBackend(SandboxConfig())
 
     # When
-    result = await backend.execute("puts 'hi'", "ruby", timeout=5)
+    result = await backend.execute("puts 'hi'", "ruby", exec_timeout=5)
 
     # Then
     assert result.success is False
@@ -222,7 +222,7 @@ async def test_execute_timeout_returns_exit_code_124_and_removes_container():
     backend = make_backend(client)
 
     # When
-    result = await backend.execute("sleep 60", "bash", timeout=3)
+    result = await backend.execute("sleep 60", "bash", exec_timeout=3)
 
     # Then
     assert result.success is False
@@ -237,7 +237,7 @@ async def test_execute_cleanup_error_does_not_mask_execution_result():
     backend = make_backend(client)
 
     # When
-    result = await backend.execute("print('hello')", "python", timeout=5)
+    result = await backend.execute("print('hello')", "python", exec_timeout=5)
 
     # Then
     assert result.success is True
@@ -252,7 +252,7 @@ async def test_execute_non_timeout_error_preserves_docker_error_prefix():
     backend = make_backend(client)
 
     # When
-    result = await backend.execute("print('hello')", "python", timeout=5)
+    result = await backend.execute("print('hello')", "python", exec_timeout=5)
 
     # Then
     assert result.success is False

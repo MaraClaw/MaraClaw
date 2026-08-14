@@ -232,8 +232,7 @@ async def _agent_has_any_channel(agent_id: uuid.UUID) -> bool:
     return await _tool_runtime_catalog.agent_has_any_channel(agent_id)
 
 
-setattr(_agent_has_feishu, "_uses_catalog_channel_presence", True)
-setattr(_agent_has_any_channel, "_uses_catalog_channel_presence", True)
+_tool_runtime_catalog.mark_shared_channel_presence(_agent_has_feishu, _agent_has_any_channel)
 
 
 # ─── Dynamic Tool Loading from DB ──────────────────────────────

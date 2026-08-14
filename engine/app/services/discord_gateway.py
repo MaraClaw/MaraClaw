@@ -66,8 +66,16 @@ class _DiscordClientLike(Protocol):
     def close(self) -> Awaitable[None]: ...
 
 
+class _DiscordIntentsLike(Protocol):
+    message_content: bool
+
+
 def _is_discord_client(value: object) -> TypeIs[_DiscordClientLike]:
     return all(hasattr(value, name) for name in ("event", "start", "is_closed", "close"))
+
+
+def _is_discord_intents(value: object) -> TypeIs[_DiscordIntentsLike]:
+    return hasattr(value, "message_content")
 
 
 def _mod_attr(value: object, name: str) -> object:
@@ -132,8 +140,8 @@ class DiscordGatewayManager:
             logger.warning("[Discord GW] discord.py Intents.default is unavailable")
             return
         intents = default_intents()
-        if hasattr(intents, "message_content"):
-            setattr(intents, "message_content", True)  # Required to read message text
+        if _is_discord_intents(intents):
+            intents.message_content = True
 
         client_cls = _mod_attr(sdk, "Client")
         if not callable(client_cls):
@@ -308,7 +316,7 @@ class DiscordGatewayManager:
                 fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
                 if fresh:
                     _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
 
             return reply_text

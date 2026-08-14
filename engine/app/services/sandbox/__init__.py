@@ -16,7 +16,7 @@ Usage:
     backend = get_sandbox_backend(config)
 
     # Execute code
-    result = await backend.execute(code, language, timeout)
+    result = await backend.execute(code, language, exec_timeout)
 """
 
 from app.services.sandbox.base import (

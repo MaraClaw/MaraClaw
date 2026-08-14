@@ -12,6 +12,7 @@ from typing import TypedDict
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.json_types import (
+    http_header,
     json_as_str,
     json_as_str_or,
     json_loads_object,
@@ -107,6 +108,7 @@ async def delete_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 # ─── Event Webhook ──────────────────────────────────────
+
 
 def _verify_slack_signature(signing_secret: str, body: bytes, headers: Mapping[str, str]) -> bool:
     """Verify Slack's HMAC-SHA256 request signature."""
@@ -301,7 +303,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
             async with _httpx.AsyncClient(timeout=30, follow_redirects=True) as _hc:
                 _r = await _hc.get(_url, headers={"Authorization": f"Bearer {_bot_token}"})
                 _ = _r.raise_for_status()
-                _ct = _r.headers["content-type"] if "content-type" in _r.headers else ""  # noqa: SIM401
+                _ct = http_header(_r.headers, "content-type")
                 if "text/html" in _ct or _r.content[:15].lower().startswith(b"<!doctype html"):
                     raise ValueError(
                         f"Got HTML response (SSO redirect) - Slack App needs 'files:read' scope. Content-Type: {_ct}"

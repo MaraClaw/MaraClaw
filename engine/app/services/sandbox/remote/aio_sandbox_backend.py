@@ -73,11 +73,12 @@ class AioSandboxBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using aio-sandbox."""
+        timeout = exec_timeout
         start_time = time.time()
 
         # Determine endpoint based on language

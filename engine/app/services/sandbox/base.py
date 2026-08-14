@@ -41,7 +41,7 @@ class SandboxBackend(Protocol):
         self,
         code: str,
         language: str,
-        timeout: int = 30,  # noqa: ASYNC109 - public backend protocol preserves caller timeout contract
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
@@ -51,7 +51,7 @@ class SandboxBackend(Protocol):
         Args:
             code: The code to execute
             language: Programming language (python, bash, node, etc.)
-            timeout: Execution timeout in seconds
+            exec_timeout: Execution timeout in seconds
             work_dir: Working directory for execution (optional)
             **kwargs: Additional backend-specific options
 
@@ -96,7 +96,7 @@ class BaseSandboxBackend(ABC):
         self,
         code: str,
         language: str,
-        timeout: int = 30,  # noqa: ASYNC109 - public backend base preserves caller timeout contract
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:

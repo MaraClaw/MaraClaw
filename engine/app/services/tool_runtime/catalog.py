@@ -64,9 +64,7 @@ async def _resolve_channel_presence(
     """One EXISTS pair when both lookups are the catalog defaults."""
     feishu_fn = dependencies.agent_has_feishu
     any_fn = dependencies.agent_has_any_channel
-    if getattr(feishu_fn, "_uses_catalog_channel_presence", False) and getattr(
-        any_fn, "_uses_catalog_channel_presence", False
-    ):
+    if uses_shared_channel_presence(feishu_fn) and uses_shared_channel_presence(any_fn):
         return await _channel_presence(agent_id)
     return await feishu_fn(agent_id), await any_fn(agent_id)
 
@@ -83,8 +81,19 @@ async def agent_has_any_channel(agent_id: uuid.UUID) -> bool:
     return has_any
 
 
-setattr(agent_has_feishu, "_uses_catalog_channel_presence", True)
-setattr(agent_has_any_channel, "_uses_catalog_channel_presence", True)
+_SHARED_CHANNEL_PRESENCE: set[object] = set()
+
+
+def mark_shared_channel_presence(*fns: object) -> None:
+    """Register catalog lookups that can share one EXISTS pair."""
+    _SHARED_CHANNEL_PRESENCE.update(fns)
+
+
+def uses_shared_channel_presence(fn: object) -> bool:
+    return fn in _SHARED_CHANNEL_PRESENCE
+
+
+mark_shared_channel_presence(agent_has_feishu, agent_has_any_channel)
 
 
 def _is_json_value(value: object) -> TypeIs[JsonValue]:

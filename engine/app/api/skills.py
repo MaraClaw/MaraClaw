@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.json_types import JsonObject, json_as_str, mapping_from_row
+from app.core.json_types import JsonObject, http_header, json_as_str, mapping_from_row
 from app.core.logging import logger
 from app.core.security import get_current_admin, get_current_user, require_role
 from app.dao.skill_dao import skill_dao, skill_file_dao
@@ -154,7 +154,7 @@ async def _fetch_clawhub_skill_archive(
                     params=params,
                     headers=_clawhub_headers_for_base(api_key, base_url),
                 )
-            content_type = resp.headers["content-type"] if "content-type" in resp.headers else ""  # noqa: SIM401
+            content_type = http_header(resp.headers, "content-type")
             if resp.status_code == 404:
                 last_error = f"Skill '{slug}' not found on ClawHub at {base_url}"
                 continue
@@ -698,9 +698,7 @@ async def set_skill_token(
 
 
 @router.get("/browse/list")
-async def browse_list(
-    path: str = "", current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+async def browse_list(path: str = "", current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
     """List skill folders (root) or files/subdirs within a skill folder."""
     if not path or path == "/":
         skills = await skill_dao.list_for_tenant_scope(current_user.tenant_id)

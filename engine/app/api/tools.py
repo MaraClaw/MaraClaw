@@ -533,7 +533,10 @@ class AgentToolConfigUpdate(BaseModel):
 
 @router.get("/agents/{agent_id}/tool-config/{tool_id}")
 async def get_agent_tool_config(
-    agent_id: uuid.UUID, tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID,
+    tool_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+    db: object | None = None,
 ) -> dict[str, object]:
     """Get merged tool config (global defaults + agent overrides) and config_schema.
 
@@ -866,8 +869,8 @@ async def check_category_config(
 
         return await check_atlassian_channel(agent_id, current_user)
     if category == "agentbay":
-        from app.services.agentbay_client import test_agentbay_channel
+        from app.services.agentbay_client import check_agentbay_channel
 
-        return await test_agentbay_channel(agent_id, current_user)
+        return await check_agentbay_channel(agent_id, current_user)
 
     return {"ok": True, "message": f"Settings for {category} saved."}

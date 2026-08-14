@@ -512,7 +512,7 @@ async def _generate_llm_report_content(
             max_tokens=min(
                 get_max_tokens(model.provider, model.model, getattr(model, "max_output_tokens", None)), 1800
             ),
-            timeout=float(getattr(model, "request_timeout", None) or 120.0),
+            request_timeout=float(getattr(model, "request_timeout", None) or 120.0),
         )
         return response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 

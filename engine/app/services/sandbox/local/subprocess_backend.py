@@ -97,7 +97,7 @@ _DANGEROUS_NODE_NETWORK = ["require('http')", "require('https')", "require('net'
 
 
 def _execute_kwarg(kwargs: Mapping[str, object], name: str) -> object:
-    return kwargs[name] if name in kwargs else None
+    return kwargs.get(name)
 
 
 async def _emit_output(on_output: object, text: str, label: str) -> None:
@@ -442,11 +442,12 @@ class SubprocessBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code in a subprocess."""
+        timeout = exec_timeout
         on_output = _execute_kwarg(kwargs, "on_output")
         agent_id = _execute_kwarg(kwargs, "agent_id")
         start_time = time.time()
@@ -555,9 +556,7 @@ class SubprocessBackend(BaseSandboxBackend):
             stdout_data = bytearray()
             stderr_data = bytearray()
 
-            async def read_stream(
-                stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout"
-            ) -> None:
+            async def read_stream(stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout") -> None:
                 if stream is None:
                     return
                 capture_limit = MAX_STDERR_CAPTURE_BYTES if label == "stderr" else MAX_STDOUT_CAPTURE_BYTES

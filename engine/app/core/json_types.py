@@ -168,6 +168,15 @@ def object_call(fn: object, *args: object) -> object:
     return fn(*args)
 
 
+def http_header(headers: object, key: str, default: str = "") -> str:
+    """Read an HTTP header as ``str`` without leaking decoder ``Any``."""
+    getter = object_attr(headers, "get")
+    value = object_call(getter, key) if callable(getter) else None
+    if value is None:
+        return default
+    return value if isinstance(value, str) else str(value)
+
+
 def yaml_load_object(value: str) -> object:
     """Parse a YAML document and return the decoded value as ``object``."""
     import yaml

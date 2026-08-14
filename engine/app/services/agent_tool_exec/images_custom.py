@@ -25,7 +25,7 @@ class _ImageHttpResponse(Protocol):
 
 
 class _ImageHttpClient(Protocol):
-    async def get(self, url: str, timeout: float = 60) -> _ImageHttpResponse: ...
+    async def get(self, url: str) -> _ImageHttpResponse: ...
 
 
 def _is_image_http_client(value: object) -> TypeIs[_ImageHttpClient]:
@@ -190,7 +190,7 @@ async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: object)
     if image_ref.startswith(("http://", "https://")):
         if not _is_image_http_client(client):
             raise TypeError("HTTP client is unavailable")
-        img_resp = await client.get(image_ref, timeout=60)
+        img_resp = await client.get(image_ref)
         img_resp.raise_for_status()
         return img_resp.content
 

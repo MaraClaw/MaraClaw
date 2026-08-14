@@ -18,6 +18,7 @@ import httpx
 from app.core.json_types import (
     JsonObject,
     JsonValue,
+    http_header,
     is_json_object,
     json_loads_value,
     json_value_from_response,
@@ -69,7 +70,7 @@ class MCPClient:
 
     def _parse_response(self, resp: httpx.Response) -> JsonObject:
         """Parse response - handles both JSON and SSE (text/event-stream) formats."""
-        content_type = resp.headers["content-type"] if "content-type" in resp.headers else ""
+        content_type = http_header(resp.headers, "content-type")
 
         # Save session ID if the server returns one
         if "mcp-session-id" in resp.headers:
@@ -254,7 +255,7 @@ class MCPClient:
 
             # Phase 3: Read the response - either from POST response or from SSE stream
             if post_resp.status_code == 200:
-                ct = post_resp.headers["content-type"] if "content-type" in post_resp.headers else ""
+                ct = http_header(post_resp.headers, "content-type")
                 if "application/json" in ct:
                     return _require_json_object(json_value_from_response(post_resp))
 

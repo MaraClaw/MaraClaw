@@ -719,10 +719,13 @@ async def get_agentbay_api_key_for_agent(agent_id: uuid.UUID, db: object | None 
     return (await resolve_agentbay_config(agent_id, db)).api_key
 
 
-async def test_agentbay_channel(
-    agent_id: uuid.UUID, current_user: object, db: object | None = None
+async def check_agentbay_channel(
+    agent_id: uuid.UUID,
+    current_user: object,
+    db: object | None = None,
 ) -> dict[str, bool | str]:
-    """Test AgentBay connectivity."""
+    """Probe AgentBay connectivity for the agent."""
+    del current_user
     key = await get_agentbay_api_key_for_agent(agent_id, db)
     if not key:
         return {"ok": False, "error": "AgentBay not configured"}
@@ -755,7 +758,7 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
         agent_id: The agent UUID.
         image_type: One of 'browser', 'computer', 'code'.
         session_id: The ChatSession ID. Defaults to '' for backward compat
-                    (e.g. test_agentbay_channel, single-session callers).
+                    (e.g. check_agentbay_channel, single-session callers).
     """
 
     now = datetime.now(UTC)

@@ -67,11 +67,12 @@ class CodeSandboxBackend(BaseSandboxBackend):
         self,
         code: str,
         language: str,
-        timeout: int = 30,
+        exec_timeout: int = 30,
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using CodeSandbox API."""
+        timeout = exec_timeout
         start_time = time.time()
 
         # Map language

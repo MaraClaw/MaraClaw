@@ -184,7 +184,7 @@ async def _execute_code(
         result = await backend.execute(
             code=code,
             language=language,
-            timeout=timeout,
+            exec_timeout=timeout,
             work_dir=str(work_dir),
             on_output=on_output,
             agent_id=agent_id,

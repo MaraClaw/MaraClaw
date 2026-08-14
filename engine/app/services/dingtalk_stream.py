@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Coroutine
 from concurrent.futures import Future as ConcurrentFuture
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import httpx
 
@@ -547,120 +547,122 @@ class DingTalkStreamManager:
         retries = 0
         manager_self = self
 
-        class MaraClawChatbotHandler(dingtalk_stream.ChatbotHandler):
-            """Custom handler that dispatches messages to the MaraClaw LLM pipeline."""
-
         async def process_dingtalk_stream_message(message: dingtalk_stream.CallbackMessage) -> tuple[int, str]:
-                """Handle incoming bot message from DingTalk Stream.
+            """Handle incoming bot message from DingTalk Stream.
 
-                NOTE: The SDK invokes this method in the thread's own asyncio loop,
-                so we must dispatch to the main FastAPI loop for DB + LLM work.
-                """
-                try:
-                    # Parse the raw data
-                    incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
-                    if isinstance(message.data, dict):
-                        parsed_data = json_object_from(message.data)
-                    elif isinstance(message.data, (str, bytes, bytearray)):
-                        loaded = json_loads_value(message.data)
-                        if not isinstance(loaded, dict):
-                            raise ValueError("DingTalk callback payload must be an object")
-                        parsed_data = json_object_from(loaded)
-                    else:
+            NOTE: The SDK invokes this method in the thread's own asyncio loop,
+            so we must dispatch to the main FastAPI loop for DB + LLM work.
+            """
+            try:
+                # Parse the raw data
+                incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
+                if isinstance(message.data, dict):
+                    parsed_data = json_object_from(message.data)
+                elif isinstance(message.data, (str, bytes, bytearray)):
+                    loaded = json_loads_value(message.data)
+                    if not isinstance(loaded, dict):
                         raise ValueError("DingTalk callback payload must be an object")
-                    msg_data = _parse_dingtalk_message(parsed_data)
+                    parsed_data = json_object_from(loaded)
+                else:
+                    raise ValueError("DingTalk callback payload must be an object")
+                msg_data = _parse_dingtalk_message(parsed_data)
 
-                    msgtype = msg_data.get("msgtype", "text")
-                    sender_staff_id = incoming.sender_staff_id or incoming.sender_id or ""
-                    sender_nick = incoming.sender_nick or ""
-                    message_id = incoming.message_id or ""
-                    conversation_id = incoming.conversation_id or ""
-                    conversation_type = incoming.conversation_type or "1"
-                    session_webhook = incoming.session_webhook or ""
+                msgtype = msg_data.get("msgtype", "text")
+                sender_staff_id = incoming.sender_staff_id or incoming.sender_id or ""
+                sender_nick = incoming.sender_nick or ""
+                message_id = incoming.message_id or ""
+                conversation_id = incoming.conversation_id or ""
+                conversation_type = incoming.conversation_type or "1"
+                session_webhook = incoming.session_webhook or ""
 
-                    logger.info(f"[DingTalk Stream] Received {msgtype} message from {sender_staff_id}")
+                logger.info(f"[DingTalk Stream] Received {msgtype} message from {sender_staff_id}")
 
-                    if msgtype == "text":
-                        # Plain text: use existing logic
-                        text_list_raw = incoming.get_text_list()
-                        text_list: list[str] = [str(part) for part in text_list_raw] if text_list_raw else []
-                        user_text = " ".join(text_list).strip() if text_list else ""
-                        if not user_text:
-                            return dingtalk_stream.AckMessage.STATUS_OK, "empty message"
+                if msgtype == "text":
+                    # Plain text: use existing logic
+                    text_list_raw = incoming.get_text_list()
+                    text_list: list[str] = [str(part) for part in text_list_raw] if text_list_raw else []
+                    user_text = " ".join(text_list).strip() if text_list else ""
+                    if not user_text:
+                        return dingtalk_stream.AckMessage.STATUS_OK, "empty message"
 
-                        logger.info(f"[DingTalk Stream] Text from {sender_staff_id}: {user_text[:80]}")
+                    logger.info(f"[DingTalk Stream] Text from {sender_staff_id}: {user_text[:80]}")
 
-                        from app.api.dingtalk import process_dingtalk_message
+                    from app.api.dingtalk import process_dingtalk_message
 
-                        if main_loop and main_loop.is_running():
-                            # Add thinking reaction immediately
-                            from app.services.dingtalk_reaction import add_thinking_reaction
+                    if main_loop and main_loop.is_running():
+                        # Add thinking reaction immediately
+                        from app.services.dingtalk_reaction import add_thinking_reaction
 
-                            _fire_and_forget(
-                                main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
-                            )
+                        _fire_and_forget(
+                            main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
+                        )
 
-                            _fire_and_forget(
-                                main_loop,
-                                process_dingtalk_message(
-                                    agent_id=agent_id,
-                                    sender_staff_id=sender_staff_id,
-                                    user_text=user_text,
-                                    conversation_id=conversation_id,
-                                    conversation_type=conversation_type,
-                                    session_webhook=session_webhook,
-                                    sender_nick=sender_nick,
-                                    message_id=message_id,
-                                ),
-                            )
-                        else:
-                            logger.warning("[DingTalk Stream] Main loop not available")
-
+                        _fire_and_forget(
+                            main_loop,
+                            process_dingtalk_message(
+                                agent_id=agent_id,
+                                sender_staff_id=sender_staff_id,
+                                user_text=user_text,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                session_webhook=session_webhook,
+                                sender_nick=sender_nick,
+                                message_id=message_id,
+                            ),
+                        )
                     else:
-                        # Non-text message: process media in the main loop
-                        if main_loop and main_loop.is_running():
-                            # Add thinking reaction immediately
-                            from app.services.dingtalk_reaction import add_thinking_reaction
+                        logger.warning("[DingTalk Stream] Main loop not available")
 
-                            _fire_and_forget(
-                                main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
-                            )
+                else:
+                    # Non-text message: process media in the main loop
+                    if main_loop and main_loop.is_running():
+                        # Add thinking reaction immediately
+                        from app.services.dingtalk_reaction import add_thinking_reaction
 
-                            _fire_and_forget(
-                                main_loop,
-                                manager_self._handle_media_and_dispatch(
-                                    msg_data=msg_data,
-                                    app_key=app_key,
-                                    app_secret=app_secret,
-                                    agent_id=agent_id,
-                                    sender_staff_id=sender_staff_id,
-                                    conversation_id=conversation_id,
-                                    conversation_type=conversation_type,
-                                    session_webhook=session_webhook,
-                                    sender_nick=sender_nick,
-                                    message_id=message_id,
-                                ),
-                            )
-                        else:
-                            logger.warning("[DingTalk Stream] Main loop not available")
+                        _fire_and_forget(
+                            main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
+                        )
 
-                    return dingtalk_stream.AckMessage.STATUS_OK, "ok"
-                except Exception as e:
-                    logger.error(f"[DingTalk Stream] Error in message handler: {e}")
-                    import traceback
+                        _fire_and_forget(
+                            main_loop,
+                            manager_self._handle_media_and_dispatch(
+                                msg_data=msg_data,
+                                app_key=app_key,
+                                app_secret=app_secret,
+                                agent_id=agent_id,
+                                sender_staff_id=sender_staff_id,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                session_webhook=session_webhook,
+                                sender_nick=sender_nick,
+                                message_id=message_id,
+                            ),
+                        )
+                    else:
+                        logger.warning("[DingTalk Stream] Main loop not available")
 
-                    traceback.print_exc()
-                    return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, str(e)
+                return dingtalk_stream.AckMessage.STATUS_OK, "ok"
+            except Exception as e:
+                logger.error(f"[DingTalk Stream] Error in message handler: {e}")
+                import traceback
+
+                traceback.print_exc()
+                return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, str(e)
+
+        class MaraClawChatbotHandler:
+            """Dispatches DingTalk stream messages to the MaraClaw LLM pipeline."""
+
+            async def process(self, message: dingtalk_stream.CallbackMessage) -> tuple[int, str]:
+                return await process_dingtalk_stream_message(message)
 
         while not stop_event.is_set() and retries <= max_retries:
             try:
                 credential = dingtalk_stream.Credential(client_id=app_key, client_secret=app_secret)
                 client = dingtalk_stream.DingTalkStreamClient(credential=credential)
                 handler = MaraClawChatbotHandler()
-                setattr(handler, "process", process_dingtalk_stream_message)
                 client.register_callback_handler(
                     dingtalk_stream.chatbot.ChatbotMessage.TOPIC,
-                    handler,
+                    cast(dingtalk_stream.CallbackHandler, handler),
                 )
 
                 logger.info(
