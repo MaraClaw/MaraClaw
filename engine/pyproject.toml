@@ -148,6 +148,24 @@ line-ending = "lf"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
+[tool.pyright]
+include = ["app"]
+extraPaths = ["."]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+reportUnannotatedClassAttribute = "error"
+
+[tool.basedpyright]
+include = ["app"]
+extraPaths = ["."]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+reportUnannotatedClassAttribute = "error"
+
 [tool.ty.environment]
 root = ["."]
 
