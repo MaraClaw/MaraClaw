@@ -15,6 +15,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - Preserve `PROCESS_ROLE` gating. Roles gate **side effects**; every process still serves HTTP. Python lowercases the role; Docker `entrypoint.sh` does not.
 - Schema is **not** applied in lifespan. Use `python -m app.scripts.bootstrap_db`.
 - Bootstrap role order matters: default tenant → **`ensure_platform_admin()`** → tools/templates/skills → agent seeders. Platform admin seed is not optional on greenfield.
+- New companies + genesis org admin: `services/tenant_provisioning.py` (called from `POST /api/tenants/` and `POST /api/admin/companies`). Not self-serve.
 - `_log_bwrap_startup_status()` is warn-only.
 - Guest sandbox proxy: `SANDBOX_*_PROXY` only. See `services/sandbox/AGENTS.md`.
 - Background work: `app.core.logging.new_trace_id()` before related logs.
