@@ -45,7 +45,7 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMappi
             time_str = p.created_at.strftime("%m-%d %H:%M") if p.created_at else ""
             post_text = (
                 f"{icon} **{p.author_name}** ({time_str}) [post_id: {p.id}]\n"
-                f"{p.content}\n❤️ {p.likes_count}  💬 {p.comments_count}"
+                + f"{p.content}\n❤️ {p.likes_count}  💬 {p.comments_count}"
             )
             if comments:
                 for c in comments:
@@ -76,7 +76,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         if agent.is_system:
             return (
                 "System agents are not allowed to post to Plaza. "
-                "Use send_platform_message to communicate with users directly."
+                + "Use send_platform_message to communicate with users directly."
             )
 
         if (agent.access_mode or "company") != "company":
@@ -106,7 +106,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     ma = a_map.get(m.lower())
                     if ma and ma.id not in notified:
                         notified.add(ma.id)
-                        await send_notification(
+                        _ = await send_notification(
                             None,
                             agent_id=ma.id,
                             type="mention",
@@ -150,7 +150,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         if (agent.access_mode or "company") != "company":
             return "Only company-wide agents are allowed to comment on Plaza posts."
 
-        await plaza_comment_dao.create_comment(
+        _ = await plaza_comment_dao.create_comment(
             {
                 "post_id": pid,
                 "author_id": agent_id,
@@ -159,7 +159,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 "content": content,
             }
         )
-        await plaza_post_dao.increment_comments_count(pid)
+        _ = await plaza_post_dao.increment_comments_count(pid)
 
         # Notify post author (if not self)
         if post.author_id != agent_id:
@@ -167,7 +167,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 from app.services.notification_service import send_notification
 
                 if post.author_type == "agent":
-                    await send_notification(
+                    _ = await send_notification(
                         None,
                         agent_id=post.author_id,
                         type="plaza_reply",
@@ -180,7 +180,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     # Also notify human creator
                     pa = await agent_dao.get(post.author_id)
                     if pa and pa.creator_id:
-                        await send_notification(
+                        _ = await send_notification(
                             None,
                             user_id=pa.creator_id,
                             type="plaza_comment",
@@ -191,7 +191,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                             sender_name=agent.name,
                         )
                 elif post.author_type == "human":
-                    await send_notification(
+                    _ = await send_notification(
                         None,
                         user_id=post.author_id,
                         type="plaza_reply",
@@ -212,7 +212,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     continue
                 notified.add(cid)
                 if ctype == "agent":
-                    await send_notification(
+                    _ = await send_notification(
                         None,
                         agent_id=cid,
                         type="plaza_reply",
@@ -234,7 +234,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     ma = a_map.get(m.lower())
                     if ma and ma.id not in notified_m:
                         notified_m.add(ma.id)
-                        await send_notification(
+                        _ = await send_notification(
                             None,
                             agent_id=ma.id,
                             type="mention",

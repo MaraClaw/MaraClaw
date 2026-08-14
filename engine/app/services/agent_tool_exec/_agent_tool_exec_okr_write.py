@@ -89,7 +89,7 @@ async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | N
                 "status": status,
             },
         )
-        await okr_progress_log_dao.create(
+        _ = await okr_progress_log_dao.create(
             obj_in={
                 "kr_id": kr_id,
                 "previous_value": prev_value,
@@ -235,7 +235,7 @@ async def _update_any_kr_progress(
             },
         )
         note = _string_argument(arguments, "note", "Updated by OKR Agent after check-in")
-        await okr_progress_log_dao.create(
+        _ = await okr_progress_log_dao.create(
             obj_in={
                 "kr_id": kr.id,
                 "previous_value": old_val,
@@ -247,7 +247,7 @@ async def _update_any_kr_progress(
 
         return (
             f"Successfully updated KR '{kr.title}'. Progress: {old_val} -> {kr.current_value} "
-            f"{kr.unit or ''}. Status: {kr.status}"
+            + f"{kr.unit or ''}. Status: {kr.status}"
         )
     except Exception as error:
         logger.exception("[OKR] update_any_kr_progress failed")

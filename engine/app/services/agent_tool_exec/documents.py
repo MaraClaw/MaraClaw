@@ -48,7 +48,7 @@ def _read_pdf_fast_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
     try:
         fitz = importlib.import_module("fitz")
 
-        text_parts = []
+        text_parts: list[str] = []
         with fitz.open(str(file_path)) as doc:
             for index, page in enumerate(doc[:50]):
                 page_text = page.get_text("text") or ""
@@ -97,8 +97,8 @@ def _read_pdf_fast_with_timeout(ws: Path, rel_path: str, max_chars: int = 8000, 
             proc.join(1)
         return (
             f"Document read timed out after {_READ_DOCUMENT_TIMEOUT_SECONDS}s, "
-            f"and PDF fallback also timed out after {_READ_DOCUMENT_FALLBACK_TIMEOUT_SECONDS}s. "
-            "The file may be too large or too complex to extract safely."
+            + f"and PDF fallback also timed out after {_READ_DOCUMENT_FALLBACK_TIMEOUT_SECONDS}s. "
+            + "The file may be too large or too complex to extract safely."
         )
     try:
         status, payload = out_queue.get_nowait()
@@ -132,8 +132,8 @@ def _read_document_with_timeout(ws: Path, rel_path: str, max_chars: int = 8000, 
             return _read_pdf_fast_with_timeout(ws, rel_path, max_chars=max_chars, tenant_id=tenant_id)
         return (
             f"Document read timed out after {_READ_DOCUMENT_TIMEOUT_SECONDS}s. "
-            "The file may be too large or too complex to extract safely. "
-            "Please split it, convert it to text/Markdown, or read a smaller excerpt."
+            + "The file may be too large or too complex to extract safely. "
+            + "Please split it, convert it to text/Markdown, or read a smaller excerpt."
         )
     try:
         status, payload = out_queue.get_nowait()

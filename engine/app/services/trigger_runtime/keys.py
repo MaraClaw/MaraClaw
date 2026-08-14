@@ -8,10 +8,13 @@ from typing import Any
 
 from croniter import croniter
 
+from app.core.json_types import mapping_from_row
+from app.records.trigger import AgentTriggerRecord
 
-def build_scheduled_execution_key(trigger: Any, now: datetime) -> str:
+
+def build_scheduled_execution_key(trigger: AgentTriggerRecord, now: datetime) -> str:
     """Build a deterministic idempotency key for non-webhook trigger runs."""
-    cfg = trigger.config or {}
+    cfg = mapping_from_row(trigger.config)
     trigger_type = trigger.type
 
     if trigger_type == "once":
@@ -23,6 +26,8 @@ def build_scheduled_execution_key(trigger: Any, now: datetime) -> str:
             raise ValueError("Trigger interval minutes must be numeric")
         minutes = int(configured_minutes)
         base = trigger.last_fired_at or trigger.created_at
+        if base is None:
+            raise ValueError("Trigger interval requires a created_at timestamp")
         due_at = base + timedelta(minutes=minutes)
         return f"interval:{trigger.id}:{due_at.astimezone(UTC).isoformat()}"
 

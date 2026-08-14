@@ -143,11 +143,11 @@ def get_wechat_context_entry(
 ) -> dict[str, Any] | None:
     cache = dict((extra_config or {}).get(WECHAT_CONTEXT_CACHE_KEY) or {})
     entry = cache.get(from_user_id)
-    return entry if isinstance(entry, dict) else None
+    return dict[str, Any](entry) if isinstance(entry, dict) else None
 
 
 async def remember_wechat_context(
-    db: Any,
+    db: object | None,
     *,
     agent_id: uuid.UUID,
     from_user_id: str,
@@ -164,7 +164,7 @@ async def remember_wechat_context(
         context_token=context_token,
         conv_id=conv_id,
     )
-    await channel_config_dao.update(db_obj=config, obj_in={"extra_config": new_extra})
+    _ = await channel_config_dao.update(db_obj=config, obj_in={"extra_config": new_extra})
 
 
 def _extract_wechat_text(item_list: list[WeChatMessageItem] | None) -> str:
@@ -184,7 +184,7 @@ class WeChatPollManager:
     def __init__(self) -> None:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._connected: dict[uuid.UUID, bool] = {}
-        self._reconcile_interval_seconds = 30
+        self._reconcile_interval_seconds: int = 30
 
     async def start_client(self, agent_id: uuid.UUID, stop_existing: bool = True) -> None:
         if stop_existing:
@@ -196,7 +196,7 @@ class WeChatPollManager:
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         task = self._tasks.pop(agent_id, None)
         if task:
-            task.cancel()
+            _ = task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
         self._connected[agent_id] = False
@@ -260,7 +260,7 @@ class WeChatPollManager:
                     if new_cursor and new_cursor != cursor:
                         await self._update_extra(agent_id, {"get_updates_buf": new_cursor})
 
-                    for msg in data.get("msgs", []) or []:
+                    for msg in list[Any](data.get("msgs", []) or []):
                         try:
                             await process_wechat_message(agent_id, msg, config)
                         except Exception as exc:
@@ -314,13 +314,13 @@ class WeChatPollManager:
             return
         extra = dict(config.extra_config or {})
         extra.update(updates)
-        await channel_config_dao.update(db_obj=config, obj_in={"extra_config": extra})
+        _ = await channel_config_dao.update(db_obj=config, obj_in={"extra_config": extra})
 
     async def _set_connected(self, agent_id: uuid.UUID, connected: bool) -> None:
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
         if not config:
             return
-        await channel_config_dao.update(db_obj=config, obj_in={"is_connected": connected})
+        _ = await channel_config_dao.update(db_obj=config, obj_in={"is_connected": connected})
 
 
 wechat_poll_manager = WeChatPollManager()

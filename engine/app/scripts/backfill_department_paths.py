@@ -15,7 +15,7 @@ from app.services.org_sync_adapter import build_department_path_map
 
 
 async def main():
-    await init_pool()
+    _ = await init_pool()
     try:
         # Prefer explicit list of provider ids (active + inactive) for full backfill.
         async with connection_ctx() as db:

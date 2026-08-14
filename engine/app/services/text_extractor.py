@@ -97,7 +97,7 @@ def save_extracted_text(save_path: Path, file_bytes: bytes, filename: str) -> Pa
         return None
 
     md_path = save_path.parent / f"{save_path.stem}.md"
-    md_path.write_text(text, encoding="utf-8")
+    _ = md_path.write_text(text, encoding="utf-8")
     logger.info(f"[TextExtractor] Extracted {len(text)} chars from {filename} -> {md_path.name}")
     return md_path
 
@@ -198,13 +198,15 @@ def _extract_pptx(data: bytes) -> str:
         texts = []
         tables = []
         for shape in slide.shapes:
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
+            text_frame = getattr(shape, "text_frame", None) if getattr(shape, "has_text_frame", False) else None
+            if text_frame is not None:
+                for para in text_frame.paragraphs:
                     text = para.text.strip()
                     if text:
                         texts.append(text)
-            if shape.has_table:
-                rows = [[cell.text.strip() for cell in row.cells] for row in shape.table.rows]
+            table = getattr(shape, "table", None) if getattr(shape, "has_table", False) else None
+            if table is not None:
+                rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
                 table_md = _markdown_table(rows)
                 if table_md:
                     tables.append(table_md)

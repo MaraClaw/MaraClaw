@@ -103,7 +103,7 @@ async def _tick():
 
         for sched in due_schedules:
             next_run = compute_next_run(sched.cron_expr, now)
-            await agent_schedule_dao.update(
+            _ = await agent_schedule_dao.update(
                 db_obj=sched,
                 obj_in={
                     "last_run_at": now,

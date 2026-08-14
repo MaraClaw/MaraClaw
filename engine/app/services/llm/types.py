@@ -224,7 +224,7 @@ class LLMResponse:
     """Unified response format."""
 
     content: str
-    tool_calls: list[LLMToolCall] = field(default_factory=list)
+    tool_calls: list[LLMToolCall] = field(default_factory=list[LLMToolCall])
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
     finish_reason: str | None = None

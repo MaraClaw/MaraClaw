@@ -1,8 +1,10 @@
 """AgentBay builtin tool definitions."""
 
+from typing import Any
+
 # ── AgentBay Tools ──────────────────────────────────────────────────────────
 
-AGENTBAY_TOOLS = [
+AGENTBAY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "agentbay_browser_navigate",
         "display_name": "AgentBay: Browser Navigate",
@@ -687,10 +689,10 @@ AGENTBAY_TOOLS = [
         "display_name": "AgentBay: File Transfer",
         "description": (
             "Transfer a file between any two endpoints: the agent workspace, "
-            "the AgentBay browser environment, the cloud desktop, or the code sandbox. "
-            "Workspace -> env: upload a workspace file into a cloud environment. "
-            "Env -> workspace: download a file from a cloud environment into the workspace. "
-            "Env -> env: transfer between environments transparently (no workspace involvement)."
+            + "the AgentBay browser environment, the cloud desktop, or the code sandbox. "
+            + "Workspace -> env: upload a workspace file into a cloud environment. "
+            + "Env -> workspace: download a file from a cloud environment into the workspace. "
+            + "Env -> env: transfer between environments transparently (no workspace involvement)."
         ),
         "category": "agentbay",
         "icon": "🔄",

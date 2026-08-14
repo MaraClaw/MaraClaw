@@ -43,7 +43,7 @@ async def _agentbay_browser_navigate(agent_id: uuid.UUID | None, ws: Path, argum
                 img_id = store_temp_screenshot(raw_bytes)
                 parts.append(
                     f"Internal screenshot captured for analysis. [ImageID: {img_id}]\n"
-                    "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+                    + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
                 )
                 logger.info(f"[AgentBay] Browser navigate screenshot stored in memory (id={img_id})")
         return "\n\n".join(parts)
@@ -76,7 +76,7 @@ async def _agentbay_browser_screenshot(agent_id: uuid.UUID | None, ws: Path, arg
         logger.info(f"[AgentBay] Browser screenshot stored in memory (id={img_id})")
         return (
             f"Internal screenshot captured for analysis. [ImageID: {img_id}]\n"
-            "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+            + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
         )
     except RuntimeError as e:
         return f"❌ {e!s}"
@@ -118,7 +118,7 @@ async def _agentbay_browser_click(agent_id: uuid.UUID | None, ws: Path, argument
     try:
         _session_id = _string_argument(arguments, "_session_id", remove=True)
         client = await get_agentbay_client_for_agent(agent_id, "browser", session_id=_session_id)
-        await client.browser_click(selector)
+        _ = await client.browser_click(selector)
         return f"✅ Clicked element: {selector}"
     except RuntimeError as e:
         return f"❌ {e!s}"
@@ -138,7 +138,7 @@ async def _agentbay_browser_type(agent_id: uuid.UUID | None, ws: Path, arguments
     try:
         _session_id = _string_argument(arguments, "_session_id", remove=True)
         client = await get_agentbay_client_for_agent(agent_id, "browser", session_id=_session_id)
-        await client.browser_type(selector, text)
+        _ = await client.browser_type(selector, text)
         return f"✅ Entered text in {selector}"
     except RuntimeError as e:
         return f"❌ {e!s}"

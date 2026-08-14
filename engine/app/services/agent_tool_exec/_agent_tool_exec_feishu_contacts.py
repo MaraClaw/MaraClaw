@@ -15,8 +15,9 @@ _cached_users: list[dict[str, str]] = []
 
 
 def _cached_user_count(facade: ModuleType) -> int:
-    if hasattr(facade, "_cached_users"):
-        return len(agent_tools._cached_users)
+    cached_users = getattr(facade, "_cached_users", None)
+    if isinstance(cached_users, list):
+        return len(cached_users)
     return len(_cached_users)
 
 
@@ -80,16 +81,16 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolArguments) -> 
     if total == 0:
         return (
             f"❌ 本地通讯录缓存为空，暂时无法搜索「{name}」。\n\n"
-            "通讯录缓存会在同事向机器人发消息时自动建立。\n"
-            "如果「覃睿」从未给机器人发过消息，可以请他先给机器人发一条消息，"
-            "之后就能直接搜索到他了。\n\n"
-            "或者，请直接告诉我「覃睿」的飞书 open_id 或邮箱，我可以立刻操作。"
+            + "通讯录缓存会在同事向机器人发消息时自动建立。\n"
+            + "如果「覃睿」从未给机器人发过消息，可以请他先给机器人发一条消息，"
+            + "之后就能直接搜索到他了。\n\n"
+            + "或者，请直接告诉我「覃睿」的飞书 open_id 或邮箱，我可以立刻操作。"
         )
     return (
         f"❌ 未在本地通讯录（已缓存 {total} 人）中找到「{name}」。\n\n"
-        "通讯录缓存来自给机器人发过消息的同事。\n"
-        "如果「{name}」从未给机器人发消息，请他先发一条，之后即可自动识别。\n"
-        "或者请直接提供其飞书 open_id / 工作邮箱。"
+        + "通讯录缓存来自给机器人发过消息的同事。\n"
+        + "如果「{name}」从未给机器人发消息，请他先发一条，之后即可自动识别。\n"
+        + "或者请直接提供其飞书 open_id / 工作邮箱。"
     )
 
 

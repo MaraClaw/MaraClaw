@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.core.json_types import JsonObject
 from app.core.tool_types import ToolConfigSchema
@@ -37,7 +38,9 @@ def _string_list_argument(arguments: ToolArguments, name: str) -> list[str] | No
     return None
 
 
-def _decrypt_sensitive_fields(config: JsonObject, config_schema: ToolConfigSchema | None = None) -> JsonObject:
+def _decrypt_sensitive_fields(
+    config: JsonObject, config_schema: Mapping[str, Any] | ToolConfigSchema | None = None
+) -> JsonObject:
     """Decrypt sensitive fields in config dict.
 
     When config_schema is provided, also decrypts fields with type='password'
@@ -110,10 +113,10 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
     if not config.get("email_address") or not config.get("auth_code"):
         return (
             "❌ Email not configured for this agent.\n\n"
-            "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
-            "1. Select your email provider\n"
-            "2. Enter your email address\n"
-            "3. Enter your authorization code (not your login password)"
+            + "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
+            + "1. Select your email provider\n"
+            + "2. Enter your email address\n"
+            + "3. Enter your authorization code (not your login password)"
         )
 
     try:

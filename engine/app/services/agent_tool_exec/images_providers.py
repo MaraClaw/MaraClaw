@@ -1,3 +1,6 @@
+from typing import Any
+
+
 async def _generate_image_siliconflow(api_key: str, model: str, base_url: str, prompt: str, size: str) -> bytes:
     """Generate image via SiliconFlow (OpenAI-compatible images.generate API).
 
@@ -10,7 +13,7 @@ async def _generate_image_siliconflow(api_key: str, model: str, base_url: str, p
 
     url = f"{base_url.rstrip('/')}/images/generations"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "image_size": size,
@@ -32,7 +35,7 @@ async def _generate_image_siliconflow(api_key: str, model: str, base_url: str, p
         image_url = image_data.get("url")
         if image_url:
             img_resp = await client.get(image_url, timeout=60)
-            img_resp.raise_for_status()
+            _ = img_resp.raise_for_status()
             return img_resp.content
 
         b64 = image_data.get("b64_json")
@@ -53,7 +56,7 @@ async def _generate_image_openai(api_key: str, model: str, base_url: str, prompt
 
     url = f"{base_url.rstrip('/')}/images/generations"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "size": size,
@@ -80,7 +83,7 @@ async def _generate_image_openai(api_key: str, model: str, base_url: str, prompt
         image_url = image_data.get("url")
         if image_url:
             img_resp = await client.get(image_url, timeout=60)
-            img_resp.raise_for_status()
+            _ = img_resp.raise_for_status()
             return img_resp.content
 
         raise ValueError(f"No b64_json or URL in OpenAI response: {data}")
@@ -109,7 +112,7 @@ async def _generate_image_google(api_key: str, model: str, base_url: str, prompt
     }
     aspect_ratio = size_to_ratio.get(size, "1:1")
 
-    payload = {
+    payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseModalities": ["IMAGE"],
@@ -149,5 +152,5 @@ async def _generate_image_google(api_key: str, model: str, base_url: str, prompt
 
         raise ValueError(
             f"No image (inlineData) found in Gemini response parts. "
-            f"Parts: {[p.get('text', '(image)') if 'text' in p else '(inline)' for p in parts]}"
+            + f"Parts: {[p.get('text', '(image)') if 'text' in p else '(inline)' for p in parts]}"
         )

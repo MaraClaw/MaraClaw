@@ -9,7 +9,7 @@ def test_duplicate_user_merge_prefers_real_email_without_legacy_user_fields() ->
 
     class _U:
         def __init__(self, email: str) -> None:
-            self.email = email
+            self.email: str = email
 
     if _user_merge_score(_U("primary@feishu.local")) != 0:
         pytest.fail("placeholder email must not be preferred")

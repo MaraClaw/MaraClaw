@@ -23,8 +23,8 @@ class FallbackStorageBackend(StorageBackend):
     """
 
     def __init__(self, primary: StorageBackend, fallback: StorageBackend):
-        self.primary = primary
-        self.fallback = fallback
+        self.primary: StorageBackend = primary
+        self.fallback: StorageBackend = fallback
 
     @override
     async def exists(self, key: str) -> bool:

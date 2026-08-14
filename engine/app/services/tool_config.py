@@ -28,7 +28,7 @@ def tenant_tool_config_key(tool_name: str) -> str:
     return f"{TENANT_TOOL_CONFIG_PREFIX}{tool_name}"
 
 
-def get_sensitive_keys(config_schema: ToolConfigSchema | None = None) -> set[str]:
+def get_sensitive_keys(config_schema: Mapping[str, Any] | ToolConfigSchema | None = None) -> set[str]:
     keys = set(SENSITIVE_FIELD_KEYS)
     if config_schema:
         for field in config_schema.get("fields", []):
@@ -39,7 +39,7 @@ def get_sensitive_keys(config_schema: ToolConfigSchema | None = None) -> set[str
 
 
 def encrypt_sensitive_fields(
-    config: Mapping[str, JsonValue], config_schema: ToolConfigSchema | None = None
+    config: Mapping[str, JsonValue], config_schema: Mapping[str, Any] | ToolConfigSchema | None = None
 ) -> JsonObject:
     if not config:
         return {}
@@ -51,7 +51,7 @@ def encrypt_sensitive_fields(
         if not isinstance(value, str) or not value:
             continue
         try:
-            decrypt_data(value, settings.SECRET_KEY)
+            _ = decrypt_data(value, settings.SECRET_KEY)
             continue
         except ValueError as exc:
             logger.debug("Encrypting non-ciphertext tool configuration field {}: {}", key, type(exc).__name__)
@@ -60,7 +60,7 @@ def encrypt_sensitive_fields(
 
 
 def decrypt_sensitive_fields(
-    config: Mapping[str, JsonValue], config_schema: ToolConfigSchema | None = None
+    config: Mapping[str, JsonValue], config_schema: Mapping[str, Any] | ToolConfigSchema | None = None
 ) -> JsonObject:
     if not config:
         return {}
@@ -94,10 +94,10 @@ def meaningful_config(config: Mapping[str, JsonValue] | None) -> JsonObject:
 
 
 async def get_tenant_tool_config(
-    db: Any,
+    db: object | None,
     tenant_id: uuid.UUID | None,
     tool_name: str,
-    config_schema: ToolConfigSchema | None = None,
+    config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
 ) -> JsonObject:
     del db
     if not tenant_id:
@@ -107,7 +107,9 @@ async def get_tenant_tool_config(
             "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
             {"tenant_id": tenant_id, "key": tenant_tool_config_key(tool_name)},
         )
-    raw = (row.get("value") or {}).get("config") if row else None
+    value_raw = row.get("value") if row else None
+    value_map: dict[str, Any] = dict[str, Any](value_raw) if isinstance(value_raw, dict) else {}
+    raw = value_map.get("config")
     if not isinstance(raw, dict):
         return {}
     return decrypt_sensitive_fields(raw, config_schema)
@@ -115,7 +117,7 @@ async def get_tenant_tool_config(
 
 async def get_tenant_tool_configs(
     tenant_id: uuid.UUID | None,
-    tools: Sequence[Any],
+    tools: Sequence[ToolRecord],
 ) -> dict[str, JsonObject]:
     """Load company configs for many tools in one tenant_settings round-trip."""
     if not tenant_id or not tools:
@@ -135,7 +137,9 @@ async def get_tenant_tool_configs(
         name = getattr(tool, "name", None)
         if not isinstance(name, str) or not name:
             continue
-        raw = (by_key.get(tenant_tool_config_key(name)) or {}).get("config")
+        setting_raw = by_key.get(tenant_tool_config_key(name)) or {}
+        setting_map: dict[str, Any] = dict[str, Any](setting_raw) if isinstance(setting_raw, dict) else {}
+        raw = setting_map.get("config")
         if not isinstance(raw, dict):
             result[name] = {}
             continue
@@ -144,11 +148,11 @@ async def get_tenant_tool_configs(
 
 
 async def set_tenant_tool_config(
-    db: Any,
+    db: object | None,
     tenant_id: uuid.UUID,
     tool_name: str,
     config: Mapping[str, JsonValue],
-    config_schema: ToolConfigSchema | None = None,
+    config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
 ) -> None:
     del db
     encrypted = encrypt_sensitive_fields(meaningful_config(config), config_schema)
@@ -162,7 +166,7 @@ async def set_tenant_tool_config(
         if existing:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
-                "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
+                + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                 {"tenant_id": tenant_id, "key": key, "value": as_jsonb(stored_value)},
             )
         else:
@@ -172,7 +176,7 @@ async def set_tenant_tool_config(
             )
 
 
-async def delete_tenant_tool_config(db: Any, tenant_id: uuid.UUID, tool_name: str) -> None:
+async def delete_tenant_tool_config(db: object | None, tenant_id: uuid.UUID, tool_name: str) -> None:
     del db
     async with connection_ctx() as conn:
         await conn.execute(
@@ -181,14 +185,14 @@ async def delete_tenant_tool_config(db: Any, tenant_id: uuid.UUID, tool_name: st
         )
 
 
-async def get_tool_company_config(db: Any, tool: ToolRecord | Any, tenant_id: uuid.UUID | None) -> JsonObject:
+async def get_tool_company_config(db: object | None, tool: ToolRecord | Any, tenant_id: uuid.UUID | None) -> JsonObject:
     """Return company config for a tool without leaking builtin config across tenants."""
     if getattr(tool, "source", None) == "builtin":
         return await get_tenant_tool_config(db, tenant_id, tool.name, getattr(tool, "config_schema", None))
     return decrypt_sensitive_fields(getattr(tool, "config", None) or {}, getattr(tool, "config_schema", None))
 
 
-def mask_sensitive_fields(config: Mapping[str, JsonValue], config_schema: ToolConfigSchema | None = None) -> JsonObject:
+def mask_sensitive_fields(config: Mapping[str, JsonValue], config_schema: Mapping[str, Any] | ToolConfigSchema | None = None) -> JsonObject:
     masked: JsonObject = dict(config)
     for key in get_sensitive_keys(config_schema):
         value = masked.get(key)

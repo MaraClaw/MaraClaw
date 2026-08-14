@@ -5,7 +5,15 @@ from typing import NotRequired, TypedDict
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import (
+    JsonObject,
+    is_json_object,
+    json_as_bool,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+)
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
@@ -141,19 +149,21 @@ async def _search_smithery_api(query: str, max_results: int, api_key: str) -> li
             )
             if resp.status_code != 200:
                 return []
-            data = resp.json()
+            data = json_object_from(resp.json())
+        servers_raw = data.get("servers", [])
+        servers = [srv for srv in servers_raw if is_json_object(srv)] if isinstance(servers_raw, list) else []
         return [
             {
-                "name": srv.get("qualifiedName", ""),
-                "display_name": srv.get("displayName", ""),
-                "description": srv.get("description", "")[:200],
-                "remote": srv.get("remote", False),
-                "verified": srv.get("verified", False),
-                "use_count": srv.get("useCount", 0),
-                "homepage": srv.get("homepage", ""),
+                "name": json_as_str_or(srv.get("qualifiedName")),
+                "display_name": json_as_str_or(srv.get("displayName")),
+                "description": json_as_str_or(srv.get("description"))[:200],
+                "remote": json_as_bool(srv.get("remote")),
+                "verified": json_as_bool(srv.get("verified")),
+                "use_count": json_as_int(srv.get("useCount")),
+                "homepage": json_as_str_or(srv.get("homepage")),
                 "source": "Smithery",
             }
-            for srv in data.get("servers", [])[:max_results]
+            for srv in servers[:max_results]
         ]
     except Exception as error:
         logger.warning(f"[ResourceDiscovery] Smithery search failed: {error}")
@@ -206,23 +216,25 @@ async def _search_modelscope_api(
             )
             if resp.status_code != 200:
                 return []
-            data = resp.json()
+            data = json_object_from(resp.json())
             if not data.get("success"):
                 return []
 
-        servers_data = data.get("data", {}).get("mcp_server_list", [])
+        payload = json_object_from(data.get("data"))
+        servers_raw = payload.get("mcp_server_list", [])
+        servers_data = [srv for srv in servers_raw if is_json_object(srv)] if isinstance(servers_raw, list) else []
         if not servers_data:
             return []
 
         results: list[RegistrySearchResult] = []
         for srv in servers_data[:max_results]:
-            server_id = srv.get("id", "")
+            server_id = json_as_str_or(srv.get("id"))
             results.append(
                 {
                     "name": server_id,
-                    "display_name": srv.get("name", server_id),
-                    "description": srv.get("description", "")[:200],
-                    "remote": srv.get("is_hosted", False),
+                    "display_name": json_as_str_or(srv.get("name"), server_id),
+                    "description": json_as_str_or(srv.get("description"))[:200],
+                    "remote": json_as_bool(srv.get("is_hosted")),
                     "verified": True,
                     "use_count": 0,
                     "homepage": f"https://modelscope.cn/mcp/servers/{server_id}",
@@ -247,8 +259,8 @@ async def search_registries(query: str, max_results: int = 5, agent_id: uuid.UUI
     smithery_results, modelscope_results = await asyncio.gather(smithery_task, modelscope_task)
 
     # Merge: Smithery first, then ModelScope (deduplicate by name)
-    seen_names = set()
-    all_results = []
+    seen_names: set[str] = set()
+    all_results: list[RegistrySearchResult] = []
     for r in smithery_results + modelscope_results:
         if r["name"] not in seen_names:
             seen_names.add(r["name"])
@@ -267,17 +279,17 @@ async def search_registries(query: str, max_results: int = 5, agent_id: uuid.UUI
 
         results.append(
             f"**{i}. {srv['display_name']}**{verified} {source_tag}\n"
-            f"   ID: `{srv['name']}`\n"
-            f"   {srv['description']}\n"
-            f"   {deploy_info}{use_info}\n"
-            f"   {'🔗 ' + hp if hp else ''}"
+            + f"   ID: `{srv['name']}`\n"
+            + f"   {srv['description']}\n"
+            + f"   {deploy_info}{use_info}\n"
+            + f"   {'🔗 ' + hp if hp else ''}"
         )
 
     header = f'🔍 Found {len(results)} MCP server(s) for "{query}":\n\n'
     footer = (
         "\n\n---\n"
-        "💡 To import a remote server, use `import_mcp_server` with the server ID.\n"
-        '   Example: import_mcp_server(server_id="gmail")'
+        + "💡 To import a remote server, use `import_mcp_server` with the server ID.\n"
+        + '   Example: import_mcp_server(server_id="gmail")'
     )
     return header + "\n\n".join(results) + footer
 
@@ -302,9 +314,15 @@ async def _ensure_smithery_connection(
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             # Get or create namespace
             ns_resp = await client.get("https://api.smithery.ai/namespaces", headers=headers)
-            namespaces = ns_resp.json().get("namespaces", []) if ns_resp.status_code == 200 else []
+            namespaces_payload = json_object_from(ns_resp.json()) if ns_resp.status_code == 200 else {}
+            namespaces_raw = namespaces_payload.get("namespaces", [])
+            namespaces = (
+                [item for item in namespaces_raw if is_json_object(item)] if isinstance(namespaces_raw, list) else []
+            )
             if namespaces:
-                namespace = namespaces[0]["name"]
+                namespace = json_as_str_or(namespaces[0].get("name"))
+                if not namespace:
+                    return {"error": "Failed to read namespace name"}
             else:
                 create_ns = await client.post(
                     "https://api.smithery.ai/namespaces",
@@ -313,7 +331,9 @@ async def _ensure_smithery_connection(
                 )
                 if create_ns.status_code not in (200, 201):
                     return {"error": f"Failed to create namespace: HTTP {create_ns.status_code}"}
-                namespace = create_ns.json()["name"]
+                namespace = json_as_str_or(json_object_from(create_ns.json()).get("name"))
+                if not namespace:
+                    return {"error": f"Failed to create namespace: HTTP {create_ns.status_code}"}
 
             # Create connection
             conn_id = display_name.lower().replace(" ", "-").replace(":", "")
@@ -325,14 +345,14 @@ async def _ensure_smithery_connection(
             if conn_resp.status_code not in (200, 201):
                 return {"error": f"Failed to create connection: HTTP {conn_resp.status_code} - {conn_resp.text[:200]}"}
 
-            conn_data = conn_resp.json()
+            conn_data = json_object_from(conn_resp.json())
             result: SmitheryConnectionSuccess = {
                 "namespace": namespace,
-                "connection_id": conn_data.get("connectionId", conn_id),
+                "connection_id": json_as_str_or(conn_data.get("connectionId"), conn_id),
             }
             status = conn_data.get("status", {})
-            if isinstance(status, dict) and status.get("state") == "auth_required":
-                result["auth_url"] = status.get("authorizationUrl", "")
+            if is_json_object(status) and status.get("state") == "auth_required":
+                result["auth_url"] = json_as_str_or(status.get("authorizationUrl"))
             return result
     except Exception as e:
         return {"error": str(e)[:200]}
@@ -362,11 +382,11 @@ async def import_mcp_from_smithery(
     if not api_key:
         return (
             "❌ Smithery API key is required to import MCP servers.\n\n"
-            "Provide your Smithery API key. You can obtain one by:\n"
-            "1. Signing up for or logging in to https://smithery.ai\n"
-            "2. Creating an API key at https://smithery.ai/account/api-keys\n"
-            "3. Providing the key, for example:\n"
-            '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
+            + "Provide your Smithery API key. You can obtain one by:\n"
+            + "1. Signing up for or logging in to https://smithery.ai\n"
+            + "2. Creating an API key at https://smithery.ai/account/api-keys\n"
+            + "3. Providing the key, for example:\n"
+            + '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
         )
 
     # Write key back to discover_resources / import_mcp_server AgentTool configs
@@ -376,7 +396,7 @@ async def import_mcp_from_smithery(
             tool = await tool_dao.get_by_name(tool_name)
             if not tool:
                 continue
-            await agent_tool_dao.ensure_with_config(
+            _ = await agent_tool_dao.ensure_with_config(
                 agent_id,
                 tool.id,
                 config={"smithery_api_key": api_key},
@@ -424,12 +444,14 @@ async def import_mcp_from_smithery(
             )
             if resp.status_code != 200:
                 return f"❌ Server '{server_id}' not found on Smithery (HTTP {resp.status_code})"
-            data = resp.json()
-            servers = data.get("servers", [])
-            server_info = None
+            data = json_object_from(resp.json())
+            servers_raw = data.get("servers", [])
+            servers = [item for item in servers_raw if is_json_object(item)] if isinstance(servers_raw, list) else []
+            server_info: JsonObject | None = None
             clean_id = server_id.lstrip("@")
             for s in servers:
-                if s.get("qualifiedName") == clean_id or s.get("qualifiedName") == server_id:
+                qualified = s.get("qualifiedName")
+                if qualified == clean_id or qualified == server_id:
                     server_info = s
                     break
             if not server_info and servers:
@@ -439,20 +461,20 @@ async def import_mcp_from_smithery(
     except Exception as e:
         return f"❌ Failed to fetch server info: {str(e)[:200]}"
 
-    display_name = server_info.get("displayName", server_id.split("/")[-1])
-    description = server_info.get("description", "")
-    qualified_name = server_info.get("qualifiedName", server_id.lstrip("@"))
+    display_name = json_as_str_or(server_info.get("displayName"), server_id.split("/")[-1])
+    description = json_as_str_or(server_info.get("description"))
+    qualified_name = json_as_str_or(server_info.get("qualifiedName"), server_id.lstrip("@"))
 
     # Check if server supports remote hosting
     if not server_info.get("remote"):
         return (
             f"⚠️ **{display_name}** (`{qualified_name}`) does not support remote hosting via Smithery Connect.\n"
-            f"This server requires local installation and cannot be imported automatically.\n"
-            f"🔗 {server_info.get('homepage', '')}"
+            + f"This server requires local installation and cannot be imported automatically.\n"
+            + f"🔗 {json_as_str_or(server_info.get('homepage'))}"
         )
 
     # Step 2: Get full server details including tools from registry API
-    tools_discovered = []
+    tools_discovered: list[JsonObject] = []
     deployment_url = None
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -461,17 +483,17 @@ async def import_mcp_from_smithery(
                 headers=headers,
             )
             if detail_resp.status_code == 200:
-                detail = detail_resp.json()
-                deployment_url = detail.get("deploymentUrl")
+                detail = json_object_from(detail_resp.json())
+                deployment_url = json_as_str(detail.get("deploymentUrl"))
                 raw_tools = detail.get("tools", [])
                 tools_discovered = [
                     {
-                        "name": t.get("name", ""),
-                        "description": t.get("description", ""),
-                        "inputSchema": t.get("inputSchema", {}),
+                        "name": json_as_str_or(t.get("name")),
+                        "description": json_as_str_or(t.get("description")),
+                        "inputSchema": json_object_from(t.get("inputSchema")),
                     }
-                    for t in raw_tools
-                    if t.get("name")
+                    for t in (raw_tools if isinstance(raw_tools, list) else [])
+                    if is_json_object(t) and t.get("name")
                 ]
                 logger.info(f"[ResourceDiscovery] Got {len(tools_discovered)} tools from registry for {qualified_name}")
             else:
@@ -495,12 +517,12 @@ async def import_mcp_from_smithery(
             "smithery_namespace": conn_result["namespace"],
             "smithery_connection_id": conn_result["connection_id"],
         }
-        auth_url = conn_result.get("auth_url")
+        auth_url = json_as_str(conn_result.get("auth_url"))
         if auth_url:
             auth_message = (
                 f"\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
-                f"{auth_url}\n"
-                f"The tool will be available after authorization is complete."
+                + f"{auth_url}\n"
+                + f"The tool will be available after authorization is complete."
             )
 
     # Step 3.6: Override registry-advertised schema with the runtime server's
@@ -509,8 +531,8 @@ async def import_mcp_from_smithery(
     # required `user_prompt` + `query`). The truth is whatever tools/list
     # returns at call time, so prefer it whenever available.
     if smithery_config:
-        ns_ = smithery_config["smithery_namespace"]
-        conn_ = smithery_config["smithery_connection_id"]
+        ns_ = json_as_str_or(smithery_config["smithery_namespace"])
+        conn_ = json_as_str_or(smithery_config["smithery_connection_id"])
         try:
             import json as _json
 
@@ -525,7 +547,7 @@ async def import_mcp_from_smithery(
                     },
                 )
             if live_resp.status_code == 200:
-                live_data = None
+                live_data: object = None
                 # Smithery Connect returns SSE; parse the first data: line.
                 for line in live_resp.text.split("\n"):
                     line = line.strip()
@@ -540,22 +562,29 @@ async def import_mcp_from_smithery(
                         live_data = _json.loads(live_resp.text)
                     except _json.JSONDecodeError:
                         live_data = None
-                live_tools = (live_data or {}).get("result", {}).get("tools", []) if live_data else []
+                live_payload = live_data if is_json_object(live_data) else None
+                live_result = json_object_from(live_payload.get("result")) if live_payload else {}
+                live_tools_raw = live_result.get("tools", [])
+                live_tools = (
+                    [item for item in live_tools_raw if is_json_object(item)]
+                    if isinstance(live_tools_raw, list)
+                    else []
+                )
                 # MCP servers also return prompts here; only treat actual tools.
-                live_tools_normalized = [
+                live_tools_normalized: list[JsonObject] = [
                     {
-                        "name": t.get("name", ""),
-                        "description": t.get("description", ""),
-                        "inputSchema": t.get("inputSchema", {}),
+                        "name": json_as_str_or(t.get("name")),
+                        "description": json_as_str_or(t.get("description")),
+                        "inputSchema": json_object_from(t.get("inputSchema")),
                     }
                     for t in live_tools
-                    if t.get("name") and isinstance(t.get("inputSchema"), dict)
+                    if t.get("name") and is_json_object(t.get("inputSchema"))
                 ]
                 if live_tools_normalized:
                     logger.info(
                         f"[ResourceDiscovery] Using live tools/list for {qualified_name}: "
-                        f"{len(live_tools_normalized)} tool(s) override registry's "
-                        f"{len(tools_discovered)}"
+                        + f"{len(live_tools_normalized)} tool(s) override registry's "
+                        + f"{len(tools_discovered)}"
                     )
                     tools_discovered = live_tools_normalized
         except Exception as e:
@@ -569,7 +598,7 @@ async def import_mcp_from_smithery(
     imported_tools = []
 
     async def _ensure_agent_tool(tool_id: uuid.UUID):
-        await agent_tool_dao.ensure_with_config(
+        _ = await agent_tool_dao.ensure_with_config(
             agent_id,
             tool_id,
             config=agent_tool_config,
@@ -579,7 +608,7 @@ async def import_mcp_from_smithery(
 
     if server_config or reauthorize:
         for et in await tool_dao.list_mcp_by_server_display_name(display_name):
-            await tool_dao.update_mcp_server_url(et.id, base_mcp_url)
+            _ = await tool_dao.update_mcp_server_url(et.id, base_mcp_url)
             await _ensure_agent_tool(et.id)
 
     if tools_discovered:
@@ -587,15 +616,18 @@ async def import_mcp_from_smithery(
         old_generic = await tool_dao.get_by_name(generic_name)
         if old_generic:
             await agent_tool_dao.delete_for_tool(old_generic.id)
-            await tool_dao.delete(id=old_generic.id)
+            _ = await tool_dao.delete(id=old_generic.id)
 
         for mcp_tool in tools_discovered:
-            tool_name = f"mcp_{server_id.replace('/', '_').replace('@', '')}_{mcp_tool['name']}"
-            tool_display = f"{display_name}: {mcp_tool['name']}"
+            mcp_tool_name = json_as_str_or(mcp_tool.get("name"))
+            if not mcp_tool_name:
+                continue
+            tool_name = f"mcp_{server_id.replace('/', '_').replace('@', '')}_{mcp_tool_name}"
+            tool_display = f"{display_name}: {mcp_tool_name}"
 
             existing_tool = await tool_dao.get_by_name(tool_name)
             if existing_tool:
-                await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
+                _ = await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
                 await _ensure_agent_tool(existing_tool.id)
                 if reauthorize:
                     imported_tools.append(f"🔄 {tool_display} (reauthorized)")
@@ -609,14 +641,16 @@ async def import_mcp_from_smithery(
                 obj_in={
                     "name": tool_name,
                     "display_name": tool_display,
-                    "description": (mcp_tool.get("description", description) or "")[:500],
+                    "description": (json_as_str_or(mcp_tool.get("description"), description) or "")[:500],
                     "type": "mcp",
                     "category": "mcp",
                     "icon": "🔌",
-                    "parameters_schema": mcp_tool.get("inputSchema", {"type": "object", "properties": {}}),
+                    "parameters_schema": json_object_from(
+                        mcp_tool.get("inputSchema", {"type": "object", "properties": {}})
+                    ),
                     "mcp_server_url": base_mcp_url,
                     "mcp_server_name": display_name,
-                    "mcp_tool_name": mcp_tool["name"],
+                    "mcp_tool_name": mcp_tool_name,
                     "enabled": True,
                     "is_default": False,
                     "source": "agent",
@@ -630,7 +664,7 @@ async def import_mcp_from_smithery(
 
         existing_tool = await tool_dao.get_by_name(tool_name)
         if existing_tool:
-            await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
+            _ = await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
             await _ensure_agent_tool(existing_tool.id)
             if server_config:
                 return f"🔄 {tool_display} config updated. The tool is now ready to use."
@@ -692,7 +726,7 @@ async def import_mcp_direct(
     safe_name = display_name.replace(".", "_").replace("/", "_").replace(":", "_").replace("-", "_")
 
     # Try to list tools from the endpoint
-    tools_discovered = []
+    tools_discovered: list[JsonObject] = []
     try:
         client = MCPClient(full_url)
         tools_discovered = await client.list_tools()
@@ -708,7 +742,7 @@ async def import_mcp_direct(
     imported_tools = []
 
     async def _ensure_agent_tool(tool_id: uuid.UUID):
-        await agent_tool_dao.ensure_with_config(
+        _ = await agent_tool_dao.ensure_with_config(
             agent_id,
             tool_id,
             config=agent_tool_config,
@@ -726,7 +760,7 @@ async def import_mcp_direct(
 
             existing_tool = await tool_dao.get_by_name(tool_name)
             if existing_tool:
-                await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
+                _ = await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
                 await _ensure_agent_tool(existing_tool.id)
                 imported_tools.append(f"⏭️ {tool_display} (already imported)")
                 continue
@@ -754,7 +788,7 @@ async def import_mcp_direct(
         tool_name = f"mcp_{safe_name}"
         existing_tool = await tool_dao.get_by_name(tool_name)
         if existing_tool:
-            await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
+            _ = await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
             await _ensure_agent_tool(existing_tool.id)
             return f"⏭️ {display_name} is already imported."
 
@@ -839,7 +873,7 @@ async def seed_atlassian_rovo_tools(api_key: str) -> None:
         atlassian_config: JsonObject = {"api_key": api_key}
 
         if existing_tool:
-            await tool_dao.update(
+            _ = await tool_dao.update(
                 db_obj=existing_tool,
                 obj_in={
                     "description": tool_desc,
@@ -848,7 +882,7 @@ async def seed_atlassian_rovo_tools(api_key: str) -> None:
                 },
             )
         else:
-            await tool_dao.create(
+            _ = await tool_dao.create(
                 obj_in={
                     "name": tool_name,
                     "display_name": tool_display,
@@ -876,5 +910,5 @@ async def refresh_atlassian_rovo_api_key(api_key: str) -> None:
 
     Called when the user updates the API key via the config UI.
     """
-    await tool_dao.update_config_for_mcp_server(ATLASSIAN_ROVO_SERVER_NAME, {"api_key": api_key})
+    _ = await tool_dao.update_config_for_mcp_server(ATLASSIAN_ROVO_SERVER_NAME, {"api_key": api_key})
     logger.info("[AtlassianRovo] API key refreshed for all Rovo tools")

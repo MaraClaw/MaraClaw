@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
@@ -43,7 +43,7 @@ class SandboxBackend(Protocol):
         language: str,
         timeout: int = 30,  # noqa: ASYNC109 - public backend protocol preserves caller timeout contract
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """
         Execute code in the sandbox.
@@ -98,7 +98,7 @@ class BaseSandboxBackend(ABC):
         language: str,
         timeout: int = 30,  # noqa: ASYNC109 - public backend base preserves caller timeout contract
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code in the sandbox."""
 

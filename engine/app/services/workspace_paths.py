@@ -38,7 +38,7 @@ def resolve_path_within_root(
 
     target = (root_resolved / candidate).resolve() if normalized else root_resolved
     try:
-        target.relative_to(root_resolved)
+        _ = target.relative_to(root_resolved)
     except ValueError as exc:
         raise WorkspacePathError(f"Access denied for this {label}") from exc
 

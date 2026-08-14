@@ -30,8 +30,8 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
         logger.warning(f"[TaskExec] Task {task_id} not found")
         return
 
-    await task_dao.update(db_obj=task, obj_in={"status": "doing"})
-    await task_log_dao.create(obj_in={"task_id": task_id, "content": "🤖 Starting task execution..."})
+    _ = await task_dao.update(db_obj=task, obj_in={"status": "doing"})
+    _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": "🤖 Starting task execution..."})
 
     task_title = task.title
     task_description = task.description or ""
@@ -114,14 +114,14 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
     if task:
         if task_type == "supervision":
             # Supervision tasks stay active; just log the result
-            await task_dao.update(db_obj=task, obj_in={"status": "pending"})
-            await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"})
+            _ = await task_dao.update(db_obj=task, obj_in={"status": "pending"})
+            _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"})
         else:
-            await task_dao.update(
+            _ = await task_dao.update(
                 db_obj=task,
                 obj_in={"status": "done", "completed_at": datetime.now(UTC)},
             )
-            await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Task completed\n\n{reply}"})
+            _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Task completed\n\n{reply}"})
         logger.info(f"[TaskExec] Task {task_id} {'logged' if task_type == 'supervision' else 'completed'}!")
 
     # Log activity
@@ -139,11 +139,11 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
 async def _log_error(task_id: uuid.UUID, message: str) -> None:
     """Add an error log to the task."""
     logger.error(f"[TaskExec] Error for {task_id}: {message}")
-    await task_log_dao.create(obj_in={"task_id": task_id, "content": f"❌ {message}"})
+    _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"❌ {message}"})
 
 
 async def _restore_supervision_status(task_id: uuid.UUID) -> None:
     """Restore supervision task status back to pending after a failed execution."""
     task = await task_dao.get(task_id)
     if task and task.status == "doing":
-        await task_dao.update(db_obj=task, obj_in={"status": "pending"})
+        _ = await task_dao.update(db_obj=task, obj_in={"status": "pending"})

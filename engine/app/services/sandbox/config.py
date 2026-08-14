@@ -1,7 +1,7 @@
 """Sandbox configuration models."""
 
 from enum import StrEnum
-from typing import TypedDict
+from typing import TypedDict, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,7 +40,7 @@ class SandboxType(StrEnum):
 class SandboxConfig(BaseModel):
     """Configuration for sandbox backend."""
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(use_enum_values=True)
 
     type: SandboxType = SandboxType.SUBPROCESS
     enabled: bool = True

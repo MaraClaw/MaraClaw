@@ -11,7 +11,7 @@ Reference: https://modelcontextprotocol.io/docs
 import json
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import TypeIs
+from typing import Any, TypeIs
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -23,14 +23,15 @@ from app.core.logging import logger
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
     if not isinstance(value, dict):
         return False
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    mapping: dict[object, object] = dict(value)
+    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
 
 
 def _is_json_value(value: object) -> TypeIs[JsonValue]:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
+        return all(_is_json_value(item) for item in list[object](value))
     return _is_json_object(value)
 
 
@@ -51,13 +52,13 @@ class MCPClient:
         parsed = urlparse(server_url)
         qs = parse_qs(parsed.query, keep_blank_values=True)
 
-        self.api_key = api_key
+        self.api_key: str | None = api_key
         if not self.api_key and "apiKey" in qs:
             self.api_key = qs.pop("apiKey")[0]
 
         # Rebuild URL without apiKey in query string
         remaining_qs = urlencode({k: v[0] for k, v in qs.items()}) if qs else ""
-        self.server_url = urlunparse(parsed._replace(query=remaining_qs)).rstrip("/")
+        self.server_url: str = urlunparse(parsed._replace(query=remaining_qs)).rstrip("/")
 
         # Transport state
         self._transport: str | None = None  # "streamable" or "sse"
@@ -124,9 +125,9 @@ class MCPClient:
                 headers=self._headers(),
             )
             if resp.status_code == 200:
-                self._parse_response(resp)  # captures Mcp-Session-Id if present
+                _ = self._parse_response(resp)  # captures Mcp-Session-Id if present
             # Send initialized notification (required by MCP spec before other requests)
-            await client.post(
+            _ = await client.post(
                 self.server_url,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=self._headers(),
@@ -251,9 +252,9 @@ class MCPClient:
                     "clientInfo": {"name": "maraclaw", "version": "1.0"},
                 },
             }
-            await client.post(messages_url, json=init_body, headers=headers_post)
+            _ = await client.post(messages_url, json=init_body, headers=headers_post)
             # Send initialized notification (required before other requests)
-            await client.post(
+            _ = await client.post(
                 messages_url,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=headers_post,
@@ -374,9 +375,10 @@ class MCPClient:
                 return result
 
             # MCP returns content as list of content blocks
-            content_blocks = result.get("content", []) if _is_json_object(result) else []
-            if not isinstance(content_blocks, list):
+            raw_blocks = result.get("content") if _is_json_object(result) else None
+            if not isinstance(raw_blocks, list):
                 return str(result)
+            content_blocks: list[Any] = list(raw_blocks)
             texts = []
             for block in content_blocks:
                 if isinstance(block, str):

@@ -15,10 +15,13 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.dao.base import as_uuid
+from app.records.agent import AgentRecord
+from app.records.llm import LLMModelRecord
+from app.services.agent_tool_exec.registry import ToolOutputCallback
 from app.services.token_tracker import (
     TokenUsage,
     estimate_token_usage_from_chars,
@@ -26,32 +29,42 @@ from app.services.token_tracker import (
     record_token_usage,
 )
 
-from .base import ToolCallback, ToolCallbackData, ToolDefinition
+from .base import ChunkCallback, ThinkingCallback, ToolCallback, ToolCallbackData, ToolDefinition
 from .client import LLMError
 from .failover import FailoverErrorType, classify_error
 from .finish import FINISH_PROTOCOL_REMINDER, FINISH_TOOL_DEFINITION, find_finish_call, parse_tool_arguments
 from .turn import TurnContext
-from .types import LLMContentPart, LLMToolCall, OpenAIMessage, ToolPayload
+from .types import LLMContentPart, LLMResponse, LLMToolCall, OpenAIMessage, ToolPayload
 from .utils import LLMMessage, create_llm_client, get_max_tokens, get_model_api_key
 
 # NOTE: agent_tools imports are deferred to function bodies to avoid circular
 # import: agent_tools → llm.finish → llm/__init__ → caller → agent_tools
 
 
-async def get_agent_tools_for_llm(*args, **kwargs):
+async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
     from app.services.agent_tools import get_agent_tools_for_llm as _impl
 
-    return await _impl(*args, **kwargs)
+    return await _impl(agent_id)
 
 
-async def execute_tool(*args, **kwargs):
-    from app.services.agent_tools import execute_tool as _impl
+async def execute_tool(
+    tool_name: str,
+    arguments: ToolPayload,
+    agent_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session_id: str = "",
+    on_output: ToolOutputCallback | None = None,
+) -> str:
+    from app.services import agent_tools
 
-    return await _impl(*args, **kwargs)
-
-
-if TYPE_CHECKING:
-    pass
+    return await agent_tools.execute_tool(
+        tool_name,
+        arguments,
+        agent_id,
+        user_id,
+        session_id=session_id,
+        on_output=on_output,
+    )
 
 
 TOOLS_REQUIRING_ARGS = frozenset(
@@ -90,10 +103,10 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
                 )
                 return None, (
                     "Your previous tool call arguments were not valid JSON. "
-                    f"The affected tool was `{tool_name or 'unknown'}`. "
-                    "Retry the tool call now with `function.arguments` as one valid JSON object string. "
-                    "Escape all quotes and newlines inside long HTML, CSS, JavaScript, or markdown content. "
-                    "Do not explain; only retry with a valid tool call."
+                    + f"The affected tool was `{tool_name or 'unknown'}`. "
+                    + "Retry the tool call now with `function.arguments` as one valid JSON object string. "
+                    + "Escape all quotes and newlines inside long HTML, CSS, JavaScript, or markdown content. "
+                    + "Do not explain; only retry with a valid tool call."
                 )
             args_str = raw_args
         elif isinstance(raw_args, (dict, list)):
@@ -101,8 +114,8 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
         else:
             return None, (
                 "Your previous tool call arguments had an unsupported type. "
-                f"The affected tool was `{tool_name or 'unknown'}`. "
-                "Retry the tool call with `function.arguments` as one valid JSON object string."
+                + f"The affected tool was `{tool_name or 'unknown'}`. "
+                + "Retry the tool call with `function.arguments` as one valid JSON object string."
             )
 
         new_tc: LLMToolCall = {
@@ -129,9 +142,9 @@ class FailoverGuard:
     """Guard state for failover decisions."""
 
     def __init__(self):
-        self.tool_executed = False
-        self.streaming_started = False
-        self.failover_done = False
+        self.tool_executed: bool = False
+        self.streaming_started: bool = False
+        self.failover_done: bool = False
 
     def mark_tool_executed(self):
         """Mark that a side-effecting tool has been executed."""
@@ -164,12 +177,12 @@ def is_retryable_error(result: str) -> bool:
     return classify_error(Exception(result)) != FailoverErrorType.NON_RETRYABLE
 
 
-def _get_model_timeout(model: Any) -> float:
+def _get_model_timeout(model: LLMModelRecord) -> float:
     """Return the effective request timeout for a model."""
     return float(getattr(model, "request_timeout", None) or 120.0)
 
 
-def _usage_from_response_or_estimate(response, api_messages: list[LLMMessage]) -> TokenUsage:
+def _usage_from_response_or_estimate(response: LLMResponse, api_messages: list[LLMMessage]) -> TokenUsage:
     usage = extract_token_usage(response.usage)
     if usage:
         return usage
@@ -183,7 +196,7 @@ def _usage_from_response_or_estimate(response, api_messages: list[LLMMessage]) -
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def _get_agent_config(agent_id, agent: Any | None = None) -> tuple[int, str | None]:
+async def _get_agent_config(agent_id: uuid.UUID | None, agent: AgentRecord | None = None) -> tuple[int, str | None]:
     """Get agent config: max_tool_rounds and token limit status.
 
     ``agent`` may supply ``max_tool_rounds``. Token counters are always reloaded
@@ -224,19 +237,20 @@ async def _get_agent_config(agent_id, agent: Any | None = None) -> tuple[int, st
     return 50, None
 
 
-async def _get_user_name(user_id) -> str | None:
+async def _get_user_name(user_id: uuid.UUID | str | None) -> str | None:
     """Get user's display name for personalized context."""
-    if not user_id:
+    resolved_id = as_uuid(user_id)
+    if resolved_id is None:
         return None
     try:
         from app.dao.agent_dao import agent_dao
         from app.dao.user_dao import user_dao
 
-        _u = await user_dao.get_with_identity(user_id)
+        _u = await user_dao.get_with_identity(resolved_id)
         if _u:
             return _u.display_name or _u.username
         # Check Agent name fallback (A2A / agent-as-user paths)
-        _a = await agent_dao.get(user_id)
+        _a = await agent_dao.get(resolved_id)
         if _a:
             return _a.name
     except Exception as exc:
@@ -324,8 +338,8 @@ def _allowed_tool_names(tools_for_llm: list[ToolDefinition] | None) -> set[str]:
 def _tool_not_enabled_message(tool_name: str) -> str:
     return (
         f"Tool `{tool_name}` is not enabled for this agent. "
-        "Do not call it again. Use only the tools currently available to you, "
-        "or explain that the required capability is not enabled."
+        + "Do not call it again. Use only the tools currently available to you, "
+        + "or explain that the required capability is not enabled."
     )
 
 
@@ -339,7 +353,7 @@ async def _process_tool_call(
     on_tool_call: ToolCallback | None,
     full_reasoning_content: str,
     allowed_tool_names: set[str],
-    on_code_output=None,
+    on_code_output: ToolOutputCallback | None = None,
 ) -> str:
     """Process a single tool call and return result."""
     fn = tc.get("function") or {}
@@ -387,7 +401,7 @@ async def _process_tool_call(
     # Notify client about tool call (in-progress)
     if on_tool_call:
         try:
-            callback_data: ToolCallbackData = {
+            callback_data = {
                 "name": tool_name,
                 "call_id": tc.get("id", ""),
                 "args": args,
@@ -399,7 +413,9 @@ async def _process_tool_call(
             logger.debug("[LLM] Tool callback failed: {}", exc)
 
     # Execute tool - pass on_output for execute_code streaming
-    _on_output = on_code_output if tool_name in ("execute_code", "execute_code_e2b") else None
+    _on_output: ToolOutputCallback | None = (
+        on_code_output if tool_name in ("execute_code", "execute_code_e2b") else None
+    )
     result = await execute_tool(
         tool_name,
         args,
@@ -457,21 +473,21 @@ async def _process_tool_call(
 
 
 async def call_llm(
-    model: Any,
+    model: LLMModelRecord,
     messages: list[OpenAIMessage],
     agent_name: str,
     role_description: str,
     agent_id: uuid.UUID,
-    user_id=None,
+    user_id: uuid.UUID | None = None,
     session_id: str = "",
-    on_chunk=None,
+    on_chunk: ChunkCallback | None = None,
     on_tool_call: ToolCallback | None = None,
-    on_tool_delta=None,
-    on_thinking=None,
-    supports_vision=False,
+    on_tool_delta: ToolCallback | None = None,
+    on_thinking: ThinkingCallback | None = None,
+    supports_vision: bool = False,
     max_tool_rounds_override: int | None = None,
     skip_tools: bool = False,
-    on_code_output=None,
+    on_code_output: ToolOutputCallback | None = None,
     current_user_name_override: str | None = None,
     system_prompt_suffix: str | None = None,
     turn: TurnContext | None = None,
@@ -527,6 +543,7 @@ async def call_llm(
     # Load tools dynamically from DB. `skip_tools=True` is set by the WS
     # handler on the onboarding greeting turn; keep the runtime-level `finish`
     # tool available so every turn still has an explicit stop signal.
+    tools_for_llm: list[ToolDefinition]
     if skip_tools:
         tools_for_llm = [FINISH_TOOL_DEFINITION]
     else:
@@ -577,8 +594,8 @@ async def call_llm(
                     role="user",
                     content=(
                         f"⚠️ You have used {round_i}/{_max_tool_rounds} tool-call rounds. "
-                        "If the task is incomplete, use upsert_focus_item to save progress "
-                        "and set a continuation trigger with set_trigger before the remaining rounds end."
+                        + "If the task is incomplete, use upsert_focus_item to save progress "
+                        + "and set a continuation trigger with set_trigger before the remaining rounds end."
                     ),
                 )
             )
@@ -717,22 +734,22 @@ async def call_llm(
 
 
 async def call_llm_with_failover(
-    primary_model,
-    fallback_model,
+    primary_model: LLMModelRecord | None,
+    fallback_model: LLMModelRecord | None,
     messages: list[OpenAIMessage],
     agent_name: str,
     role_description: str,
     agent_id: uuid.UUID,
-    user_id=None,
+    user_id: uuid.UUID | None = None,
     session_id: str = "",
-    on_chunk=None,
-    on_thinking=None,
-    on_tool_call=None,
-    on_tool_delta=None,
-    supports_vision=False,
-    on_failover=None,
+    on_chunk: ChunkCallback | None = None,
+    on_thinking: ThinkingCallback | None = None,
+    on_tool_call: ToolCallback | None = None,
+    on_tool_delta: ToolCallback | None = None,
+    supports_vision: bool = False,
+    on_failover: ChunkCallback | None = None,
     skip_tools: bool = False,
-    on_code_output=None,
+    on_code_output: ToolOutputCallback | None = None,
     current_user_name_override: str | None = None,
     system_prompt_suffix: str | None = None,
     turn: TurnContext | None = None,
@@ -861,14 +878,14 @@ async def call_llm_with_failover(
 
 
 async def call_agent_llm(
-    db,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
+    db: object,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
     agent_id: uuid.UUID,
     user_text: str,
     history: list[OpenAIMessage] | None = None,
     user_id: uuid.UUID | None = None,
     session_id: str = "",
-    on_chunk=None,
-    on_thinking=None,
+    on_chunk: ChunkCallback | None = None,
+    on_thinking: ThinkingCallback | None = None,
     supports_vision: bool = False,
     turn: TurnContext | None = None,
 ) -> str:
@@ -939,7 +956,7 @@ async def call_agent_llm(
 
 
 async def call_agent_llm_with_tools(
-    db,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
+    db: object,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
     agent_id: uuid.UUID,
     system_prompt: str,
     user_prompt: str,
@@ -989,7 +1006,7 @@ async def call_agent_llm_with_tools(
     tools_for_llm = await get_agent_tools_for_llm(agent_id)
     allowed_tool_names = _allowed_tool_names(tools_for_llm)
 
-    async def _try_model(model: Any) -> tuple[str, bool, bool]:
+    async def _try_model(model: LLMModelRecord) -> tuple[str, bool, bool]:
         """Try to complete with a model. Returns (response, success, tool_executed)."""
         _accumulated_usage = TokenUsage()
         _unsaved_usage = TokenUsage()

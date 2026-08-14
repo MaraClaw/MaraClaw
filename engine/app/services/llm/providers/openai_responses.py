@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, override
+from typing import Any, override, ClassVar
 
 import httpx
 
+from app.core.json_types import is_str_dict, object_list_from_row
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
@@ -15,8 +16,7 @@ from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
 class OpenAIResponsesClient(LLMClient):
     """Client for OpenAI Responses API (`/v1/responses`)."""
 
-    base_url: str
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_BASE_URL: ClassVar[str] = "https://api.openai.com/v1"
 
     def __init__(
         self,
@@ -27,7 +27,7 @@ class OpenAIResponsesClient(LLMClient):
         supports_tool_choice: bool = True,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
-        self.supports_tool_choice = supports_tool_choice
+        self.supports_tool_choice: bool = supports_tool_choice
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -45,30 +45,32 @@ class OpenAIResponsesClient(LLMClient):
 
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing /responses endpoint."""
-        url = self.base_url.rstrip("/")
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
         if url.endswith("/responses"):
             url = url[: -len("/responses")]
         return url
 
-    def _format_content_for_input(self, content: Any) -> Any:
+    def _format_content_for_input(self, content: object) -> object:
         """Convert OpenAI chat-style content into Responses API input content."""
         if not isinstance(content, list):
             return content
 
+        content_parts: list[Any] = content
         formatted: list[dict[str, Any]] = []
-        for part in content:
-            if not isinstance(part, dict):
+        for raw_part in content_parts:
+            if not is_str_dict(raw_part):
                 continue
+            part: dict[str, Any] = dict(raw_part)
             ptype = part.get("type")
             if ptype == "text":
                 formatted.append({"type": "input_text", "text": part.get("text", "")})
             elif ptype == "image_url":
                 img = part.get("image_url", {})
-                if isinstance(img, dict):
+                if is_str_dict(img):
                     formatted.append({"type": "input_image", "image_url": img.get("url", "")})
             else:
                 formatted.append(part)
-        return formatted if formatted else content
+        return formatted if formatted else content_parts
 
     def _messages_to_input(self, messages: list[LLMMessage]) -> list[dict[str, Any]]:
         """Convert canonical message format to Responses API input format."""
@@ -156,14 +158,14 @@ class OpenAIResponsesClient(LLMClient):
         if orphaned_fco:
             logger.warning(
                 "[OpenAIResponses] Removing %d orphaned function_call_output item(s) "
-                "with no matching function_call: %s",
+                + "with no matching function_call: %s",
                 len(orphaned_fco),
                 orphaned_fco,
             )
         if orphaned_fc:
             logger.warning(
                 "[OpenAIResponses] Removing %d orphaned function_call item(s) "
-                "with no matching function_call_output: %s",
+                + "with no matching function_call_output: %s",
                 len(orphaned_fc),
                 orphaned_fc,
             )
@@ -188,13 +190,14 @@ class OpenAIResponsesClient(LLMClient):
             if tool.get("type") != "function":
                 continue
             function = tool.get("function")
-            fn = function if isinstance(function, dict) else {}
+            if function is None:
+                continue
             converted.append(
                 {
                     "type": "function",
-                    "name": fn.get("name", ""),
-                    "description": fn.get("description", ""),
-                    "parameters": fn.get("parameters", {"type": "object"}),
+                    "name": function.get("name", ""),
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {"type": "object"}),
                 }
             )
         return converted or None
@@ -234,10 +237,10 @@ class OpenAIResponsesClient(LLMClient):
         reasoning_parts: list[str] = []
         tool_calls: list[LLMToolCall] = []
 
-        for item in data.get("output", []) or []:
+        for item in object_list_from_row(data.get("output")):
             item_type = item.get("type")
             if item_type == "message":
-                for c in item.get("content", []) or []:
+                for c in object_list_from_row(item.get("content")):
                     c_type = c.get("type")
                     if c_type in {"output_text", "text"}:
                         content_parts.append(c.get("text", ""))
@@ -281,7 +284,7 @@ class OpenAIResponsesClient(LLMClient):
         # so we must only treat it as error when it's truthy.
         err = data.get("error")
         if err:
-            if isinstance(err, dict):
+            if is_str_dict(err):
                 msg = err.get("message") or str(err)
                 err_type = err.get("type")
                 err_code = err.get("code")

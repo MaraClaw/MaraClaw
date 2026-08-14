@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, Literal, TypedDict
 
+from app.core.tool_types import ToolDefinition
 from app.services.llm.types import LLMMessage, LLMResponse, ToolPayload
 
 # ============================================================================
@@ -14,9 +15,6 @@ from app.services.llm.types import LLMMessage, LLMResponse, ToolPayload
 
 ChunkCallback = Callable[[str], Coroutine[Any, Any, None]]
 ThinkingCallback = Callable[[str], Coroutine[Any, Any, None]]
-
-
-ToolDefinition = dict[str, object]
 
 
 class ToolCallbackData(TypedDict, total=False):
@@ -55,10 +53,10 @@ class LLMClient(ABC):
         model: str | None = None,
         timeout: float = 120.0,
     ):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.model = model
-        self.timeout = timeout
+        self.api_key: str = api_key
+        self.base_url: str | None = base_url
+        self.model: str | None = model
+        self.timeout: float = timeout
 
     @abstractmethod
     async def complete(

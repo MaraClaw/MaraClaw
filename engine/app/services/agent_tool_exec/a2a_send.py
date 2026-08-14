@@ -60,13 +60,13 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
+                + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target_agent.is_expired or (target_agent.expires_at and datetime.now(UTC) >= target_agent.expires_at):
             return (
                 f"⚠️ {target_agent.name} is currently unavailable - their service period has ended. "
-                f"Please contact the platform administrator."
+                + f"Please contact the platform administrator."
             )
 
         rels = await agent_agent_relationship_dao.list_for_agent(from_agent_id)
@@ -74,14 +74,14 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         if not rel:
             return (
                 f"❌ You do not have a relationship with {target_agent.name}. Only agents in your relationship list "
-                f"can receive files. Ask your administrator to add a relationship if needed."
+                + f"can receive files. Ask your administrator to add a relationship if needed."
             )
         status_info = await evaluate_agent_relationship_status(None, rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_agent.name} is not active "
-                f"({status_info['access_status_reason'] or 'restricted'}). "
-                f"Ask a manager of both agents to review Relationships."
+                + f"({status_info['access_status_reason'] or 'restricted'}). "
+                + f"Ask a manager of both agents to review Relationships."
             )
 
         target_name = target_agent.name
@@ -142,7 +142,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
                 agent_id=target_id,
             )
         except Exception:
-            await audit_log_dao.create(
+            _ = await audit_log_dao.create(
                 obj_in={
                     "agent_id": from_agent_id,
                     "action": "collaboration:file_send",
@@ -154,7 +154,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
                     },
                 }
             )
-            await audit_log_dao.create(
+            _ = await audit_log_dao.create(
                 obj_in={
                     "agent_id": target_id,
                     "action": "collaboration:file_receive",
@@ -208,15 +208,15 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
 
             file_msg_content = (
                 f"[File delivery from {source_agent_name}]\n"
-                f"{source_agent_name} sent you a file: {delivered_name}\n"
-                f"File path: {target_rel_path}\n"
-                f'Use read_file(path="{target_rel_path}") to inspect it.'
+                + f"{source_agent_name} sent you a file: {delivered_name}\n"
+                + f"File path: {target_rel_path}\n"
+                + f'Use read_file(path="{target_rel_path}") to inspect it.'
             )
             if delivery_note:
                 file_msg_content += f"\nNote: {delivery_note}"
 
             src_part2 = await participant_dao.get_by_type_ref("agent", from_agent_id)
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=session_agent_id,
                 user_id=source_creator_id,
                 role="user",
@@ -224,7 +224,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
                 conversation_id=str(chat_session.id),
                 participant_id=src_part2.id if src_part2 else None,
             )
-            await chat_session_dao.update(db_obj=chat_session, obj_in={"last_message_at": ts})
+            _ = await chat_session_dao.update(db_obj=chat_session, obj_in={"last_message_at": ts})
             logger.info(
                 "[A2A-File] Injected file delivery message into session %s for %s",
                 chat_session.id,

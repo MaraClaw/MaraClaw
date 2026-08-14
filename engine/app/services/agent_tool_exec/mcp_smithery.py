@@ -1,6 +1,7 @@
 """Smithery Connect execution and recovery helpers."""
 
 import uuid
+from typing import Any
 
 from .registry import ToolArguments, ToolArgumentValue
 
@@ -33,10 +34,10 @@ async def _execute_via_smithery_connect(
     if not api_key:
         return (
             "❌ Smithery API key not configured.\n\n"
-            "Provide your Smithery API key. Get one by following these steps:\n"
-            "1. Sign up or sign in at https://smithery.ai\n"
-            "2. Open https://smithery.ai/account/api-keys and create an API key\n"
-            "3. Provide the key and I will configure it"
+            + "Provide your Smithery API key. Get one by following these steps:\n"
+            + "1. Sign up or sign in at https://smithery.ai\n"
+            + "2. Open https://smithery.ai/account/api-keys and create an API key\n"
+            + "3. Provide the key and I will configure it"
         )
 
     # Get namespace + connection from tool config, or use defaults
@@ -62,7 +63,7 @@ async def _execute_via_smithery_connect(
     if not namespace or not connection_id:
         return (
             "❌ Smithery Connect namespace/connection not configured. "
-            "Please set smithery_namespace and smithery_connection_id in the tool configuration."
+            + "Please set smithery_namespace and smithery_connection_id in the tool configuration."
         )
 
     # Smithery Connect (and many MCP servers) emit SSE responses for tools/call.
@@ -101,14 +102,15 @@ async def _execute_via_smithery_connect(
 
             # Smithery Connect returns SSE format: "event: message\ndata: {...}\n"
             raw = tool_resp.text
-            data = None
+            data: dict[str, Any] | None = None
 
             # Parse SSE response
             for line in raw.split("\n"):
                 line = line.strip()
                 if line.startswith("data: "):
                     try:
-                        data = json_mod.loads(line[6:])
+                        parsed = json_mod.loads(line[6:])
+                        data = parsed if isinstance(parsed, dict) else None
                         break
                     except json_mod.JSONDecodeError:
                         pass
@@ -116,13 +118,16 @@ async def _execute_via_smithery_connect(
             # Fallback: try parsing as plain JSON
             if data is None:
                 try:
-                    data = json_mod.loads(raw)
+                    parsed = json_mod.loads(raw)
+                    if not isinstance(parsed, dict):
+                        return f"❌ Unexpected response from Smithery: {raw[:300]}"
+                    data = parsed
                 except json_mod.JSONDecodeError:
                     return f"❌ Unexpected response from Smithery: {raw[:300]}"
 
             if "error" in data:
                 err = data["error"]
-                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                msg: str = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                 # Check if error indicates auth/connection issue
                 auth_keywords = ["auth", "unauthorized", "forbidden", "expired", "not found", "connection"]
                 if any(kw in msg.lower() for kw in auth_keywords):
@@ -135,14 +140,19 @@ async def _execute_via_smithery_connect(
             if isinstance(result, str):
                 return result
 
-            content_blocks = result.get("content", []) if isinstance(result, dict) else []
-            texts = []
+            raw_blocks: Any = result.get("content") if isinstance(result, dict) else None
+            if not isinstance(raw_blocks, list):
+                content_blocks: list[Any] = []
+            else:
+                content_blocks = list(raw_blocks)
+            texts: list[str] = []
             for block in content_blocks:
                 if isinstance(block, str):
                     texts.append(block)
                 elif isinstance(block, dict):
                     if block.get("type") == "text":
-                        texts.append(block.get("text", ""))
+                        text: Any = block.get("text", "")
+                        texts.append(text if isinstance(text, str) else str(text))
                     elif block.get("type") == "image":
                         texts.append(f"[Image: {block.get('mimeType', 'image')}]")
                     else:
@@ -173,7 +183,7 @@ async def _smithery_auto_recover(
         if "error" in conn_result:
             return (
                 f"❌ MCP tool connection expired and auto-recovery failed: {conn_result['error']}\n\n"
-                f'💡 Please re-authorize by telling me: `import_mcp_server(server_id="...", reauthorize=true)`'
+                + f'💡 Please re-authorize by telling me: `import_mcp_server(server_id="...", reauthorize=true)`'
             )
 
         auth_url = conn_result.get("auth_url")
@@ -184,9 +194,9 @@ async def _smithery_auto_recover(
             # replacement. The user-facing auth URL is enough for recovery.
             return (
                 f"🔐 MCP tool connection expired. Re-authorization needed.\n\n"
-                f"Please visit the following URL to re-authorize:\n"
-                f"{auth_url}\n\n"
-                f"After completing authorization, the tools will work again automatically."
+                + f"Please visit the following URL to re-authorize:\n"
+                + f"{auth_url}\n\n"
+                + f"After completing authorization, the tools will work again automatically."
             )
 
         # Update stored config with new connection info
@@ -201,7 +211,7 @@ async def _smithery_auto_recover(
                 for tool in await tool_dao.list_mcp_by_server_url(mcp_url):
                     at = await agent_tool_dao.get_assignment(agent_id, tool.id)
                     if at:
-                        await agent_tool_dao.update(
+                        _ = await agent_tool_dao.update(
                             db_obj=at,
                             obj_in={"config": {**(at.config or {}), **new_config}},
                         )

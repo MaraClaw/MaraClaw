@@ -39,7 +39,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
     if not file_path and not url:
         return "❌ Please provide either 'file_path' (workspace path) or 'url' (public image URL)"
 
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     private_key = ""
     try:
         config = await agent_tools._get_tool_config(agent_id, "upload_image") or {}
@@ -110,10 +110,10 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
             size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f}MB"
             return (
                 f"✅ Image uploaded successfully!\n\n"
-                f"**CDN URL**: {cdn_url}\n"
-                f"**File ID**: {file_id}\n"
-                f"**Size**: {size_str}\n"
-                f"**Name**: {result.get('name', file_name)}"
+                + f"**CDN URL**: {cdn_url}\n"
+                + f"**File ID**: {file_id}\n"
+                + f"**Size**: {size_str}\n"
+                + f"**Name**: {result.get('name', file_name)}"
             )
         error_detail = resp.text[:300]
         return f"❌ Upload failed (HTTP {resp.status_code}): {error_detail}"
@@ -147,7 +147,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     size = _string_value(arguments.get("size"), "1024x1024")
     save_path = _string_value(arguments.get("save_path"))
 
-    importlib.import_module("app.services.agent_tools")
+    _ = importlib.import_module("app.services.agent_tools")
     tool_key = f"generate_image_{provider}"
     config = await agent_tools._get_tool_config(agent_id, tool_key) or {}
     model = _string_value(config.get("model"))
@@ -157,7 +157,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     if not api_key:
         return (
             "❌ Image generation API key not configured. "
-            "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
+            + "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
         )
 
     if not save_path:
@@ -218,21 +218,21 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
         if not image_bytes:
             return "❌ Image generation returned empty result. Please try a different prompt."
 
-        await anyio.Path(full_save_path).write_bytes(image_bytes)
+        _ = await anyio.Path(full_save_path).write_bytes(image_bytes)
         size_kb = len(image_bytes) / 1024
         api_image_path = f"/api/agents/{agent_id}/files/download?path={save_path}"
 
         return (
             f"✅ Image generated and saved to: {save_path}\n"
-            f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
-            f"Display this image to the user using this exact markdown:\n"
-            f"![generated image]({api_image_path})"
+            + f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
+            + f"Display this image to the user using this exact markdown:\n"
+            + f"![generated image]({api_image_path})"
         )
     except httpx.TimeoutException:
         logger.error(f"[GenerateImage] Timeout ({provider}): took longer than 120 seconds or network unreachable.")
         return (
             f"❌ Image generation failed ({provider}): API request timed out after 120 seconds. "
-            f"This is usually caused by network issues or the model taking too long to generate."
+            + f"This is usually caused by network issues or the model taking too long to generate."
         )
     except Exception as e:
         err_msg = str(e) or type(e).__name__

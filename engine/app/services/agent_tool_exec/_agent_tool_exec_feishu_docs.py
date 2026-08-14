@@ -7,7 +7,7 @@ from typing import TypedDict
 from app.services import agent_tools
 
 from . import feishu_docs_legacy as _legacy, feishu_docs_write as _write
-from .registry import ToolArguments, ToolArgumentValue
+from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
 
 class _WikiPage(TypedDict):
@@ -112,13 +112,17 @@ async def _feishu_doc_search(agent_id: uuid.UUID, arguments: ToolArguments) -> s
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
         )
-    data = response.json()
+    data: dict[str, ToolArgumentValue] = response.json()
     error = agent_tools._check_feishu_err(data)
     if error:
         return error
 
-    result = data.get("data", {})
-    entities = result.get("docs_entities", []) or []
+    result_raw = data.get("data", {})
+    result: dict[str, ToolArgumentValue] = result_raw if isinstance(result_raw, dict) else {}
+    entities_raw = result.get("docs_entities", []) or []
+    entities: list[dict[str, ToolArgumentValue]] = (
+        [item for item in entities_raw if isinstance(item, dict)] if isinstance(entities_raw, list) else []
+    )
     if not entities:
         return _empty_search_result(query)
     return _format_search_results(query, count, offset, entities, result)
@@ -127,10 +131,10 @@ async def _feishu_doc_search(agent_id: uuid.UUID, arguments: ToolArguments) -> s
 def _empty_search_result(query: str) -> str:
     return (
         f"🔎 未找到与 `{query}` 匹配的飞书文档。"
-        f"\n可以尝试{_FW_COLON}"
-        "\n1. 缩短关键词"
-        "\n2. 换同义词"
-        f"\n3. 指定 docs_types 过滤{_FW_COMMA}例如 ['docx'] 或 ['bitable']"
+        + f"\n可以尝试{_FW_COLON}"
+        + "\n1. 缩短关键词"
+        + "\n2. 换同义词"
+        + f"\n3. 指定 docs_types 过滤{_FW_COMMA}例如 ['docx'] 或 ['bitable']"
     )
 
 
@@ -151,9 +155,9 @@ def _format_search_results(
     for index, item in enumerate(entities, start=offset + 1):
         lines.append(
             f"{index}. **{item.get('title') or '(无标题)'}**\n"
-            f"   - docs_type: `{item.get('docs_type') or 'unknown'}`\n"
-            f"   - docs_token: `{item.get('docs_token') or ''}`\n"
-            f"   - owner_id: `{item.get('owner_id') or ''}`"
+            + f"   - docs_type: `{item.get('docs_type') or 'unknown'}`\n"
+            + f"   - docs_token: `{item.get('docs_token') or ''}`\n"
+            + f"   - owner_id: `{item.get('owner_id') or ''}`"
         )
     lines.extend(
         [
@@ -184,9 +188,9 @@ async def _feishu_wiki_list(agent_id: uuid.UUID, arguments: ToolArguments) -> st
     if not node_info:
         return (
             f"❌ 无法解析 Wiki 节点 `{node_token}`。\n请确认 token 来自飞书知识库 URL"
-            f"{_FW_LEFT_PAREN}https://xxx.feishu.cn/wiki/NodeToken{_FW_RIGHT_PAREN}{_FW_COMMA}而非普通文档 URL。"
+            + f"{_FW_LEFT_PAREN}https://xxx.feishu.cn/wiki/NodeToken{_FW_RIGHT_PAREN}{_FW_COMMA}而非普通文档 URL。"
         )
-    space_id = node_info["space_id"]
+    space_id = tool_arg_str(node_info.get("space_id"))
     if not space_id:
         return f"❌ 无法获取知识库 space_id{_FW_COMMA}请检查 token 是否正确。"
 
@@ -196,19 +200,19 @@ async def _feishu_wiki_list(agent_id: uuid.UUID, arguments: ToolArguments) -> st
 
     lines = [
         f"📂 Wiki 页面 `{node_token}` 的子页面{_FW_LEFT_PAREN}共 {len(pages)} 个{_FW_RIGHT_PAREN}{_FW_COLON}\n"
-        f"space_id: `{space_id}`\n"
+        + f"space_id: `{space_id}`\n"
     ]
     for page in pages:
         indent = "  " * page["depth"]
         child_hint = " _(有子页面)_" if page["has_child"] else ""
         lines.append(
             f"{indent}• **{page['title']}**{child_hint}\n"
-            f"{indent}  node_token: `{page['node_token']}`\n"
-            f"{indent}  obj_token: `{page['obj_token']}`"
+            + f"{indent}  node_token: `{page['node_token']}`\n"
+            + f"{indent}  obj_token: `{page['obj_token']}`"
         )
     lines.append(
         '\n💡 用 `feishu_doc_read(document_token="<node_token>")` 读取每个子页面的内容。'
-        f'\n   对有子页面的条目{_FW_COMMA}再次调用 `feishu_wiki_list(node_token="...")` 继续展开。'
+        + f'\n   对有子页面的条目{_FW_COMMA}再次调用 `feishu_wiki_list(node_token="...")` 继续展开。'
     )
     return "\n".join(lines)
 
@@ -262,7 +266,7 @@ async def _feishu_doc_read(agent_id: uuid.UUID, arguments: ToolArguments) -> str
         if node_info.get("has_child"):
             wiki_hint = (
                 f"\n\n> 💡 这是一个 Wiki 目录页{_FW_COMMA}它有多个子页面。"
-                f"使用 `feishu_wiki_list` 工具{_FW_LEFT_PAREN}传入相同的 node_token{_FW_RIGHT_PAREN}可以查看所有子页面列表。"
+                + f"使用 `feishu_wiki_list` 工具{_FW_LEFT_PAREN}传入相同的 node_token{_FW_RIGHT_PAREN}可以查看所有子页面列表。"
             )
 
     try:

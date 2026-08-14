@@ -4,7 +4,7 @@ import importlib
 import uuid
 
 from app.services import agent_tools
-from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
 
 
 def _feishu_service():
@@ -21,8 +21,9 @@ async def _resolve_docx_document_token(agent_id: uuid.UUID, parsed_url: dict[str
         if app_id and app_secret:
             tenant_token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
             node_info = await agent_tools._feishu_wiki_get_node(wiki_token, tenant_token)
-            if node_info and node_info.get("obj_token"):
-                return node_info["obj_token"]
+            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info else None
+            if obj_token:
+                return obj_token
     return None
 
 

@@ -82,7 +82,7 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
             unresolved_ids = [owner_id for owner_id in user_owner_ids if owner_id not in user_names]
             if unresolved_ids:
                 member_names = await org_member_dao.names_for_ids(unresolved_ids)
-                user_names.update(member_names)
+                _ = user_names.update(member_names)
 
         agent_names: dict[uuid.UUID, str] = {}
         if agent_owner_ids:
@@ -115,8 +115,8 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
                 lines.extend(
                     (
                         f"  - KR ({kr.status}): {kr.title}  "
-                        f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
-                        f" kr_id={kr.id}"
+                        + f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
+                        + f" kr_id={kr.id}"
                     )
                     for kr in krs
                 )
@@ -130,8 +130,8 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
                 lines.extend(
                     (
                         f"  - KR ({kr.status}): {kr.title}  "
-                        f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
-                        f" kr_id={kr.id}"
+                        + f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
+                        + f" kr_id={kr.id}"
                     )
                     for kr in krs
                 )
@@ -175,7 +175,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
         if not objectives:
             return (
                 f"You have no OKRs set for the current period ({ps} – {pe}). "  # noqa: RUF001
-                "Contact the OKR Agent to set up your Objectives and Key Results."
+                + "Contact the OKR Agent to set up your Objectives and Key Results."
             )
 
         obj_ids = [objective.id for objective in objectives]
@@ -201,8 +201,8 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
             lines.extend(
                 (
                     f"  - [{kr.status}] {kr.title}  "
-                    f"Progress: {kr.current_value}/{kr.target_value} {kr.unit or ''}  "
-                    f"  kr_id={kr.id}"
+                    + f"Progress: {kr.current_value}/{kr.target_value} {kr.unit or ''}  "
+                    + f"  kr_id={kr.id}"
                 )
                 for kr in krs
             )
@@ -222,8 +222,11 @@ async def _get_okr_settings_tool(agent_id: uuid.UUID | None) -> str:
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "Agent not found."
+        tenant_id = agent.tenant_id
+        if tenant_id is None:
+            return "Agent has no tenant."
 
-        settings = await get_okr_settings_for_agent(agent.tenant_id)
+        settings = await get_okr_settings_for_agent(tenant_id)
         return json.dumps(settings, indent=2, ensure_ascii=False)
 
     except Exception as error:

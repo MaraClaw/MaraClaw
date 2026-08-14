@@ -21,7 +21,7 @@ from app.services.document_conversion.chrome_runtime import (
 
 def chrome_executable() -> str | None:
     """Return a local Chrome/Chromium executable path if one is available."""
-    candidates = [
+    candidates: list[str | None] = [
         os.environ.get("CHROME_BIN"),
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -29,7 +29,7 @@ def chrome_executable() -> str | None:
         shutil.which("chromium"),
         shutil.which("chromium-browser"),
     ]
-    executable = next((trusted_executable(path) for path in candidates), None)
+    executable = next((trusted_executable(path) for path in candidates if path), None)
     return str(executable) if executable else None
 
 
@@ -283,9 +283,9 @@ roots = [body];
                     if message.get("id") == msg_id:
                         return message
 
-            await send("Page.enable")
-            await send("Runtime.enable")
-            await send(
+            _ = await send("Page.enable")
+            _ = await send("Runtime.enable")
+            _ = await send(
                 "Emulation.setDeviceMetricsOverride",
                 {
                     "width": design_w_px,
@@ -294,7 +294,7 @@ roots = [body];
                     "mobile": False,
                 },
             )
-            await send("Page.navigate", {"url": file_url})
+            _ = await send("Page.navigate", {"url": file_url})
             load_deadline = asyncio.get_running_loop().time() + 8
             while asyncio.get_running_loop().time() < load_deadline:
                 raw = await asyncio.wait_for(ws_conn.recv(), timeout=8)
@@ -363,16 +363,16 @@ roots = [body];
                     clip_h = root_h
                     hide_expr = (
                         "(() => {"
-                        "const id='maraclaw-bg-capture-style';"
-                        "document.getElementById(id)?.remove();"
-                        "const style=document.createElement('style');"
-                        "style.id=id;"
-                        f"style.textContent='[data-maraclaw-slide-root=\"{idx}\"] > * {{ visibility: hidden !important; }}';"
-                        "document.head.appendChild(style);"
-                        "})()"
+                        + "const id='maraclaw-bg-capture-style';"
+                        + "document.getElementById(id)?.remove();"
+                        + "const style=document.createElement('style');"
+                        + "style.id=id;"
+                        + f"style.textContent='[data-maraclaw-slide-root=\"{idx}\"] > * {{ visibility: hidden !important; }}';"
+                        + "document.head.appendChild(style);"
+                        + "})()"
                     )
                     restore_expr = "document.getElementById('maraclaw-bg-capture-style')?.remove()"
-                    await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
+                    _ = await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
                     try:
                         screenshot_result = await send(
                             "Page.captureScreenshot",
@@ -390,7 +390,7 @@ roots = [body];
                             },
                         )
                     finally:
-                        await send("Runtime.evaluate", {"expression": restore_expr})
+                        _ = await send("Runtime.evaluate", {"expression": restore_expr})
                     data = screenshot_result.get("result", {}).get("data")
                     if not data:
                         background_screenshots.append(None)
@@ -400,11 +400,12 @@ roots = [body];
                     # Root background capture temporarily hides direct
                     # children; after it is restored, item-level captures
                     # can preserve shadows/backdrop effects for cards.
-                for slide_idx, slide_data in enumerate(layout.get("slides") or []):
-                    for item in slide_data.get("items") or []:
+                for slide_idx, slide_data in enumerate(list[Any](layout.get("slides") or [])):
+                    for item in list[Any](slide_data.get("items") or []):
                         if item.get("kind") != "shape":
                             continue
-                        style = item.get("style") or {}
+                        style_raw = item.get("style") or {}
+                        style: dict[str, Any] = dict[str, Any](style_raw) if isinstance(style_raw, dict) else {}
                         bg_value = str(style.get("backgroundImage") or "")
                         has_complex_paint = (
                             "gradient(" in bg_value
@@ -420,21 +421,21 @@ roots = [body];
                         clip_h = max(1.0, float(item.get("h") or 1))
                         hide_expr = (
                             "(() => {"
-                            "const id='maraclaw-item-bg-capture-style';"
-                            "document.getElementById(id)?.remove();"
-                            "const style=document.createElement('style');"
-                            "style.id=id;"
-                            "style.textContent="
-                            f'\'[data-maraclaw-slide-root="{slide_idx}"] * {{ visibility: hidden !important; }} '
-                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] {{ visibility: visible !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
-                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::before, '
-                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::after {{ color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
-                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] * {{ visibility: hidden !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }}\';'
-                            "document.head.appendChild(style);"
-                            "})()"
+                            + "const id='maraclaw-item-bg-capture-style';"
+                            + "document.getElementById(id)?.remove();"
+                            + "const style=document.createElement('style');"
+                            + "style.id=id;"
+                            + "style.textContent="
+                            + f'\'[data-maraclaw-slide-root="{slide_idx}"] * {{ visibility: hidden !important; }} '
+                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] {{ visibility: visible !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
+                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::before, '
+                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::after {{ color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
+                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] * {{ visibility: hidden !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }}\';'
+                            + "document.head.appendChild(style);"
+                            + "})()"
                         )
                         restore_expr = "document.getElementById('maraclaw-item-bg-capture-style')?.remove()"
-                        await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
+                        _ = await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
                         try:
                             screenshot_result = await send(
                                 "Page.captureScreenshot",
@@ -452,7 +453,7 @@ roots = [body];
                                 },
                             )
                         finally:
-                            await send("Runtime.evaluate", {"expression": restore_expr})
+                            _ = await send("Runtime.evaluate", {"expression": restore_expr})
                         data = screenshot_result.get("result", {}).get("data")
                         if not data:
                             continue

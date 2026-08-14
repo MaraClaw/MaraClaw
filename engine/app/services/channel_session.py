@@ -15,7 +15,7 @@ from app.records.chat import ChatSessionRecord
 
 
 async def find_or_create_channel_session(
-    db: Any,
+    db: object | None,
     agent_id: _uuid.UUID,
     user_id: _uuid.UUID,
     external_conv_id: str,

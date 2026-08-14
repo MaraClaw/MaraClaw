@@ -64,7 +64,7 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
         tenant_id = None
 
     try:
-        await published_page_dao.create(
+        _ = await published_page_dao.create(
             obj_in={
                 "short_id": short_id,
                 "agent_id": agent_id,
@@ -88,9 +88,9 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
         url = f"/p/{short_id}"
         url_note = (
             "\n\n> Note: PUBLIC_BASE_URL is not configured on this server. "
-            "The link above is a relative path - prepend your server's domain "
-            "to get the full URL. Set PUBLIC_BASE_URL in your .env to have "
-            "the agent generate complete links automatically."
+            + "The link above is a relative path - prepend your server's domain "
+            + "to get the full URL. Set PUBLIC_BASE_URL in your .env to have "
+            + "the agent generate complete links automatically."
         )
     else:
         url = f"{public_base}/p/{short_id}"
@@ -98,9 +98,9 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
 
     return (
         f"Published successfully!\n\n"
-        f"Public URL: {url}\n"
-        f"Title: {title}\n\n"
-        f"Anyone can access this page without logging in.{url_note}"
+        + f"Public URL: {url}\n"
+        + f"Title: {title}\n\n"
+        + f"Anyone can access this page without logging in.{url_note}"
     )
 
 

@@ -16,7 +16,7 @@ async def log_activity(
 ) -> None:
     """Record an agent activity. Fire-and-forget, never raises."""
     try:
-        await agent_activity_log_dao.create(
+        _ = await agent_activity_log_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "action_type": action_type,

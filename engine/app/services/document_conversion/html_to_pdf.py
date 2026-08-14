@@ -66,9 +66,9 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
                     design_w_px = int(arguments.get("design_width") or 1280)
                     design_h_px = int(arguments.get("design_height") or 720)
-                    await send("Page.enable")
-                    await send("Runtime.enable")
-                    await send(
+                    _ = await send("Page.enable")
+                    _ = await send("Runtime.enable")
+                    _ = await send(
                         "Emulation.setDeviceMetricsOverride",
                         {
                             "width": design_w_px,
@@ -77,8 +77,8 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                             "mobile": False,
                         },
                     )
-                    await send("Emulation.setEmulatedMedia", {"media": "screen"})
-                    await send("Page.navigate", {"url": file_url})
+                    _ = await send("Emulation.setEmulatedMedia", {"media": "screen"})
+                    _ = await send("Page.navigate", {"url": file_url})
                     load_deadline = asyncio.get_running_loop().time() + 8
                     while asyncio.get_running_loop().time() < load_deadline:
                         raw = await asyncio.wait_for(ws_conn.recv(), timeout=10)
@@ -94,7 +94,8 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                             "returnByValue": True,
                         },
                     )
-                    dims = page_info.get("result", {}).get("result", {}).get("value") or {}
+                    dims_raw = page_info.get("result", {}).get("result", {}).get("value") or {}
+                    dims: dict[str, Any] = dict[str, Any](dims_raw) if isinstance(dims_raw, dict) else {}
                     scroll_w = max(1, float(dims.get("w") or design_w_px))
                     scroll_h = max(1, float(dims.get("h") or design_h_px))
 
@@ -128,7 +129,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                     data = pdf_result.get("result", {}).get("data")
                     if not data:
                         return False
-                    await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
+                    _ = await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
                     return True
             finally:
                 await terminate_process(proc)
@@ -146,7 +147,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
         from weasyprint import HTML
 
-        await asyncio.to_thread(HTML(filename=str(src_file)).write_pdf, str(tgt_file))
+        _ = await asyncio.to_thread(HTML(filename=str(src_file)).write_pdf, str(tgt_file))
         note = f" Chrome fallback reason: {chrome_pdf_error}" if chrome_pdf_error else ""
         return f"✅ Successfully converted HTML to PDF with WeasyPrint: {target_path}.{note}"
     except Exception as e:

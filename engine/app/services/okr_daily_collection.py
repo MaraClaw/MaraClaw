@@ -39,21 +39,21 @@ class DailyCollectionResult(TypedDict):
 def _human_request_message(target_name: str, report_day: date) -> str:
     return (
         f"你好，{target_name}！我是 OKR Agent，需要收集你今天的日报（{report_day.isoformat()}）。请回复以下内容：\n"
-        "- 今天取得的进展\n"
-        "- 遇到的风险或阻碍\n"
-        "- 下一步计划\n\n"
-        "我收到后会帮你整理并记入 OKR 日报。谢谢！"
+        + "- 今天取得的进展\n"
+        + "- 遇到的风险或阻碍\n"
+        + "- 下一步计划\n\n"
+        + "我收到后会帮你整理并记入 OKR 日报。谢谢！"
     )
 
 
 def _agent_request_message(target_name: str, report_day: date) -> str:
     return (
         f"Hi {target_name}, this is OKR Agent collecting your daily report for {report_day.isoformat()}.\n"
-        "Please review today's progress and reply to me with:\n"
-        "- progress made today\n"
-        "- risks or blockers\n"
-        "- next step\n\n"
-        "Please keep the final reply concise so I can record it directly."
+        + "Please review today's progress and reply to me with:\n"
+        + "- progress made today\n"
+        + "- risks or blockers\n"
+        + "- next step\n\n"
+        + "Please keep the final reply concise so I can record it directly."
     )
 
 
@@ -69,7 +69,7 @@ async def _cleanup_legacy_daily_reply_triggers(okr_agent_id: uuid.UUID) -> None:
         if not trigger.is_enabled:
             continue
         if _is_legacy_daily_reply_trigger(trigger.name):
-            await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
+            _ = await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
 
 
 async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyCollectionResult:
@@ -99,6 +99,8 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
     member_user_display_names: dict[uuid.UUID, str] = {}
     for rel in rel_rows:
         org_member = rel.member
+        if org_member is None:
+            continue
         member_user_ids[org_member.id] = org_member.user_id
         if org_member.user_id:
             user = await user_dao.get(org_member.user_id)
@@ -133,6 +135,8 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
 
     for rel in rel_rows:
         org_member = rel.member
+        if org_member is None:
+            continue
         platform_name = member_user_display_names.get(org_member.id)
         message_text = _human_request_message(org_member.name, report_day)
         has_external_channel = bool(org_member.open_id or org_member.external_id)

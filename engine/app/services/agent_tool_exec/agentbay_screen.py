@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from app.core.logging import logger
 
 from .agentbay_media import _agentbay_normalize_image_bytes, _agentbay_save_image_to_workspace
 from .registry import ToolArguments, ToolArgumentValue
+
+if TYPE_CHECKING:
+    from app.services.agentbay_client import AgentBayClient
 
 
 def _session_id(arguments: ToolArguments) -> str:
@@ -18,15 +22,15 @@ def _float_input(value: ToolArgumentValue | None) -> str | int | float:
     return value if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ""
 
 
-def _agentbay_extract_screen_dimensions(screen_data) -> tuple[int | None, int | None, str]:
+def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None, int | None, str]:
     if not isinstance(screen_data, dict):
         return None, None, ""
-    width = screen_data.get("width")
-    height = screen_data.get("height")
-    dpi = screen_data.get("dpiScalingFactor")
+    width_raw: Any = screen_data.get("width")
+    height_raw: Any = screen_data.get("height")
+    dpi: Any = screen_data.get("dpiScalingFactor")
     try:
-        width = int(width) if width is not None else None
-        height = int(height) if height is not None else None
+        width = int(width_raw) if width_raw is not None else None
+        height = int(height_raw) if height_raw is not None else None
     except TypeError, ValueError:
         width, height = None, None
     parts = []
@@ -37,7 +41,7 @@ def _agentbay_extract_screen_dimensions(screen_data) -> tuple[int | None, int | 
     return width, height, ", ".join(parts)
 
 
-async def _agentbay_get_screen_metadata(client) -> tuple[int | None, int | None, str]:
+async def _agentbay_get_screen_metadata(client: AgentBayClient) -> tuple[int | None, int | None, str]:
     try:
         size_result = await client.computer_get_screen_size()
         if size_result.get("success"):
@@ -182,8 +186,8 @@ async def _agentbay_computer_screenshot(agent_id: uuid.UUID | None, ws: Path, ar
         )
         return (
             f"Internal desktop screenshot captured for analysis. [ImageID: {img_id}]\n{coordinate_note}\n"
-            "TARGETING NOTE: Before clicking dialog buttons, text buttons, tabs, menus, checkboxes, close buttons, small controls, or any target whose center is not unambiguous, call agentbay_computer_precision_screenshot around the target and click from that enlarged crop.\n"
-            "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+            + "TARGETING NOTE: Before clicking dialog buttons, text buttons, tabs, menus, checkboxes, close buttons, small controls, or any target whose center is not unambiguous, call agentbay_computer_precision_screenshot around the target and click from that enlarged crop.\n"
+            + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
         )
     except RuntimeError as e:
         return f"{e!s}. Please configure AgentBay in Agent settings."

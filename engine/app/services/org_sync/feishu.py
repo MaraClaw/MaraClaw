@@ -2,12 +2,13 @@
 
 import asyncio
 import uuid
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_bool, json_as_str, json_as_str_or
 from app.core.logging import logger
+from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
 from .types import ExternalDepartment, ExternalUser
@@ -16,21 +17,21 @@ from .types import ExternalDepartment, ExternalUser
 class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
     """Feishu organization sync adapter."""
 
-    provider_type = "feishu"
+    provider_type: ClassVar[str] = "feishu"
 
-    FEISHU_APP_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"  # noqa: S105
-    FEISHU_DEPT_URL = "https://open.feishu.cn/open-apis/contact/v3/departments"
-    FEISHU_USERS_URL = "https://open.feishu.cn/open-apis/contact/v3/users/find_by_department"
+    FEISHU_APP_TOKEN_URL: ClassVar[str] = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"  # noqa: S105
+    FEISHU_DEPT_URL: ClassVar[str] = "https://open.feishu.cn/open-apis/contact/v3/departments"
+    FEISHU_USERS_URL: ClassVar[str] = "https://open.feishu.cn/open-apis/contact/v3/users/find_by_department"
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
         super().__init__(provider, config, tenant_id)
-        self.app_id = self._config_string("app_id")
-        self.app_secret = self._config_string("app_secret")
+        self.app_id: str = self._config_string("app_id")
+        self.app_secret: str = self._config_string("app_secret")
 
     @property
     @override
@@ -90,10 +91,13 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                         logger.error(f"Feishu fetch departments list error for parent {parent_id}: {data}")
                         break
 
-                    res_data = data.get("data", {})
-                    items = res_data.get("items", []) or []
+                    res_data_raw = data.get("data", {})
+                    res_data: dict[str, Any] = dict[str, Any](res_data_raw) if isinstance(res_data_raw, dict) else {}
+                    items: list[dict[str, Any]] = [
+                        dict[str, Any](item) for item in (res_data.get("items", []) or []) if isinstance(item, dict)
+                    ]
                     for item in items:
-                        dept_id = item.get("open_department_id")
+                        dept_id = json_as_str(item.get("open_department_id"))
                         if not dept_id:
                             continue
 
@@ -117,7 +121,8 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                         break
 
                 if tasks:
-                    await asyncio.gather(*tasks)
+                    _gathered: list[Any] = list(await asyncio.gather(*tasks))
+                    del _gathered
 
             await fetch_children("0")
 
@@ -170,7 +175,7 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                     error_msg = data.get("msg", "")
                     logger.error(
                         f"Feishu fetch users error for dept {department_external_id}: "
-                        f"code={error_code}, msg={error_msg}"
+                        + f"code={error_code}, msg={error_msg}"
                     )
                     # Provide targeted guidance based on error code
                     if error_code == 40060:
@@ -178,40 +183,48 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                         # but lacks DATA-level access to this department.
                         guidance = (
                             f"Feishu API error (code {error_code}): {error_msg}. "
-                            f"The app does not have data access to this department. "
-                            f"Please go to Feishu Open Platform -> App -> Permissions -> "
-                            f"Data Permissions (数据权限) -> Contact Scope (通讯录权限范围) -> "
-                            f"set to 'All Employees' (全部员工) or add the required departments. "
-                            f"After changing, you must publish a new app version for it to take effect."
+                            + f"The app does not have data access to this department. "
+                            + f"Please go to Feishu Open Platform -> App -> Permissions -> "
+                            + f"Data Permissions (数据权限) -> Contact Scope (通讯录权限范围) -> "
+                            + f"set to 'All Employees' (全部员工) or add the required departments. "
+                            + f"After changing, you must publish a new app version for it to take effect."
                         )
                     else:
                         guidance = (
                             f"Feishu API error (code {error_code}): {error_msg}. "
-                            f"One of the following scopes may be required: "
-                            f"[contact:user.employee_id:readonly]. "
-                            f"Please enable this permission in Feishu Open Platform -> App -> "
-                            f"Permissions -> search 'employee_id' -> enable and publish a new version. "
-                            f"Note: unlike DingTalk, Feishu permissions require app re-publishing to take effect."
+                            + f"One of the following scopes may be required: "
+                            + f"[contact:user.employee_id:readonly]. "
+                            + f"Please enable this permission in Feishu Open Platform -> App -> "
+                            + f"Permissions -> search 'employee_id' -> enable and publish a new version. "
+                            + f"Note: unlike DingTalk, Feishu permissions require app re-publishing to take effect."
                         )
                     raise RuntimeError(guidance)
 
-                res_data = data.get("data", {})
-                items = res_data.get("items", []) or []
+                res_data_raw = data.get("data", {})
+                res_data: dict[str, Any] = dict[str, Any](res_data_raw) if isinstance(res_data_raw, dict) else {}
+                items: list[dict[str, Any]] = [
+                    dict[str, Any](item) for item in (res_data.get("items", []) or []) if isinstance(item, dict)
+                ]
                 for item in items:
                     # Collect all departments the user belongs to
                     raw_dept_ids = item.get("department_ids", [])
-                    department_ids = [str(did) for did in raw_dept_ids] if raw_dept_ids else [department_external_id]
+                    department_ids = (
+                        [str(did) for did in raw_dept_ids]
+                        if isinstance(raw_dept_ids, list) and raw_dept_ids
+                        else [department_external_id]
+                    )
 
                     # When user_id_type=open_id, Feishu returns the open_id value in the
                     # "user_id" field of the response. So external_id == open_id == open_id field.
                     # The open_id field is also present for consistency.
-                    external_id = item.get("user_id", "") or item.get("open_id", "")
+                    external_id = json_as_str_or(item.get("user_id")) or json_as_str_or(item.get("open_id"))
 
                     # For Feishu, a user is considered inactive if they are explicitly frozen or resigned.
                     # Merely not being activated (is_activated=False) shouldn't hide them from the org chart.
-                    feishu_status = item.get("status", {})
-                    is_frozen = feishu_status.get("is_frozen", False)
-                    is_resigned = feishu_status.get("is_resigned", False)
+                    status_raw = item.get("status", {})
+                    feishu_status: dict[str, Any] = dict[str, Any](status_raw) if isinstance(status_raw, dict) else {}
+                    is_frozen = json_as_bool(feishu_status.get("is_frozen", False))
+                    is_resigned = json_as_bool(feishu_status.get("is_resigned", False))
                     member_status = "inactive" if (is_frozen or is_resigned) else "active"
 
                     user = ExternalUser(

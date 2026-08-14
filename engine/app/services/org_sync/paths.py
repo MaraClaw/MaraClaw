@@ -7,14 +7,15 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.dao.org_department_dao import org_department_dao
+from app.records.org_department import OrgDepartmentRecord
 
 
-def build_department_path_map(departments: Sequence[Any]) -> dict[uuid.UUID, str]:
+def build_department_path_map(departments: Sequence[OrgDepartmentRecord]) -> dict[uuid.UUID, str]:
     """Build department name paths by walking the internal department tree."""
     dept_by_id = {dept.id: dept for dept in departments}
     paths: dict[uuid.UUID, str] = {}
 
-    def is_virtual_root(dept: Any) -> bool:
+    def is_virtual_root(dept: OrgDepartmentRecord) -> bool:
         return not dept.parent_id and str(getattr(dept, "external_id", "") or "") == "0"
 
     def compute_path(dept_id: uuid.UUID, visited: set[uuid.UUID] | None = None) -> str:
@@ -48,13 +49,13 @@ def build_department_path_map(departments: Sequence[Any]) -> dict[uuid.UUID, str
         return full_path
 
     for dept in departments:
-        compute_path(dept.id)
+        _ = compute_path(dept.id)
 
     return paths
 
 
 async def derive_member_department_paths(
-    db: Any,
+    db: object | None,
     members: list[Any],
 ) -> dict[uuid.UUID, str]:
     """Resolve member department paths from department_id via the department tree."""
@@ -67,7 +68,7 @@ async def derive_member_department_paths(
     pending_ids = set(dept_ids)
 
     while pending_ids:
-        batch = []
+        batch: list[Any] = []
         for dept_id in list(pending_ids):
             dept = await org_department_dao.get(dept_id)
             if dept:

@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any, override
+from typing import Any, override, ClassVar
 
 import httpx
 
+from app.core.json_types import (
+    JsonObject,
+    is_json_object,
+    is_str_dict,
+    json_as_int,
+    json_as_str,
+    json_as_str_or,
+    json_object_from,
+)
 from app.services.llm.base import (
     ChunkCallback,
     LLMClient,
@@ -16,7 +25,15 @@ from app.services.llm.base import (
     ToolCallbackData,
     ToolDefinition,
 )
-from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
+from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
+
+
+def _usage_from_json(value: JsonObject) -> LLMUsage:
+    usage: LLMUsage = {}
+    for key, raw in value.items():
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            usage[key] = raw
+    return usage
 
 
 class AnthropicClient(LLMClient):
@@ -25,9 +42,8 @@ class AnthropicClient(LLMClient):
     Supports Claude 3.x and Claude 3.7+ with extended thinking.
     """
 
-    base_url: str
-    DEFAULT_BASE_URL = "https://api.anthropic.com"
-    API_VERSION = "2023-06-01"
+    DEFAULT_BASE_URL: ClassVar[str] = "https://api.anthropic.com"
+    API_VERSION: ClassVar[str] = "2023-06-01"
 
     def __init__(
         self,
@@ -56,7 +72,7 @@ class AnthropicClient(LLMClient):
 
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing API paths."""
-        url = self.base_url.rstrip("/")
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
         if url.endswith("/v1/messages"):
             url = url[: -len("/v1/messages")]
         elif url.endswith("/v1/chat/completions"):
@@ -72,8 +88,8 @@ class AnthropicClient(LLMClient):
         temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """Build Anthropic request payload."""
         system_blocks: list[dict[str, object]] = []
         anthropic_messages: list[dict[str, object]] = []
@@ -96,14 +112,14 @@ class AnthropicClient(LLMClient):
             content = user_msg["content"]
             if isinstance(content, list) and content:
                 # Ensure the last block of the user message has cache_control
-                blocks = [dict(block) for block in content if isinstance(block, dict)]
+                blocks: list[dict[str, object]] = [dict(block) for block in content if is_str_dict(block)]
                 if blocks:
                     blocks[-1]["cache_control"] = {"type": "ephemeral"}
                     user_msg["content"] = blocks
             elif isinstance(content, str):
                 user_msg["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
 
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "model": self.model,
             "messages": anthropic_messages,
             "max_tokens": max_tokens or 4096,
@@ -125,7 +141,7 @@ class AnthropicClient(LLMClient):
                 payload["temperature"] = 1.0
 
         if tools:
-            anthropic_tools = []
+            anthropic_tools: list[dict[str, object]] = []
             for tool in tools:
                 function = tool.get("function")
                 if tool.get("type") == "function" and isinstance(function, dict):
@@ -163,40 +179,47 @@ class AnthropicClient(LLMClient):
             error_text = response.text[:500]
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
-        data = response.json()
+        data = json_object_from(response.json())
         if data.get("type") == "error":
             raise LLMError(f"API error: {data.get('error', {})}")
 
         full_content = ""
         full_reasoning = ""
-        full_signature = None
+        full_signature: str | None = None
         tool_calls: list[LLMToolCall] = []
 
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                full_content += block.get("text", "")
-            elif block.get("type") == "thinking":
-                full_reasoning += block.get("thinking", "")
-                full_signature = block.get("signature")
-            elif block.get("type") == "tool_use":
+        content_blocks = data.get("content", [])
+        for block in content_blocks if isinstance(content_blocks, list) else []:
+            if not is_json_object(block):
+                continue
+            block_type = block.get("type")
+            if block_type == "text":
+                full_content += json_as_str_or(block.get("text"))
+            elif block_type == "thinking":
+                full_reasoning += json_as_str_or(block.get("thinking"))
+                signature = json_as_str(block.get("signature"))
+                if signature is not None:
+                    full_signature = signature
+            elif block_type == "tool_use":
                 tool_calls.append(
                     {
-                        "id": block.get("id"),
+                        "id": json_as_str_or(block.get("id")),
                         "type": "function",
                         "function": {
-                            "name": block.get("name"),
-                            "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                            "name": json_as_str_or(block.get("name")),
+                            "arguments": json.dumps(json_object_from(block.get("input")), ensure_ascii=False),
                         },
                     }
                 )
 
         usage = None
-        if "usage" in data:
+        usage_raw = data.get("usage")
+        if is_json_object(usage_raw):
             usage = {
-                "input_tokens": data["usage"].get("input_tokens", 0),
-                "output_tokens": data["usage"].get("output_tokens", 0),
-                "cache_creation_input_tokens": data["usage"].get("cache_creation_input_tokens", 0),
-                "cache_read_input_tokens": data["usage"].get("cache_read_input_tokens", 0),
+                "input_tokens": json_as_int(usage_raw.get("input_tokens")),
+                "output_tokens": json_as_int(usage_raw.get("output_tokens")),
+                "cache_creation_input_tokens": json_as_int(usage_raw.get("cache_creation_input_tokens")),
+                "cache_read_input_tokens": json_as_int(usage_raw.get("cache_read_input_tokens")),
             }
 
         return LLMResponse(
@@ -204,9 +227,9 @@ class AnthropicClient(LLMClient):
             tool_calls=tool_calls,
             reasoning_content=full_reasoning or None,
             reasoning_signature=full_signature,
-            finish_reason=data.get("stop_reason"),
+            finish_reason=json_as_str(data.get("stop_reason")),
             usage=usage,
-            model=data.get("model"),
+            model=json_as_str(data.get("model")),
         )
 
     @override
@@ -227,11 +250,11 @@ class AnthropicClient(LLMClient):
 
         full_content = ""
         full_reasoning = ""
-        full_signature = None
+        full_signature: str | None = None
         tool_calls_data: list[LLMToolCall] = []
         tool_call_index_map: dict[int, int] = {}
         last_finish_reason: str | None = None
-        final_usage = None
+        final_usage: LLMUsage | None = None
         final_model = self.model
 
         client = await self._get_client()
@@ -262,58 +285,62 @@ class AnthropicClient(LLMClient):
                         break
 
                     try:
-                        data = json.loads(data_str)
+                        data = json_object_from(json.loads(data_str))
                     except json.JSONDecodeError:
                         continue
 
                     # Handle events
                     if current_event == "message_start":
-                        msg = data.get("message", {})
-                        if msg.get("model"):
-                            final_model = msg["model"]
-                        if msg.get("usage"):
-                            final_usage = msg["usage"]
+                        msg = json_object_from(data.get("message"))
+                        model_name = json_as_str(msg.get("model"))
+                        if model_name:
+                            final_model = model_name
+                        usage_raw = msg.get("usage")
+                        if is_json_object(usage_raw):
+                            final_usage = _usage_from_json(usage_raw)
 
                     elif current_event == "content_block_start":
-                        block = data.get("content_block", {})
-                        idx = data.get("index", 0)
+                        block = json_object_from(data.get("content_block"))
+                        idx = json_as_int(data.get("index"))
                         if block.get("type") == "tool_use":
                             tool_call_index_map[idx] = len(tool_calls_data)
                             tool_calls_data.append(
                                 {
-                                    "id": block.get("id"),
+                                    "id": json_as_str_or(block.get("id")),
                                     "type": "function",
-                                    "function": {"name": block.get("name"), "arguments": ""},
+                                    "function": {"name": json_as_str_or(block.get("name")), "arguments": ""},
                                 }
                             )
                             if on_tool_delta:
                                 callback_data: ToolCallbackData = {
-                                    "id": block.get("id") or f"draft-{idx}",
+                                    "id": json_as_str_or(block.get("id"), f"draft-{idx}"),
                                     "index": idx,
-                                    "name": block.get("name", ""),
+                                    "name": json_as_str_or(block.get("name")),
                                     "arguments": "",
                                 }
                                 await on_tool_delta(callback_data)
 
                     elif current_event == "content_block_delta":
-                        idx = data.get("index", 0)
-                        delta = data.get("delta", {})
+                        idx = json_as_int(data.get("index"))
+                        delta = json_object_from(data.get("delta"))
                         delta_type = delta.get("type")
 
                         if delta_type == "text_delta":
-                            text = delta.get("text", "")
+                            text = json_as_str_or(delta.get("text"))
                             full_content += text
                             if on_chunk:
                                 await on_chunk(text)
 
                         elif delta_type == "thinking_delta":
-                            thought = delta.get("thinking", "")
+                            thought = json_as_str_or(delta.get("thinking"))
                             full_reasoning += thought
                             if on_thinking:
                                 await on_thinking(thought)
 
                         elif delta_type == "signature_delta":
-                            full_signature = delta.get("signature")
+                            signature = json_as_str(delta.get("signature"))
+                            if signature is not None:
+                                full_signature = signature
 
                         elif delta_type == "input_json_delta":
                             if idx in tool_call_index_map:
@@ -329,7 +356,7 @@ class AnthropicClient(LLMClient):
                                 )
                                 tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
                                 if on_tool_delta:
-                                    callback_data: ToolCallbackData = {
+                                    callback_data = {
                                         "id": tool_call.get("id") or f"draft-{idx}",
                                         "index": idx,
                                         "name": tool_name,
@@ -338,15 +365,17 @@ class AnthropicClient(LLMClient):
                                     await on_tool_delta(callback_data)
 
                     elif current_event == "message_delta":
-                        delta = data.get("delta", {})
-                        if delta.get("stop_reason"):
-                            last_finish_reason = delta["stop_reason"]
-                        if data.get("usage"):
+                        delta = json_object_from(data.get("delta"))
+                        stop_reason = json_as_str(delta.get("stop_reason"))
+                        if stop_reason:
+                            last_finish_reason = stop_reason
+                        usage_raw = data.get("usage")
+                        if is_json_object(usage_raw):
                             # message_delta usage is cumulative
-                            final_usage = data["usage"]
+                            final_usage = _usage_from_json(usage_raw)
 
                     elif current_event == "error":
-                        error_info = data.get("error", {})
+                        error_info = json_object_from(data.get("error"))
                         raise LLMError(
                             f"Anthropic stream error ({error_info.get('type')}): {error_info.get('message')}"
                         )

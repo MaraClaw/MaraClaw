@@ -9,8 +9,10 @@ import base64
 import json
 import threading
 import uuid
+from collections.abc import Coroutine
+from concurrent.futures import Future as ConcurrentFuture
 from pathlib import Path
-from typing import TypedDict, override
+from typing import TypedDict
 
 import httpx
 
@@ -44,9 +46,14 @@ class _DingTalkMessage(TypedDict, total=False):
 
 
 def _string_keyed_object(value: object) -> dict[str, object] | None:
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+    if not isinstance(value, dict):
         return None
-    return {key: item for key, item in value.items() if isinstance(key, str)}
+    result: dict[str, object] = {}
+    for raw_key, raw_item in dict[object, object](value).items():
+        if not isinstance(raw_key, str):
+            return None
+        result[raw_key] = raw_item
+    return result
 
 
 def _parse_rich_text_item(value: object) -> _DingTalkRichTextItem | None:
@@ -97,7 +104,7 @@ def _parse_dingtalk_message(payload: object) -> _DingTalkMessage:
         raw_rich_text = content_data.get("richText")
         if isinstance(raw_rich_text, list):
             rich_text: list[_DingTalkRichTextItem | list[_DingTalkRichTextItem]] = []
-            for section in raw_rich_text:
+            for section in list[object](raw_rich_text):
                 if isinstance(section, list):
                     rich_text.append([item for value in section if (item := _parse_rich_text_item(value)) is not None])
                 elif (item := _parse_rich_text_item(section)) is not None:
@@ -136,7 +143,7 @@ async def _download_file(url: str) -> bytes | None:
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             resp = await client.get(url)
-            resp.raise_for_status()
+            _ = resp.raise_for_status()
             return resp.content
     except Exception as e:
         logger.error(f"[DingTalk] Error downloading file: {e}")
@@ -463,9 +470,9 @@ async def _send_dingtalk_media_message(
 # ─── Stream Manager ─────────────────────────────────────
 
 
-def _fire_and_forget(loop, coro):
+def _fire_and_forget(loop: asyncio.AbstractEventLoop, coro: Coroutine[object, object, object]) -> None:
     """Schedule a coroutine on the main loop and log any unhandled exception."""
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    future: ConcurrentFuture[object] = asyncio.run_coroutine_threadsafe(coro, loop)
     future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
 
 
@@ -527,8 +534,8 @@ class DingTalkStreamManager:
             logger.warning(
                 "[DingTalk Stream] dingtalk-stream package not installed. Install with: pip install dingtalk-stream"
             )
-            self._threads.pop(agent_id, None)
-            self._stop_events.pop(agent_id, None)
+            _ = self._threads.pop(agent_id, None)
+            _ = self._stop_events.pop(agent_id, None)
             return
 
         max_retries = 5
@@ -542,8 +549,7 @@ class DingTalkStreamManager:
         class MaraClawChatbotHandler(dingtalk_stream.ChatbotHandler):
             """Custom handler that dispatches messages to the MaraClaw LLM pipeline."""
 
-            @override
-            async def process(self, message: dingtalk_stream.CallbackMessage):
+        async def process_dingtalk_stream_message(message: dingtalk_stream.CallbackMessage) -> tuple[int, str]:
                 """Handle incoming bot message from DingTalk Stream.
 
                 NOTE: The SDK invokes this method in the thread's own asyncio loop,
@@ -552,10 +558,10 @@ class DingTalkStreamManager:
                 try:
                     # Parse the raw data
                     incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
-                    raw_data = message.data if isinstance(message.data, dict) else json.loads(message.data)
-                    if not isinstance(raw_data, dict):
+                    parsed_data: object = message.data if isinstance(message.data, dict) else json.loads(message.data)
+                    if not isinstance(parsed_data, dict):
                         raise ValueError("DingTalk callback payload must be an object")
-                    msg_data = _parse_dingtalk_message(raw_data)
+                    msg_data = _parse_dingtalk_message(parsed_data)
 
                     msgtype = msg_data.get("msgtype", "text")
                     sender_staff_id = incoming.sender_staff_id or incoming.sender_id or ""
@@ -569,7 +575,8 @@ class DingTalkStreamManager:
 
                     if msgtype == "text":
                         # Plain text: use existing logic
-                        text_list = incoming.get_text_list()
+                        text_list_raw = incoming.get_text_list()
+                        text_list: list[str] = [str(part) for part in text_list_raw] if text_list_raw else []
                         user_text = " ".join(text_list).strip() if text_list else ""
                         if not user_text:
                             return dingtalk_stream.AckMessage.STATUS_OK, "empty message"
@@ -642,9 +649,11 @@ class DingTalkStreamManager:
             try:
                 credential = dingtalk_stream.Credential(client_id=app_key, client_secret=app_secret)
                 client = dingtalk_stream.DingTalkStreamClient(credential=credential)
+                handler = MaraClawChatbotHandler()
+                setattr(handler, "process", process_dingtalk_stream_message)
                 client.register_callback_handler(
                     dingtalk_stream.chatbot.ChatbotMessage.TOPIC,
-                    MaraClawChatbotHandler(),
+                    handler,
                 )
 
                 logger.info(
@@ -678,8 +687,8 @@ class DingTalkStreamManager:
             if stop_event.wait(timeout=delay):
                 break  # stop was requested during wait
 
-        self._threads.pop(agent_id, None)
-        self._stop_events.pop(agent_id, None)
+        _ = self._threads.pop(agent_id, None)
+        _ = self._stop_events.pop(agent_id, None)
         logger.info(f"[DingTalk Stream] Client stopped for agent {agent_id}")
 
     @staticmethod

@@ -5,6 +5,7 @@ This module provides a centralized way to manage and instantiate auth providers.
 
 from app.core.json_types import JsonObject
 from app.dao import identity_provider_dao
+from app.dao.base import as_uuid
 from app.records.identity import IdentityProviderRecord
 from app.services.auth_provider import (
     PROVIDER_CLASSES,
@@ -30,7 +31,7 @@ class AuthProviderRegistry:
 
         provider_model = await identity_provider_dao.get_preferred(
             provider_type,
-            tenant_id,
+            as_uuid(tenant_id),
             is_active=True,
         )
 
@@ -53,7 +54,7 @@ class AuthProviderRegistry:
 
     async def list_providers(self, tenant_id: str | None = None) -> list[IdentityProviderRecord]:
         """List all available identity providers."""
-        return list(await identity_provider_dao.list_active(tenant_id))
+        return list(await identity_provider_dao.list_active(as_uuid(tenant_id)))
 
     async def create_provider(
         self,
@@ -91,7 +92,10 @@ class AuthProviderRegistry:
     ) -> IdentityProviderRecord | None:
         """Update an existing identity provider."""
         del db
-        provider = await identity_provider_dao.get(provider_id)
+        provider_uuid = as_uuid(provider_id)
+        if provider_uuid is None:
+            return None
+        provider = await identity_provider_dao.get(provider_uuid)
         if not provider:
             return None
 
@@ -112,12 +116,15 @@ class AuthProviderRegistry:
     async def delete_provider(self, db: object | None, provider_id: str) -> bool:
         """Delete an identity provider."""
         del db
-        provider = await identity_provider_dao.get(provider_id)
+        provider_uuid = as_uuid(provider_id)
+        if provider_uuid is None:
+            return False
+        provider = await identity_provider_dao.get(provider_uuid)
         if not provider:
             return False
 
         provider_type = provider.provider_type
-        await identity_provider_dao.delete(id=provider_id)
+        _ = await identity_provider_dao.delete(id=provider_uuid)
         self._clear_cache(provider_type)
         return True
 

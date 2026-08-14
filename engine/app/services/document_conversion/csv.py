@@ -25,7 +25,7 @@ def _convert_csv_to_xlsx(src_file: Path, tgt_file: Path, target_path: str) -> st
         for row in reader:
             values = list(row)
             while values and not str(values[-1] or "").strip():
-                values.pop()
+                _ = values.pop()
             if values:
                 worksheet.append(values)
 

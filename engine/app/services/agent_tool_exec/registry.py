@@ -13,8 +13,17 @@ type ToolArgumentMapping = Mapping[str, ToolArgumentValue | uuid.UUID]
 type ToolArguments = dict[str, ToolArgumentValue]
 
 
+def tool_arg_str(value: object) -> str | None:
+    """Narrow a tool argument to ``str`` when the runtime value is a string."""
+    return value if isinstance(value, str) else None
+
+
+def tool_arg_str_or(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
 class ToolOutputCallback(Protocol):
-    def __call__(self, content: str) -> Awaitable[None] | None: ...
+    def __call__(self, content: str, label: str = "stdout", /) -> Awaitable[None] | None: ...
 
 
 type ToolHandlerResult = str | Awaitable[str]

@@ -2,11 +2,12 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, override
+from typing import ClassVar, override
 
 import httpx
 
 from app.core.json_types import JsonObject
+from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
 from .types import ExternalDepartment, ExternalUser
@@ -15,32 +16,32 @@ from .types import ExternalDepartment, ExternalUser
 class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
     """WeCom organization sync adapter."""
 
-    provider_type = "wecom"
+    provider_type: ClassVar[str] = "wecom"
 
-    WECOM_API_URL = "https://qyapi.weixin.qq.com"
-    WECOM_TOKEN_URL = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"  # noqa: S105
+    WECOM_API_URL: ClassVar[str] = "https://qyapi.weixin.qq.com"
+    WECOM_TOKEN_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"  # noqa: S105
     # Use simplelist (newer API) instead of the deprecated department/list.
     # The simplelist endpoint is accessible to the contact assistant token
     # (obtained via the 通讯录同步 Secret) without requiring app-level IP whitelist.
-    WECOM_DEPT_LIST_URL = "https://qyapi.weixin.qq.com/cgi-bin/department/simplelist"
-    WECOM_USER_LIST_URL = "https://qyapi.weixin.qq.com/cgi-bin/user/list"
+    WECOM_DEPT_LIST_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/department/simplelist"
+    WECOM_USER_LIST_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/user/list"
     # Fallback APIs for contact assistant token (cannot call user/list):
     # list_id returns {userid, open_userid} for all dept members
     # user/get returns full details for a single user by userid
-    WECOM_USER_LIST_ID_URL = "https://qyapi.weixin.qq.com/cgi-bin/user/list_id"
-    WECOM_USER_GET_URL = "https://qyapi.weixin.qq.com/cgi-bin/user/get"
+    WECOM_USER_LIST_ID_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/user/list_id"
+    WECOM_USER_GET_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/user/get"
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
         super().__init__(provider, config, tenant_id)
         # corp_id: the enterprise's WeCom corp ID
         # secret: the 通讯录同步 (contact-sync) secret - used for department/simplelist and user/list_id
-        self.corp_id = self._config_string("corp_id", "app_id", "corpid")
-        self.secret = self._config_string("secret", "app_secret", "corpsecret")
+        self.corp_id: str = self._config_string("corp_id", "app_id", "corpid")
+        self.secret: str = self._config_string("secret", "app_secret", "corpsecret")
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
 

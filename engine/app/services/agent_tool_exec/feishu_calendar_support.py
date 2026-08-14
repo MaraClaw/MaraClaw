@@ -9,9 +9,10 @@ from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
+from app.services.feishu_service import FeishuService
 
 
-def _feishu_service():
+def _feishu_service() -> FeishuService:
     return importlib.import_module("app.services.feishu_service").feishu_service
 
 
@@ -50,7 +51,7 @@ def _nested_string(value: ToolArgumentValue | None, name: str) -> str:
 
 
 def _format_calendar_items(items: list[dict[str, ToolArgumentValue]]) -> list[str]:
-    lines = []
+    lines: list[str] = []
     if items:
         lines.append(f"📅 Bot 日历共 {len(items)} 个日程：\n")
     for event in items:
@@ -71,7 +72,9 @@ def _format_calendar_items(items: list[dict[str, ToolArgumentValue]]) -> list[st
     return lines
 
 
-async def _calendar_write_context(agent_id: uuid.UUID, user_email: str):
+async def _calendar_write_context(
+    agent_id: uuid.UUID, user_email: str
+) -> tuple[object, str, str, str]:
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     if not app_id or not app_secret:
         return agent_tools, "", "", "❌ Agent has no Feishu channel configured."

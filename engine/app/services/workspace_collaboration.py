@@ -20,7 +20,7 @@ import aiofiles
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
 from app.records.workspace import WorkspaceEditLockRecord, WorkspaceFileRevisionRecord
 from app.services.storage import get_storage_backend, normalize_storage_key
-from app.services.storage_runtime.base import WriteCondition
+from app.services.storage_runtime.base import StorageBackend, WriteCondition
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.workspace_locking import workspace_locks
 
@@ -68,7 +68,7 @@ class WorkspaceWriteResult:
     locked_by_user_id: str | None = None
 
 
-def _should_mirror_to_local_filesystem(storage) -> bool:
+def _should_mirror_to_local_filesystem(storage: StorageBackend) -> bool:
     """Only mirror writes into AGENT_DATA_DIR when the filesystem is the primary store."""
     return isinstance(storage, LocalStorageBackend)
 
@@ -87,7 +87,7 @@ def normalize_workspace_path(path: str) -> str:
             continue
         if part == "..":
             if parts:
-                parts.pop()
+                _ = parts.pop()
             continue
         parts.append(part)
     return "/".join(parts)
@@ -120,17 +120,17 @@ async def read_text_if_exists(path: Path) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
-async def cleanup_expired_locks(db: Any = None) -> None:
+async def cleanup_expired_locks(db: object | None = None) -> None:
     """Remove stale edit locks.
 
     ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
     del db
-    await workspace_edit_lock_dao.delete_expired(now=datetime.now(UTC))
+    _ = await workspace_edit_lock_dao.delete_expired(now=datetime.now(UTC))
 
 
 async def acquire_edit_lock(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
@@ -156,7 +156,7 @@ async def acquire_edit_lock(
 
 
 async def release_edit_lock(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
@@ -175,7 +175,7 @@ async def release_edit_lock(
 
 
 async def get_active_lock(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
@@ -190,7 +190,7 @@ async def get_active_lock(
 
 
 async def record_revision(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
@@ -255,7 +255,7 @@ async def record_revision(
 
 
 async def write_workspace_file(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -286,7 +286,7 @@ async def write_workspace_file(
                 normalized,
                 (
                     f"Human is currently editing {normalized}. Do not modify it now. "
-                    "Ask the user to finish editing, or work on another file."
+                    + "Ask the user to finish editing, or work on another file."
                 ),
                 locked_by_user_id=str(lock.user_id),
             )
@@ -315,7 +315,7 @@ async def write_workspace_file(
     if local_base_available and target is not None:
         target.parent.mkdir(parents=True, exist_ok=True)
         async with aiofiles.open(target, "w", encoding="utf-8") as f:
-            await f.write(content)
+            _ = await f.write(content)
 
     revision = await record_revision(
         agent_id=agent_id,
@@ -340,7 +340,7 @@ async def write_workspace_file(
 
 
 async def delete_workspace_file(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -429,7 +429,7 @@ async def delete_workspace_file(
 
 
 async def move_workspace_path(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -486,7 +486,7 @@ async def move_workspace_path(
                     locked_path,
                     (
                         f"Human is currently editing {locked_path}. Do not move it now. "
-                        "Ask the user to finish editing, or choose another path."
+                        + "Ask the user to finish editing, or choose another path."
                     ),
                     locked_by_user_id=str(lock.user_id),
                 )
@@ -575,7 +575,7 @@ async def move_workspace_path(
                 source.unlink()
         if destination is not None and await storage.is_file(destination_key):
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(await storage.read_bytes(destination_key))
+            _ = destination.write_bytes(await storage.read_bytes(destination_key))
 
     source_revision = await record_revision(
         agent_id=agent_id,
@@ -609,7 +609,7 @@ async def move_workspace_path(
     )
 
 
-async def _collect_storage_tree_versions(storage, root_key: str) -> list[tuple[str, str]]:
+async def _collect_storage_tree_versions(storage: StorageBackend, root_key: str) -> list[tuple[str, str]]:
     keys: list[tuple[str, str]] = []
     for entry in await storage.list_dir(root_key):
         if entry.is_dir:
@@ -621,7 +621,7 @@ async def _collect_storage_tree_versions(storage, root_key: str) -> list[tuple[s
 
 
 async def list_revisions(
-    db: Any = None,
+    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,

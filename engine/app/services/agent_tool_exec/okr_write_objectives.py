@@ -72,7 +72,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                                 owner_id = member.user_id
                                 logger.info(
                                     f"[OKR] _create_objective: resolved OrgMember.id {owner_id_str} "
-                                    f"→ user_id {owner_id}"
+                                    + f"→ user_id {owner_id}"
                                 )
 
                 if not owner_exists:
@@ -80,7 +80,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                     if not owner_name_hint:
                         return (
                             f"owner_id '{owner_id_str}' was not found. Provide a valid UUID, "
-                            "or pass owner_name instead."
+                            + "or pass owner_name instead."
                         )
 
         if owner_type != "company" and not owner_id and owner_name_hint:

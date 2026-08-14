@@ -107,7 +107,7 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
         skill_dir = (skills_root / folder_name).resolve()
         if not skill_dir.is_relative_to(skills_root):
             return "❌ Invalid skill folder name."
-        skill_dir.mkdir(parents=True, exist_ok=True)
+        _ = skill_dir.mkdir(parents=True, exist_ok=True)
 
         written = []
         for file in files:
@@ -115,7 +115,7 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
             if not file_path.is_relative_to(skill_dir):
                 continue
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(file["content"], encoding="utf-8")
+            _ = file_path.write_text(file["content"], encoding="utf-8")
             written.append(file["path"])
 
         return f"✅ Skill '{folder_name}' installed successfully ({len(written)} files written to skills/{folder_name}/).\n\nFiles: {', '.join(written)}"

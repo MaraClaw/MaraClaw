@@ -13,7 +13,7 @@ surface we'll shrink as old templates are ported.
 """
 
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import yaml
 
@@ -412,7 +412,8 @@ def _load_folder_templates() -> list[TemplateSeed]:
             continue
 
         try:
-            meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            meta_raw = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            meta: dict[str, Any] = dict[str, Any](meta_raw) if isinstance(meta_raw, dict) else {}
         except yaml.YAMLError as exc:
             logger.error(f"[TemplateSeeder] {slug_dir.name}/meta.yaml parse error: {exc}")
             continue
@@ -464,7 +465,7 @@ async def seed_agent_templates():
             if old.name not in current_names:
                 ref_count = await agent_template_dao.count_agents_using(old.id)
                 if ref_count == 0:
-                    await agent_template_dao.delete(id=old.id)
+                    _ = await agent_template_dao.delete(id=old.id)
                     logger.info(f"[TemplateSeeder] Removed old template: {old.name}")
                 else:
                     logger.info(f"[TemplateSeeder] Skipping delete of '{old.name}' (still referenced by agents)")
@@ -472,7 +473,7 @@ async def seed_agent_templates():
         for tmpl in templates:
             existing = await agent_template_dao.get_builtin_by_name(tmpl["name"])
             if existing:
-                await agent_template_dao.update(
+                _ = await agent_template_dao.update(
                     db_obj=existing,
                     obj_in={
                         "description": tmpl["description"],
@@ -487,7 +488,7 @@ async def seed_agent_templates():
                     },
                 )
             else:
-                await agent_template_dao.create(
+                _ = await agent_template_dao.create(
                     obj_in={
                         "name": tmpl["name"],
                         "description": tmpl["description"],
@@ -505,6 +506,6 @@ async def seed_agent_templates():
                 logger.info(f"[TemplateSeeder] Created template: {tmpl['name']}")
         logger.info(
             f"[TemplateSeeder] Seeded {len(templates)} templates "
-            f"({len(DEFAULT_TEMPLATES)} legacy + "
-            f"{len(templates) - len(DEFAULT_TEMPLATES)} folder)"
+            + f"({len(DEFAULT_TEMPLATES)} legacy + "
+            + f"{len(templates) - len(DEFAULT_TEMPLATES)} folder)"
         )

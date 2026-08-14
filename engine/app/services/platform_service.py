@@ -23,7 +23,7 @@ class PlatformService:
         ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$")
         return bool(ip_pattern.match(h))
 
-    async def get_public_base_url(self, db: Any = None, request: Request | None = None) -> str:
+    async def get_public_base_url(self, db: object | None = None, request: Request | None = None) -> str:
         """Resolve the platform's public base URL with priority lookup.
 
         Priority:
@@ -50,7 +50,7 @@ class PlatformService:
         tenant: _TenantSsoTarget,
         request: Request | None = None,
         *,
-        db: Any = None,
+        db: object | None = None,
         sso_redirect_enabled: bool = True,
     ) -> str:
         """Generate the SSO base URL for a tenant based on IP/Domain logic.

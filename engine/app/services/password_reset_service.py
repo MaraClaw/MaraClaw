@@ -33,7 +33,7 @@ async def create_password_reset_token(identity_id: uuid.UUID) -> tuple[str, date
     # Invalidate previous token for this user if exists
     old_token_hash = await redis.get(user_key)
     if old_token_hash:
-        await redis.delete(f"{RESET_REDIS_KEY_PREFIX}{old_token_hash}")
+        _ = await redis.delete(f"{RESET_REDIS_KEY_PREFIX}{old_token_hash}")
 
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
@@ -47,9 +47,9 @@ async def create_password_reset_token(identity_id: uuid.UUID) -> tuple[str, date
     ttl_seconds = int(expiry_minutes * 60)
 
     async with redis.pipeline(transaction=True) as pipe:
-        pipe.setex(token_key, ttl_seconds, str(identity_id))
-        pipe.setex(user_key, ttl_seconds, token_hash)
-        await pipe.execute()
+        _ = pipe.setex(token_key, ttl_seconds, str(identity_id))
+        _ = pipe.setex(user_key, ttl_seconds, token_hash)
+        _ = await pipe.execute()
 
     return raw_token, expires_at
 
@@ -83,8 +83,8 @@ async def consume_password_reset_token(raw_token: str) -> ConsumedPasswordResetT
 
     # Atomic delete to ensure single-use
     async with redis.pipeline(transaction=True) as pipe:
-        pipe.delete(token_key)
-        pipe.delete(user_key)
-        await pipe.execute()
+        _ = pipe.delete(token_key)
+        _ = pipe.delete(user_key)
+        _ = await pipe.execute()
 
     return {"identity_id": identity_id}

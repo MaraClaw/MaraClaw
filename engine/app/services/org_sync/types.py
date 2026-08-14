@@ -16,7 +16,7 @@ class ExternalDepartment:
     name: str
     parent_external_id: str | None = None
     member_count: int = 0
-    raw_data: ExternalProviderPayload = field(default_factory=dict)
+    raw_data: ExternalProviderPayload = field(default_factory=dict[str, ExternalProviderPayloadValue])
 
 
 @dataclass
@@ -32,7 +32,7 @@ class ExternalUser:
     title: str = ""
     department_external_id: str = ""
     department_path: str = ""
-    department_ids: list[str] = field(default_factory=list)  # List of dept IDs from provider
+    department_ids: list[str] = field(default_factory=list[str])  # List of dept IDs from provider
     mobile: str = ""
     status: str = "active"
-    raw_data: ExternalProviderPayload = field(default_factory=dict)
+    raw_data: ExternalProviderPayload = field(default_factory=dict[str, ExternalProviderPayloadValue])

@@ -2,42 +2,62 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from types import ModuleType
 
+import httpx
+
+from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
-from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_module() -> ModuleType:
+def _httpx_module():
     return importlib.import_module("httpx")
+
+
+def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
+    return _httpx_module().AsyncClient(**kwargs)
+
+
+def _response_mapping(response: httpx.Response) -> JsonObject:
+    raw: object = response.json()
+    return raw if isinstance(raw, dict) else {}
+
+
+def _nested_mapping(value: object) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _object_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 async def _get_vercel_token(agent_id: uuid.UUID, tool_name: str) -> str | None:
     config = await agent_tools._get_tool_config(agent_id, tool_name)
-    token = (config or {}).get("vercel_token")
+    token = json_as_str((config or {}).get("vercel_token"))
     if not token and tool_name != "vercel_deploy":
         config_deploy = await agent_tools._get_tool_config(agent_id, "vercel_deploy")
-        token = (config_deploy or {}).get("vercel_token")
+        token = json_as_str((config_deploy or {}).get("vercel_token"))
     return token
 
 
 async def _get_vercel_quota_summary(vercel_token: str) -> str:
-    httpx = _httpx_module()
     headers = {"Authorization": f"Bearer {vercel_token}"}
-    async with httpx.AsyncClient() as client:
+    async with _httpx_client() as client:
         try:
             proj_res = await client.get("https://api.vercel.com/v9/projects", headers=headers)
             if proj_res.status_code == 200:
-                projects = proj_res.json().get("projects", [])
+                projects = _object_items(_response_mapping(proj_res).get("projects"))
                 project_count = len(projects)
                 user_res = await client.get("https://api.vercel.com/v2/user", headers=headers)
                 username = "User"
                 plan = "Hobby"
                 if user_res.status_code == 200:
-                    user_data = user_res.json().get("user", {})
-                    username = user_data.get("username", username)
-                    plan = user_data.get("billing", {}).get("plan", plan)
+                    user_data = _nested_mapping(_response_mapping(user_res).get("user"))
+                    username = json_as_str(user_data.get("username")) or username
+                    plan = json_as_str(_nested_mapping(user_data.get("billing")).get("plan")) or plan
                 return f"📊 **Vercel Account status ({username} - {plan} Plan)**:\n- Active Projects: {project_count}"
         except Exception as e:
             logger.warning(f"Error fetching Vercel quota info: {e}")
@@ -45,13 +65,12 @@ async def _get_vercel_quota_summary(vercel_token: str) -> str:
 
 
 async def _check_neon_quota_limit(api_key: str) -> tuple[bool, str]:
-    httpx = _httpx_module()
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-    async with httpx.AsyncClient() as client:
+    async with _httpx_client() as client:
         try:
             res = await client.get("https://console.neon.tech/api/v2/projects", headers=headers)
             if res.status_code == 200:
-                projects = res.json().get("projects", [])
+                projects = _object_items(_response_mapping(res).get("projects"))
                 project_count = len(projects)
                 if project_count >= 1:
                     return (
@@ -70,12 +89,11 @@ def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> 
 
 
 async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     project_name = _string_argument(arguments, "project_name")
     key = _string_argument(arguments, "key")
     value = _string_argument(arguments, "value")
     target_value = arguments.get("target")
-    target = (
+    target: list[ToolArgumentValue] = (
         [item for item in target_value if isinstance(item, str)]
         if isinstance(target_value, list)
         else ["production", "preview", "development"]
@@ -88,8 +106,13 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {"key": key, "value": value, "type": "encrypted" if key == "DATABASE_URL" else "plain", "target": target}
-    async with httpx.AsyncClient() as client:
+    payload: dict[str, ToolArgumentValue] = {
+        "key": key,
+        "value": value,
+        "type": "encrypted" if key == "DATABASE_URL" else "plain",
+        "target": target,
+    }
+    async with _httpx_client() as client:
         try:
             res = await client.post(
                 f"https://api.vercel.com/v9/projects/{project_name}/env", headers=headers, json=payload
@@ -104,14 +127,14 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
             ):
                 list_res = await client.get(f"https://api.vercel.com/v9/projects/{project_name}/env", headers=headers)
                 if list_res.status_code == 200:
-                    envs = list_res.json().get("envs", [])
+                    envs = _object_items(_response_mapping(list_res).get("envs"))
                     env_id = None
                     for env in envs:
                         if env.get("key") == key:
-                            env_id = env.get("id")
+                            env_id = json_as_str(env.get("id"))
                             break
                     if env_id:
-                        patch_payload = {"value": value, "target": target}
+                        patch_payload: dict[str, ToolArgumentValue] = {"value": value, "target": target}
                         patch_res = await client.patch(
                             f"https://api.vercel.com/v9/projects/{project_name}/env/{env_id}",
                             headers=headers,
@@ -128,7 +151,6 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
 
 
 async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     action = _string_argument(arguments, "action")
     domain = _string_argument(arguments, "domain")
     project_name = _string_argument(arguments, "project_name")
@@ -140,7 +162,7 @@ async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient() as client:
+    async with _httpx_client() as client:
         try:
             if action == "check":
                 avail_res = await client.get(
@@ -148,15 +170,16 @@ async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -
                 )
                 available = False
                 if avail_res.status_code == 200:
-                    available = avail_res.json().get("available", False)
+                    available = bool(_response_mapping(avail_res).get("available", False))
                 else:
                     logger.warning(f"Failed to check domain availability: {avail_res.text}")
-                price = 0
+                price: int | float = 0
                 price_res = await client.get(
                     f"https://api.vercel.com/v1/registrar/domains/{domain}/price", headers=headers
                 )
                 if price_res.status_code == 200:
-                    price = price_res.json().get("price", 0)
+                    price_value = _response_mapping(price_res).get("price", 0)
+                    price = price_value if isinstance(price_value, int | float) and not isinstance(price_value, bool) else 0
                 else:
                     logger.warning(f"Failed to check domain price: {price_res.text}")
                 avail_str = "Yes" if available else "No"
@@ -178,7 +201,6 @@ async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -
 
 
 async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     project_name = _string_argument(arguments, "project_name")
     database_name = _string_argument(arguments, "database_name", "neondb")
     region = _string_argument(arguments, "region", "aws-us-east-1")
@@ -187,7 +209,7 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
         return "❌ Missing required argument: 'project_name'."
 
     config = await agent_tools._get_tool_config(agent_id, "neon_create_database")
-    api_key = (config or {}).get("neon_api_key")
+    api_key = json_as_str((config or {}).get("neon_api_key"))
     if not api_key:
         return "❌ Neon API Key is not configured. Please paste your key in the tool settings."
     is_blocked, quota_msg = await agent_tools._check_neon_quota_limit(api_key)
@@ -195,47 +217,48 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
         return quota_msg
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json"}
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with _httpx_client(timeout=45.0) as client:
         if not org_id:
             try:
                 org_res = await client.get("https://console.neon.tech/api/v2/users/me/organizations", headers=headers)
                 if org_res.status_code == 200:
-                    orgs = org_res.json().get("organizations", [])
+                    orgs = _object_items(_response_mapping(org_res).get("organizations"))
                     if len(orgs) == 1:
-                        org_id = orgs[0].get("id")
+                        org_id = json_as_str(orgs[0].get("id")) or ""
                         logger.info(f"[Neon] Automatically resolved single org_id: {org_id}")
                     elif len(orgs) > 1:
                         org_list_str = "\n".join([f"- {o.get('name')} (ID: `{o.get('id')}`)" for o in orgs])
                         return (
                             f"⚠️ **Multiple Neon organizations/spaces detected**.\n"
-                            f"Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
-                            f"{org_list_str}"
+                            + f"Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
+                            + f"{org_list_str}"
                         )
             except Exception as e:
                 logger.warning(f"Failed to auto-resolve Neon org_id: {e}")
 
-        project_payload = {"project": {"name": project_name, "region_id": region, "pg_version": 15}}
+        project_body: JsonObject = {"name": project_name, "region_id": region, "pg_version": 15}
         if org_id:
-            project_payload["project"]["org_id"] = org_id
+            project_body["org_id"] = org_id
+        project_payload: JsonObject = {"project": project_body}
         res = await client.post("https://console.neon.tech/api/v2/projects", headers=headers, json=project_payload)
         if res.status_code in (200, 201):
-            data = res.json()
-            project = data.get("project", {})
-            proj_id = project.get("id")
-            connection_uri = data.get("connection_uri")
+            data = _response_mapping(res)
+            project = _nested_mapping(data.get("project"))
+            proj_id = json_as_str(project.get("id"))
+            connection_uri = json_as_str(data.get("connection_uri"))
             if not connection_uri:
                 conn_res = await client.get(
                     f"https://console.neon.tech/api/v2/projects/{proj_id}/connection_string", headers=headers
                 )
                 if conn_res.status_code == 200:
-                    connection_uri = conn_res.json().get("connection_uri")
+                    connection_uri = json_as_str(_response_mapping(conn_res).get("connection_uri"))
             if not connection_uri:
                 connection_uri = f"postgresql://alex:password@ep-cool-breeze-12345.us-east-1.neon.tech/{database_name}?sslmode=require"
             return (
                 f"✅ **Neon database created successfully!**\n\n"
-                f"- **Project ID**: {proj_id}\n"
-                f"- **Region**: {region}\n"
-                f"- **DATABASE_URL**: {connection_uri}\n\n"
-                f"Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
+                + f"- **Project ID**: {proj_id}\n"
+                + f"- **Region**: {region}\n"
+                + f"- **DATABASE_URL**: {connection_uri}\n\n"
+                + f"Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
             )
         return f"❌ Failed to create Neon project: {res.text}"

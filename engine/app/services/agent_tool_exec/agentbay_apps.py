@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.logging import logger
 
 from .agentbay_response import _agentbay_response_list, _agentbay_response_text
 from .registry import ToolArguments, ToolArgumentValue
 
+if TYPE_CHECKING:
+    from app.services.agentbay_client import AgentBayClient
+
 type _App = dict[str, ToolArgumentValue]
 
 
-def _agentbay_normalize_text(value) -> str:
+def _agentbay_normalize_text(value: object) -> str:
     import re
 
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
@@ -90,7 +94,7 @@ def _agentbay_uncertain_start_error(error_message: str) -> bool:
     return "may have launched" in text or "no processes found" in text
 
 
-async def _agentbay_visible_apps_note(client) -> str:
+async def _agentbay_visible_apps_note(client: AgentBayClient) -> str:
     try:
         visible = await client.computer_list_visible_apps()
         if visible.get("success"):
@@ -164,7 +168,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
             else:
                 installed_note = (
                     "\n\nCould not check installed apps: "
-                    f"{_agentbay_response_text(installed_result.get('error_message'), 'Unknown error')}"
+                    + f"{_agentbay_response_text(installed_result.get('error_message'), 'Unknown error')}"
                 )
         except Exception as e:
             logger.debug(f"[AgentBay] Installed app fallback failed: {e}")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from app.core.agent_constants import DEFAULT_CONTEXT_WINDOW_SIZE
 from app.core.json_types import JsonValue
@@ -83,7 +83,8 @@ def _parse_wechat_message(raw_message: JsonValue) -> WeChatInboundMessage | None
 def _parse_wechat_delivery_config(
     config: ChannelConfigRecord | object, fallback_base_url: str
 ) -> WeChatDeliveryConfig | None:
-    extra = getattr(config, "extra_config", None) or {}
+    extra_raw = getattr(config, "extra_config", None) or {}
+    extra: dict[str, Any] = dict[str, Any](extra_raw) if isinstance(extra_raw, dict) else {}
     token = _nonempty_string(extra.get("bot_token") if isinstance(extra, dict) else None)
     if token is None:
         return None
@@ -166,14 +167,14 @@ async def process_wechat_message(
     )
     history = convert_chat_messages_to_llm_format(history_msgs)
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="user",
         content=user_text,
         conversation_id=session_conv_id,
     )
-    await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
+    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
     reply_text = await _call_llm_with_config(
@@ -195,7 +196,7 @@ async def process_wechat_message(
         route_tag=delivery_config["route_tag"],
     )
 
-    await chat_message_dao.insert_message(
+    _ = await chat_message_dao.insert_message(
         agent_id=agent_id,
         user_id=platform_user_id,
         role="assistant",
@@ -205,7 +206,7 @@ async def process_wechat_message(
     try:
         fresh_session = await chat_session_dao.get(uuid.UUID(session_conv_id))
         if fresh_session:
-            await chat_session_dao.update(db_obj=fresh_session, obj_in={"last_message_at": datetime.now(UTC)})
+            _ = await chat_session_dao.update(db_obj=fresh_session, obj_in={"last_message_at": datetime.now(UTC)})
     except ValueError, TypeError:
         pass
 

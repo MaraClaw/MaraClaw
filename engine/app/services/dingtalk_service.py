@@ -1,6 +1,7 @@
 """DingTalk service for sending messages via Open API."""
 
 import json
+from typing import Any
 
 import httpx
 
@@ -78,7 +79,12 @@ async def send_dingtalk_v1_robot_oto_message(
         msg_key = "sampleText"
         msg_param = json.dumps({"content": message})
 
-    payload = {"robotCode": robot_code or app_id, "userIds": user_ids, "msgKey": msg_key, "msgParam": msg_param}
+    payload: dict[str, Any] = {
+        "robotCode": robot_code or app_id,
+        "userIds": user_ids,
+        "msgKey": msg_key,
+        "msgParam": msg_param,
+    }
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
@@ -113,7 +119,7 @@ async def send_dingtalk_corp_conversation(
     url = "https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2"
     params = {"access_token": access_token}
 
-    payload = {
+    payload: JsonObject = {
         "agent_id": agent_id,
         "userid_list": user_id,
         "msg": msg_body,

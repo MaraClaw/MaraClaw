@@ -42,7 +42,7 @@ async def set_cached_im_token(
     safe_ttl = int(ttl)
     if safe_ttl <= 0:
         return
-    await cache_set(_subject_key(provider, subject, secret), token, ttl=safe_ttl)
+    _ = await cache_set(_subject_key(provider, subject, secret), token, ttl=safe_ttl)
 
 
 async def drop_cached_im_token(provider: str, subject: str, *, secret: str = "") -> None:

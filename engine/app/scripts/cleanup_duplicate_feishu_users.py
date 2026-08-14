@@ -47,7 +47,7 @@ async def main():
 
     from app.services.auth_registry import auth_provider_registry
 
-    await init_pool()
+    _ = await init_pool()
     try:
         # ── Step 0: Load org sync app credentials ──
         provider = await auth_provider_registry.get_provider("feishu")
@@ -83,7 +83,7 @@ async def main():
         async with connection_ctx() as db:
             members_to_fill = await db.fetchall(
                 "SELECT id, name, open_id, external_id FROM org_members "
-                "WHERE open_id IS NOT NULL AND (external_id IS NULL OR external_id = '')"
+                + "WHERE open_id IS NOT NULL AND (external_id IS NULL OR external_id = '')"
             )
         logger.info(f"Found {len(members_to_fill)} org members needing user_id backfill")
 
@@ -118,8 +118,8 @@ async def main():
         async with connection_ctx() as db:
             om_dup_groups = await db.fetchall(
                 "SELECT name, tenant_id, COUNT(id) AS cnt FROM org_members "
-                "WHERE name IS NOT NULL AND name <> '' "
-                "GROUP BY name, tenant_id HAVING COUNT(id) > 1"
+                + "WHERE name IS NOT NULL AND name <> '' "
+                + "GROUP BY name, tenant_id HAVING COUNT(id) > 1"
             )
         om_merge_count = 0
         logger.info(f"Found {len(om_dup_groups)} groups of duplicate OrgMembers")
@@ -130,13 +130,13 @@ async def main():
                 if tid is None:
                     dups = await db.fetchall(
                         "SELECT * FROM org_members WHERE name = %(name)s AND tenant_id IS NULL "
-                        "ORDER BY synced_at DESC NULLS LAST",
+                        + "ORDER BY synced_at DESC NULLS LAST",
                         {"name": name},
                     )
                 else:
                     dups = await db.fetchall(
                         "SELECT * FROM org_members WHERE name = %(name)s AND tenant_id = %(tenant_id)s "
-                        "ORDER BY synced_at DESC NULLS LAST",
+                        + "ORDER BY synced_at DESC NULLS LAST",
                         {"name": name, "tenant_id": tid},
                     )
             if len(dups) <= 1:
@@ -192,8 +192,8 @@ async def main():
         async with connection_ctx() as db:
             dup_groups = await db.fetchall(
                 "SELECT display_name, tenant_id, COUNT(id) AS cnt FROM users "
-                "WHERE display_name IS NOT NULL AND display_name <> '' "
-                "GROUP BY display_name, tenant_id HAVING COUNT(id) > 1"
+                + "WHERE display_name IS NOT NULL AND display_name <> '' "
+                + "GROUP BY display_name, tenant_id HAVING COUNT(id) > 1"
             )
         merge_count = 0
         logger.info(f"Found {len(dup_groups)} groups of duplicate display_names")
@@ -204,13 +204,13 @@ async def main():
                 if tid is None:
                     dups = await db.fetchall(
                         "SELECT * FROM users WHERE display_name = %(name)s AND tenant_id IS NULL "
-                        "ORDER BY created_at ASC NULLS LAST",
+                        + "ORDER BY created_at ASC NULLS LAST",
                         {"name": name},
                     )
                 else:
                     dups = await db.fetchall(
                         "SELECT * FROM users WHERE display_name = %(name)s AND tenant_id = %(tenant_id)s "
-                        "ORDER BY created_at ASC NULLS LAST",
+                        + "ORDER BY created_at ASC NULLS LAST",
                         {"name": name, "tenant_id": tid},
                     )
             if len(dups) <= 1:

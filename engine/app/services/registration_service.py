@@ -25,8 +25,9 @@ from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.org import OrgMemberRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.auth_provider import BaseAuthProvider
 from app.services.sso_service import sso_service
-from app.services.system_email_service import resolve_email_config_async
+from app.services.system_email_service import SystemEmailConfig, resolve_email_config_async
 
 
 class SSOUserInfo(TypedDict):
@@ -115,7 +116,7 @@ class RegistrationService:
         username: str | None = None,
         password: str | None = None,
         is_platform_admin: bool = False,
-        email_config: Any = None,
+        email_config: SystemEmailConfig | None = None,
         password_hash: str | None = None,
     ) -> IdentityRecord:
         """Find an existing identity or create a new one.
@@ -137,7 +138,7 @@ class RegistrationService:
             if not email_config:
                 email_config = await resolve_email_config_async()
             if not email_config and not identity.email_verified:
-                await identity_dao.update(db_obj=identity, obj_in={"email_verified": True})
+                _ = await identity_dao.update(db_obj=identity, obj_in={"email_verified": True})
             return identity
 
         # Determine verified status
@@ -178,7 +179,7 @@ class RegistrationService:
         role: str = "member",
         tenant_id: uuid.UUID | None = None,
         registration_source: str = "web",
-        email_config: Any = None,
+        email_config: SystemEmailConfig | None = None,
     ) -> UserRecord:
         """Create a new tenant-specific user linked to an identity."""
         name = display_name or identity.username or "UserRecord"
@@ -218,7 +219,7 @@ class RegistrationService:
         await self.bind_org_member(user)
 
         # Create Participant record
-        await participant_dao.create_for_user(
+        _ = await participant_dao.create_for_user(
             user.id,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
@@ -260,7 +261,7 @@ class RegistrationService:
             return existing, False
 
         if existing_user:
-            await sso_service.link_identity(
+            _ = await sso_service.link_identity(
                 str(existing_user.id),
                 provider_type,
                 lookup_provider_user_id,
@@ -298,13 +299,13 @@ class RegistrationService:
         self,
         provider_type: str,
         code: str,
-        auth_provider,
+        auth_provider: BaseAuthProvider,
     ) -> tuple[UserRecord | None, bool, str | None]:
         """Register or login user via SSO."""
         try:
             token_data = await auth_provider.exchange_code_for_token(code)
             access_token = token_data.get("access_token")
-            if not access_token:
+            if not isinstance(access_token, str) or not access_token:
                 return None, False, "Failed to get access token from provider"
 
             user_info_obj = await auth_provider.get_user_info(access_token)
@@ -324,6 +325,8 @@ class RegistrationService:
                 sso_tenant_id = str(tenant.id) if tenant else None
 
             lookup_provider_user_id = user_info_obj.provider_union_id or user_info_obj.provider_user_id
+            if not lookup_provider_user_id:
+                return None, False, "SSO provider did not return a user id"
             existing_user = await sso_service.resolve_user_identity(
                 lookup_provider_user_id,
                 provider_type,
@@ -336,7 +339,7 @@ class RegistrationService:
             if user_info_obj.email:
                 existing_by_email = await sso_service.match_user_by_email(user_info_obj.email, tenant_id=sso_tenant_id)
                 if existing_by_email:
-                    await sso_service.link_identity(
+                    _ = await sso_service.link_identity(
                         str(existing_by_email.id),
                         provider_type,
                         lookup_provider_user_id,
@@ -409,13 +412,15 @@ class RegistrationService:
                 identity_updates["phone"] = member.phone
                 user.primary_mobile = member.phone
             if identity_updates and user.identity is not None:
-                await identity_dao.update(db_obj=user.identity, obj_in=identity_updates)
+                _ = await identity_dao.update(db_obj=user.identity, obj_in=identity_updates)
 
             await self._run_okr_member_hook(member.id, user.tenant_id)
 
-        await self.ensure_web_org_member(user)
+        _ = await self.ensure_web_org_member(user)
 
     async def _find_unbound_org_member_by_contact(self, user: UserRecord) -> OrgMemberRecord | None:
+        if user.tenant_id is None:
+            return None
         if user.email:
             member = await org_member_dao.find_unbound_by_email(user.email, user.tenant_id)
             if member:
@@ -455,7 +460,7 @@ class RegistrationService:
         linked_existing = False
         if member:
             linked_existing = member.user_id is None
-            fields = {
+            fields: dict[str, Any] = {
                 "user_id": user.id,
                 "name": user.display_name or member.name or "User",
                 "email": user.email,
@@ -511,7 +516,7 @@ class RegistrationService:
             if sync_phone and member.phone != user.primary_mobile:
                 fields["phone"] = user.primary_mobile
             if fields:
-                await org_member_dao.update_fields(member.id, fields)
+                _ = await org_member_dao.update_fields(member.id, fields)
 
 
 # Global registration service

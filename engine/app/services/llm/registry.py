@@ -39,7 +39,7 @@ class ProviderSpec:
     default_base_url: str | None
     supports_tool_choice: bool = True
     default_max_tokens: int = 4096
-    model_max_tokens: dict[str, int] = field(default_factory=dict)
+    model_max_tokens: dict[str, int] = field(default_factory=dict[str, int])
 
 
 PROVIDER_ALIASES: dict[str, str] = {

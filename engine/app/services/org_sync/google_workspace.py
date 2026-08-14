@@ -3,15 +3,16 @@
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 import httpx
 from jose import jwt
 
 from app.config import get_settings
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str_or
 from app.core.logging import logger
 from app.core.security import decrypt_data
+from app.records.identity import IdentityProviderRecord
 from app.services.auth_provider import GoogleWorkspaceAuthProvider
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
 
@@ -26,26 +27,26 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
     Legacy service-account delegation is kept only as a compatibility fallback.
     """
 
-    provider_type = "google_workspace"
+    provider_type: ClassVar[str] = "google_workspace"
 
-    GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105
-    GOOGLE_DIRECTORY_BASE_URL = "https://admin.googleapis.com/admin/directory/v1"
-    GOOGLE_DIRECTORY_SCOPE = "https://www.googleapis.com/auth/admin.directory.user.readonly"
-    GOOGLE_ORGUNIT_SCOPE = "https://www.googleapis.com/auth/admin.directory.orgunit.readonly"
+    GOOGLE_TOKEN_URL: ClassVar[str] = "https://oauth2.googleapis.com/token"  # noqa: S105
+    GOOGLE_DIRECTORY_BASE_URL: ClassVar[str] = "https://admin.googleapis.com/admin/directory/v1"
+    GOOGLE_DIRECTORY_SCOPE: ClassVar[str] = "https://www.googleapis.com/auth/admin.directory.user.readonly"
+    GOOGLE_ORGUNIT_SCOPE: ClassVar[str] = "https://www.googleapis.com/auth/admin.directory.orgunit.readonly"
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
         super().__init__(provider, config, tenant_id)
-        self.service_account = self._load_service_account(self.config)
-        self.client_id = self._config_string("client_id", "sso_client_id")
-        self.client_secret = self._config_string("client_secret", "sso_client_secret")
-        self.customer_id = self._config_string("customer_id") or "my_customer"
-        self.admin_refresh_token = self._load_admin_refresh_token(self.config)
-        self.delegated_admin_email = self._config_string(
+        self.service_account: JsonObject = self._load_service_account(self.config)
+        self.client_id: str = self._config_string("client_id", "sso_client_id")
+        self.client_secret: str = self._config_string("client_secret", "sso_client_secret")
+        self.customer_id: str = self._config_string("customer_id") or "my_customer"
+        self.admin_refresh_token: str | None = self._load_admin_refresh_token(self.config)
+        self.delegated_admin_email: str = self._config_string(
             "delegated_admin_email", "admin_email", "google_admin_authorized_email"
         )
         self._access_token: str | None = None
@@ -183,11 +184,13 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
             if resp.status_code >= 400:
                 raise RuntimeError(f"Google Workspace orgunits error: {data}")
 
-            items = data.get("organizationUnits", []) or []
+            items: list[dict[str, Any]] = [
+                dict[str, Any](item) for item in (data.get("organizationUnits", []) or []) if isinstance(item, dict)
+            ]
 
             for item in items:
-                org_unit_path = item.get("orgUnitPath") or ""
-                external_id = item.get("orgUnitId") or org_unit_path or item.get("name")
+                org_unit_path = json_as_str_or(item.get("orgUnitPath"))
+                external_id = json_as_str_or(item.get("orgUnitId")) or org_unit_path or json_as_str_or(item.get("name"))
                 normalized_path = org_unit_path if org_unit_path.startswith("/") else f"/{org_unit_path}"
                 self._org_unit_path_to_external_id[normalized_path] = external_id
                 self._org_unit_path_to_display_path[normalized_path] = normalized_path.strip("/") or "Root"
@@ -204,8 +207,8 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
 
             for item in items:
                 org_unit_path = item.get("orgUnitPath") or ""
-                parent_org_unit_path = item.get("parentOrgUnitPath") or "/"
-                external_id = item.get("orgUnitId") or org_unit_path or item.get("name")
+                parent_org_unit_path = json_as_str_or(item.get("parentOrgUnitPath"), "/")
+                external_id = json_as_str_or(item.get("orgUnitId")) or org_unit_path or json_as_str_or(item.get("name"))
                 normalized_path = org_unit_path if org_unit_path.startswith("/") else f"/{org_unit_path}"
                 parent_path = (
                     parent_org_unit_path if parent_org_unit_path.startswith("/") else f"/{parent_org_unit_path}"
@@ -240,7 +243,7 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
 
         async with httpx.AsyncClient(timeout=20, proxy=GOOGLE_HTTP_PROXY) as client:
             while True:
-                params = {
+                params: dict[str, Any] = {
                     "customer": customer,
                     "maxResults": 500,
                     "projection": "full",
@@ -259,11 +262,16 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
                 if resp.status_code >= 400:
                     raise RuntimeError(f"Google Workspace users error: {data}")
 
-                for item in data.get("users", []) or []:
+                for item_raw in data.get("users", []) or []:
+                    item = dict[str, Any](item_raw) if isinstance(item_raw, dict) else {}
                     org_unit_path = item.get("orgUnitPath") or "/"
                     normalized_path = org_unit_path if org_unit_path.startswith("/") else f"/{org_unit_path}"
                     department_external = self._org_unit_path_to_external_id.get(normalized_path, "root")
-                    primary_org = (item.get("organizations") or [None])[0] or {}
+                    orgs = item.get("organizations") or [None]
+                    primary_org_raw = orgs[0] if orgs else None
+                    primary_org: dict[str, Any] = (
+                        dict[str, Any](primary_org_raw) if isinstance(primary_org_raw, dict) else {}
+                    )
                     primary_phone = self._extract_primary_phone(item.get("phones") or [])
 
                     users.append(

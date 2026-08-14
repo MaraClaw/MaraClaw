@@ -100,7 +100,7 @@ def build_execution_runtime_trigger(
     trigger: AgentTriggerRecord | Any,
     execution: TriggerExecutionRecord | Any,
 ) -> AgentTriggerRecord:
-    runtime_cfg = {
+    runtime_cfg: dict[str, Any] = {
         **(getattr(trigger, "config", None) or {}),
         "_execution_id": str(execution.id),
     }

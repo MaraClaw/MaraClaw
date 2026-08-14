@@ -10,12 +10,13 @@ from app.core.logging import logger
 from app.core.permissions import evaluate_human_relationship_status
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.user_dao import user_dao
+from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.channels.types import outbound_provider_key
 
 from .registry import ToolArguments
 
-ChannelSender = Callable[[uuid.UUID, str, str, Any], Awaitable[str]]
+ChannelSender = Callable[[uuid.UUID, str, str, OrgMemberRecord], Awaitable[str]]
 
 
 def _channel_providers() -> ModuleType:
@@ -53,7 +54,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
 
     try:
         relationships = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
-        rows: list[tuple[Any, Any, str | None]] = []
+        rows: list[tuple[object, OrgMemberRecord, str | None]] = []
         for relationship in relationships:
             member = relationship.member
             if not member or member.name != member_name or member.status != "active":
@@ -65,7 +66,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
         if not rows:
             return f"❌ {member_name} is not in your relationship network"
 
-        target_member: Any = None
+        target_member: OrgMemberRecord | None = None
         provider_type: str | None = None
         if target_channel:
             for _relationship, member, row_provider_type in rows:
@@ -77,7 +78,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                 available = sorted({channel for _, _, channel in rows if channel is not None})
                 return (
                     f"❌ {member_name} not found in {target_channel} channel. "
-                    f"Available channels: {', '.join(available)}"
+                    + f"Available channels: {', '.join(available)}"
                 )
         else:
             if len(rows) > 1:
@@ -86,6 +87,9 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                     f"[ChannelMessage] Ambiguous member '{member_name}' found in multiple channels: {available}"
                 )
             _relationship, target_member, provider_type = rows[0]
+
+        if target_member is None:
+            return f"❌ {member_name} is not in your relationship network"
 
         if not provider_type:
             if target_member.user_id:
@@ -109,7 +113,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
             else:
                 return (
                     f"❌ {member_name} has no linked channel. "
-                    "If they are a platform user, use send_platform_message instead."
+                    + "If they are a platform user, use send_platform_message instead."
                 )
 
         logger.info(f"[ChannelMessage] Sending to {member_name} via {provider_type}")

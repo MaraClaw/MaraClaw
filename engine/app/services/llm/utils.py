@@ -8,11 +8,13 @@ This module also exports the unified LLM client classes from client.py
 for convenient access.
 """
 
-from typing import Any, Protocol
+from collections.abc import Iterable
+from typing import Protocol
 
 from app.config import get_settings
 from app.core.logging import logger
 from app.core.security import decrypt_data
+from app.records.chat import ChatMessageRecord
 from app.services.llm.types import OpenAIMessage, ToolPayload
 
 # Re-export all client classes and functions from client.py
@@ -43,7 +45,8 @@ from .client import (
 
 
 class _EncryptedModel(Protocol):
-    api_key_encrypted: str | None
+    @property
+    def api_key_encrypted(self) -> str | None: ...
 
 
 # Keep ANTHROPIC_API_PROVIDERS for backward compatibility
@@ -52,7 +55,7 @@ ANTHROPIC_API_PROVIDERS = {"anthropic"}
 # Keep the original PROVIDER_URLS reference (already exported from client)
 
 
-def get_model_api_key(model: _EncryptedModel | Any) -> str:
+def get_model_api_key(model: _EncryptedModel) -> str:
     """Decrypt the model's API key, with backward compatibility for plaintext keys."""
     raw = getattr(model, "api_key_encrypted", None) or ""
     if not raw:
@@ -81,7 +84,7 @@ def get_tool_params(provider: str) -> ToolPayload:
     return {}
 
 
-def convert_chat_messages_to_llm_format(messages) -> list[OpenAIMessage]:
+def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -> list[OpenAIMessage]:
     """Convert ChatMessage DB records to LLM-compatible message dicts.
 
     Properly handles ``tool_call`` role records by splitting them into an
@@ -142,7 +145,14 @@ def convert_chat_messages_to_llm_format(messages) -> list[OpenAIMessage]:
                 logger.debug("Skipping malformed tool-call history record {}: {}", msg.id, type(exc).__name__)
                 continue
         else:
-            entry: OpenAIMessage = {"role": msg.role, "content": msg.content}
+            if msg.role == "assistant":
+                entry: OpenAIMessage = {"role": "assistant", "content": msg.content}
+            elif msg.role == "system":
+                entry = {"role": "system", "content": msg.content}
+            elif msg.role == "tool":
+                entry = {"role": "tool", "content": msg.content}
+            else:
+                entry = {"role": "user", "content": msg.content}
             if hasattr(msg, "thinking") and msg.thinking:
                 entry["reasoning_content"] = msg.thinking
             result.append(entry)
@@ -166,7 +176,7 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
 
     # Pass 1: Remove leading tool messages (they have no matching assistant before them)
     while truncated and truncated[0].get("role") == "tool":
-        truncated.pop(0)
+        _ = truncated.pop(0)
 
     if not truncated:
         return truncated
@@ -218,7 +228,7 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
                 content = msg.get("content")
                 if not isinstance(content, (str, list)):
                     continue
-                new_msg: OpenAIMessage = {"role": "assistant", "content": content}
+                new_msg = {"role": "assistant", "content": content}
                 reasoning_content = msg.get("reasoning_content")
                 if isinstance(reasoning_content, str):
                     new_msg["reasoning_content"] = reasoning_content

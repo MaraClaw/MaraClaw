@@ -3,11 +3,12 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_as_str_or
+from app.records.identity import IdentityProviderRecord
 
 from .base import BaseOrgSyncAdapter
 from .types import ExternalDepartment, ExternalUser
@@ -16,22 +17,22 @@ from .types import ExternalDepartment, ExternalUser
 class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
     """DingTalk organization sync adapter."""
 
-    provider_type = "dingtalk"
+    provider_type: ClassVar[str] = "dingtalk"
 
-    DINGTALK_API_URL = "https://oapi.dingtalk.com"
-    DINGTALK_TOKEN_URL = "https://oapi.dingtalk.com/gettoken"  # noqa: S105
-    DINGTALK_DEPT_LIST_URL = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
-    DINGTALK_USER_LIST_URL = "https://oapi.dingtalk.com/topapi/v2/user/list"
+    DINGTALK_API_URL: ClassVar[str] = "https://oapi.dingtalk.com"
+    DINGTALK_TOKEN_URL: ClassVar[str] = "https://oapi.dingtalk.com/gettoken"  # noqa: S105
+    DINGTALK_DEPT_LIST_URL: ClassVar[str] = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
+    DINGTALK_USER_LIST_URL: ClassVar[str] = "https://oapi.dingtalk.com/topapi/v2/user/list"
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: IdentityProviderRecord | None = None,
         config: JsonObject | None = None,
         tenant_id: uuid.UUID | None = None,
     ):
         super().__init__(provider, config, tenant_id)
-        self.app_key = self._config_string("app_key", "appkey", "app_id")
-        self.app_secret = self._config_string("app_secret", "appsecret", "app_secret_key")
+        self.app_key: str = self._config_string("app_key", "appkey", "app_id")
+        self.app_secret: str = self._config_string("app_secret", "appsecret", "app_secret_key")
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._dept_path_map: dict[str, str] = {}
@@ -98,16 +99,19 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     raise RuntimeError(f"DingTalk department list error: {data.get('errmsg') or data}")
 
                 result = data.get("result")
+                items: list[dict[str, Any]] = []
                 if isinstance(result, list):
-                    items = result
+                    items = [dict[str, Any](item) for item in result if isinstance(item, dict)]
                 elif isinstance(result, dict):
-                    items = result.get("department", []) or []
-                else:
-                    items = []
+                    raw_items = result.get("department", []) or []
+                    items = [dict[str, Any](item) for item in raw_items if isinstance(item, dict)]
 
                 for item in items:
-                    dept_id = int(item.get("dept_id"))
-                    dept_name = item.get("name", "")
+                    raw_dept_id = item.get("dept_id")
+                    if raw_dept_id is None:
+                        continue
+                    dept_id = int(raw_dept_id)
+                    dept_name = json_as_str_or(item.get("name"))
                     # Use actual parent_id from API response to preserve real hierarchy
                     raw_parent_id = item.get("parent_id")
                     if dept_id == 1 or not raw_parent_id or int(raw_parent_id) == dept_id:
@@ -165,13 +169,20 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                 if data.get("errcode") != 0:
                     raise RuntimeError(f"DingTalk user list error: {data.get('errmsg') or data}")
 
-                result = data.get("result", {}) or {}
-                items = result.get("list", []) or []
+                result_raw = data.get("result", {}) or {}
+                result: dict[str, Any] = dict[str, Any](result_raw) if isinstance(result_raw, dict) else {}
+                items: list[dict[str, Any]] = [
+                    dict[str, Any](item) for item in (result.get("list", []) or []) if isinstance(item, dict)
+                ]
                 for item in items:
-                    external_id = item.get("userid") or item.get("user_id") or ""
+                    external_id = json_as_str_or(item.get("userid")) or json_as_str_or(item.get("user_id"))
                     # Get user's actual department list from DingTalk data
                     dept_id_list = item.get("dept_id_list", [])
-                    department_ids = [str(did) for did in dept_id_list] if dept_id_list else [department_external_id]
+                    department_ids = (
+                        [str(did) for did in dept_id_list]
+                        if isinstance(dept_id_list, list) and dept_id_list
+                        else [department_external_id]
+                    )
                     # Use last level department (last item in list is most specific)
                     last_dept_id = department_ids[-1] if department_ids else department_external_id
                     last_dept_path = self._dept_path_map.get(last_dept_id, "")
@@ -221,5 +232,5 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
             return full
 
         for did in list(dept_index.keys()):
-            compute_path(did)
+            _ = compute_path(did)
         return paths

@@ -56,7 +56,7 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
                 desktop_dir = "/home/wuying/桌面"
                 if to_type == "computer" and to_path.startswith(desktop_dir):
                     try:
-                        await asyncio.to_thread(
+                        _ = await asyncio.to_thread(
                             session.command.exec, f"DISPLAY=:0 gio info '{to_path}' 2>/dev/null || true"
                         )
                     except Exception as exc:

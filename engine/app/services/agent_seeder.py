@@ -1,6 +1,7 @@
 """Seed default agents (Morty & Meeseeks) on first platform startup."""
 
 import uuid
+from typing import Any
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -220,7 +221,7 @@ async def seed_default_agents():
     )
     existing_by_name: dict[str, AgentRecord] = {}
     for agent in existing_agents:
-        existing_by_name.setdefault(agent.name, agent)
+        _ = existing_by_name.setdefault(agent.name, agent)
 
     if "Morty" in existing_by_name and "Meeseeks" in existing_by_name:
         logger.info("[AgentSeeder] Default agents already exist in DB, skipping creation")
@@ -267,7 +268,7 @@ async def seed_default_agents():
     for agent in created_agents:
         existing_p = await participant_dao.get_by_type_ref("agent", agent.id)
         if not existing_p:
-            await participant_dao.create(
+            _ = await participant_dao.create(
                 obj_in={
                     "type": "agent",
                     "ref_id": agent.id,
@@ -275,7 +276,7 @@ async def seed_default_agents():
                     "avatar_url": agent.avatar_url,
                 }
             )
-        await agent_permission_dao.create(
+        _ = await agent_permission_dao.create(
             obj_in={"agent_id": agent.id, "scope_type": "company", "access_level": "manage"}
         )
 
@@ -283,7 +284,7 @@ async def seed_default_agents():
         if agent.name not in created_names:
             continue
         await agent_manager.initialize_agent_files(agent)
-        await store_agent_bytes(
+        _ = await store_agent_bytes(
             agent.id,
             "soul.md",
             (soul_content.strip() + "\n").encode("utf-8"),
@@ -305,7 +306,7 @@ async def seed_default_agents():
             if not skill:
                 continue
             for sf in skill.files:
-                await store_agent_bytes(
+                _ = await store_agent_bytes(
                     agent.id,
                     f"skills/{skill.folder_name}/{sf.path}",
                     sf.content.encode("utf-8"),
@@ -315,7 +316,7 @@ async def seed_default_agents():
     default_tools = await tool_dao.list_defaults()
     for agent in created_agents:
         for tool in default_tools:
-            await agent_tool_dao.ensure_enabled(agent.id, tool.id)
+            _ = await agent_tool_dao.ensure_enabled(agent.id, tool.id)
 
     relationship_specs = [
         (
@@ -331,7 +332,7 @@ async def seed_default_agents():
     ]
     for agent_id, target_agent_id, description in relationship_specs:
         if not await agent_agent_relationship_dao.exists(agent_id, target_agent_id):
-            await agent_agent_relationship_dao.create(
+            _ = await agent_agent_relationship_dao.create(
                 obj_in={
                     "agent_id": agent_id,
                     "target_agent_id": target_agent_id,
@@ -342,7 +343,7 @@ async def seed_default_agents():
 
     logger.info(
         "[AgentSeeder] Default agent seeding complete: "
-        f"Morty ({morty.id}), Meeseeks ({meeseeks.id}), created={len(created_agents)}"
+        + f"Morty ({morty.id}), Meeseeks ({meeseeks.id}), created={len(created_agents)}"
     )
 
     await get_storage_backend().write_text(
@@ -377,12 +378,12 @@ async def seed_okr_agent():
                 "name": "OKR Agent",
                 "role_description": (
                     "OKR system coordinator - monitors team Objectives and Key Results, "
-                    "collects progress updates, and generates daily/weekly reports"
+                    + "collects progress updates, and generates daily/weekly reports"
                 ),
                 "bio": (
                     "I am the OKR Agent. I help this team stay aligned on goals by tracking "
-                    "Objectives and Key Results, collecting progress from team members, and "
-                    "generating clear reports. My job is to surface insights and flag risks early."
+                    + "Objectives and Key Results, collecting progress from team members, and "
+                    + "generating clear reports. My job is to surface insights and flag risks early."
                 ),
                 "avatar_url": "",
                 "creator_id": admin.id,
@@ -399,11 +400,11 @@ async def seed_okr_agent():
 
     if admin.tenant_id:
         settings = await okr_settings_dao.get_or_create(admin.tenant_id)
-        await okr_settings_dao.update(db_obj=settings, obj_in={"okr_agent_id": okr_agent.id})
+        _ = await okr_settings_dao.update(db_obj=settings, obj_in={"okr_agent_id": okr_agent.id})
 
     existing_p = await participant_dao.get_by_type_ref("agent", okr_agent.id)
     if not existing_p:
-        await participant_dao.create(
+        _ = await participant_dao.create(
             obj_in={
                 "type": "agent",
                 "ref_id": okr_agent.id,
@@ -412,30 +413,30 @@ async def seed_okr_agent():
             }
         )
 
-    await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
+    _ = await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
 
     await agent_manager.initialize_agent_files(okr_agent)
-    await store_agent_bytes(
+    _ = await store_agent_bytes(
         okr_agent.id,
         "soul.md",
         (OKR_AGENT_SOUL.strip() + "\n").encode("utf-8"),
         content_type="text/markdown; charset=utf-8",
     )
-    await store_agent_bytes(
+    _ = await store_agent_bytes(
         okr_agent.id,
         "memory/memory.md",
         (
             b"# Memory\n\n"
-            b"## OKR System State\n"
-            b"- Last report generated: (none)\n"
-            b"- Last progress collection: (none)\n"
-            b"- Team members tracked: (pending)\n"
+            + b"## OKR System State\n"
+            + b"- Last report generated: (none)\n"
+            + b"- Last progress collection: (none)\n"
+            + b"- Team members tracked: (pending)\n"
         ),
         content_type="text/markdown; charset=utf-8",
     )
 
     for tool in await tool_dao.list_defaults():
-        await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
+        _ = await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
 
     okr_tool_names = [
         "get_okr",
@@ -477,7 +478,7 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
         system=True,
     )
 
-    triggers_to_create = [
+    triggers_to_create: list[dict[str, Any]] = [
         {
             "name": "daily_okr_collection",
             "type": "cron",
@@ -512,8 +513,8 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
             "config": {"expr": "0 10 1,15 * *"},
             "reason": (
                 "System trigger: fires on the 1st and 15th of every month at 10:00 "
-                "to perform the mandatory bi-weekly OKR check-in. This trigger is always "
-                "enabled and cannot be disabled - OKR check-in is a core non-optional feature."
+                + "to perform the mandatory bi-weekly OKR check-in. This trigger is always "
+                + "enabled and cannot be disabled - OKR check-in is a core non-optional feature."
             ),
             "cooldown_seconds": 3600,
             "is_system": True,
@@ -524,7 +525,7 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
             "config": {"expr": "0 9 1 * *"},
             "reason": (
                 "System trigger: fires at 09:00 on the 1st of every month to generate "
-                "the previous month's company OKR report."
+                + "the previous month's company OKR report."
             ),
             "cooldown_seconds": 3600,
             "is_system": True,
@@ -536,7 +537,7 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
         if existing:
             logger.info(f"[AgentSeeder] Trigger '{t['name']}' already exists, skipping")
             continue
-        await agent_trigger_dao.create(
+        _ = await agent_trigger_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "name": t["name"],
@@ -595,7 +596,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
         }
     }
 
-    desired = {
+    desired: dict[str, dict[str, Any]] = {
         "daily_okr_collection": {
             "config": {"expr": f"{daily_minute} {daily_hour} * * *"},
             "is_enabled": bool(settings.enabled and settings.daily_report_enabled),
@@ -612,7 +613,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
             "is_enabled": bool(settings.enabled),
             "reason": (
                 "System trigger: fires on the 1st and 15th of every month at 10:00 "
-                "to perform the mandatory bi-weekly OKR check-in."
+                + "to perform the mandatory bi-weekly OKR check-in."
             ),
         },
         "monthly_okr_report": {
@@ -620,7 +621,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
             "is_enabled": bool(settings.enabled),
             "reason": (
                 "System trigger: fires at 09:00 on the 1st of every month to generate "
-                "the previous month's company OKR report."
+                + "the previous month's company OKR report."
             ),
         },
     }
@@ -629,7 +630,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
         trigger = triggers.get(name)
         if not trigger:
             continue
-        updates: dict = {}
+        updates: dict[str, Any] = {}
         if "config" in values and trigger.config != values["config"]:
             updates["config"] = values["config"]
         if trigger.is_enabled != values["is_enabled"]:
@@ -637,7 +638,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
         if "reason" in values and trigger.reason != values["reason"]:
             updates["reason"] = values["reason"]
         if updates:
-            await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+            _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
             changed = True
 
     if changed:
@@ -717,12 +718,12 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
             "name": "OKR Agent",
             "role_description": (
                 "OKR system coordinator - monitors team Objectives and Key Results, "
-                "collects progress updates, and generates daily/weekly reports"
+                + "collects progress updates, and generates daily/weekly reports"
             ),
             "bio": (
                 "I am the OKR Agent. I help this team stay aligned on goals by tracking "
-                "Objectives and Key Results, collecting progress from team members, and "
-                "generating clear reports. My job is to surface insights and flag risks early."
+                + "Objectives and Key Results, collecting progress from team members, and "
+                + "generating clear reports. My job is to surface insights and flag risks early."
             ),
             "avatar_url": "",
             "creator_id": creator_id,
@@ -735,7 +736,7 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
 
     existing_p = await participant_dao.get_by_type_ref("agent", okr_agent.id)
     if not existing_p:
-        await participant_dao.create(
+        _ = await participant_dao.create(
             obj_in={
                 "type": "agent",
                 "ref_id": okr_agent.id,
@@ -744,33 +745,33 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
             }
         )
 
-    await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
+    _ = await agent_permission_dao.create(obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"})
 
     settings = await okr_settings_dao.get_or_create(tenant_id)
-    await okr_settings_dao.update(db_obj=settings, obj_in={"okr_agent_id": okr_agent.id})
+    _ = await okr_settings_dao.update(db_obj=settings, obj_in={"okr_agent_id": okr_agent.id})
 
     await agent_manager.initialize_agent_files(okr_agent)
-    await store_agent_bytes(
+    _ = await store_agent_bytes(
         okr_agent.id,
         "soul.md",
         (OKR_AGENT_SOUL.strip() + "\n").encode("utf-8"),
         content_type="text/markdown; charset=utf-8",
     )
-    await store_agent_bytes(
+    _ = await store_agent_bytes(
         okr_agent.id,
         "memory/memory.md",
         (
             b"# Memory\n\n"
-            b"## OKR System State\n"
-            b"- Last report generated: (none)\n"
-            b"- Last progress collection: (none)\n"
-            b"- Team members tracked: (pending)\n"
+            + b"## OKR System State\n"
+            + b"- Last report generated: (none)\n"
+            + b"- Last progress collection: (none)\n"
+            + b"- Team members tracked: (pending)\n"
         ),
         content_type="text/markdown; charset=utf-8",
     )
 
     for tool in await tool_dao.list_defaults():
-        await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
+        _ = await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
 
     okr_tool_names = [
         "get_okr",
@@ -791,14 +792,14 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
     for tool_name in okr_tool_names:
         tool = tools_by_name.get(tool_name)
         if tool:
-            await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
+            _ = await agent_tool_dao.ensure_enabled(okr_agent.id, tool.id)
         else:
             logger.warning(f"[AgentSeeder] OKR tool '{tool_name}' not found - run tool seeder first")
 
     await _seed_okr_triggers(okr_agent.id)
-    await _sync_okr_triggers_with_settings(okr_agent.id, settings)
+    _ = await _sync_okr_triggers_with_settings(okr_agent.id, settings)
     from app.services.okr_agent_hook import sync_okr_agent_platform_members
 
-    await sync_okr_agent_platform_members(None, tenant_id)
+    _ = await sync_okr_agent_platform_members(None, tenant_id)
     logger.info(f"[AgentSeeder] Created OKR Agent for tenant {tenant_id} ({okr_agent.id})")
     logger.info(f"[AgentSeeder] OKR triggers created for tenant {tenant_id}")

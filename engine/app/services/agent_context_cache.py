@@ -39,7 +39,7 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
     if isinstance(data, dict) and "v" in data:
         if str(data.get("ver") or "0") != current_ver:
             return None
-        value = data.get("v")
+        value: object | None = data.get("v")
         return value if isinstance(value, str) else None
     return raw if isinstance(raw, str) else None
 
@@ -87,7 +87,7 @@ async def set_cached_text(
             logger.debug("agent_context_cache set skipped (ver)")
             return
         payload = json.dumps({"ver": current, "v": text}, separators=(",", ":"))
-        await asyncio.wait_for(client.set(_key(agent_id, kind), payload, ex=_ttl()), timeout=_wait())
+        _ = await asyncio.wait_for(client.set(_key(agent_id, kind), payload, ex=_ttl()), timeout=_wait())
     except Exception as exc:
         logger.debug("agent_context_cache set skipped: {}", type(exc).__name__)
 
@@ -98,7 +98,7 @@ async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None)
         return
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_wait())
-        await asyncio.wait_for(
+        _ = await asyncio.wait_for(
             client.delete(*(_key(agent_id, item) for item in kinds)),
             timeout=_wait(),
         )

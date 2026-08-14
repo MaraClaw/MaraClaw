@@ -43,40 +43,40 @@ def patch_computer_tool_descriptions(tools: list[ToolDefinition], os_type: str) 
     new_file_transfer_desc = (
         (
             "Transfer a file between any two endpoints: the agent workspace, "
-            "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
-            f"COMPUTER ENVIRONMENT OS: {computer_os_label}\n"
-            f"VERIFIED PATH CONVENTIONS for the computer environment ({computer_os_label}):\n"
-            f"- computer desktop: {desktop_path}\\<filename>  (e.g. {desktop_path}\\report.xlsx)\n"
-            f"- computer home:    {home_path}\\<filename>\n\n"
-            "Other environments (Linux-based, user 'wuying', HOME=/home/wuying/):\n"
-            "- code env:     /home/wuying/<filename>  (e.g. /home/wuying/data.csv)\n"
-            "- browser env:  /home/wuying/下载/<filename>  (download folder)\n"
-            "- workspace:    relative path, e.g. 'workspace/data.csv'\n\n"
-            "Transfer directions:\n"
-            "- workspace -> env: upload a workspace file into a cloud environment\n"
-            "- env -> workspace: download a file from a cloud environment into the workspace\n"
-            "- env A -> env B:   transfer between environments (transparent backend temp)"
+            + "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
+            + f"COMPUTER ENVIRONMENT OS: {computer_os_label}\n"
+            + f"VERIFIED PATH CONVENTIONS for the computer environment ({computer_os_label}):\n"
+            + f"- computer desktop: {desktop_path}\\<filename>  (e.g. {desktop_path}\\report.xlsx)\n"
+            + f"- computer home:    {home_path}\\<filename>\n\n"
+            + "Other environments (Linux-based, user 'wuying', HOME=/home/wuying/):\n"
+            + "- code env:     /home/wuying/<filename>  (e.g. /home/wuying/data.csv)\n"
+            + "- browser env:  /home/wuying/下载/<filename>  (download folder)\n"
+            + "- workspace:    relative path, e.g. 'workspace/data.csv'\n\n"
+            + "Transfer directions:\n"
+            + "- workspace -> env: upload a workspace file into a cloud environment\n"
+            + "- env -> workspace: download a file from a cloud environment into the workspace\n"
+            + "- env A -> env B:   transfer between environments (transparent backend temp)"
         )
         if os_type == "windows"
         else (
             "Transfer a file between any two endpoints: the agent workspace, "
-            "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
-            f"COMPUTER ENVIRONMENT OS: {computer_os_label}\n"
-            f"VERIFIED PATH CONVENTIONS for the computer environment ({computer_os_label}):\n"
-            f"- computer desktop: {desktop_path}/<filename>  (e.g. {desktop_path}/report.xlsx)\n"
-            f"- computer home:    {home_path}/<filename>\n\n"
-            "Other environments (also Linux, user 'wuying'):\n"
-            "- code env:     /home/wuying/<filename>  (e.g. /home/wuying/data.csv)\n"
-            "- browser env:  /home/wuying/下载/<filename>  (download folder)\n"
-            "- workspace:    relative path, e.g. 'workspace/data.csv'\n\n"
-            "Transfer directions:\n"
-            "- workspace -> env: upload a workspace file into a cloud environment\n"
-            "- env -> workspace: download a file from a cloud environment into the workspace\n"
-            "- env A -> env B:   transfer between environments (transparent backend temp)"
+            + "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
+            + f"COMPUTER ENVIRONMENT OS: {computer_os_label}\n"
+            + f"VERIFIED PATH CONVENTIONS for the computer environment ({computer_os_label}):\n"
+            + f"- computer desktop: {desktop_path}/<filename>  (e.g. {desktop_path}/report.xlsx)\n"
+            + f"- computer home:    {home_path}/<filename>\n\n"
+            + "Other environments (also Linux, user 'wuying'):\n"
+            + "- code env:     /home/wuying/<filename>  (e.g. /home/wuying/data.csv)\n"
+            + "- browser env:  /home/wuying/下载/<filename>  (download folder)\n"
+            + "- workspace:    relative path, e.g. 'workspace/data.csv'\n\n"
+            + "Transfer directions:\n"
+            + "- workspace -> env: upload a workspace file into a cloud environment\n"
+            + "- env -> workspace: download a file from a cloud environment into the workspace\n"
+            + "- env A -> env B:   transfer between environments (transparent backend temp)"
         )
     )
 
-    patched = []
+    patched: list[ToolDefinition] = []
     for tool in tools:
         function = tool["function"]
         if function["name"] == "agentbay_file_transfer":
@@ -95,11 +95,11 @@ def _path_hint(direction: str, os_type: str) -> str:
     if os_type == "windows":
         return (
             f"{direction} path. Relative if workspace (e.g. 'workspace/data.csv'). "
-            r"Absolute if env: computer → C:\Users\Administrator\Desktop\file, "
-            "code → /home/wuying/file, browser → /home/wuying/下载/file."
+            + r"Absolute if env: computer → C:\Users\Administrator\Desktop\file, "
+            + "code → /home/wuying/file, browser → /home/wuying/下载/file."
         )
     return (
         f"{direction} path. Relative if workspace (e.g. 'workspace/data.csv'). "
-        "Absolute if env: computer → /home/wuying/Desktop/file, "
-        "code → /home/wuying/file, browser → /home/wuying/下载/file."
+        + "Absolute if env: computer → /home/wuying/Desktop/file, "
+        + "code → /home/wuying/file, browser → /home/wuying/下载/file."
     )

@@ -67,7 +67,7 @@ async def recall_thinking_reaction(
     if not message_id or not conversation_id or not app_key:
         return
 
-    delays = [0, 1.5, 5.0]
+    delays: list[float] = [0, 1.5, 5.0]
 
     for delay in delays:
         if delay > 0:

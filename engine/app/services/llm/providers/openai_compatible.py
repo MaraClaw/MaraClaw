@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, override
+from typing import Any, override, ClassVar
 
 import httpx
 
+from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.services.llm.base import (
     ChunkCallback,
@@ -25,8 +26,7 @@ from app.services.llm.types import LLMMessage, LLMResponse, LLMStreamChunk, LLMT
 class OpenAICompatibleClient(LLMClient):
     """Client for OpenAI-compatible APIs (OpenAI, DeepSeek, Qwen, etc.)."""
 
-    base_url: str
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_BASE_URL: ClassVar[str] = "https://api.openai.com/v1"
 
     def __init__(
         self,
@@ -38,8 +38,8 @@ class OpenAICompatibleClient(LLMClient):
         supports_cache_control: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
-        self.supports_tool_choice = supports_tool_choice
-        self.supports_cache_control = supports_cache_control
+        self.supports_tool_choice: bool = supports_tool_choice
+        self.supports_cache_control: bool = supports_cache_control
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -57,7 +57,7 @@ class OpenAICompatibleClient(LLMClient):
 
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing /chat/completions."""
-        url = self.base_url.rstrip("/")
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
         if url.endswith("/chat/completions"):
             url = url[: -len("/chat/completions")]
         return url
@@ -124,8 +124,12 @@ class OpenAICompatibleClient(LLMClient):
                         }
                     )
                 elif isinstance(msg.content, list):
-                    content_blocks = [dict(part) for part in msg.content if isinstance(part, dict)]
-                    self._mark_last_text_block_cacheable(content_blocks)
+                    narrowed_blocks: list[dict[str, object]] = []
+                    for part in msg.content:
+                        if isinstance(part, dict):
+                            narrowed_blocks.append(dict(part))
+                    content_blocks = narrowed_blocks
+                    _ = self._mark_last_text_block_cacheable(content_blocks)
 
                 if msg.dynamic_content:
                     content_blocks.append(
@@ -164,7 +168,7 @@ class OpenAICompatibleClient(LLMClient):
             ]
             return message
         if isinstance(content, list):
-            blocks = [dict(part) for part in content if isinstance(part, dict)]
+            blocks: list[dict[str, Any]] = [dict(part) for part in content if is_str_dict(part)]
             if self._mark_last_text_block_cacheable(blocks):
                 message = dict(message)
                 message["content"] = blocks

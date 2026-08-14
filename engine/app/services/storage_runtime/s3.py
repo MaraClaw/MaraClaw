@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, override
+from typing import Protocol, TypedDict, TypeIs, override
 
+from app.core.json_types import json_as_int
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
@@ -16,6 +18,88 @@ from app.services.storage_runtime.base import (
     WriteCondition,
 )
 from app.services.storage_runtime.utils import normalize_storage_key
+
+
+class _S3ObjectIdentity(TypedDict):
+    Key: str
+
+
+class _ReadableBody(Protocol):
+    def read(self) -> bytes: ...
+
+
+class _S3Client(Protocol):
+    def list_objects_v2(
+        self,
+        *,
+        Bucket: str,
+        Prefix: str = ...,
+        Delimiter: str = ...,
+        MaxKeys: int = ...,
+    ) -> Mapping[str, object]: ...
+
+    def get_object(self, *, Bucket: str, Key: str) -> Mapping[str, object]: ...
+
+    def head_object(self, *, Bucket: str, Key: str) -> Mapping[str, object]: ...
+
+    def generate_presigned_url(
+        self,
+        ClientMethod: str,
+        Params: Mapping[str, str],
+        ExpiresIn: int,
+    ) -> str: ...
+
+
+class _AsyncS3Client(Protocol):
+    async def put_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        Body: bytes,
+        ContentType: str,
+    ) -> object: ...
+
+    async def delete_object(self, *, Bucket: str, Key: str) -> object: ...
+
+    async def delete_objects(
+        self,
+        *,
+        Bucket: str,
+        Delete: Mapping[str, list[_S3ObjectIdentity]],
+    ) -> object: ...
+
+
+class _AsyncS3ClientCM(Protocol):
+    async def __aenter__(self) -> _AsyncS3Client: ...
+
+    async def __aexit__(self, *args: object) -> bool | None: ...
+
+
+class _AioBoto3Session(Protocol):
+    def client(self, service_name: str, **kwargs: object) -> _AsyncS3ClientCM: ...
+
+
+def _is_s3_client(value: object) -> TypeIs[_S3Client]:
+    return value is not None
+
+
+def _is_aioboto3_session(value: object) -> TypeIs[_AioBoto3Session]:
+    return value is not None
+
+
+def _is_async_s3_cm(value: object) -> TypeIs[_AsyncS3ClientCM]:
+    return value is not None
+
+
+def _is_readable_body(value: object) -> TypeIs[_ReadableBody]:
+    return callable(getattr(value, "read", None))
+
+
+def _mapping_items(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in list[object](value) if isinstance(item, dict)]
 
 
 class S3StorageBackend(StorageBackend):
@@ -32,16 +116,16 @@ class S3StorageBackend(StorageBackend):
         max_pool_connections: int = 50,
         write_workers: int = 32,
     ):
-        self.bucket = bucket
-        self.prefix = normalize_storage_key(prefix)
-        self.region = region
-        self.endpoint_url = endpoint_url or None
-        self.access_key_id = access_key_id or None
-        self.secret_access_key = secret_access_key or None
-        self.presign_ttl_seconds = presign_ttl_seconds
-        self.max_pool_connections = max_pool_connections
-        self._client: Any | None = None
-        self._aioboto3_session: Any | None = None
+        self.bucket: str = bucket
+        self.prefix: str = normalize_storage_key(prefix)
+        self.region: str = region
+        self.endpoint_url: str | None = endpoint_url or None
+        self.access_key_id: str | None = access_key_id or None
+        self.secret_access_key: str | None = secret_access_key or None
+        self.presign_ttl_seconds: int = presign_ttl_seconds
+        self.max_pool_connections: int = max_pool_connections
+        self._client: _S3Client | None = None
+        self._aioboto3_session: _AioBoto3Session | None = None
 
     def _object_key(self, key: str) -> str:
         normalized = normalize_storage_key(key)
@@ -53,7 +137,7 @@ class S3StorageBackend(StorageBackend):
             return False
         return "storage.googleapis.com" in self.endpoint_url
 
-    def _boto_config(self):
+    def _boto_config(self) -> object:
         """Build a botocore Config appropriate for the target endpoint."""
         from botocore.config import Config
 
@@ -76,37 +160,48 @@ class S3StorageBackend(StorageBackend):
             region_name=region,
         )
 
-    def _client_or_raise(self):
+    def _client_or_raise(self) -> _S3Client:
         if self._client is None:
             try:
                 import boto3
             except ImportError as exc:
                 raise RuntimeError("boto3 is required for S3 storage backend") from exc
-            self._client = boto3.client(
+            client = boto3.client(
                 "s3",
                 endpoint_url=self.endpoint_url,
                 aws_access_key_id=self.access_key_id,
                 aws_secret_access_key=self.secret_access_key,
                 config=self._boto_config(),
             )
+            if not _is_s3_client(client):
+                raise RuntimeError("boto3 S3 client is missing required methods")
+            self._client = client
         return self._client
 
     @asynccontextmanager
-    async def _async_client(self):
+    async def _async_client(self) -> AsyncIterator[_AsyncS3Client]:
         """Shared aioboto3 session with aiohttp connection pool - reuses connections but detects stale ones correctly."""
         try:
             import aioboto3
         except ImportError as exc:
             raise RuntimeError("aioboto3 is required for async S3 writes") from exc
-        if self._aioboto3_session is None:
-            self._aioboto3_session = aioboto3.Session()
-        async with self._aioboto3_session.client(
+        session = self._aioboto3_session
+        if session is None:
+            raw_session = aioboto3.Session()
+            if not _is_aioboto3_session(raw_session):
+                raise RuntimeError("aioboto3 session is missing client()")
+            session = raw_session
+            self._aioboto3_session = session
+        client_cm_raw = session.client(
             "s3",
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key_id,
             aws_secret_access_key=self.secret_access_key,
             config=self._boto_config(),
-        ) as client:
+        )
+        if not _is_async_s3_cm(client_cm_raw):
+            raise RuntimeError("aioboto3 S3 client context manager is missing")
+        async with client_cm_raw as client:
             yield client
 
     @override
@@ -126,7 +221,7 @@ class S3StorageBackend(StorageBackend):
             Prefix=object_key,
             MaxKeys=1,
         )
-        return any(item.get("Key") == object_key for item in response.get("Contents", []))
+        return any(item.get("Key") == object_key for item in _mapping_items(response.get("Contents")))
 
     @override
     async def is_dir(self, key: str) -> bool:
@@ -154,13 +249,13 @@ class S3StorageBackend(StorageBackend):
             Delimiter="/",
         )
         entries: list[StorageEntry] = []
-        for item in response.get("CommonPrefixes", []):
-            raw = item.get("Prefix", "").rstrip("/")
+        for item in _mapping_items(response.get("CommonPrefixes")):
+            raw = str(item.get("Prefix", "")).rstrip("/")
             rel = _strip_prefix(raw, self.prefix)
             name = rel.split("/")[-1]
             entries.append(StorageEntry(name=name, key=rel, is_dir=True))
-        for item in response.get("Contents", []):
-            raw = item.get("Key", "")
+        for item in _mapping_items(response.get("Contents")):
+            raw = str(item.get("Key", ""))
             if not raw or raw == prefix:
                 continue
             rel = _strip_prefix(raw, self.prefix)
@@ -170,7 +265,7 @@ class S3StorageBackend(StorageBackend):
                     name=name,
                     key=rel,
                     is_dir=False,
-                    size=int(item.get("Size", 0)),
+                    size=json_as_int(item.get("Size")),
                     modified_at=str(item.get("LastModified") or ""),
                     etag=_clean_etag(item.get("ETag")),
                 )
@@ -186,6 +281,8 @@ class S3StorageBackend(StorageBackend):
             Key=self._object_key(key),
         )
         body = response["Body"]
+        if not _is_readable_body(body):
+            raise TypeError("S3 get_object response is missing a readable Body")
         return await asyncio.to_thread(body.read)
 
     @override
@@ -194,14 +291,13 @@ class S3StorageBackend(StorageBackend):
         # the V4 signature body-hash is calculated on an empty content-type,
         # but GCS applies a different default - causing SignatureDoesNotMatch.
         resolved_ct = content_type or "application/octet-stream"
-        kwargs: dict[str, Any] = {
-            "Bucket": self.bucket,
-            "Key": self._object_key(key),
-            "Body": data,
-            "ContentType": resolved_ct,
-        }
         async with self._async_client() as client:
-            await client.put_object(**kwargs)
+            await client.put_object(
+                Bucket=self.bucket,
+                Key=self._object_key(key),
+                Body=data,
+                ContentType=resolved_ct,
+            )
 
     @override
     async def delete(self, key: str) -> None:
@@ -220,10 +316,16 @@ class S3StorageBackend(StorageBackend):
             Bucket=self.bucket,
             Prefix=prefix,
         )
-        contents = response.get("Contents", [])
+        contents = _mapping_items(response.get("Contents"))
         if not contents:
             return
-        objects = [{"Key": item["Key"]} for item in contents]
+        objects: list[_S3ObjectIdentity] = []
+        for item in contents:
+            item_key = item.get("Key")
+            if isinstance(item_key, str):
+                objects.append({"Key": item_key})
+        if not objects:
+            return
         async with self._async_client() as client:
             await client.delete_objects(
                 Bucket=self.bucket,
@@ -262,7 +364,7 @@ class S3StorageBackend(StorageBackend):
             key=normalize_storage_key(key),
             exists=True,
             is_dir=False,
-            size=int(response.get("ContentLength", 0)),
+            size=json_as_int(response.get("ContentLength")),
             modified_at=str(response.get("LastModified") or ""),
             etag=_clean_etag(response.get("ETag")),
             version_id=str(response.get("VersionId") or ""),
@@ -304,12 +406,12 @@ class S3StorageBackend(StorageBackend):
 
     async def write_local_copy(self, key: str, path: Path) -> None:
         data = await self.read_bytes(key)
-        await asyncio.to_thread(path.write_bytes, data)
+        _ = await asyncio.to_thread(path.write_bytes, data)
 
     @override
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
         client = self._client_or_raise()
-        params: dict[str, Any] = {"Bucket": self.bucket, "Key": self._object_key(key)}
+        params: dict[str, str] = {"Bucket": self.bucket, "Key": self._object_key(key)}
         if filename:
             disposition = "inline" if inline else "attachment"
             params["ResponseContentDisposition"] = f'{disposition}; filename="{filename}"'
@@ -346,7 +448,7 @@ def _is_header_parsing_error(exc: Exception) -> bool:
     return isinstance(exc, HeaderParsingError)
 
 
-def _clean_etag(raw: Any) -> str:
+def _clean_etag(raw: object) -> str:
     if raw is None:
         return ""
     text = str(raw)

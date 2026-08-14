@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, override
+from typing import Any, override, ClassVar
 
 import httpx
 
+from app.core.json_types import is_str_dict, mapping_from_row, object_list_from_row
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
@@ -16,8 +17,7 @@ from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall
 class GeminiClient(LLMClient):
     """Client for Gemini native API (`generateContent` / `streamGenerateContent`)."""
 
-    base_url: str
-    DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    DEFAULT_BASE_URL: ClassVar[str] = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(
         self,
@@ -28,7 +28,7 @@ class GeminiClient(LLMClient):
         supports_tool_choice: bool = True,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
-        self.supports_tool_choice = supports_tool_choice
+        self.supports_tool_choice: bool = supports_tool_choice
         self._client: httpx.AsyncClient | None = None
         self._openai_fallback_client: OpenAICompatibleClient | None = None
 
@@ -53,7 +53,7 @@ class GeminiClient(LLMClient):
 
     def _is_openai_compatible_base(self) -> bool:
         """Detect legacy OpenAI-compatible Gemini gateway endpoint."""
-        url = self.base_url.rstrip("/").lower()
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/").lower()
         return url.endswith("/openai") or "/openai/" in url
 
     @override
@@ -65,7 +65,7 @@ class GeminiClient(LLMClient):
 
     def _normalize_base_url(self) -> str:
         """Normalize base URL for Gemini native endpoints."""
-        url = self.base_url.rstrip("/")
+        url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
         if "/models/" in url and url.endswith((":generateContent", ":streamGenerateContent")):
             url = url.split("/models/")[0]
         return url
@@ -84,7 +84,7 @@ class GeminiClient(LLMClient):
             return None
         return m.group(1), m.group(2)
 
-    def _content_to_gemini_parts(self, content: Any) -> list[dict[str, Any]]:
+    def _content_to_gemini_parts(self, content: object) -> list[dict[str, Any]]:
         """Convert canonical content into Gemini `parts`."""
         if content is None:
             return []
@@ -94,9 +94,11 @@ class GeminiClient(LLMClient):
 
         if isinstance(content, list):
             parts: list[dict[str, Any]] = []
-            for part in content:
-                if not isinstance(part, dict):
+            content_parts: list[Any] = content
+            for raw_part in content_parts:
+                if not is_str_dict(raw_part):
                     continue
+                part: dict[str, Any] = dict(raw_part)
                 ptype = part.get("type")
                 if ptype == "text":
                     text = part.get("text", "")
@@ -104,7 +106,7 @@ class GeminiClient(LLMClient):
                         parts.append({"text": text})
                 elif ptype == "image_url":
                     image_obj = part.get("image_url", {})
-                    image_url = image_obj.get("url", "") if isinstance(image_obj, dict) else ""
+                    image_url = image_obj.get("url", "") if is_str_dict(image_obj) else ""
                     parsed = self._parse_data_url_image(image_url)
                     if parsed:
                         mime_type, b64_data = parsed
@@ -149,12 +151,13 @@ class GeminiClient(LLMClient):
             if tool.get("type") != "function":
                 continue
             function = tool.get("function")
-            fn = function if isinstance(function, dict) else {}
+            if function is None:
+                continue
             decl: dict[str, Any] = {
-                "name": fn.get("name", ""),
-                "description": fn.get("description", ""),
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
             }
-            params = fn.get("parameters")
+            params = function.get("parameters")
             if isinstance(params, dict):
                 decl["parameters"] = params
             declarations.append(decl)
@@ -229,13 +232,13 @@ class GeminiClient(LLMClient):
                 if isinstance(response_content, str):
                     try:
                         parsed = json.loads(response_content)
-                        if isinstance(parsed, dict):
+                        if is_str_dict(parsed):
                             response_obj: dict[str, Any] = parsed
                         else:
                             response_obj = {"result": parsed}
                     except json.JSONDecodeError:
                         response_obj = {"result": response_content}
-                elif isinstance(response_content, dict):
+                elif is_str_dict(response_content):
                     response_obj = response_content
                 else:
                     response_obj = {"result": str(response_content)}
@@ -310,16 +313,16 @@ class GeminiClient(LLMClient):
         seen_tool_calls: set[str] = set()
         finish_reason = None
 
-        candidates = data.get("candidates") or []
+        candidates = object_list_from_row(data.get("candidates"))
         if candidates:
             candidate = candidates[0]
             finish_reason = candidate.get("finishReason")
-            content_obj = candidate.get("content", {}) or {}
-            for part in content_obj.get("parts", []) or []:
+            content_obj = mapping_from_row(candidate.get("content"))
+            for part in object_list_from_row(content_obj.get("parts")):
                 text = part.get("text")
                 if text:
                     content_chunks.append(text)
-                function_call = part.get("functionCall")
+                function_call = mapping_from_row(part.get("functionCall")) if part.get("functionCall") else {}
                 if function_call:
                     name = function_call.get("name", "")
                     args = function_call.get("args", {})
@@ -329,7 +332,7 @@ class GeminiClient(LLMClient):
                         continue
                     seen_tool_calls.add(dedup_key)
 
-                    extra = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
+                    extra: dict[str, Any] = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
 
                     tool_calls.append(
                         {
@@ -454,27 +457,29 @@ class GeminiClient(LLMClient):
                     except json.JSONDecodeError:
                         continue
 
-                    if isinstance(data, dict) and data.get("error"):
+                    if not is_str_dict(data):
+                        continue
+                    if data.get("error"):
                         raise LLMError(f"API error: {data['error']}")
 
                     usage = self._normalize_usage(data.get("usageMetadata"))
                     if usage:
                         final_usage = usage
 
-                    candidates = data.get("candidates") or []
+                    candidates = object_list_from_row(data.get("candidates"))
                     if not candidates:
                         continue
                     candidate = candidates[0]
                     final_finish_reason = candidate.get("finishReason") or final_finish_reason
-                    content_obj = candidate.get("content", {}) or {}
-                    for part in content_obj.get("parts", []) or []:
+                    content_obj = mapping_from_row(candidate.get("content"))
+                    for part in object_list_from_row(content_obj.get("parts")):
                         text = part.get("text")
                         if text:
                             full_text += text
                             if on_chunk:
                                 await on_chunk(text)
 
-                        function_call = part.get("functionCall")
+                        function_call = mapping_from_row(part.get("functionCall")) if part.get("functionCall") else {}
                         if function_call:
                             name = function_call.get("name", "")
                             args = function_call.get("args", {})
@@ -484,7 +489,7 @@ class GeminiClient(LLMClient):
                                 continue
                             seen_tool_calls.add(dedup_key)
 
-                            extra = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
+                            extra: dict[str, Any] = {k: v for k, v in function_call.items() if k not in ["name", "args"]}
 
                             tool_calls.append(
                                 {

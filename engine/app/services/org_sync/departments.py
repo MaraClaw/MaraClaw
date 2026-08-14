@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, ClassVar, TypedDict
 
 from app.core.json_types import JsonObject
 from app.dao import identity_provider_dao
@@ -33,28 +33,28 @@ class OrgSyncDepartmentMixin:
 
     config: JsonObject
     provider: IdentityProviderRecord | Any | None
-    provider_type: str
+    provider_type: ClassVar[str]
     tenant_id: uuid.UUID | None
 
-    async def _reconcile(self, db: Any, provider_id: uuid.UUID, sync_start: datetime):
+    async def _reconcile(self, db: object | None, provider_id: uuid.UUID, sync_start: datetime):
         """Mark records that were not updated in this sync as deleted."""
         del db
         now = _utcnow()
         async with connection_ctx() as conn:
             await conn.execute(
                 "UPDATE org_members SET status = 'deleted', synced_at = %(now)s "
-                "WHERE provider_id = %(provider_id)s "
-                "AND synced_at < %(sync_start)s AND status <> 'deleted'",
+                + "WHERE provider_id = %(provider_id)s "
+                + "AND synced_at < %(sync_start)s AND status <> 'deleted'",
                 {"provider_id": provider_id, "sync_start": sync_start, "now": now},
             )
             await conn.execute(
                 "UPDATE org_departments SET status = 'deleted', synced_at = %(now)s "
-                "WHERE provider_id = %(provider_id)s "
-                "AND synced_at < %(sync_start)s AND status <> 'deleted'",
+                + "WHERE provider_id = %(provider_id)s "
+                + "AND synced_at < %(sync_start)s AND status <> 'deleted'",
                 {"provider_id": provider_id, "sync_start": sync_start, "now": now},
             )
 
-    async def _update_member_counts(self, db: Any, provider_id: uuid.UUID):
+    async def _update_member_counts(self, db: object | None, provider_id: uuid.UUID):
         """Update member_count for all departments to include recursive sub-department members."""
         del db
         async with connection_ctx() as conn:
@@ -72,7 +72,7 @@ class OrgSyncDepartmentMixin:
             )
             rows = await conn.fetchall(
                 "SELECT id, parent_id, member_count FROM org_departments "
-                "WHERE provider_id = %(provider_id)s AND status = 'active'",
+                + "WHERE provider_id = %(provider_id)s AND status = 'active'",
                 {"provider_id": provider_id},
             )
 
@@ -102,12 +102,12 @@ class OrgSyncDepartmentMixin:
             return total
 
         for root_id in root_ids:
-            compute_total(root_id)
+            _ = compute_total(root_id)
 
         for d_id, d_data in dept_map.items():
             await org_department_dao.set_member_count(d_id, d_data["total"])
 
-    async def _ensure_provider(self, db: Any) -> Any:
+    async def _ensure_provider(self, db: object | None) -> Any:
         """Ensure IdentityProvider record exists."""
         del db
         if self.provider:
@@ -124,7 +124,7 @@ class OrgSyncDepartmentMixin:
             if self.tenant_id:
                 row = await conn.fetchone(
                     "SELECT * FROM identity_providers "
-                    "WHERE provider_type = %(ptype)s AND tenant_id = %(tenant_id)s LIMIT 1",
+                    + "WHERE provider_type = %(ptype)s AND tenant_id = %(tenant_id)s LIMIT 1",
                     {"ptype": self.provider_type, "tenant_id": self.tenant_id},
                 )
             else:
@@ -148,7 +148,7 @@ class OrgSyncDepartmentMixin:
             self.provider = provider
             return provider
 
-    async def _upsert_department(self, db: Any, provider: Any, dept: ExternalDepartment):
+    async def _upsert_department(self, db: object | None, provider: IdentityProviderRecord, dept: ExternalDepartment):
         """Insert or update a department."""
         del db
         existing = await org_department_dao.get_by_external(
@@ -168,7 +168,7 @@ class OrgSyncDepartmentMixin:
                 parent_id = parent_dept.id
 
         if existing:
-            await org_department_dao.update(
+            _ = await org_department_dao.update(
                 db_obj=existing,
                 obj_in={
                     "name": dept.name,
@@ -182,7 +182,7 @@ class OrgSyncDepartmentMixin:
                 },
             )
         else:
-            await org_department_dao.create(
+            _ = await org_department_dao.create(
                 obj_in={
                     "external_id": dept.external_id,
                     "provider_id": provider.id,
@@ -196,7 +196,7 @@ class OrgSyncDepartmentMixin:
                 }
             )
 
-    async def _rebuild_department_paths(self, db: Any, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
+    async def _rebuild_department_paths(self, db: object | None, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
         """Normalize OrgDepartment.path using parent_id/name reverse derivation."""
         del db
         departments = list(await org_department_dao.list_for_provider(provider_id))
@@ -209,7 +209,7 @@ class OrgSyncDepartmentMixin:
 
         return path_map
 
-    async def _refresh_member_department_paths(self, db: Any, provider_id: uuid.UUID):
+    async def _refresh_member_department_paths(self, db: object | None, provider_id: uuid.UUID):
         """Refresh OrgMember.department_path from the normalized department tree."""
         del db
         departments = list(await org_department_dao.list_for_provider(provider_id))

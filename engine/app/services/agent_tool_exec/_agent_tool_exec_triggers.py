@@ -4,7 +4,7 @@ import importlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -80,13 +80,13 @@ async def _handle_set_trigger(
             if existing.is_enabled:
                 return (
                     f"❌ Trigger '{name}' already exists and is active. "
-                    "Use update_trigger to modify it, or cancel_trigger first."
+                    + "Use update_trigger to modify it, or cancel_trigger first."
                 )
             if ttype == "webhook":
                 old_token = (existing.config or {}).get("token")
                 if old_token:
                     config["token"] = old_token
-            updates: dict = {
+            updates: dict[str, Any] = {
                 "type": ttype,
                 "config": config,
                 "reason": reason,
@@ -98,10 +98,10 @@ async def _handle_set_trigger(
             existing = await agent_trigger_dao.update(db_obj=existing, obj_in=updates) or existing
             return (
                 f"✅ Trigger '{name}' re-enabled with new configuration "
-                f"({ttype}, fired {existing.fire_count} times so far)"
+                + f"({ttype}, fired {existing.fire_count} times so far)"
             )
 
-        obj_in: dict = {
+        obj_in: dict[str, Any] = {
             "agent_id": agent_id,
             "name": name,
             "type": ttype,
@@ -112,7 +112,7 @@ async def _handle_set_trigger(
         if ttype == "on_message":
             obj_in["max_fires"] = 100
             obj_in["expires_at"] = datetime.now(UTC) + timedelta(days=7)
-        await agent_trigger_dao.create(obj_in=obj_in)
+        _ = await agent_trigger_dao.create(obj_in=obj_in)
 
         await _TRIGGER_HELPERS._write_trigger_audit(
             "trigger_created",
@@ -126,12 +126,12 @@ async def _handle_set_trigger(
             webhook_url = f"{base.rstrip('/')}/api/webhooks/t/{config['token']}"
             return (
                 f"✅ Webhook trigger '{name}' created.\n\nWebhook URL: {webhook_url}\n\n"
-                "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
-                "When the service sends a POST to this URL, you will be woken up with the payload as context."
+                + "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
+                + "When the service sends a POST to this URL, you will be woken up with the payload as context."
             )
         return (
             f"✅ Trigger '{name}' created ({ttype}). "
-            "It will fire according to your config and wake you up with the reason as context."
+            + "It will fire according to your config and wake you up with the reason as context."
         )
     except Exception as error:
         return f"❌ Failed to create trigger: {error}"
@@ -153,7 +153,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
             return f"❌ Trigger '{name}' not found"
 
         changes = []
-        updates: dict = {}
+        updates: dict[str, Any] = {}
         if new_config is not None:
             old_config = trigger.config
             updates["config"] = new_config
@@ -161,7 +161,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
         if new_reason is not None:
             updates["reason"] = new_reason
             changes.append("reason updated")
-        await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+        _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
 
         await _TRIGGER_HELPERS._write_trigger_audit(
             "trigger_updated",
@@ -185,7 +185,7 @@ async def _handle_cancel_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
         if not trigger.is_enabled:
             return f"\u2139\ufe0f Trigger '{name}' is already disabled"
 
-        await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
+        _ = await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
 
         await _TRIGGER_HELPERS._write_trigger_audit("trigger_cancelled", {"name": name}, agent_id=agent_id)
         return f"✅ Trigger '{name}' cancelled. It will no longer fire."

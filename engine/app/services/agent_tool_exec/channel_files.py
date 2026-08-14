@@ -10,6 +10,7 @@ from types import ModuleType
 from anyio import to_thread
 
 from app.config import get_settings
+from app.records.channel_config import ChannelConfigRecord
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments
 
@@ -52,7 +53,7 @@ async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArgum
             return result
         return (
             f"Failed to send file to '{member_name}': recipient not reachable via configured channels. "
-            "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
+            + "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
         )
 
     sender = _channel_context().channel_file_sender.get()
@@ -102,7 +103,9 @@ async def _send_file_to_recipient(
     return None
 
 
-async def _resolve_feishu_recipient(agent_id: uuid.UUID, config, member_name: str) -> tuple[str, str] | None:
+async def _resolve_feishu_recipient(
+    agent_id: uuid.UUID, config: ChannelConfigRecord, member_name: str
+) -> tuple[str, str] | None:
     """Resolve a Feishu recipient by name. Returns (receive_id, id_type) or None."""
     del config
     search_result = await agent_tools._feishu_user_search(agent_id, {"name": member_name})
@@ -127,7 +130,9 @@ async def _resolve_feishu_recipient(agent_id: uuid.UUID, config, member_name: st
     return None
 
 
-async def _send_file_via_feishu(agent_id, config, file_path: Path, member_name: str, message: str) -> str | None:
+async def _send_file_via_feishu(
+    agent_id: uuid.UUID, config: ChannelConfigRecord, file_path: Path, member_name: str, message: str
+) -> str | None:
     """Send file to a person via Feishu. Returns result string or None."""
     recipient = await _resolve_feishu_recipient(agent_id, config, member_name)
     if not recipient:
@@ -137,7 +142,7 @@ async def _send_file_via_feishu(agent_id, config, file_path: Path, member_name: 
     from app.services.feishu_service import feishu_service
 
     try:
-        await feishu_service.upload_and_send_file(
+        _ = await feishu_service.upload_and_send_file(
             config.app_id,
             config.app_secret,
             receive_id,
@@ -166,7 +171,7 @@ async def _send_file_via_feishu(agent_id, config, file_path: Path, member_name: 
             f"File upload failed ({error}). If you need direct file sending, enable im:resource permission in Feishu."
         )
         try:
-            await feishu_service.send_message(
+            _ = await feishu_service.send_message(
                 config.app_id,
                 config.app_secret,
                 receive_id,
@@ -179,7 +184,9 @@ async def _send_file_via_feishu(agent_id, config, file_path: Path, member_name: 
             return f"Failed to send file to {member_name} via Feishu: {error}"
 
 
-async def _send_file_via_slack(agent_id, config, file_path: Path, member_name: str, message: str) -> str | None:
+async def _send_file_via_slack(
+    agent_id: uuid.UUID, config: ChannelConfigRecord, file_path: Path, member_name: str, message: str
+) -> str | None:
     """Send file to a person via Slack DM. Returns result string or None."""
     del agent_id
     bot_token = config.app_secret or ""

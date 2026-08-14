@@ -9,7 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NotRequired, TypedDict, override
+from typing import Any, NotRequired, TypedDict, override, ClassVar
 
 from app.core.logging import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
@@ -39,10 +39,10 @@ async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     except OSError:
         process.kill()
     try:
-        await asyncio.wait_for(process.wait(), timeout=2)
+        _ = await asyncio.wait_for(process.wait(), timeout=2)
     except TimeoutError:
         process.kill()
-        await process.wait()
+        _ = await process.wait()
 
 
 # Security patterns - reused from agent_tools.py
@@ -151,10 +151,10 @@ class SubprocessBackend(BaseSandboxBackend):
     When bubblewrap is unavailable, code execution fails closed.
     """
 
-    _bwrap_missing_warned = False
+    _bwrap_missing_warned: ClassVar[bool] = False
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
+        self.config: SandboxConfig = config
 
     @property
     @override
@@ -255,7 +255,7 @@ class SubprocessBackend(BaseSandboxBackend):
         for pip_cmd in ["pip", "pip3", "pip3.12"]:
             pip_path = venv_bin / pip_cmd
             if pip_path.parent.exists():
-                pip_path.write_text(wrapper_script, encoding="utf-8")
+                _ = pip_path.write_text(wrapper_script, encoding="utf-8")
                 pip_path.chmod(0o755)
 
     def _build_exec_kwargs(self, work_path: Path, timeout: int, use_preexec: bool = False) -> SubprocessExecKwargs:
@@ -272,7 +272,7 @@ class SubprocessBackend(BaseSandboxBackend):
     def _build_preexec_fn(self, work_path: Path, timeout: int) -> Callable[[], None]:
         def _preexec() -> None:
             os.chdir(work_path)
-            os.umask(0o077)
+            _ = os.umask(0o077)
 
             try:
                 import resource
@@ -311,7 +311,7 @@ class SubprocessBackend(BaseSandboxBackend):
             if not SubprocessBackend._bwrap_missing_warned:
                 logger.warning(
                     "[Subprocess] bubblewrap (bwrap) is not available. "
-                    "execute_code will be rejected until bubblewrap is installed."
+                    + "execute_code will be rejected until bubblewrap is installed."
                 )
                 SubprocessBackend._bwrap_missing_warned = True
             return None
@@ -420,7 +420,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await proc.communicate()
+            _ = await proc.communicate()
             return proc.returncode == 0
         except Exception:
             return False
@@ -432,11 +432,11 @@ class SubprocessBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code in a subprocess."""
-        on_output = kwargs.get("on_output")
-        agent_id = kwargs.get("agent_id")
+        on_output: Any = kwargs.get("on_output")
+        agent_id: Any = kwargs.get("agent_id")
         start_time = time.time()
 
         # Validate language
@@ -506,7 +506,7 @@ class SubprocessBackend(BaseSandboxBackend):
         proc: asyncio.subprocess.Process | None = None
         try:
             await self._ensure_workspace_venv(venv_path)
-            await asyncio.to_thread(script_path.write_text, code, encoding="utf-8")
+            _ = await asyncio.to_thread(script_path.write_text, code, encoding="utf-8")
 
             sandbox_command = self._build_command(language, f"/workspace/{script_path.name}")
             bwrap_command = self._build_bwrap_command(sandbox_command, work_path, venv_path)
@@ -521,8 +521,8 @@ class SubprocessBackend(BaseSandboxBackend):
                         duration_ms=duration_ms,
                         error=(
                             "bubblewrap (bwrap) is required for execute_code but is not available. "
-                            "Install bwrap in the runtime environment or enable "
-                            "allow_unsafe_fallback_when_bwrap_missing for local development."
+                            + "Install bwrap in the runtime environment or enable "
+                            + "allow_unsafe_fallback_when_bwrap_missing for local development."
                         ),
                     )
 
@@ -543,7 +543,11 @@ class SubprocessBackend(BaseSandboxBackend):
             stdout_data = bytearray()
             stderr_data = bytearray()
 
-            async def read_stream(stream, out, label="stdout"):
+            async def read_stream(
+                stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout"
+            ) -> None:
+                if stream is None:
+                    return
                 capture_limit = MAX_STDERR_CAPTURE_BYTES if label == "stderr" else MAX_STDOUT_CAPTURE_BYTES
                 while True:
                     chunk = await stream.read(4096)
@@ -565,12 +569,12 @@ class SubprocessBackend(BaseSandboxBackend):
 
             is_timeout = False
             try:
-                await asyncio.wait_for(proc.wait(), timeout=timeout)
+                _ = await asyncio.wait_for(proc.wait(), timeout=timeout)
             except TimeoutError:
                 await _terminate_process_group(proc)
                 is_timeout = True
 
-            await asyncio.gather(task1, task2)
+            _ = await asyncio.gather(task1, task2)
             stdout = bytes(stdout_data)
             stderr = bytes(stderr_data)
 

@@ -5,9 +5,11 @@ import json
 import uuid
 from dataclasses import dataclass
 
+from app.core.json_types import JsonObject
 from app.services import agent_tools
+from app.services.feishu_service import FeishuService
 
-from .registry import ToolArguments, ToolArgumentValue
+from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -29,8 +31,22 @@ class _RecordWrite:
     record_id: str = ""
 
 
-def _feishu_service():
+def _feishu_service() -> FeishuService:
     return importlib.import_module("app.services.feishu_service").feishu_service
+
+
+def _nested_mapping(value: object) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _object_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _fields_mapping(value: object) -> dict[str, ToolArgumentValue]:
+    return value if isinstance(value, dict) else {}
 
 
 async def _resolve_bitable_app_token(agent_id: uuid.UUID, parsed_url: dict[str, str]) -> str | None:
@@ -43,8 +59,9 @@ async def _resolve_bitable_app_token(agent_id: uuid.UUID, parsed_url: dict[str, 
         if app_id and app_secret:
             token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
             node_info = await agent_tools._feishu_wiki_get_node(wiki_token, token)
-            if node_info and node_info.get("obj_token"):
-                return node_info["obj_token"]
+            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info else None
+            if obj_token:
+                return obj_token
     return None
 
 
@@ -53,9 +70,10 @@ def _filters_from(filter_info: ToolArgumentValue) -> dict[str, ToolArgumentValue
         return filter_info
     if isinstance(filter_info, str) and filter_info.strip():
         try:
-            return json.loads(filter_info)
+            loaded: object = json.loads(filter_info)
         except json.JSONDecodeError:
             return {}
+        return loaded if isinstance(loaded, dict) else {}
     return {}
 
 
@@ -82,7 +100,7 @@ async def _bitable_list_tables(agent_id: uuid.UUID, arguments: ToolArguments) ->
         err = agent_tools._check_feishu_err(resp)
         if err:
             return err
-        tables = resp.get("data", {}).get("items", [])
+        tables = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not tables:
             return "OK: No tables found in this Bitable."
         lines = [f"- {table.get('name')} (ID: {table.get('table_id')})" for table in tables]
@@ -108,10 +126,10 @@ async def _bitable_create_app(agent_id: uuid.UUID, arguments: ToolArguments) -> 
         err = agent_tools._check_feishu_err(resp)
         if err:
             return err
-        app_info = resp.get("data", {}).get("app", {})
-        app_token = app_info.get("app_token", "")
-        bitable_url = app_info.get("url", "")
-        default_table_id = app_info.get("default_table_id", "")
+        app_info = _nested_mapping(_nested_mapping(resp.get("data")).get("app"))
+        app_token = tool_arg_str(app_info.get("app_token")) or ""
+        bitable_url = tool_arg_str(app_info.get("url")) or ""
+        default_table_id = tool_arg_str(app_info.get("default_table_id")) or ""
         if not app_token:
             return f"Failed: Bitable created but could not extract app_token from response: {resp}"
         if not bitable_url:
@@ -137,7 +155,7 @@ async def _bitable_list_fields(agent_id: uuid.UUID, arguments: ToolArguments) ->
         err = agent_tools._check_feishu_err(resp)
         if err:
             return err
-        fields = resp.get("data", {}).get("items", [])
+        fields = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not fields:
             return "OK: No fields found in this table."
         lines = [
@@ -164,7 +182,7 @@ async def _bitable_query_records(agent_id: uuid.UUID, arguments: ToolArguments) 
         err = agent_tools._check_feishu_err(resp)
         if err:
             return err
-        records = resp.get("data", {}).get("items", [])
+        records = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not records:
             return "OK: No matching records found."
         lines = [
@@ -181,11 +199,12 @@ async def _bitable_create_record(agent_id: uuid.UUID, arguments: ToolArguments) 
     if not app_token or not table_id:
         return "Failed: Could not resolve app_token or table_id from the provided parameters/URL."
     try:
-        fields = json.loads(_string_argument(arguments, "fields", "{}"))
+        parsed_fields: object = json.loads(_string_argument(arguments, "fields", "{}"))
     except json.JSONDecodeError:
         return "Failed: The 'fields' parameter is not valid JSON."
     return await _write_record(
-        agent_id, _RecordWrite(app_token=app_token, table_id=table_id, fields=fields, create=True)
+        agent_id,
+        _RecordWrite(app_token=app_token, table_id=table_id, fields=_fields_mapping(parsed_fields), create=True),
     )
 
 
@@ -195,12 +214,18 @@ async def _bitable_update_record(agent_id: uuid.UUID, arguments: ToolArguments) 
     if not app_token or not table_id or not record_id:
         return "Failed: Missing required parameters. Need app_token (from URL), table_id, and record_id."
     try:
-        fields = json.loads(_string_argument(arguments, "fields", "{}"))
+        parsed_fields: object = json.loads(_string_argument(arguments, "fields", "{}"))
     except json.JSONDecodeError:
         return "Failed: The 'fields' parameter is not valid JSON."
     return await _write_record(
         agent_id,
-        _RecordWrite(app_token=app_token, table_id=table_id, fields=fields, create=False, record_id=record_id),
+        _RecordWrite(
+            app_token=app_token,
+            table_id=table_id,
+            fields=_fields_mapping(parsed_fields),
+            create=False,
+            record_id=record_id,
+        ),
     )
 
 
@@ -229,13 +254,13 @@ async def _write_record(
         err = agent_tools._check_feishu_err(resp)
         if err:
             return err
-        record = resp.get("data", {}).get("record", {})
+        record = _nested_mapping(_nested_mapping(resp.get("data")).get("record"))
         tenant_token = await service.get_tenant_access_token(app_id, app_secret)
         bitable_url = await agent_tools._get_feishu_bitable_url(tenant_token, write.app_token, write.table_id)
         return (
             f"OK: Record {verb}. Record ID: {record.get('record_id')}\n"
-            f"Fields: {json.dumps(record.get('fields', {}), ensure_ascii=False)}\n"
-            f"🔗 多维表格链接: {bitable_url}"
+            + f"Fields: {json.dumps(record.get('fields', {}), ensure_ascii=False)}\n"
+            + f"🔗 多维表格链接: {bitable_url}"
         )
     except Exception as error:
         return f"Failed: {str(error)[:300]}"

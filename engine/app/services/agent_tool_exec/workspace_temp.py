@@ -71,7 +71,7 @@ async def _materialize_storage_entry(
             await _materialize_storage_entry(storage, child.key, root_key, local_root)
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(await storage.read_bytes(entry_key))
+    _ = target.write_bytes(await storage.read_bytes(entry_key))
 
 
 async def _prepare_temp_workspace(
@@ -124,7 +124,7 @@ async def _materialize_storage_path_with_budget(
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         data = await storage.read_bytes(storage_key)
-        target.write_bytes(data)
+        _ = target.write_bytes(data)
         normalized_rel = normalize_workspace_path(rel_path)
         manifest[normalized_rel] = TempWorkspaceManifestEntry(
             rel_path=normalized_rel,

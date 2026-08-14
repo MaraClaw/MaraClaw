@@ -5,9 +5,13 @@ import re
 import uuid
 from typing import Final
 
-from app.services import agent_tools
+import httpx
 
-from .registry import ToolArguments
+from app.core.json_types import JsonObject, json_as_str
+from app.services import agent_tools
+from app.services.feishu_service import FeishuService
+
+from .registry import ToolArguments, tool_arg_str_or
 
 _VALID_FILE_TYPES: Final = {"file", "docx", "bitable", "folder", "doc", "sheet", "mindnote", "shortcut", "slides"}
 _TYPE_LABELS: Final = {
@@ -23,12 +27,31 @@ _TYPE_LABELS: Final = {
 }
 
 
-def _feishu_service():
+def _feishu_service() -> FeishuService:
     return importlib.import_module("app.services.feishu_service").feishu_service
 
 
 def _httpx_module():
     return importlib.import_module("httpx")
+
+
+def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
+    return _httpx_module().AsyncClient(**kwargs)
+
+
+def _response_mapping(response: httpx.Response) -> JsonObject:
+    raw: object = response.json()
+    return raw if isinstance(raw, dict) else {}
+
+
+def _nested_mapping(value: object) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _object_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -57,8 +80,8 @@ async def _feishu_drive_share(agent_id: uuid.UUID, arguments: ToolArguments) -> 
 
     node_info = await agent_tools._feishu_wiki_get_node(document_token, token)
     is_wiki = node_info is not None
-    space_id = node_info.get("space_id", "") if node_info else ""
-    obj_token = node_info.get("obj_token", "") if node_info else ""
+    space_id = tool_arg_str_or(node_info.get("space_id")) if node_info else ""
+    obj_token = tool_arg_str_or(node_info.get("obj_token")) if node_info else ""
 
     api_perm = {"view": "view", "edit": "edit", "full_access": "full_access"}.get(permission, "edit")
     wiki_role = "admin" if api_perm in ("edit", "full_access") else "member"
@@ -79,7 +102,7 @@ async def _feishu_drive_share(agent_id: uuid.UUID, arguments: ToolArguments) -> 
     resolved.extend((open_id, open_id) for open_id in member_open_ids if open_id)
 
     results = []
-    async with _httpx_module().AsyncClient(timeout=15) as client:
+    async with _httpx_client(timeout=15) as client:
         for display, open_id in resolved:
             if not open_id:
                 results.append(f"❌ 无法找到「{display}」的 open_id，跳过")
@@ -117,32 +140,32 @@ async def _list_drive_members(
     space_id: str,
 ) -> str:
     use_token = obj_token if (is_wiki and obj_token) else document_token
-    async with _httpx_module().AsyncClient(timeout=15) as client:
+    async with _httpx_client(timeout=15) as client:
         response = await client.get(
             f"https://open.feishu.cn/open-apis/drive/v1/permissions/{use_token}/members",
             params={"type": doc_type},
             headers=headers,
         )
-    data = response.json()
+    data = _response_mapping(response)
     if data.get("code") != 0:
         code = data.get("code")
         if code == 1063003 and is_wiki:
             return (
                 f"ℹ️ 文档 `{document_token}` 是知识库页面，其权限由知识库空间统一管理。\n"  # noqa: RUF001
-                "知识库空间 ID：`" + space_id + "`\n"
-                "请直接在飞书知识库中管理成员权限。"
+                + "知识库空间 ID：`" + space_id + "`\n"
+                + "请直接在飞书知识库中管理成员权限。"
             )
         if code in (99991672, 99991668):
             return f"❌ 权限不足（code {code}）\n需要在飞书开放平台开通：\n• drive:drive（云文档权限管理）"
         return f"❌ 获取协作者列表失败：{data.get('msg')} (code {code})"
 
-    members = data.get("data", {}).get("items", [])
+    members = _object_items(_nested_mapping(data.get("data")).get("items"))
     if not members:
         return f"📄 文档 `{document_token}` 当前没有其他协作者。"
     lines = [f"📄 文档 `{document_token}` 的协作者列表（共 {len(members)} 人）：\n"]
     for member in members:
         perm = member.get("perm", "")
-        member_type = member.get("member_type", "")
+        member_type = json_as_str(member.get("member_type")) or ""
         member_id = member.get("member_id", "")
         type_label = {"openid": "用户", "openchat": "群组", "opendepartmentid": "部门"}.get(member_type, member_type)
         lines.append(f"• {type_label} `{member_id}` | 权限: **{perm}**")
@@ -150,7 +173,7 @@ async def _list_drive_members(
 
 
 async def _add_member(
-    client,
+    client: httpx.AsyncClient,
     display: str,
     open_id: str,
     document_token: str,
@@ -168,7 +191,7 @@ async def _add_member(
             json={"member_type": "openid", "member_id": open_id, "member_role": wiki_role},
             headers=headers,
         )
-        data = response.json()
+        data = _response_mapping(response)
         code = data.get("code")
         if code == 0:
             return f"✅ 已将「{display}」加入知识库空间（角色：{wiki_role}）"
@@ -184,7 +207,7 @@ async def _add_member(
         headers=headers,
         params={"type": doc_type},
     )
-    data = response.json()
+    data = _response_mapping(response)
     if data.get("code") == 0:
         return f"✅ 已将「{display}」添加为**{permission}**权限协作者"
     code = data.get("code")
@@ -196,7 +219,7 @@ async def _add_member(
 
 
 async def _remove_member(
-    client,
+    client: httpx.AsyncClient,
     display: str,
     open_id: str,
     document_token: str,
@@ -211,7 +234,7 @@ async def _remove_member(
             headers=headers,
             params={"member_type": "openid"},
         )
-        data = response.json()
+        data = _response_mapping(response)
         if data.get("code") == 0:
             return f"✅ 已将「{display}」从知识库移除"
         return f"❌ 移除「{display}」失败：{data.get('msg')} (code {data.get('code')})"
@@ -221,7 +244,7 @@ async def _remove_member(
         headers=headers,
         params={"type": doc_type, "member_type": "openid"},
     )
-    data = response.json()
+    data = _response_mapping(response)
     if data.get("code") == 0:
         return f"✅ 已移除「{display}」的协作权限"
     return f"❌ 移除「{display}」失败：{data.get('msg')} (code {data.get('code')})"
@@ -244,16 +267,16 @@ async def _feishu_drive_delete(agent_id: uuid.UUID, arguments: ToolArguments) ->
     type_label = _TYPE_LABELS.get(file_type, file_type)
 
     try:
-        async with _httpx_module().AsyncClient(timeout=15) as client:
+        async with _httpx_client(timeout=15) as client:
             response = await client.delete(
                 f"https://open.feishu.cn/open-apis/drive/v1/files/{file_token}",
                 params={"type": file_type},
                 headers={"Authorization": f"Bearer {token}"},
             )
-        data = response.json()
+        data = _response_mapping(response)
         code = data.get("code", -1)
         if code == 0:
-            task_id = data.get("data", {}).get("task_id")
+            task_id = _nested_mapping(data.get("data")).get("task_id")
             if task_id:
                 return f"✅ 已提交{type_label}删除任务（异步执行中）。\n📋 任务 ID: `{task_id}`\n文件夹删除为异步操作，文件会被移至回收站。"
             return f"✅ {type_label} `{file_token}` 已删除（移至回收站）。"
@@ -264,10 +287,10 @@ async def _feishu_drive_delete(agent_id: uuid.UUID, arguments: ToolArguments) ->
         if code == 1061004:
             return (
                 f"❌ 权限不足（code {code}）\n"
-                "需要满足以下条件之一：\n"
-                "• 文件所有者 + 父文件夹编辑权限\n"
-                "• 父文件夹的所有者或 full_access 权限\n"
-                "同时需要在飞书开放平台开通：drive:drive 或 space:document:delete"
+                + "需要满足以下条件之一：\n"
+                + "• 文件所有者 + 父文件夹编辑权限\n"
+                + "• 父文件夹的所有者或 full_access 权限\n"
+                + "同时需要在飞书开放平台开通：drive:drive 或 space:document:delete"
             )
         if code == 1061007:
             return f"❌ 文件 `{file_token}` 已被删除。"

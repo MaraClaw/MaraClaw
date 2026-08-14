@@ -1,5 +1,7 @@
 """WeCom (Enterprise WeChat) service for sending messages via Open API."""
 
+from typing import Any
+
 import httpx
 
 from app.core.json_types import JsonObject
@@ -83,7 +85,7 @@ async def send_wecom_message(
     if not agent_id:
         return {"errcode": -1, "errmsg": "agent_id is required for WeCom messages"}
 
-    payload = {
+    payload: dict[str, Any] = {
         "touser": user_id,
         "msgtype": "text",
         "agentid": agent_id,

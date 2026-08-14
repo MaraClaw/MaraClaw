@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any, TypeIs
 
 from app.config import get_settings
 from app.core.json_types import JsonObject
@@ -30,6 +31,30 @@ class ToolConfigDependencies:
     set_cached_tool_config: Callable[[uuid.UUID | None, str, JsonObject], None]
 
 
+def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
+    if not isinstance(value, dict):
+        return False
+    fields: object | None = value.get("fields")
+    if fields is None:
+        return True
+    if not isinstance(fields, list):
+        return False
+    return all(
+        isinstance(field, dict)
+        and (field.get("key") is None or isinstance(field.get("key"), str))
+        and (field.get("type") is None or isinstance(field.get("type"), str))
+        for field in list[object](fields)
+    )
+
+
+def _as_tool_config_schema(value: object) -> ToolConfigSchema | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        value = dict[str, Any](value) if isinstance(value, Mapping) else {}
+    return value if _is_tool_config_schema(value) else None
+
+
 def _legacy_local_now() -> datetime:
     """Produce the legacy naive local timestamp from a timezone-aware clock."""
     return datetime.now(UTC).astimezone().replace(tzinfo=None)
@@ -37,7 +62,7 @@ def _legacy_local_now() -> datetime:
 
 def decrypt_sensitive_fields(
     config: JsonObject,
-    config_schema: ToolConfigSchema | None = None,
+    config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
     *,
     sensitive_field_keys: set[str] | None = None,
 ) -> JsonObject:
@@ -121,34 +146,38 @@ async def get_tool_config(
     if agent_id:
         joined = await agent_tool_dao.get_assignment_with_tool_by_name(agent_id, tool_name)
         if joined:
-            assignment, tool_fields = joined
+            assignment, tool_fields_raw = joined
+            tool_fields = dict[str, Any](tool_fields_raw)
             agent_config = assignment.config or {}
-            global_config = tool_fields.get("config") or {}
-            config_schema = tool_fields.get("config_schema") or {}
+            global_config_raw = tool_fields.get("config") or {}
+            global_config: dict[str, Any] = (
+                dict[str, Any](global_config_raw) if isinstance(global_config_raw, dict) else {}
+            )
+            config_schema: dict[str, Any] = dict[str, Any](tool_fields.get("config_schema") or {})
             tool_source = tool_fields.get("source") or "builtin"
             db_tool_name = tool_fields.get("name") or tool_name
             tenant_config: JsonObject = {}
+            schema = _as_tool_config_schema(config_schema)
             if tool_source == "builtin":
-                tenant_config = await get_tenant_tool_config(None, agent_tenant_id, db_tool_name, config_schema)
+                tenant_config = await get_tenant_tool_config(None, agent_tenant_id, db_tool_name, schema)
             if not isinstance(global_config, dict):
-                global_config = dict(global_config)
-            if not isinstance(config_schema, dict):
-                config_schema = dict(config_schema)
-            merged = {**global_config, **tenant_config, **agent_config}
+                global_config = dict[str, Any](global_config)
+            merged: dict[str, Any] = {**global_config, **tenant_config, **agent_config}
             if merged:
-                decrypted = dependencies.decrypt_sensitive_fields(merged, config_schema)  # type: ignore[arg-type]
+                decrypted = dependencies.decrypt_sensitive_fields(merged, schema)
                 dependencies.set_cached_tool_config(agent_id, tool_name, decrypted)
                 return decrypted
 
     tool = await tool_dao.get_by_name(tool_name)
     if not tool:
         return None
-    tenant_config: JsonObject = {}
+    tenant_config = {}
+    schema = _as_tool_config_schema(tool.config_schema)
     if tool.source == "builtin":
-        tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, tool.config_schema)
+        tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, schema)
     merged = {**(tool.config or {}), **tenant_config}
     if not merged:
         return None
-    decrypted = dependencies.decrypt_sensitive_fields(merged, tool.config_schema)  # type: ignore[arg-type]
+    decrypted = dependencies.decrypt_sensitive_fields(merged, schema)
     dependencies.set_cached_tool_config(agent_id, tool_name, decrypted)
     return decrypted

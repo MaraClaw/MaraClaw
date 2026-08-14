@@ -10,6 +10,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.channel_user_service import get_platform_user_by_org_member
 
@@ -22,7 +23,7 @@ async def _send_slack_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send proactive Slack DM via conversations.open + chat.postMessage."""
     from app.api.slack import _send_slack_messages
@@ -45,11 +46,15 @@ async def _send_slack_message(
                 headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
                 json={"users": user_id},
             )
-            data = open_resp.json()
+            data: dict[str, Any] = open_resp.json()
             if open_resp.status_code >= 400 or not data.get("ok"):
                 err = data.get("error") or open_resp.text[:200]
                 return f"❌ Slack conversations.open failed: {err}"
-            channel_id = ((data.get("channel") or {}).get("id") or "").strip()
+            channel_obj = data.get("channel")
+            channel_id = ""
+            if isinstance(channel_obj, dict):
+                raw_channel_id = channel_obj.get("id")
+                channel_id = raw_channel_id.strip() if isinstance(raw_channel_id, str) else ""
 
         if not channel_id:
             return f"❌ Slack DM channel unavailable for {member_name}"
@@ -78,7 +83,7 @@ async def _send_teams_channel_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send proactive Teams message using the latest known conversation context."""
     from app.api.teams import _send_teams_message
@@ -108,14 +113,14 @@ async def _send_teams_channel_message(
             conversation_id,
             {"type": "message", "text": message_text, "conversation": {"id": conversation_id}},
         )
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user.id,
             role="assistant",
             content=message_text,
             conversation_id=str(session.id),
         )
-        await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
+        _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
         logger.info(f"[Teams] Proactive message saved to session {session.id}")
         return f"✅ Message sent to {member_name} via Teams"
     except Exception as error:
@@ -127,7 +132,7 @@ async def _send_google_chat_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send proactive Google Chat message using the latest known space/thread context."""
     from app.services.channels.google_chat import parse_external_conv_id, send_google_chat_message
@@ -178,7 +183,7 @@ async def _send_google_chat_message(
         if session is None or not external:
             return (
                 f"❌ Google Chat proactive send to {member_name} requires them to message the bot first "
-                "(DM preferred; group rooms work after any message in that space)"
+                + "(DM preferred; group rooms work after any message in that space)"
             )
 
         try:
@@ -186,7 +191,7 @@ async def _send_google_chat_message(
         except ValueError:
             return f"❌ Google Chat session for {member_name} has an invalid space reference"
 
-        await send_google_chat_message(
+        _ = await send_google_chat_message(
             config,
             space_name=space_name,
             text=message_text,
@@ -211,7 +216,7 @@ async def _send_wechat_channel_message(
     agent_id: uuid.UUID,
     member_name: str,
     message_text: str,
-    target_member: Any,
+    target_member: OrgMemberRecord,
 ) -> str:
     """Send proactive WeChat message using the latest cached context_token."""
     from app.services.wechat_channel import WECHAT_ILINK_BASE_URL, get_wechat_context_entry, send_wechat_text_message

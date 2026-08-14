@@ -78,7 +78,7 @@ async def upsert_channel_config(
 async def delete_channel_config(agent_id: uuid.UUID, channel_type: str) -> None:
     config = await require_channel_config(agent_id, channel_type)
     await _drop_im_tokens_for_config(config.channel_type, config.app_id, config.app_secret)
-    await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(id=config.id)
 
 
 async def _drop_im_tokens_for_config(

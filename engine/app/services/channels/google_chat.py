@@ -64,13 +64,14 @@ async def _fetch_chat_certs() -> dict[str, str]:
         return _CERT_CACHE["certs"]
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(CHAT_CERTS_URL)
-        resp.raise_for_status()
+        _ = resp.raise_for_status()
         certs = resp.json()
     if not isinstance(certs, dict):
         raise ValueError("Unexpected Chat certs payload")
-    _CERT_CACHE["certs"] = certs
+    certs_map = dict[str, str](certs)
+    _CERT_CACHE["certs"] = certs_map
     _CERT_CACHE["expires_at"] = now + 3600
-    return certs
+    return certs_map
 
 
 def _decode_with_key(token: str, key: str, audience: str) -> dict[str, Any]:
@@ -140,17 +141,17 @@ def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
         return None
 
     message_raw = body.get("message")
-    message: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
+    message: dict[str, Any] = dict[str, Any](message_raw) if isinstance(message_raw, dict) else {}
     space_raw = body.get("space")
-    space: dict[str, Any] = space_raw if isinstance(space_raw, dict) else {}
+    space: dict[str, Any] = dict[str, Any](space_raw) if isinstance(space_raw, dict) else {}
     message_space = message.get("space")
     if not space and isinstance(message_space, dict):
-        space = message_space
+        space = dict[str, Any](message_space)
     sender_raw = message.get("sender")
-    sender: dict[str, Any] = sender_raw if isinstance(sender_raw, dict) else {}
+    sender: dict[str, Any] = dict[str, Any](sender_raw) if isinstance(sender_raw, dict) else {}
     user_raw = body.get("user")
     if not sender and isinstance(user_raw, dict):
-        sender = user_raw
+        sender = dict[str, Any](user_raw)
 
     # Prefer argumentText (already stripped of bot @mention by Google).
     text = str(message.get("argumentText") or "").strip()
@@ -163,19 +164,20 @@ def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
         # Strip annotated user mentions from plain text when possible.
         annotations = message.get("annotations")
         if isinstance(annotations, list) and text:
-            for ann in annotations:
-                if not isinstance(ann, dict):
+            for ann_raw in annotations:
+                if not isinstance(ann_raw, dict):
                     continue
+                ann = dict[str, Any](ann_raw)
                 if str(ann.get("type") or "").upper() != "USER_MENTION":
                     continue
-                start = ann.get("startIndex")
-                length = ann.get("length")
+                start: object | None = ann.get("startIndex")
+                length: object | None = ann.get("length")
                 if isinstance(start, int) and isinstance(length, int) and start == 0:
                     text = text[length:].lstrip()
                     break
 
     thread_raw = message.get("thread")
-    thread: dict[str, Any] = thread_raw if isinstance(thread_raw, dict) else {}
+    thread: dict[str, Any] = dict[str, Any](thread_raw) if isinstance(thread_raw, dict) else {}
     space_name = str(space.get("name") or "").strip()
     space_type = str(space.get("type") or space.get("spaceType") or "").strip().upper()
     space_display = str(space.get("displayName") or space.get("name") or "").strip()
@@ -282,12 +284,12 @@ def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
     extra = config.extra_config or {}
     raw = extra.get("service_account_json")
     if isinstance(raw, dict):
-        return raw
+        return dict[str, Any](raw)
     if isinstance(raw, str) and raw.strip():
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                return parsed
+                return dict[str, Any](parsed)
         except json.JSONDecodeError:
             logger.warning("[GoogleChat] extra_config.service_account_json is not valid JSON")
     # Legacy: never prefer encrypt_key PEM path for new writes; still read if present
@@ -359,7 +361,7 @@ async def send_google_chat_message(
     if not sa_info:
         raise ValueError(
             "Google Chat proactive send requires extra_config.service_account_json "
-            "with client_email and private_key"
+            + "with client_email and private_key"
         )
     if not space_name.startswith("spaces/"):
         raise ValueError(f"Invalid space name: {space_name}")

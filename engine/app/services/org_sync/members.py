@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from app.dao import identity_dao, org_member_dao, user_dao
 from app.dao.org_department_dao import org_department_dao
+from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.org_sync.types import ExternalUser
@@ -16,13 +17,13 @@ from app.services.org_sync.utils import Style, _anyascii, _normalize_contact, _u
 class OrgSyncMemberMixin:
     """Shared member persistence behavior for organization sync adapters."""
 
-    provider_type: str
+    provider_type: ClassVar[str]
     tenant_id: uuid.UUID | None
 
     async def _upsert_member(
         self,
-        db: Any,
-        provider: Any,
+        db: object | None,
+        provider: IdentityProviderRecord,
         user: ExternalUser,
         department_external_id: str,
     ) -> dict[str, Any]:
@@ -133,15 +134,15 @@ class OrgSyncMemberMixin:
                 if mobile and identity.phone != mobile:
                     id_updates["phone"] = mobile
                 if id_updates:
-                    await identity_dao.update(db_obj=identity, obj_in=id_updates)
+                    _ = await identity_dao.update(db_obj=identity, obj_in=id_updates)
 
         return stats
 
-    def _provider_requires_unionid(self, provider: Any) -> bool:
+    def _provider_requires_unionid(self, provider: IdentityProviderRecord) -> bool:
         provider_type = (provider.provider_type or self.provider_type or "").lower()
         return provider_type in {"feishu", "dingtalk"}
 
-    def _validate_member_identifiers(self, provider: Any, user: ExternalUser) -> None:
+    def _validate_member_identifiers(self, provider: IdentityProviderRecord, user: ExternalUser) -> None:
         user.unionid = (user.unionid or "").strip()
         user.external_id = (user.external_id or "").strip()
         user.open_id = (user.open_id or "").strip()
@@ -158,8 +159,8 @@ class OrgSyncMemberMixin:
 
     async def _find_existing_member(
         self,
-        db: Any,
-        provider: Any,
+        db: object | None,
+        provider: IdentityProviderRecord,
         user: ExternalUser,
     ) -> OrgMemberRecord | None:
         del db
@@ -176,7 +177,7 @@ class OrgSyncMemberMixin:
             unionid=user.unionid or None,
         )
 
-    async def _resolve_platform_user(self, db: Any, user: ExternalUser) -> UserRecord | None:
+    async def _resolve_platform_user(self, db: object | None, user: ExternalUser) -> UserRecord | None:
         """Resolve platform user from external user info."""
         del db
         email = _normalize_contact(user.email)

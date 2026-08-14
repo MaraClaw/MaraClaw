@@ -35,9 +35,10 @@ def redact_extra_config(extra: dict[str, Any] | None) -> dict[str, Any] | None:
         if key in _SECRET_EXTRA_KEYS or "secret" in key.lower() or "private" in key.lower() or "token" in key.lower():
             if isinstance(value, dict):
                 # SA JSON: keep non-secret metadata only
-                meta = {
+                secret_obj = dict[str, Any](value)
+                meta: dict[str, Any] = {
                     k: v
-                    for k, v in value.items()
+                    for k, v in secret_obj.items()
                     if k
                     in {
                         "type",
@@ -47,7 +48,7 @@ def redact_extra_config(extra: dict[str, Any] | None) -> dict[str, Any] | None:
                         "universe_domain",
                     }
                 }
-                if "private_key" in value or "private_key_id" in value:
+                if "private_key" in secret_obj or "private_key_id" in secret_obj:
                     meta["credentials_configured"] = True
                 out[key] = meta
             else:

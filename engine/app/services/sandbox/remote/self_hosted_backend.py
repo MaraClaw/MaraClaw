@@ -1,7 +1,7 @@
 """Self-hosted sandbox backend."""
 
 import time
-from typing import override
+from typing import Any, override
 
 import httpx
 
@@ -29,13 +29,13 @@ class SelfHostedBackend(BaseSandboxBackend):
         return "self_hosted"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
+        self.config: SandboxConfig = config
 
         if not config.api_url:
             raise ValueError("Self-hosted sandbox URL is required. Set SANDBOX_API_URL environment variable.")
 
         # Normalize URL (remove trailing slash)
-        self.api_url = config.api_url.rstrip("/")
+        self.api_url: str = config.api_url.rstrip("/")
 
     @override
     def get_capabilities(self) -> SandboxCapabilities:
@@ -81,7 +81,7 @@ class SelfHostedBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code using the self-hosted sandbox service."""
         start_time = time.time()
@@ -112,7 +112,7 @@ class SelfHostedBackend(BaseSandboxBackend):
                 cmd = f"node -e {code!r}"
             else:
                 cmd = code
-            payload = {"cmd": cmd}
+            payload: dict[str, Any] = {"cmd": cmd}
         elif "jupyter" in url_lower:
             # aio-sandbox jupyter
             payload = {"code": code}

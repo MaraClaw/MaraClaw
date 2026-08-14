@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -51,7 +51,7 @@ def load_clawsec_manifest() -> dict[str, object]:
             "default_skills": [],
             "catalog_only_skills": [],
         }
-    return payload
+    return dict[str, Any](payload)
 
 
 def _frontmatter_value(content: str, key: str, default: str) -> str:
@@ -131,7 +131,7 @@ async def seed_clawsec_skills(db: object | None = None) -> int:
             continue
 
         existing = await skill_dao.get_by_folder_name(folder_name)
-        await skill_dao.upsert_skill_package(
+        _ = await skill_dao.upsert_skill_package(
             name=name,
             description=description,
             category=_SKILL_CATEGORY,

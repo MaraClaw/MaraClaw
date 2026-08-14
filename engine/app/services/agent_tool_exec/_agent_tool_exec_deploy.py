@@ -7,15 +7,35 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType
+import httpx
 
+from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
-from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 
 
-def _httpx_module() -> ModuleType:
+def _httpx_module():
     return importlib.import_module("httpx")
+
+
+def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
+    return _httpx_module().AsyncClient(**kwargs)
+
+
+def _response_mapping(response: httpx.Response) -> JsonObject:
+    raw: object = response.json()
+    return raw if isinstance(raw, dict) else {}
+
+
+def _nested_mapping(value: object) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _object_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -24,7 +44,6 @@ def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> 
 
 
 async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     project_name = _string_argument(arguments, "project_name")
     source_dir_arg = _string_argument(arguments, "source_dir", ".")
     deploy_method = _string_argument(arguments, "deploy_method", "upload")
@@ -46,7 +65,7 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
         if not source_dir_path.exists() or not source_dir_path.is_dir():
             return f"❌ Source directory '{source_dir_arg}' does not exist in workspace."
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with _httpx_client(timeout=60.0) as client:
         try:
             project_res = await client.get(f"https://api.vercel.com/v9/projects/{project_name}", headers=headers)
             if project_res.status_code == 200:
@@ -79,7 +98,7 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
                 )
                 if link_res.status_code not in (200, 201, 409):
                     logger.warning(f"Repo linking returned status {link_res.status_code}: {link_res.text}")
-                deploy_payload = {
+                deploy_payload: dict[str, ToolArgumentValue] = {
                     "name": project_name,
                     "gitSource": {"type": "github", "repo": github_repo, "ref": "main"},
                 }
@@ -90,11 +109,11 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
                 )
                 if dep_res.status_code not in (200, 201):
                     return f"❌ Failed to trigger GitHub deployment: {dep_res.text}"
-                dep_data = dep_res.json()
-                dep_id = dep_data.get("id")
-                dep_url = dep_data.get("url")
+                dep_data = _response_mapping(dep_res)
+                dep_id = json_as_str(dep_data.get("id"))
+                dep_url = json_as_str(dep_data.get("url"))
             else:
-                files_payload = []
+                files_payload: list[ToolArgumentValue] = []
                 ignored_dirs = {".git", "node_modules", ".next", "dist", ".vercel", "out", "build"}
                 for root, dirs, files in os.walk(source_dir_path):
                     dirs[:] = [d for d in dirs if d not in ignored_dirs]
@@ -131,18 +150,18 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
                 )
                 if dep_res.status_code not in (200, 201):
                     return f"❌ Failed to trigger upload deployment: {dep_res.text}"
-                dep_data = dep_res.json()
-                dep_id = dep_data.get("id")
-                dep_url = dep_data.get("url")
+                dep_data = _response_mapping(dep_res)
+                dep_id = json_as_str(dep_data.get("id"))
+                dep_url = json_as_str(dep_data.get("url"))
 
             status = "QUEUED"
             max_polls = 60
             for _poll in range(max_polls):
                 status_res = await client.get(f"https://api.vercel.com/v13/deployments/{dep_id}", headers=headers)
                 if status_res.status_code == 200:
-                    status_data = status_res.json()
-                    status = status_data.get("readyState", status)
-                    dep_url = status_data.get("url", dep_url)
+                    status_data = _response_mapping(status_res)
+                    status = json_as_str(status_data.get("readyState")) or status
+                    dep_url = json_as_str(status_data.get("url")) or dep_url
                     if status in ("READY", "ERROR", "CANCELED"):
                         break
                 await asyncio.sleep(2.0)
@@ -151,19 +170,19 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
             if status == "READY":
                 return (
                     f"✅ **Deployment triggered successfully!**\n\n"
-                    f"- **URL**: https://{dep_url}\n"
-                    f"- **Status**: READY (Active)\n"
-                    f"- **Project Name**: {project_name}\n"
-                    f"- **Deployment ID**: {dep_id}\n"
-                    f"- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
-                    f"{quota_summary}"
+                    + f"- **URL**: https://{dep_url}\n"
+                    + f"- **Status**: READY (Active)\n"
+                    + f"- **Project Name**: {project_name}\n"
+                    + f"- **Deployment ID**: {dep_id}\n"
+                    + f"- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
+                    + f"{quota_summary}"
                 )
             return (
                 f"⚠️ **Deployment state**: {status}\n"
-                f"- **URL**: https://{dep_url}\n"
-                f"- **Deployment ID**: {dep_id}\n"
-                f"- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
-                f"{quota_summary}"
+                + f"- **URL**: https://{dep_url}\n"
+                + f"- **Deployment ID**: {dep_id}\n"
+                + f"- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
+                + f"{quota_summary}"
             )
         except Exception as e:
             logger.exception("Vercel deployment failed")
@@ -171,7 +190,6 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
 
 
 async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     project_name = _string_argument(arguments, "project_name")
     if not project_name:
         return "❌ Missing required argument: 'project_name'."
@@ -180,11 +198,11 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient() as client:
+    async with _httpx_client() as client:
         try:
             res = await client.get(f"https://api.vercel.com/v6/deployments?projectId={project_name}", headers=headers)
             if res.status_code == 200:
-                deployments = res.json().get("deployments", [])
+                deployments = _object_items(_response_mapping(res).get("deployments"))
                 if not deployments:
                     return f"No deployments found for project '{project_name}'."
                 lines = [f"📋 **Deployments for {project_name}**:"]
@@ -197,9 +215,9 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
                         created_str = str(created_at)
                     lines.append(
                         f"- URL: https://{dep.get('url')} | "
-                        f"Status: {dep.get('state')} | "
-                        f"Created: {created_str} | "
-                        f"ID: `{dep.get('uid')}`"
+                        + f"Status: {dep.get('state')} | "
+                        + f"Created: {created_str} | "
+                        + f"ID: `{dep.get('uid')}`"
                     )
                 return "\n".join(lines)
             return f"❌ Failed to retrieve deployments: {res.text}"
@@ -208,7 +226,6 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
 
 
 async def _vercel_get_deploy_logs(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     deployment_id = _string_argument(arguments, "deployment_id")
     if not deployment_id:
         return "❌ Missing required argument: 'deployment_id'."
@@ -220,20 +237,27 @@ async def _vercel_get_deploy_logs(agent_id: uuid.UUID, arguments: ToolArguments)
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with _httpx_client(timeout=30.0) as client:
         try:
             res = await client.get(f"https://api.vercel.com/v2/deployments/{deployment_id}/events", headers=headers)
             if res.status_code == 200:
-                events = res.json()
-                if not isinstance(events, list):
-                    events = events.get("events", []) if isinstance(events, dict) else []
+                events_raw: object = res.json()
+                events: list[object] = []
+                if isinstance(events_raw, list):
+                    events = list(events_raw)
+                elif isinstance(events_raw, dict):
+                    nested_events = events_raw.get("events", [])
+                    if isinstance(nested_events, list):
+                        events = list(nested_events)
                 if not events:
                     return f"No logs found for deployment '{deployment_id}'."
                 log_lines = []
                 for event in events:
-                    payload = event.get("payload", {})
+                    if not isinstance(event, dict):
+                        continue
+                    payload = _nested_mapping(event.get("payload"))
                     text = payload.get("text", "") or event.get("text", "")
-                    if text:
+                    if isinstance(text, str) and text:
                         log_lines.append(text.strip())
                 content = "\n".join(log_lines[-100:])
                 return f"📜 **Logs for deployment {deployment_id} (last 100 lines)**:\n```\n{content}\n```"

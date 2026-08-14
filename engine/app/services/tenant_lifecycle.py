@@ -26,12 +26,12 @@ async def set_tenant_active(tenant: TenantRecord, *, is_active: bool) -> TenantR
         updated = await tenant_dao.update(db_obj=tenant, obj_in={"is_active": is_active})
         tenant_id = tenant.id
         if not is_active:
-            await user_dao.deactivate_for_tenant(tenant_id)
-            await agent_dao.disable_for_tenant(tenant_id)
-            await agent_trigger_dao.disable_for_tenant(tenant_id)
-            await agent_schedule_dao.disable_for_tenant(tenant_id)
+            _ = await user_dao.deactivate_for_tenant(tenant_id)
+            _ = await agent_dao.disable_for_tenant(tenant_id)
+            _ = await agent_trigger_dao.disable_for_tenant(tenant_id)
+            _ = await agent_schedule_dao.disable_for_tenant(tenant_id)
         else:
-            await user_dao.reactivate_for_tenant(tenant_id)
+            _ = await user_dao.reactivate_for_tenant(tenant_id)
         return updated or tenant
 
 

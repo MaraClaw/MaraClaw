@@ -168,8 +168,8 @@ async def execute_tool(
         if is_session_locked(str(agent_id), session_id):
             return (
                 "⏸️ A human operator is currently controlling this browser session "
-                "(Take Control mode). Please wait for them to finish before retrying "
-                "browser/computer operations."
+                + "(Take Control mode). Please wait for them to finish before retrying "
+                + "browser/computer operations."
             )
 
     try:
@@ -196,10 +196,12 @@ async def execute_tool(
             if not file_path:
                 result = "Error: file_path is required"
             else:
+                from app.services.agent_tool_exec.channel_files import _send_channel_file
+
                 result = await agent_tools._run_with_temp_workspace(
                     agent_id,
                     agent_tenant_id,
-                    lambda temp_ws: agent_tools._send_channel_file(agent_id, temp_ws, arguments),
+                    lambda temp_ws: _send_channel_file(agent_id, temp_ws, arguments),
                     paths=[file_path],
                 )
         elif tool_name == "plaza_get_new_posts":
@@ -334,15 +336,15 @@ async def execute_tool(
                 from app.dao.chat_dao import chat_message_dao
 
                 if user_id is not None:
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=user_id,
                         role="assistant",
                         content=(
                             f"⚠️ [System notice] Digital employee tool call failed.\n"
-                            f"Tool: `{tool_name}`\n"
-                            f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
-                            f"Error: {result}"
+                            + f"Tool: `{tool_name}`\n"
+                            + f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
+                            + f"Error: {result}"
                         ),
                         conversation_id=session_id,
                     )

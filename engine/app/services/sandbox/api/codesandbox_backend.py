@@ -1,7 +1,7 @@
 """CodeSandbox API-based sandbox backend."""
 
 import time
-from typing import override
+from typing import Any, override
 
 import httpx
 
@@ -31,8 +31,8 @@ class CodeSandboxBackend(BaseSandboxBackend):
         return "codesandbox"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self.api_url = "https://codesandbox.io/api/v1/sandboxes/exec"
+        self.config: SandboxConfig = config
+        self.api_url: str = "https://codesandbox.io/api/v1/sandboxes/exec"
 
         if not config.api_key:
             raise ValueError("CodeSandbox API key is required. Set SANDBOX_API_KEY environment variable.")
@@ -68,7 +68,7 @@ class CodeSandboxBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code using CodeSandbox API."""
         start_time = time.time()

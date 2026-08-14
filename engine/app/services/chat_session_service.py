@@ -15,7 +15,7 @@ from app.records.chat import ChatSessionRecord
 
 
 async def get_primary_platform_session(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ChatSessionRecord | None:
@@ -25,7 +25,7 @@ async def get_primary_platform_session(
 
 
 async def ensure_primary_platform_session(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ChatSessionRecord:
@@ -74,7 +74,7 @@ async def save_tool_call_log(
     if not conversation_id:
         return
 
-    payload = {
+    payload: dict[str, Any] = {
         "name": tool_name,
         "args": arguments or {},
         "status": status,
@@ -86,7 +86,7 @@ async def save_tool_call_log(
     try:
         # Open a short-lived connection when no request-scoped transaction is active.
         async with connection_ctx():
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=user_id,
                 role="tool_call",

@@ -47,7 +47,7 @@ def mark_processed(namespace: str, key: str, *, cap: int = _DEFAULT_CAP) -> None
         store[key] = None
         store.move_to_end(key)
         while len(store) > cap:
-            store.popitem(last=False)
+            _ = store.popitem(last=False)
 
 
 def remember_if_new(namespace: str, key: str, *, cap: int = _DEFAULT_CAP) -> bool:
@@ -78,4 +78,4 @@ async def mark_processed_shared(namespace: str, key: str, *, cap: int = _DEFAULT
     mark_processed(namespace, key, cap=cap)
     if not key or _redis_ttl() <= 0:
         return
-    await cache_set_nx(_redis_key(namespace, key), "1", ttl=_redis_ttl())
+    _ = await cache_set_nx(_redis_key(namespace, key), "1", ttl=_redis_ttl())

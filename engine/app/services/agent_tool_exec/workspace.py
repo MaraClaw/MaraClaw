@@ -5,17 +5,18 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.services.agent_tool_exec.registry import ToolArguments
-from app.services.agent_tool_exec.workspace_paths import _tool_storage_key
+from app.services.agent_tool_exec.workspace_paths import _normalize_tool_rel_path, _tool_storage_key
 from app.services.agent_tool_exec.workspace_temp import (
     _is_enterprise_info_path,
     _prepare_temp_workspace,
     flush_temp_workspace,
 )
 from app.services.focus_service import is_focus_file_path
-from app.services.storage import get_storage_backend
+from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.workspace_collaboration import (
     delete_workspace_file,
     move_workspace_path,
+    normalize_workspace_path,
     write_workspace_file,
 )
 
@@ -158,7 +159,15 @@ async def _execute_workspace_mutation(
 
         replace_all = arguments.get("replace_all") is True
         storage = get_storage_backend()
-        storage_key, normalized_path, _ = _tool_storage_key(agent_id, path, None)
+        storage_key, normalized_path, _ = _tool_storage_key(
+            agent_id,
+            path,
+            None,
+            normalize_workspace_path_fn=normalize_workspace_path,
+            normalize_tool_rel_path=_normalize_tool_rel_path,
+            is_enterprise_info_path=_is_enterprise_info_path,
+            normalize_storage_key_fn=normalize_storage_key,
+        )
         if not await storage.is_file(storage_key):
             return f"File not found: {path}"
 

@@ -6,9 +6,11 @@ import copy
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TypeIs
 
+from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
-from app.core.tool_types import ToolDefinition
+from app.core.tool_types import ToolDefinition, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tenant_dao, tool_dao
 from app.db.pool import get_pool
 from app.db.session import connection_ctx, get_connection
@@ -81,13 +83,46 @@ async def agent_has_any_channel(agent_id: uuid.UUID) -> bool:
     return has_any
 
 
-agent_has_feishu._uses_catalog_channel_presence = True
-agent_has_any_channel._uses_catalog_channel_presence = True
+setattr(agent_has_feishu, "_uses_catalog_channel_presence", True)
+setattr(agent_has_any_channel, "_uses_catalog_channel_presence", True)
+
+
+def _is_json_value(value: object) -> TypeIs[JsonValue]:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in list[object](value))
+    return _is_json_object(value)
+
+
+def _is_json_object(value: object) -> TypeIs[JsonObject]:
+    if not isinstance(value, dict):
+        return False
+    mapping: dict[object, object] = dict(value)
+    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
+
+
+def _as_tool_parameter_schema(value: object) -> ToolParameterSchema:
+    if not isinstance(value, dict):
+        return {"type": "object", "properties": {}}
+    schema_type: object | None = value.get("type")
+    properties_raw: object | None = value.get("properties")
+    if not isinstance(schema_type, str) or not isinstance(properties_raw, dict):
+        return {"type": "object", "properties": {}}
+    properties: dict[object, object] = dict(properties_raw)
+    narrowed_properties: dict[str, JsonObject] = {
+        key: item for key, item in properties.items() if isinstance(key, str) and _is_json_object(item)
+    }
+    parameters: ToolParameterSchema = {"type": schema_type, "properties": narrowed_properties}
+    required: object | None = value.get("required")
+    if isinstance(required, list):
+        parameters["required"] = [item for item in list[object](required) if isinstance(item, str)]
+    return parameters
 
 
 def strip_a2a_msg_type(tools: list[ToolDefinition]) -> list[ToolDefinition]:
     """Copy only the synchronous A2A tool while removing its async message mode."""
-    result = []
+    result: list[ToolDefinition] = []
     for tool in tools:
         function = tool["function"]
         if function["name"] == "send_message_to_agent":
@@ -98,7 +133,7 @@ def strip_a2a_msg_type(tools: list[ToolDefinition]) -> list[ToolDefinition]:
             )
             parameters = function["parameters"]
             properties = parameters["properties"]
-            properties.pop("msg_type", None)
+            _ = properties.pop("msg_type", None)
             required = parameters.get("required", [])
             if "msg_type" in required:
                 parameters["required"] = [item for item in required if item != "msg_type"]
@@ -115,7 +150,7 @@ async def get_agent_tools_for_llm(
     if get_connection() is not None:
         return await _get_agent_tools_for_llm_bound(agent_id, dependencies=dependencies)
     try:
-        get_pool()
+        _ = get_pool()
     except RuntimeError:
         return await _get_agent_tools_for_llm_bound(agent_id, dependencies=dependencies)
     async with connection_ctx():
@@ -159,8 +194,8 @@ async def _get_agent_tools_for_llm_bound(
         )
 
         result: list[ToolDefinition] = []
-        db_tool_names = set()
-        explicitly_disabled_names = set()
+        db_tool_names: set[str] = set()
+        explicitly_disabled_names: set[str] = set()
         for tool in all_tools:
             assignment = assignments.get(str(tool.id))
             enabled = assignment.enabled if assignment is not None else tool.is_default
@@ -181,7 +216,7 @@ async def _get_agent_tools_for_llm_bound(
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.parameters_schema or {"type": "object", "properties": {}},
+                        "parameters": _as_tool_parameter_schema(tool.parameters_schema),
                     },
                 }
             )

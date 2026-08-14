@@ -36,7 +36,7 @@ class EmailVerificationService:
         # Invalidate previous code for this user if exists
         old_code_hash = await redis.get(user_key)
         if old_code_hash:
-            await redis.delete(f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{old_code_hash}")
+            _ = await redis.delete(f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{old_code_hash}")
 
         # Generate a random 6-digit code
         raw_code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
@@ -56,9 +56,9 @@ class EmailVerificationService:
         token_data = json.dumps({"identity_id": str(identity_id), "email": email})
 
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.setex(token_key, ttl_seconds, token_data)
-            pipe.setex(user_key, ttl_seconds, code_hash)
-            await pipe.execute()
+            _ = pipe.setex(token_key, ttl_seconds, token_data)
+            _ = pipe.setex(user_key, ttl_seconds, code_hash)
+            _ = await pipe.execute()
 
         return raw_code, expires_at
 
@@ -90,9 +90,9 @@ class EmailVerificationService:
 
         # Atomic delete to ensure single-use
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.delete(token_key)
-            pipe.delete(user_key)
-            await pipe.execute()
+            _ = pipe.delete(token_key)
+            _ = pipe.delete(user_key)
+            _ = await pipe.execute()
 
         return {"identity_id": identity_id, "email": email}
 

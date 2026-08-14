@@ -1,6 +1,6 @@
 """Seed builtin tools into the database on startup."""
 
-from typing import TypedDict, TypeIs
+from typing import Any, TypedDict, TypeIs
 from uuid import UUID
 
 from app.core.json_types import JsonObject, JsonValue
@@ -103,14 +103,15 @@ def _is_json_value(value: object) -> TypeIs[JsonValue]:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
+        return all(_is_json_value(item) for item in list[object](value))
     return _is_json_object(value)
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
     if not isinstance(value, dict):
         return False
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    mapping: dict[object, object] = dict(value)
+    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
 
 
 def _is_tool_parameter_schema(value: object) -> TypeIs[ToolParameterSchema]:
@@ -180,11 +181,11 @@ async def seed_builtin_tools():
         old_tool = await tool_dao.get_by_name(old_name)
         new_tool = await tool_dao.get_by_name(new_name)
         if old_tool and not new_tool:
-            await tool_dao.update(db_obj=old_tool, obj_in={"name": new_name})
+            _ = await tool_dao.update(db_obj=old_tool, obj_in={"name": new_name})
             logger.info(f"[ToolSeeder] Renamed builtin tool: {old_name} -> {new_name}")
         elif old_tool and new_tool:
             await agent_tool_dao.reassign_tool(from_tool_id=old_tool.id, to_tool_id=new_tool.id)
-            await tool_dao.delete(id=old_tool.id)
+            _ = await tool_dao.delete(id=old_tool.id)
             logger.info(f"[ToolSeeder] Merged legacy builtin tool into {new_name}")
 
         new_tool_ids: list[UUID] = []
@@ -214,7 +215,7 @@ async def seed_builtin_tools():
                 logger.info(f"[ToolSeeder] Created builtin tool: {t['name']}")
             else:
                 updated_fields: list[str] = []
-                updates: dict = {}
+                updates: dict[str, Any] = {}
                 if existing.category != t["category"]:
                     updates["category"] = t["category"]
                     updated_fields.append("category")
@@ -230,7 +231,7 @@ async def seed_builtin_tools():
                 if t["name"] in SYNC_IS_DEFAULT_TOOL_NAMES and existing.is_default != t["is_default"]:
                     updates["is_default"] = t["is_default"]
                     updated_fields.append("is_default")
-                config = dict(existing.config or {})
+                config: dict[str, Any] = dict(existing.config or {})
                 config_schema = dict(existing.config_schema or {})
                 if t.get("config_schema") and config_schema != t["config_schema"]:
                     updates["config_schema"] = t["config_schema"]
@@ -244,7 +245,7 @@ async def seed_builtin_tools():
                     updated_fields.append("config")
                     config = dict(seed_config)
                 elif seed_config and config != seed_config:
-                    merged = {**seed_config, **config}
+                    merged: dict[str, Any] = {**seed_config, **config}
                     if merged != config:
                         updates["config"] = merged
                         updated_fields.append("config")
@@ -261,14 +262,14 @@ async def seed_builtin_tools():
                     updates["parameters_schema"] = t["parameters_schema"]
                     updated_fields.append("parameters_schema")
                 if updates:
-                    await tool_dao.update(db_obj=existing, obj_in=updates)
+                    _ = await tool_dao.update(db_obj=existing, obj_in=updates)
                     logger.info(f"[ToolSeeder] Updated {', '.join(updated_fields)}: {t['name']}")
 
         if new_tool_ids:
             agent_ids = await agent_dao.list_all_ids()
             for agent_id in agent_ids:
                 for tool_id in new_tool_ids:
-                    await agent_tool_dao.ensure_enabled(agent_id, tool_id)
+                    _ = await agent_tool_dao.ensure_enabled(agent_id, tool_id)
             logger.info(f"[ToolSeeder] Auto-assigned {len(new_tool_ids)} new tools to {len(agent_ids)} agents")
 
         await _auto_assign_helpers(
@@ -302,7 +303,7 @@ async def seed_builtin_tools():
         for obsolete_name in ("bing_search", "manage_tasks"):
             obsolete = await tool_dao.get_by_name(obsolete_name)
             if obsolete:
-                await tool_dao.delete(id=obsolete.id)
+                _ = await tool_dao.delete(id=obsolete.id)
                 logger.info(f"[ToolSeeder] Removed obsolete tool: {obsolete_name}")
 
         first_tenant = await tenant_dao.get_first_by_created_at()
@@ -314,11 +315,12 @@ async def seed_builtin_tools():
                 legacy_config = meaningful_config(tool.config or {})
                 if not legacy_config:
                     continue
+                config_schema = tool.config_schema if _is_tool_config_schema(tool.config_schema) else None
                 existing_setting = await get_tenant_tool_config(
                     None,
                     first_tenant.id,
                     tool.name,
-                    tool.config_schema,
+                    config_schema,
                 )
                 if not existing_setting:
                     await set_tenant_tool_config(
@@ -326,18 +328,18 @@ async def seed_builtin_tools():
                         first_tenant.id,
                         tool.name,
                         legacy_config,
-                        tool.config_schema,
+                        config_schema,
                     )
                     migrated += 1
                 schema_fields = (tool.config_schema or {}).get("fields", [])
                 sensitive_keys = {f["key"] for f in schema_fields if f.get("type") == "password"}
                 clean_config = {key: value for key, value in (tool.config or {}).items() if key not in sensitive_keys}
                 if clean_config != tool.config:
-                    await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})
+                    _ = await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})
             if migrated:
                 logger.info(
                     f"[ToolSeeder] Migrated {migrated} legacy builtin tool config(s) "
-                    f"to tenant_settings for tenant {first_tenant.id}"
+                    + f"to tenant_settings for tenant {first_tenant.id}"
                 )
 
     logger.info("[ToolSeeder] Builtin tools seeded")
@@ -357,7 +359,7 @@ async def _auto_assign_helpers(*, anchor_names: list[str], helper_names: list[st
     if assigned_count:
         logger.info(
             f"[ToolSeeder] Auto-assigned {assigned_count} AgentBay {label} helper tool(s) "
-            f"to {len(enabled_agent_ids)} agent(s)"
+            + f"to {len(enabled_agent_ids)} agent(s)"
         )
 
 
@@ -384,8 +386,8 @@ ATLASSIAN_ROVO_CONFIG_TOOL: AtlassianRovoConfigTool = {
     "display_name": "Atlassian Rovo (Jira / Confluence / Compass)",
     "description": (
         "Connect to Atlassian Rovo MCP Server to access Jira, Confluence, and Compass. "
-        "Configure your API key to enable Jira issue management, Confluence page creation, "
-        "and Compass component queries."
+        + "Configure your API key to enable Jira issue management, Confluence page creation, "
+        + "and Compass component queries."
     ),
     "category": "atlassian",
     "icon": "🔷",
@@ -402,7 +404,7 @@ ATLASSIAN_ROVO_CONFIG_TOOL: AtlassianRovoConfigTool = {
                 "placeholder": "ATSTT3x... (service account key) or Basic base64(email:token)",
                 "description": (
                     "Service account API key (Bearer) or base64-encoded email:api_token (Basic). "
-                    "Get your API key from id.atlassian.com/manage-profile/security/api-tokens"
+                    + "Get your API key from id.atlassian.com/manage-profile/security/api-tokens"
                 ),
             },
         ]
@@ -430,7 +432,7 @@ async def seed_atlassian_rovo_config():
             initial_config: JsonObject = dict(t["config"])
             if env_key:
                 initial_config["api_key"] = env_key
-            await tool_dao.create(
+            _ = await tool_dao.create(
                 obj_in={
                     "name": t["name"],
                     "display_name": t["display_name"],
@@ -450,7 +452,7 @@ async def seed_atlassian_rovo_config():
             logger.info("[ToolSeeder] Created Atlassian Rovo config tool")
             return
 
-        updates: dict = {}
+        updates: dict[str, Any] = {}
         if existing.config_schema != config_schema:
             updates["config_schema"] = config_schema
         if existing.mcp_server_url != ATLASSIAN_ROVO_MCP_URL:
@@ -458,7 +460,7 @@ async def seed_atlassian_rovo_config():
         if env_key and (not existing.config or not existing.config.get("api_key")):
             updates["config"] = {**(existing.config or {}), "api_key": env_key}
         if updates:
-            await tool_dao.update(db_obj=existing, obj_in=updates)
+            _ = await tool_dao.update(db_obj=existing, obj_in=updates)
             logger.info("[ToolSeeder] Updated Atlassian Rovo config tool")
 
 

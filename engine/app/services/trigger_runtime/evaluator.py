@@ -5,18 +5,19 @@ from __future__ import annotations
 import ipaddress
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TypeIs
 from urllib.parse import urlparse
 
 from croniter import croniter
 
-from app.core.json_types import JsonValue
+from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
+from app.records.trigger import AgentTriggerRecord
 
 MIN_POLL_INTERVAL_MINUTES = 5
 
@@ -27,6 +28,26 @@ def _config_number(value: JsonValue) -> int | float | None:
     if isinstance(value, int | float):
         return value
     return None
+
+
+def _is_json_value(value: object) -> TypeIs[JsonValue]:
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
+
+
+def _json_config(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, item in value.items():
+        if isinstance(key, str) and _is_json_value(item):
+            result[key] = item
+    return result
 
 
 def _config_headers(value: JsonValue) -> dict[str, str] | None:
@@ -41,7 +62,7 @@ def _config_headers(value: JsonValue) -> dict[str, str] | None:
     return headers
 
 
-async def should_skip_non_workday(trigger: Any, local_now: datetime) -> bool:
+async def should_skip_non_workday(trigger: AgentTriggerRecord, local_now: datetime) -> bool:
     if trigger.name != "daily_okr_collection":
         return False
 
@@ -97,7 +118,7 @@ async def mark_trigger_fired(trigger_id: uuid.UUID, now: datetime) -> None:
         logger.warning(f"Failed to mark fired trigger {trigger_id}: {e}")
 
 
-async def handle_okr_report_trigger(trigger: Any, now: datetime) -> bool:
+async def handle_okr_report_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     if trigger.name not in {"daily_okr_report", "weekly_okr_report", "monthly_okr_report"}:
         return False
 
@@ -131,21 +152,21 @@ async def handle_okr_report_trigger(trigger: Any, now: datetime) -> bool:
     local_today = now.astimezone(tz).date()
 
     if trigger.name == "daily_okr_report":
-        await generate_company_daily_report(tenant_id, local_today - timedelta(days=1))
+        _ = await generate_company_daily_report(tenant_id, local_today - timedelta(days=1))
     elif trigger.name == "weekly_okr_report":
         previous_week_anchor = local_today - timedelta(days=7)
         week_start = previous_week_anchor - timedelta(days=previous_week_anchor.weekday())
-        await generate_company_weekly_report(tenant_id, week_start)
+        _ = await generate_company_weekly_report(tenant_id, week_start)
     elif trigger.name == "monthly_okr_report":
         previous_month_end = local_today.replace(day=1) - timedelta(days=1)
-        await generate_company_monthly_report(tenant_id, previous_month_end)
+        _ = await generate_company_monthly_report(tenant_id, previous_month_end)
 
     await mark_trigger_fired(trigger.id, now)
     logger.info(f"[Trigger] Auto-generated OKR report for trigger {trigger.name}")
     return True
 
 
-async def handle_okr_collection_trigger(trigger: Any, now: datetime) -> bool:
+async def handle_okr_collection_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     if trigger.name != "daily_okr_collection":
         return False
 
@@ -164,7 +185,7 @@ async def handle_okr_collection_trigger(trigger: Any, now: datetime) -> bool:
     if not settings or not settings.get("enabled") or not settings.get("daily_report_enabled"):
         return True
 
-    await trigger_daily_collection_for_tenant(tenant_id)
+    _ = await trigger_daily_collection_for_tenant(tenant_id)
     await mark_trigger_fired(trigger.id, now)
     logger.info(f"[Trigger] Deterministic OKR collection sent for trigger {trigger.name}")
     return True
@@ -193,7 +214,7 @@ def is_private_url(url: str) -> bool:
         return True
 
 
-async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
+async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     if not trigger.is_enabled:
         return False
     if trigger.expires_at and now >= trigger.expires_at:
@@ -206,7 +227,7 @@ async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
         if (now - trigger.last_fired_at) < cooldown:
             return False
 
-    cfg = trigger.config or {}
+    cfg = _json_config(trigger.config)
     t = trigger.type
 
     if t == "cron":
@@ -228,6 +249,8 @@ async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
                 tz = ZoneInfo(tz_name)
             except KeyError, Exception:
                 tz = ZoneInfo("UTC")
+            if base is None:
+                return False
             local_now = now.astimezone(tz)
             local_base = base.astimezone(tz) if base.tzinfo else base.replace(tzinfo=tz)
             cron = croniter(expr, local_base)
@@ -260,6 +283,8 @@ async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
         if minutes is None:
             return False
         base = trigger.last_fired_at or trigger.created_at
+        if base is None:
+            return False
         return (now - base) >= timedelta(minutes=minutes)
 
     if t == "poll":
@@ -268,7 +293,7 @@ async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
             return False
         interval_min = max(configured_interval, MIN_POLL_INTERVAL_MINUTES)
         base = trigger.last_fired_at or trigger.created_at
-        if (now - base) < timedelta(minutes=interval_min):
+        if base is None or (now - base) < timedelta(minutes=interval_min):
             return False
         return await poll_check(trigger)
 
@@ -281,10 +306,10 @@ async def evaluate_trigger(trigger: Any, now: datetime) -> bool:
     return False
 
 
-async def poll_check(trigger: Any) -> bool:
+async def poll_check(trigger: AgentTriggerRecord) -> bool:
     import httpx
 
-    cfg = trigger.config or {}
+    cfg = _json_config(trigger.config)
     url = cfg.get("url")
     if not isinstance(url, str) or not url:
         return False
@@ -300,7 +325,7 @@ async def poll_check(trigger: Any) -> bool:
             return False
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.request(method, url, headers=headers)
-            resp.raise_for_status()
+            _ = resp.raise_for_status()
 
         data = resp.json()
         json_path = cfg.get("json_path", "$")
@@ -320,7 +345,7 @@ async def poll_check(trigger: Any) -> bool:
         try:
             row = await agent_trigger_dao.get(trigger.id)
             if row:
-                await agent_trigger_dao.update(db_obj=row, obj_in={"config": cfg})
+                _ = await agent_trigger_dao.update(db_obj=row, obj_in={"config": cfg})
         except Exception as e:
             logger.warning(f"Failed to persist poll _last_value for {trigger.name}: {e}")
 
@@ -330,11 +355,11 @@ async def poll_check(trigger: Any) -> bool:
         return False
 
 
-def extract_json_path(data, path: str):
+def extract_json_path(data: object, path: str) -> object:
     if path == "$" or not path:
         return data
     parts = path.lstrip("$.").split(".")
-    current = data
+    current: object = data
     for part in parts:
         if isinstance(current, dict):
             current = current.get(part)
@@ -345,8 +370,8 @@ def extract_json_path(data, path: str):
     return current
 
 
-async def check_new_agent_messages(trigger: Any) -> bool:
-    cfg = trigger.config or {}
+async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
+    cfg = _json_config(trigger.config)
     from_agent_name = cfg.get("from_agent_name")
     from_user_name = cfg.get("from_user_name")
     if not from_agent_name and not from_user_name:

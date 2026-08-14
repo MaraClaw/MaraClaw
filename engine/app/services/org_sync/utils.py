@@ -1,5 +1,6 @@
 """Shared organization sync utility helpers."""
 
+from typing import ClassVar
 import importlib
 from datetime import UTC, datetime
 from types import ModuleType
@@ -27,7 +28,7 @@ def _anyascii(value: str) -> str:
 
 
 class _FallbackStyle:
-    FIRST_LETTER = "first_letter"
+    FIRST_LETTER: ClassVar[str] = "first_letter"
 
 
 Style = getattr(_pypinyin_module, "Style", _FallbackStyle) if _pypinyin_module else _FallbackStyle
@@ -39,7 +40,7 @@ def lazy_pinyin(value: str, errors: str = "default") -> list[str]:
         if callable(converter):
             converted = converter(value, errors=errors)
             if isinstance(converted, list):
-                return [str(item) for item in converted]
+                return [str(item) for item in list[object](converted)]
 
     ascii_value = _anyascii(value)
     return list(ascii_value) if ascii_value else list(value)
@@ -51,7 +52,11 @@ def pinyin(value: str, style: str | None = None) -> list[list[str]]:
         if callable(converter):
             converted = converter(value, style=style)
             if isinstance(converted, list):
-                return [[str(part) for part in item] for item in converted if isinstance(item, list)]
+                return [
+                    [str(part) for part in list[object](item)]
+                    for item in list[object](converted)
+                    if isinstance(item, list)
+                ]
 
     ascii_value = _anyascii(value) or value
     if style == Style.FIRST_LETTER:

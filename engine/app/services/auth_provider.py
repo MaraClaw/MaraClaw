@@ -6,14 +6,15 @@ and concrete implementations for each supported provider.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import ClassVar, override
+from typing import ClassVar, TypeIs, override
 from urllib.parse import quote, urlencode
 
 import httpx
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_json_object, json_as_str
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, user_dao
+from app.dao.base import as_uuid
 from app.records.identity import IdentityProviderRecord
 from app.records.user import UserRecord
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
@@ -22,6 +23,18 @@ type AuthProviderPayloadValue = (
     str | int | float | bool | list[AuthProviderPayloadValue] | dict[str, AuthProviderPayloadValue] | None
 )
 type AuthProviderPayload = dict[str, AuthProviderPayloadValue]
+
+
+def _is_payload(value: object) -> TypeIs[AuthProviderPayload]:
+    return is_json_object(value)
+
+
+def _as_payload(value: object) -> AuthProviderPayload:
+    return value if _is_payload(value) else {}
+
+
+def _payload_from_response(resp: httpx.Response) -> AuthProviderPayload:
+    return _as_payload(resp.json())
 
 
 @dataclass
@@ -35,13 +48,13 @@ class ExternalUserInfo:
     email: str = ""
     avatar_url: str = ""
     mobile: str = ""
-    raw_data: AuthProviderPayload = field(default_factory=dict)
+    raw_data: AuthProviderPayload = field(default_factory=dict[str, AuthProviderPayloadValue])
 
 
 class BaseAuthProvider(ABC):
     """Abstract base class for all authentication providers."""
 
-    provider_type: str = ""
+    provider_type: ClassVar[str] = ""
 
     def __init__(
         self,
@@ -54,7 +67,7 @@ class BaseAuthProvider(ABC):
             provider: IdentityProvider record from database
             config: Configuration dict (fallback if no provider record)
         """
-        self.provider = provider
+        self.provider: IdentityProviderRecord | None = provider
         self.config: JsonObject = config or {}
         if provider and provider.config:
             self.config = provider.config
@@ -127,7 +140,7 @@ class BaseAuthProvider(ABC):
         from app.services.registration_service import registration_service
         from app.services.sso_service import sso_service
 
-        await self._ensure_provider(tenant_id)
+        _ = await self._ensure_provider(tenant_id)
 
         provider_user_id = user_info.provider_user_id or user_info.provider_union_id
         if provider_user_id is None:
@@ -161,14 +174,14 @@ class BaseAuthProvider(ABC):
             user = await self._create_new_user(user_info, tenant_id)
             is_new = True
 
-        await sso_service.link_identity(
+        _ = await sso_service.link_identity(
             str(user.id),
             self.provider_type,
             provider_user_id,
             dict(user_info.raw_data) if user_info.raw_data else None,
             tenant_id=tenant_id,
         )
-        await registration_service.ensure_web_org_member(user)
+        _ = await registration_service.ensure_web_org_member(user)
         return user, is_new
 
     async def _ensure_provider(self, tenant_id: str | None = None) -> IdentityProviderRecord:
@@ -176,7 +189,7 @@ class BaseAuthProvider(ABC):
         if self.provider:
             return self.provider
 
-        provider = await identity_provider_dao.get_preferred(self.provider_type, tenant_id)
+        provider = await identity_provider_dao.get_preferred(self.provider_type, as_uuid(tenant_id))
         if not provider:
             provider = await identity_provider_dao.create(
                 obj_in={
@@ -265,16 +278,16 @@ class BaseAuthProvider(ABC):
 class FeishuAuthProvider(BaseAuthProvider):
     """Feishu (Lark) OAuth provider implementation."""
 
-    provider_type = "feishu"
+    provider_type: ClassVar[str] = "feishu"
 
-    FEISHU_OAUTH_ENDPOINT = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
-    FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
-    FEISHU_APP_ACCESS_ENDPOINT = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
+    FEISHU_OAUTH_ENDPOINT: ClassVar[str] = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
+    FEISHU_USER_INFO_URL: ClassVar[str] = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+    FEISHU_APP_ACCESS_ENDPOINT: ClassVar[str] = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
-        self.app_id = self._config_string("app_id")
-        self.app_secret = self._config_string("app_secret")
+        self.app_id: str = self._config_string("app_id")
+        self.app_secret: str = self._config_string("app_secret")
         self._app_access_token: str | None = None
 
     @override
@@ -293,7 +306,7 @@ class FeishuAuthProvider(BaseAuthProvider):
                 self.FEISHU_APP_ACCESS_ENDPOINT,
                 json={"app_id": self.app_id, "app_secret": self.app_secret},
             )
-            app_access_token = resp.json().get("app_access_token")
+            app_access_token = _payload_from_response(resp).get("app_access_token")
             if not isinstance(app_access_token, str):
                 return ""
             self._app_access_token = app_access_token
@@ -309,23 +322,23 @@ class FeishuAuthProvider(BaseAuthProvider):
                 json={"grant_type": "authorization_code", "code": code},
                 headers={"Authorization": f"Bearer {app_token}"},
             )
-            token_data = token_resp.json()
-            return token_data.get("data", {})
+            token_data = _payload_from_response(token_resp)
+            return _as_payload(token_data.get("data", {}))
 
     @override
     async def get_user_info(self, access_token: str) -> ExternalUserInfo:
         async with httpx.AsyncClient() as client:
             info_resp = await client.get(self.FEISHU_USER_INFO_URL, headers={"Authorization": f"Bearer {access_token}"})
-            info_data = info_resp.json().get("data", {})
+            info_data = _as_payload(_payload_from_response(info_resp).get("data", {}))
             logger.info("Feishu user info received union_id={}", info_data.get("union_id"))
 
             return ExternalUserInfo(
                 provider_type=self.provider_type,
-                provider_union_id=info_data.get("union_id"),
-                name=info_data.get("name", ""),
-                email=info_data.get("email", ""),
-                avatar_url=info_data.get("avatar_url", ""),
-                mobile=info_data.get("mobile", ""),
+                provider_union_id=self._payload_string(info_data, "union_id") or None,
+                name=self._payload_string(info_data, "name"),
+                email=self._payload_string(info_data, "email"),
+                avatar_url=self._payload_string(info_data, "avatar_url"),
+                mobile=self._payload_string(info_data, "mobile"),
                 raw_data=info_data,
             )
 
@@ -348,16 +361,16 @@ class FeishuAuthProvider(BaseAuthProvider):
 class DingTalkAuthProvider(BaseAuthProvider):
     """DingTalk OAuth provider implementation."""
 
-    provider_type = "dingtalk"
+    provider_type: ClassVar[str] = "dingtalk"
 
-    DINGTALK_OAUTH_ENDPOINT = "https://api.dingtalk.com/v1.0/oauth2/userAccessToken"
-    DINGTALK_USER_INFO_URL = "https://api.dingtalk.com/v1.0/contact/users/me"
+    DINGTALK_OAUTH_ENDPOINT: ClassVar[str] = "https://api.dingtalk.com/v1.0/oauth2/userAccessToken"
+    DINGTALK_USER_INFO_URL: ClassVar[str] = "https://api.dingtalk.com/v1.0/contact/users/me"
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
-        self.app_key = self._config_string("app_key")
-        self.app_secret = self._config_string("app_secret")
-        self.corp_id = self._config_string("corp_id")
+        self.app_key: str = self._config_string("app_key")
+        self.app_secret: str = self._config_string("app_secret")
+        self.corp_id: str = self._config_string("corp_id")
 
     @override
     async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
@@ -369,7 +382,7 @@ class DingTalkAuthProvider(BaseAuthProvider):
         scope = "openid corpid Contact.User.Read fieldEmail contact.user.mobile"
         params = (
             f"client_id={app_id}&redirect_uri={quote(redirect_uri)}&"
-            f"state={state}&response_type=code&scope={quote(scope)}&prompt=consent"
+            + f"state={state}&response_type=code&scope={quote(scope)}&prompt=consent"
         )
         # corp_id is optional: restricts the login page to a specific enterprise.
         # If not configured, DingTalk shows a company picker (still works for SSO).
@@ -389,7 +402,7 @@ class DingTalkAuthProvider(BaseAuthProvider):
                     "grantType": "authorization_code",
                 },
             )
-            resp_data = resp.json()
+            resp_data = _payload_from_response(resp)
             if resp.status_code != 200:
                 logger.error(f"DingTalk token exchange failed (HTTP {resp.status_code}): {resp_data}")
                 return {}
@@ -406,7 +419,7 @@ class DingTalkAuthProvider(BaseAuthProvider):
         async with httpx.AsyncClient() as client:
             headers = {"x-acs-dingtalk-access-token": access_token}
             info_resp = await client.get(self.DINGTALK_USER_INFO_URL, headers=headers)
-            info_data = info_resp.json()
+            info_data = _payload_from_response(info_resp)
             if info_resp.status_code != 200:
                 # Common error: errCode=403 means Contact.User.Read scope not granted.
                 # Ensure 'Contact.User.Read' is included in the OAuth scope AND
@@ -414,8 +427,8 @@ class DingTalkAuthProvider(BaseAuthProvider):
                 err_msg = info_data.get("message") or info_data.get("errmsg") or str(info_data)
                 logger.error(
                     f"DingTalk user info fetch failed (HTTP {info_resp.status_code}): {info_data}. "
-                    "This usually means the 'Contact.User.Read' OAuth scope is missing from "
-                    "the authorization URL, or the app lacks the corresponding permission."
+                    + "This usually means the 'Contact.User.Read' OAuth scope is missing from "
+                    + "the authorization URL, or the app lacks the corresponding permission."
                 )
                 raise Exception(f"Failed to fetch user info: {err_msg}")
 
@@ -423,11 +436,11 @@ class DingTalkAuthProvider(BaseAuthProvider):
             logger.info(f"DingTalk user info: {info_data}")
             return ExternalUserInfo(
                 provider_type=self.provider_type,
-                provider_union_id=info_data.get("unionId"),
-                name=info_data.get("nick", ""),
-                email=info_data.get("email", ""),
-                avatar_url=info_data.get("avatarUrl", ""),
-                mobile=info_data.get("mobile", ""),
+                provider_union_id=self._payload_string(info_data, "unionId") or None,
+                name=self._payload_string(info_data, "nick"),
+                email=self._payload_string(info_data, "email"),
+                avatar_url=self._payload_string(info_data, "avatarUrl"),
+                mobile=self._payload_string(info_data, "mobile"),
                 raw_data=info_data,
             )
 
@@ -447,23 +460,23 @@ class WeComAuthProvider(BaseAuthProvider):
     not IP whitelist.)
     """
 
-    provider_type = "wecom"
+    provider_type: ClassVar[str] = "wecom"
 
     # All WeCom self-built app API calls go to qyapi.weixin.qq.com
     # The old api.weixin.qq.com endpoints are legacy WeCom Public Account APIs
     # and no longer work for self-built apps.
-    WECOM_ACCESS_ENDPOINT = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
-    WECOM_USER_INFO_URL = "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo"
-    WECOM_USER_DETAIL_URL = "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserdetail"
-    WECOM_USER_GET_URL = "https://qyapi.weixin.qq.com/cgi-bin/user/get"
+    WECOM_ACCESS_ENDPOINT: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
+    WECOM_USER_INFO_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo"
+    WECOM_USER_DETAIL_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserdetail"
+    WECOM_USER_GET_URL: ClassVar[str] = "https://qyapi.weixin.qq.com/cgi-bin/user/get"
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
         # corp_id and agent_id are used for the OAuth redirect URL
-        self.corp_id = self._config_string("corp_id", "app_id")
+        self.corp_id: str = self._config_string("corp_id", "app_id")
         # secret is the self-built app's AgentSecret (not the contact-sync secret)
-        self.secret = self._config_string("secret", "app_secret")
-        self.agent_id = self._config_string("agent_id")
+        self.secret: str = self._config_string("secret", "app_secret")
+        self.agent_id: str = self._config_string("agent_id")
 
     @override
     async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
@@ -476,10 +489,10 @@ class WeComAuthProvider(BaseAuthProvider):
         base_url = "https://open.work.weixin.qq.com/wwlogin/sso/login"
         params = (
             f"loginType=CorpPinCorp"
-            f"&appid={self.corp_id}"
-            f"&agentid={self.agent_id}"
-            f"&redirect_uri={quote(redirect_uri)}"
-            f"&state={state}"
+            + f"&appid={self.corp_id}"
+            + f"&agentid={self.agent_id}"
+            + f"&redirect_uri={quote(redirect_uri)}"
+            + f"&state={state}"
         )
         return f"{base_url}?{params}"
 
@@ -504,9 +517,9 @@ class WeComAuthProvider(BaseAuthProvider):
                 self.WECOM_ACCESS_ENDPOINT,
                 params={"corpid": self.corp_id, "corpsecret": self.secret},
             )
-            token_data = token_resp.json()
+            token_data = _payload_from_response(token_resp)
             access_token = token_data.get("access_token")
-            if not access_token:
+            if not isinstance(access_token, str) or not access_token:
                 logger.error(f"[WeCom SSO] gettoken failed: {token_data}")
                 return {}
 
@@ -518,10 +531,12 @@ class WeComAuthProvider(BaseAuthProvider):
                 self.WECOM_USER_INFO_URL,
                 params={"access_token": access_token, "code": code},
             )
-            info_data = info_resp.json()
+            info_data = _payload_from_response(info_resp)
             # The key is lowercase 'userid' in the new auth endpoint (not 'UserId')
-            userid = info_data.get("userid") or info_data.get("UserId", "")
-            user_ticket = info_data.get("user_ticket", "")
+            userid_raw = info_data.get("userid") or info_data.get("UserId", "")
+            userid = userid_raw if isinstance(userid_raw, str) else ""
+            user_ticket_raw = info_data.get("user_ticket", "")
+            user_ticket = user_ticket_raw if isinstance(user_ticket_raw, str) else ""
             if not userid:
                 logger.error(f"[WeCom SSO] getuserinfo missing userid: {info_data}")
                 return {}
@@ -538,7 +553,7 @@ class WeComAuthProvider(BaseAuthProvider):
                         params={"access_token": access_token},
                         json={"user_ticket": user_ticket},
                     )
-                    detail_json = detail_resp.json()
+                    detail_json = _payload_from_response(detail_resp)
                     if detail_json.get("errcode") == 0:
                         sensitive_data = detail_json
                         logger.info(f"[WeCom SSO] getuserdetail succeeded for {userid}")
@@ -549,8 +564,8 @@ class WeComAuthProvider(BaseAuthProvider):
             else:
                 logger.info(
                     f"[WeCom SSO] No user_ticket for {userid}; "
-                    "sensitive fields (avatar/email/mobile) will be unavailable. "
-                    "Ensure the WeCom app has 'snsapi_privateinfo' scope."
+                    + "sensitive fields (avatar/email/mobile) will be unavailable. "
+                    + "Ensure the WeCom app has 'snsapi_privateinfo' scope."
                 )
 
             # Step 3b: Fetch non-sensitive profile fields from user/get (name, position).
@@ -562,7 +577,7 @@ class WeComAuthProvider(BaseAuthProvider):
                     self.WECOM_USER_GET_URL,
                     params={"access_token": access_token, "userid": userid},
                 )
-                get_json = get_resp.json()
+                get_json = _payload_from_response(get_resp)
                 if get_json.get("errcode") == 0:
                     basic_data = get_json
                     logger.info(f"[WeCom SSO] user/get succeeded for {userid}")
@@ -594,27 +609,30 @@ class WeComAuthProvider(BaseAuthProvider):
         import json
 
         try:
-            data = json.loads(access_token)
-            userid = data.get("userid", "")
-            sensitive = data.get("sensitive", {})
-            basic = data.get("basic", {})
+            data = _as_payload(json.loads(access_token))
+            userid = self._payload_string(data, "userid")
+            sensitive = _as_payload(data.get("sensitive"))
+            basic = _as_payload(data.get("basic"))
 
             # Name from user/get (non-sensitive, always available when IP is whitelisted)
-            name = basic.get("name") or f"WeCom {userid}"
+            name = self._payload_string(basic, "name") or f"WeCom {userid}"
 
             # Email: prefer personal email from getuserdetail, fall back to biz_mail
             email = (
-                sensitive.get("email") or sensitive.get("biz_mail") or basic.get("email") or basic.get("biz_mail") or ""
+                self._payload_string(sensitive, "email")
+                or self._payload_string(sensitive, "biz_mail")
+                or self._payload_string(basic, "email")
+                or self._payload_string(basic, "biz_mail")
             )
 
             # Avatar from getuserdetail (restricted post-2022 in user/get)
-            avatar_url = sensitive.get("avatar") or basic.get("avatar") or ""
+            avatar_url = self._payload_string(sensitive, "avatar") or self._payload_string(basic, "avatar")
 
             # Mobile only from getuserdetail (restricted post-2022 in user/get)
-            mobile = sensitive.get("mobile") or ""
+            mobile = self._payload_string(sensitive, "mobile")
 
             # Merge raw_data so OrgMember has full context
-            raw = {**basic, **sensitive, "userid": userid}
+            raw: AuthProviderPayload = {**basic, **sensitive, "userid": userid}
 
             return ExternalUserInfo(
                 provider_type=self.provider_type,
@@ -638,12 +656,12 @@ class WeComAuthProvider(BaseAuthProvider):
 class GoogleWorkspaceAuthProvider(BaseAuthProvider):
     """Google Workspace OAuth provider implementation for SSO login."""
 
-    provider_type = "google_workspace"
+    provider_type: ClassVar[str] = "google_workspace"
 
-    GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-    GOOGLE_OAUTH_ENDPOINT = "https://oauth2.googleapis.com/token"
-    GOOGLE_USER_INFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-    GOOGLE_SSO_SCOPE = "openid email profile"
+    GOOGLE_AUTHORIZE_URL: ClassVar[str] = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_OAUTH_ENDPOINT: ClassVar[str] = "https://oauth2.googleapis.com/token"
+    GOOGLE_USER_INFO_URL: ClassVar[str] = "https://openidconnect.googleapis.com/v1/userinfo"
+    GOOGLE_SSO_SCOPE: ClassVar[str] = "openid email profile"
     GOOGLE_ADMIN_SCOPES: ClassVar[tuple[str, ...]] = (
         "openid",
         "email",
@@ -654,9 +672,11 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
-        self.client_id = self._config_string("client_id", "sso_client_id", "app_id")
-        self.client_secret = self._config_string("client_secret", "sso_client_secret", "app_secret")
-        self.scope = self._config_scopes("sso_scope", self._config_string("scope") or self.GOOGLE_SSO_SCOPE)
+        self.client_id: str = self._config_string("client_id", "sso_client_id", "app_id")
+        self.client_secret: str = self._config_string("client_secret", "sso_client_secret", "app_secret")
+        self.scope: str | list[str] = self._config_scopes(
+            "sso_scope", self._config_string("scope") or self.GOOGLE_SSO_SCOPE
+        )
 
     def _build_authorization_url(
         self,
@@ -675,13 +695,13 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
         self.config["redirect_uri"] = redirect_uri
         params = (
             f"client_id={quote(self.client_id or '')}"
-            f"&redirect_uri={quote(redirect_uri)}"
-            f"&response_type=code"
-            f"&scope={quote(scope_value)}"
-            f"&state={quote(state or '')}"
-            f"&access_type={quote(access_type)}"
-            f"&include_granted_scopes=true"
-            f"&prompt={quote(prompt)}"
+            + f"&redirect_uri={quote(redirect_uri)}"
+            + f"&response_type=code"
+            + f"&scope={quote(scope_value)}"
+            + f"&state={quote(state or '')}"
+            + f"&access_type={quote(access_type)}"
+            + f"&include_granted_scopes=true"
+            + f"&prompt={quote(prompt)}"
         )
         return f"{self.GOOGLE_AUTHORIZE_URL}?{params}"
 
@@ -718,8 +738,8 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            resp.raise_for_status()
-            return resp.json()
+            _ = resp.raise_for_status()
+            return _payload_from_response(resp)
 
     async def refresh_access_token(self, refresh_token: str) -> AuthProviderPayload:
         async with httpx.AsyncClient(timeout=15, proxy=GOOGLE_HTTP_PROXY) as client:
@@ -733,8 +753,8 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            resp.raise_for_status()
-            return resp.json()
+            _ = resp.raise_for_status()
+            return _payload_from_response(resp)
 
     async def fetch_openid_profile(self, access_token: str) -> AuthProviderPayload:
         async with httpx.AsyncClient(timeout=15, proxy=GOOGLE_HTTP_PROXY) as client:
@@ -742,8 +762,8 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
                 self.GOOGLE_USER_INFO_URL,
                 headers={"Authorization": f"Bearer {access_token}"},
             )
-            resp.raise_for_status()
-            return resp.json()
+            _ = resp.raise_for_status()
+            return _payload_from_response(resp)
 
     @override
     async def get_user_info(self, access_token: str) -> ExternalUserInfo:
@@ -761,7 +781,7 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
 class MicrosoftTeamsAuthProvider(BaseAuthProvider):
     """Microsoft Teams OAuth provider implementation."""
 
-    provider_type = "microsoft_teams"
+    provider_type: ClassVar[str] = "microsoft_teams"
 
     # Will be implemented when needed
     @override
@@ -780,17 +800,17 @@ class MicrosoftTeamsAuthProvider(BaseAuthProvider):
 class GoogleAuthProvider(BaseAuthProvider):
     """Google OAuth provider implementation."""
 
-    provider_type = "google"
+    provider_type: ClassVar[str] = "google"
 
-    GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-    GOOGLE_OAUTH_ENDPOINT = "https://oauth2.googleapis.com/token"
-    GOOGLE_USER_INFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+    GOOGLE_AUTHORIZE_URL: ClassVar[str] = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_OAUTH_ENDPOINT: ClassVar[str] = "https://oauth2.googleapis.com/token"
+    GOOGLE_USER_INFO_URL: ClassVar[str] = "https://openidconnect.googleapis.com/v1/userinfo"
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
-        self.client_id = self._config_string("client_id", "app_id")
-        self.client_secret = self._config_string("client_secret", "app_secret")
-        self.scope = self._config_string("scope") or "openid profile email"
+        self.client_id: str = self._config_string("client_id", "app_id")
+        self.client_secret: str = self._config_string("client_secret", "app_secret")
+        self.scope: str = self._config_string("scope") or "openid profile email"
 
     @override
     async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
@@ -819,7 +839,7 @@ class GoogleAuthProvider(BaseAuthProvider):
                     "grant_type": "authorization_code",
                 },
             )
-            data = resp.json()
+            data = _payload_from_response(resp)
             if resp.status_code != 200:
                 logger.error(f"Google token exchange failed (HTTP {resp.status_code}): {data}")
                 return {}
@@ -832,18 +852,20 @@ class GoogleAuthProvider(BaseAuthProvider):
                 self.GOOGLE_USER_INFO_URL,
                 headers={"Authorization": f"Bearer {access_token}"},
             )
-            data = resp.json()
+            data = _payload_from_response(resp)
             if resp.status_code != 200:
                 raise Exception(
-                    data.get("error_description") or data.get("error") or "Failed to fetch Google user info"
+                    self._payload_string(data, "error_description")
+                    or self._payload_string(data, "error")
+                    or "Failed to fetch Google user info"
                 )
 
             return ExternalUserInfo(
                 provider_type=self.provider_type,
-                provider_user_id=data.get("sub", ""),
-                name=data.get("name", ""),
-                email=data.get("email", ""),
-                avatar_url=data.get("picture", ""),
+                provider_user_id=self._payload_string(data, "sub"),
+                name=self._payload_string(data, "name"),
+                email=self._payload_string(data, "email"),
+                avatar_url=self._payload_string(data, "picture"),
                 raw_data=data,
             )
 
@@ -851,18 +873,18 @@ class GoogleAuthProvider(BaseAuthProvider):
 class GitHubAuthProvider(BaseAuthProvider):
     """GitHub OAuth provider implementation."""
 
-    provider_type = "github"
+    provider_type: ClassVar[str] = "github"
 
-    GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
-    GITHUB_OAUTH_ENDPOINT = "https://github.com/login/oauth/access_token"
-    GITHUB_USER_INFO_URL = "https://api.github.com/user"
-    GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+    GITHUB_AUTHORIZE_URL: ClassVar[str] = "https://github.com/login/oauth/authorize"
+    GITHUB_OAUTH_ENDPOINT: ClassVar[str] = "https://github.com/login/oauth/access_token"
+    GITHUB_USER_INFO_URL: ClassVar[str] = "https://api.github.com/user"
+    GITHUB_EMAILS_URL: ClassVar[str] = "https://api.github.com/user/emails"
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
-        self.client_id = self._config_string("client_id", "app_id")
-        self.client_secret = self._config_string("client_secret", "app_secret")
-        self.scope = self._config_string("scope") or "read:user user:email"
+        self.client_id: str = self._config_string("client_id", "app_id")
+        self.client_secret: str = self._config_string("client_secret", "app_secret")
+        self.scope: str = self._config_string("scope") or "read:user user:email"
 
     @override
     async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
@@ -887,7 +909,7 @@ class GitHubAuthProvider(BaseAuthProvider):
                     "code": code,
                 },
             )
-            data = resp.json()
+            data = _payload_from_response(resp)
             if resp.status_code != 200:
                 logger.error(f"GitHub token exchange failed (HTTP {resp.status_code}): {data}")
                 return {}
@@ -901,32 +923,36 @@ class GitHubAuthProvider(BaseAuthProvider):
         }
         async with httpx.AsyncClient(timeout=15) as client:
             user_resp = await client.get(self.GITHUB_USER_INFO_URL, headers=headers)
-            user_data = user_resp.json()
+            user_data = _payload_from_response(user_resp)
             if user_resp.status_code != 200:
-                raise Exception(user_data.get("message") or "Failed to fetch GitHub user info")
+                raise Exception(self._payload_string(user_data, "message") or "Failed to fetch GitHub user info")
 
-            email = user_data.get("email") or ""
+            email = self._payload_string(user_data, "email")
             if not email:
                 emails_resp = await client.get(self.GITHUB_EMAILS_URL, headers=headers)
-                emails_data = emails_resp.json()
-                if emails_resp.status_code == 200 and isinstance(emails_data, list):
-                    primary = next((item for item in emails_data if item.get("primary")), None)
-                    verified = next((item for item in emails_data if item.get("verified")), None)
-                    fallback = primary or verified or (emails_data[0] if emails_data else {})
-                    email = fallback.get("email", "")
+                emails_raw: object = emails_resp.json()
+                if emails_resp.status_code == 200 and isinstance(emails_raw, list):
+                    emails: list[AuthProviderPayload] = [
+                        item for item in list[object](emails_raw) if _is_payload(item)
+                    ]
+                    primary = next((item for item in emails if item.get("primary")), None)
+                    verified = next((item for item in emails if item.get("verified")), None)
+                    fallback: AuthProviderPayload = primary or verified or (emails[0] if emails else {})
+                    email = self._payload_string(fallback, "email")
 
+            name = json_as_str(user_data.get("name")) or json_as_str(user_data.get("login")) or ""
             return ExternalUserInfo(
                 provider_type=self.provider_type,
                 provider_user_id=str(user_data.get("id", "")),
-                name=user_data.get("name") or user_data.get("login") or "",
+                name=name,
                 email=email,
-                avatar_url=user_data.get("avatar_url", ""),
+                avatar_url=self._payload_string(user_data, "avatar_url"),
                 raw_data=user_data,
             )
 
 
 # Provider class mapping
-PROVIDER_CLASSES = {
+PROVIDER_CLASSES: dict[str, type[BaseAuthProvider]] = {
     "feishu": FeishuAuthProvider,
     "dingtalk": DingTalkAuthProvider,
     "wecom": WeComAuthProvider,

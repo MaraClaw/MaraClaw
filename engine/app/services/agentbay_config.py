@@ -86,7 +86,7 @@ async def _resolve_with_daos(agent_id: uuid.UUID | None) -> AgentBayConfigResolu
 
 async def resolve_agentbay_config(
     agent_id: uuid.UUID | None,
-    db: Any = None,
+    db: object | None = None,
 ) -> AgentBayConfigResolution:
     """Resolve AgentBay configuration from per-agent and global persisted settings.
 

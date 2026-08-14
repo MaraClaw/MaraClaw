@@ -62,7 +62,7 @@ def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
     if file_size > _READ_DOCUMENT_MAX_FILE_BYTES:
         return (
             f"Document is too large to read safely ({file_size / 1024 / 1024:.1f} MB). "
-            "Please split or convert it to a smaller text/Markdown excerpt first."
+            + "Please split or convert it to a smaller text/Markdown excerpt first."
         )
 
     ext = file_path.suffix.lower()
@@ -70,7 +70,7 @@ def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
         if ext == ".pdf":
             pdfplumber = importlib.import_module("pdfplumber")
 
-            text_parts = []
+            text_parts: list[str] = []
             with pdfplumber.open(str(file_path)) as pdf:
                 for index, page in enumerate(pdf.pages[:50]):
                     page_text = page.extract_text() or ""
@@ -129,7 +129,7 @@ def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
             openpyxl = importlib.import_module("openpyxl")
 
             workbook = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
-            sheets = []
+            sheets: list[str] = []
             cell_count = 0
             for ws_name in workbook.sheetnames[:10]:
                 sheet = workbook[ws_name]

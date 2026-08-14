@@ -1,7 +1,7 @@
 """aio-sandbox backend."""
 
 import time
-from typing import override
+from typing import Any, override
 
 import httpx
 
@@ -31,8 +31,8 @@ class AioSandboxBackend(BaseSandboxBackend):
         return "aio_sandbox"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self.base_url = config.api_url.rstrip("/") if config.api_url else ""
+        self.config: SandboxConfig = config
+        self.base_url: object = config.api_url.rstrip("/") if config.api_url else ""
 
         if not self.base_url:
             raise ValueError(
@@ -66,7 +66,7 @@ class AioSandboxBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code using aio-sandbox."""
         start_time = time.time()

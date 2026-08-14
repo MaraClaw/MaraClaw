@@ -24,7 +24,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "❌ Agent not found"
-        await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=agent.creator_id)
+        _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=agent.creator_id)
 
         # 1. Look up target user by username or display_name within tenant
         target_user = await user_dao.find_by_username_or_display_name(
@@ -36,7 +36,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
                 names = await user_dao.list_display_names_for_tenant(agent.tenant_id, limit=20)
             return (
                 f"❌ No user named '{username}' found in your organization. "
-                f"Available users: {', '.join(names) if names else 'none'}"
+                + f"Available users: {', '.join(names) if names else 'none'}"
             )
 
         rel = await agent_relationship_dao.get_for_agent_and_user(agent_id, target_user.id)
@@ -46,7 +46,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_user.display_name or target_user.username} "
-                f"is not active ({status_info['access_status_reason'] or 'restricted'})"
+                + f"is not active ({status_info['access_status_reason'] or 'restricted'})"
             )
 
         # Agent-initiated platform messages should always go to the long-lived primary session
@@ -54,7 +54,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
 
         session = await ensure_primary_platform_session(None, agent_id, target_user.id)
 
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=target_user.id,
             role="assistant",
@@ -62,11 +62,11 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
             conversation_id=str(session.id),
         )
         now = datetime.now(UTC)
-        await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": now})
+        _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": now})
         try:
             from app.api.websocket import maybe_mark_session_read_for_active_viewer
 
-            await maybe_mark_session_read_for_active_viewer(
+            _ = await maybe_mark_session_read_for_active_viewer(
                 None,
                 agent_id=agent_id,
                 session_id=str(session.id),

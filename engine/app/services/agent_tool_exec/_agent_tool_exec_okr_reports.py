@@ -19,9 +19,12 @@ async def _collect_okr_progress(agent_id: uuid.UUID | None) -> str:
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "Agent not found."
+        tenant_id = agent.tenant_id
+        if tenant_id is None:
+            return "Agent has no tenant."
 
         return await collect_all_focus_updates(
-            tenant_id=agent.tenant_id,
+            tenant_id=tenant_id,
             okr_agent_id=agent_id,
         )
 
@@ -44,14 +47,17 @@ async def _generate_okr_report(agent_id: uuid.UUID | None, arguments: ToolArgume
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "Agent not found."
+        tenant_id = agent.tenant_id
+        if tenant_id is None:
+            return "Agent has no tenant."
 
         if report_type == "daily":
             return await generate_daily_report(
-                tenant_id=agent.tenant_id,
+                tenant_id=tenant_id,
                 okr_agent_id=agent_id,
             )
         return await generate_weekly_report(
-            tenant_id=agent.tenant_id,
+            tenant_id=tenant_id,
             okr_agent_id=agent_id,
         )
 
@@ -69,9 +75,12 @@ async def _generate_monthly_okr_report(agent_id: uuid.UUID | None) -> str:
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "Agent not found."
+        tenant_id = agent.tenant_id
+        if tenant_id is None:
+            return "Agent has no tenant."
 
         return await generate_monthly_report(
-            tenant_id=agent.tenant_id,
+            tenant_id=tenant_id,
             okr_agent_id=agent_id,
         )
 
@@ -114,6 +123,9 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: Too
         ag = await agent_dao.get(agent_id)
         if not ag:
             return "Agent not found."
+        tenant_id = ag.tenant_id
+        if tenant_id is None:
+            return "Agent has no tenant."
         if not ag.is_system:
             return "Permission denied: only the OKR Agent can upsert member daily reports."
 
@@ -127,7 +139,7 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: Too
         if not target_member_id:
             if not member_name:
                 return "Provide either member_id or member_name."
-            members = await list_tracked_okr_members(ag.tenant_id)
+            members = await list_tracked_okr_members(tenant_id)
             lowered = member_name.casefold()
             exact_matches = [
                 member
@@ -157,7 +169,7 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: Too
                     return f"No {member_type} member matched '{member_name}'."
 
         existing = await member_daily_report_dao.get_for_member_date(
-            ag.tenant_id,
+            tenant_id,
             member_type=member_type,
             member_id=target_member_id,
             report_date=report_date,
@@ -165,7 +177,7 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: Too
         previous_content = existing.content if existing else ""
 
         report = await _upsert(
-            tenant_id=ag.tenant_id,
+            tenant_id=tenant_id,
             member_type=member_type,
             member_id=target_member_id,
             report_date=report_date,

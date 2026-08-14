@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Iterable
-from typing import override
+from typing import Any, override
 
 from anyio import fail_after
 from anyio.to_thread import run_sync
@@ -58,8 +58,8 @@ class DockerBackend(BaseSandboxBackend):
         return "docker"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self._client = None
+        self.config: SandboxConfig = config
+        self._client: Any = None
 
     @property
     def client(self):
@@ -83,7 +83,7 @@ class DockerBackend(BaseSandboxBackend):
     async def health_check(self) -> bool:
         """Check if docker is available and running."""
         try:
-            self.client.info()
+            _ = self.client.info()
             return True
         except Exception:
             return False
@@ -95,7 +95,7 @@ class DockerBackend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code inside a docker container."""
         start_time = time.time()
@@ -134,7 +134,7 @@ class DockerBackend(BaseSandboxBackend):
         try:
             # Pull image if needed
             if not self.client.image.exists(image):
-                self.client.image.pull(image)
+                _ = self.client.image.pull(image)
 
             # Run container
             container = self.client.run(
@@ -219,13 +219,23 @@ def _decode_log(log: bytes | str) -> str:
     return log
 
 
-def _collect_logs(logs: Iterable[tuple[str, bytes | str]]) -> tuple[str, str]:
+def _collect_logs(logs: str | Iterable[object]) -> tuple[str, str]:
+    if isinstance(logs, str):
+        return logs[:10000], ""
     stdout_parts = []
     stderr_parts = []
-    for stream_name, content in logs:
-        if stream_name == "stdout":
+    for item in logs:
+        if isinstance(item, (bytes, str)):
+            stdout_parts.append(_decode_log(item))
+            continue
+        if not (isinstance(item, tuple) and len(item) == 2):
+            continue
+        stream_name: Any
+        content: Any
+        stream_name, content = item
+        if stream_name == "stdout" and isinstance(content, (bytes, str)):
             stdout_parts.append(_decode_log(content))
-        elif stream_name == "stderr":
+        elif stream_name == "stderr" and isinstance(content, (bytes, str)):
             stderr_parts.append(_decode_log(content))
     return "".join(stdout_parts)[:10000], "".join(stderr_parts)[:5000]
 

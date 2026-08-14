@@ -2,7 +2,12 @@
 
 import uuid
 from datetime import datetime
+from typing import Protocol
 from zoneinfo import ZoneInfo
+
+
+class _HasTimezone(Protocol):
+    timezone: str | None
 
 # Common timezones for frontend dropdown
 COMMON_TIMEZONES = [
@@ -52,15 +57,16 @@ async def get_agent_timezone(agent_id: uuid.UUID) -> str:
     return "UTC"
 
 
-def get_agent_timezone_sync(agent, tenant=None) -> str:
+def get_agent_timezone_sync(agent: _HasTimezone, tenant: object | None = None) -> str:
     """Synchronous version - when agent and tenant objects are already loaded.
 
     Priority: agent.timezone → tenant.timezone → 'UTC'
     """
     if agent.timezone:
         return agent.timezone
-    if tenant and hasattr(tenant, "timezone") and tenant.timezone:
-        return tenant.timezone
+    tenant_timezone = getattr(tenant, "timezone", None) if tenant is not None else None
+    if tenant_timezone:
+        return tenant_timezone
     return "UTC"
 
 

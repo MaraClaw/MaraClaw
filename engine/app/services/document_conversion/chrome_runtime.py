@@ -60,7 +60,7 @@ async def wait_for_cdp(port: int, deadline_seconds: float = 8) -> bool:
         while asyncio.get_running_loop().time() < deadline:
             try:
                 response = await client.get(endpoint)
-                response.raise_for_status()
+                _ = response.raise_for_status()
                 response.json()
                 return True
             except httpx.HTTPError:
@@ -76,7 +76,7 @@ async def create_cdp_target(port: int, file_url: str) -> str | None:
     endpoint = f"http://127.0.0.1:{port}/json/new?{file_url}"
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
         response = await client.put(endpoint)
-        response.raise_for_status()
+        _ = response.raise_for_status()
     value = response.json().get("webSocketDebuggerUrl")
     return value if isinstance(value, str) else None
 
@@ -87,15 +87,15 @@ async def terminate_process(process: asyncio.subprocess.Process) -> None:
         return
     process.terminate()
     try:
-        await asyncio.wait_for(process.wait(), timeout=2)
+        _ = await asyncio.wait_for(process.wait(), timeout=2)
     except TimeoutError:
         process.kill()
-        await process.wait()
+        _ = await process.wait()
 
 
 async def cleanup_temporary_paths(paths: list[Path]) -> None:
     """Remove conversion artifacts after their consumer has finished."""
-    await asyncio.gather(*(asyncio.to_thread(path.unlink, missing_ok=True) for path in paths))
+    _ = await asyncio.gather(*(asyncio.to_thread(path.unlink, missing_ok=True) for path in paths))
 
 
 async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
@@ -103,7 +103,7 @@ async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
 
     def write() -> Path:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temporary_file:
-            temporary_file.write(data)
+            _ = temporary_file.write(data)
             return Path(temporary_file.name)
 
     return await asyncio.to_thread(write)

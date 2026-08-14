@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.json_types import mapping_from_row
 from app.core.logging import logger, new_trace_id
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
@@ -62,7 +63,7 @@ def _cleanup_stale_invoke_cache():
         del _last_invoke[k]
     # Clean up old on_message rate limiter entries
     cutoff = now - timedelta(seconds=_ON_MSG_RATE_WINDOW)
-    stale_agents = []
+    stale_agents: list[uuid.UUID] = []
     for aid, timestamps in _on_msg_fire_log.items():
         _on_msg_fire_log[aid] = [t for t in timestamps if t > cutoff]
         if not _on_msg_fire_log[aid]:
@@ -71,7 +72,7 @@ def _cleanup_stale_invoke_cache():
         del _on_msg_fire_log[aid]
 
 
-async def _should_skip_non_workday(trigger: Any, local_now: datetime) -> bool:
+async def _should_skip_non_workday(trigger: AgentTriggerRecord, local_now: datetime) -> bool:
     return await should_skip_non_workday_runtime(trigger, local_now)
 
 
@@ -83,20 +84,20 @@ async def _mark_trigger_fired(trigger_id: uuid.UUID, now: datetime) -> None:
     await mark_trigger_fired_runtime(trigger_id, now)
 
 
-async def _handle_okr_report_trigger(trigger: Any, now: datetime) -> bool:
+async def _handle_okr_report_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     return await handle_okr_report_trigger_runtime(trigger, now)
 
 
-async def _handle_okr_collection_trigger(trigger: Any, now: datetime) -> bool:
+async def _handle_okr_collection_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     return await handle_okr_collection_trigger_runtime(trigger, now)
 
 
-async def _evaluate_trigger(trigger: Any, now: datetime) -> bool:
+async def _evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     return await evaluate_trigger_runtime(trigger, now)
 
 
-async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
-    new_trace_id()
+async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]):
+    _ = new_trace_id()
     await invoke_agent_for_triggers_runtime(agent_id, triggers)
 
 
@@ -105,7 +106,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
 
 async def _tick():
     """One daemon tick: evaluate all triggers, group by agent, invoke."""
-    new_trace_id()
+    _ = new_trace_id()
     now = datetime.now(UTC)
 
     all_triggers = await agent_trigger_dao.list_enabled()
@@ -119,7 +120,7 @@ async def _tick():
         if trigger.expires_at and now >= trigger.expires_at:
             t = await agent_trigger_dao.get(trigger.id)
             if t:
-                await agent_trigger_dao.update(db_obj=t, obj_in={"is_enabled": False})
+                _ = await agent_trigger_dao.update(db_obj=t, obj_in={"is_enabled": False})
             continue
 
         try:
@@ -136,12 +137,12 @@ async def _tick():
                         if len(recent) >= _ON_MSG_RATE_LIMIT:
                             logger.warning(
                                 f"[A2A Safety] Agent {trigger.agent_id} hit "
-                                f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
-                                f"Auto-disabling trigger '{trigger.name}'."
+                                + f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
+                                + f"Auto-disabling trigger '{trigger.name}'."
                             )
                             t_obj = await agent_trigger_dao.get(trigger.id)
                             if t_obj:
-                                await agent_trigger_dao.update(db_obj=t_obj, obj_in={"is_enabled": False})
+                                _ = await agent_trigger_dao.update(db_obj=t_obj, obj_in={"is_enabled": False})
                             continue
                         recent.append(now)
                         _on_msg_fire_log[trigger.agent_id] = recent
@@ -155,7 +156,7 @@ async def _tick():
     except Exception as e:
         logger.warning(f"Failed to claim trigger executions: {e}")
         fired_by_agent = {}
-        force_invoke_agents = set()
+        force_invoke_agents: set[uuid.UUID] = set()
 
     # Invoke each agent (with dedup window)
     for agent_id, agent_triggers in fired_by_agent.items():
@@ -171,7 +172,7 @@ async def _tick():
         # would cause repeated invocations for long-running triggers.
         try:
             for t in agent_triggers:
-                cfg = t.config or {}
+                cfg = mapping_from_row(t.config)
                 if isinstance(cfg, str):
                     import json
 
@@ -192,7 +193,7 @@ async def _tick():
                         updates["is_enabled"] = False
                     if trigger.max_fires and fire_count >= trigger.max_fires:
                         updates["is_enabled"] = False
-                    await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+                    _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
         except Exception as e:
             logger.warning(f"Failed to pre-update trigger state: {e}")
 
@@ -239,9 +240,9 @@ async def wake_agent_with_context(
         _A2A_WAKE_CHAIN[chain_key] = current_depth + 1
 
         def _decay_chain():
-            _A2A_WAKE_CHAIN.pop(chain_key, None)
+            _ = _A2A_WAKE_CHAIN.pop(chain_key, None)
 
-        asyncio.get_running_loop().call_later(_A2A_WAKE_CHAIN_TTL, _decay_chain)
+        _ = asyncio.get_running_loop().call_later(_A2A_WAKE_CHAIN_TTL, _decay_chain)
 
     if not skip_dedup and agent_id in _last_invoke:
         elapsed = (now - _last_invoke[agent_id]).total_seconds()
@@ -274,10 +275,10 @@ async def wake_agent_with_context(
         },
         reason=(
             "You received a notification from another agent. "
-            "Read the message content above, update your focus and memory if needed, "
-            "and take any action you deem necessary. "
-            "Do NOT reply back to the sender unless you have a genuine question - "
-            "this was a notification, not a request for response."
+            + "Read the message content above, update your focus and memory if needed, "
+            + "and take any action you deem necessary. "
+            + "Do NOT reply back to the sender unless you have a genuine question - "
+            + "this was a notification, not a request for response."
         ),
         is_enabled=True,
         last_fired_at=now,

@@ -1,23 +1,131 @@
 """Feishu WebSocket Long Connection Manager."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
+from typing import Any, Protocol, TypeIs
 from unittest.mock import patch
 
+from app.core.json_types import JsonObject, json_as_str_or, mapping_from_row
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 
 try:
-    import lark_oapi as lark
-    import lark_oapi.ws as ws
+    import lark_oapi as _lark_mod
+    import lark_oapi.ws as _lark_ws_mod
 
     _HAS_LARK = True
 except ImportError:
-    lark = None  # type: ignore
-    ws = None  # type: ignore
+    _lark_mod = None
+    _lark_ws_mod = None
     _HAS_LARK = False
+
+
+def _is_json_object(value: object) -> TypeIs[JsonObject]:
+    return isinstance(value, dict)
+
+
+def _json_object(value: object) -> JsonObject:
+    return value if _is_json_object(value) else mapping_from_row(value)
+
+
+class LarkWSClient(Protocol):
+    async def _connect(self) -> None: ...
+
+    async def _ping_loop(self) -> None: ...
+
+    async def _disconnect(self) -> None: ...
+
+
+class _EventHandler(Protocol):
+    pass
+
+
+class _EventHandlerBuilder(Protocol):
+    def register_p2_customized_event(
+        self, name: str, handler: Callable[[object], None]
+    ) -> _EventHandlerBuilder: ...
+
+    def build(self) -> _EventHandler: ...
+
+
+def _is_lark_ws_client(value: object) -> TypeIs[LarkWSClient]:
+    return hasattr(value, "_connect") and hasattr(value, "_disconnect")
+
+
+def _is_event_builder(value: object) -> TypeIs[_EventHandlerBuilder]:
+    return callable(getattr(value, "register_p2_customized_event", None)) and callable(getattr(value, "build", None))
+
+
+def _is_awaitable(value: object) -> TypeIs[Awaitable[object]]:
+    return hasattr(value, "__await__")
+
+
+def _construct_ws_client(client_cls: object, *args: object, **kwargs: Any) -> object:
+    if not callable(client_cls):
+        raise TypeError("lark-oapi ws Client is unavailable")
+    return client_cls(*args, **kwargs)
+
+
+def _header_mapping(header_obj: object) -> JsonObject:
+    if hasattr(header_obj, "__dict__"):
+        return _json_object(vars(header_obj))
+    return {
+        "event_type": str(getattr(header_obj, "event_type", "im.message.receive_v1")),
+        "event_id": str(getattr(header_obj, "event_id", "")),
+        "create_time": str(getattr(header_obj, "create_time", "")),
+    }
+
+
+def _feishu_event_body(data: object) -> JsonObject | None:
+    """Normalize a Feishu WS event payload into a JSON object, or None if unusable."""
+    raw_body: object = getattr(data, "raw_body", None)
+    if not raw_body:
+        if isinstance(data, dict):
+            return _json_object(data)
+        body_dict: JsonObject = {}
+        if hasattr(data, "header"):
+            header_obj: object = getattr(data, "header")
+            header = _header_mapping(header_obj)
+            if "event_type" not in header:
+                header["event_type"] = str(getattr(header_obj, "event_type", "im.message.receive_v1"))
+            body_dict["header"] = header
+        else:
+            body_dict["header"] = {"event_type": "im.message.receive_v1"}
+
+        if hasattr(data, "event"):
+            event_raw: object = getattr(data, "event")
+            body_dict["event"] = _json_object(event_raw) if isinstance(event_raw, dict) else mapping_from_row(event_raw)
+        else:
+            content_raw: object = getattr(data, "content", None)
+            if isinstance(content_raw, str):
+                try:
+                    loaded: object = json.loads(content_raw)
+                    body_dict["event"] = (
+                        _json_object(loaded) if isinstance(loaded, dict) else {"content": content_raw}
+                    )
+                except json.JSONDecodeError:
+                    body_dict["event"] = {"content": content_raw}
+
+        if not hasattr(data, "header") and not hasattr(data, "event"):
+            return None
+        return body_dict
+
+    if isinstance(raw_body, (bytes, bytearray)):
+        loaded_body: object = json.loads(raw_body.decode("utf-8"))
+        return _json_object(loaded_body)
+    decode = getattr(raw_body, "decode", None)
+    if callable(decode):
+        text_obj: object = decode("utf-8")
+        text = text_obj if isinstance(text_obj, str) else str(text_obj)
+        loaded_body = json.loads(text)
+        return _json_object(loaded_body)
+    return {}
+
 
 if _HAS_LARK:
     try:
@@ -32,7 +140,7 @@ else:
     _PROXY_PATCH_AVAILABLE = False
 
 
-def _make_no_proxy_connect(orig_connect):
+def _make_no_proxy_connect(orig_connect: Callable[..., object]) -> Callable[[], AbstractAsyncContextManager[None]]:
     """Return a drop-in replacement for websockets.connect that forces proxy=None.
 
     This is intentionally NOT applied at module import time to avoid polluting
@@ -45,24 +153,30 @@ def _make_no_proxy_connect(orig_connect):
         """Wraps websockets.connect to inject proxy=None, preventing macOS
         system-proxy interference with long-lived SSE / WebSocket connections."""
 
-        def __init__(self, *args, **kwargs):
-            kwargs.setdefault("proxy", None)
-            self._coro = orig_connect(*args, **kwargs)
-            self._ws = None
+        def __init__(self, *args: object, **kwargs: Any) -> None:
+            _ = kwargs.setdefault("proxy", None)
+            started: object = orig_connect(*args, **kwargs)
+            if not _is_awaitable(started):
+                raise TypeError("websockets.connect did not return an awaitable")
+            self._coro: Awaitable[object] = started
+            self._ws: object = None
 
-        def __await__(self):
+        def __await__(self) -> object:
             return self._coro.__await__()
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> object:
             self._ws = await self._coro
             return self._ws
 
-        async def __aexit__(self, *exc):
-            if self._ws:
-                await self._ws.close()
+        async def __aexit__(self, *exc: object) -> None:
+            closer = getattr(self._ws, "close", None)
+            if callable(closer):
+                closed: object = closer()
+                if _is_awaitable(closed):
+                    await closed
 
     @contextlib.asynccontextmanager
-    async def _scoped_no_proxy():
+    async def _scoped_no_proxy() -> AsyncIterator[None]:
         """Context manager that temporarily replaces websockets.connect for
         the duration of the lark-oapi connection handshake only."""
         if not _PROXY_PATCH_AVAILABLE:
@@ -81,71 +195,33 @@ def _make_no_proxy_connect(orig_connect):
 if not _HAS_LARK:
     logger.warning(
         "[Feishu WS] lark-oapi package not installed. "
-        "Feishu WebSocket features will be disabled. "
-        "Install with: pip install lark-oapi"
+        + "Feishu WebSocket features will be disabled. "
+        + "Install with: pip install lark-oapi"
     )
 
 
 class FeishuWSManager:
     """Manages Feishu WebSocket clients for all agents."""
 
-    def __init__(self):
-        self._clients: dict[uuid.UUID, ws.Client] = {}
+    def __init__(self) -> None:
+        self._clients: dict[uuid.UUID, LarkWSClient] = {}
         # Tasks for reconnection or ping loops if we want to cancel them later
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._event_tasks: set[asyncio.Task[None]] = set()
         self._ping_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
 
-    def _create_event_handler(self, agent_id: uuid.UUID) -> lark.EventDispatcherHandler:
+    def _create_event_handler(self, agent_id: uuid.UUID) -> _EventHandler:
         """Create an event dispatcher for a specific agent."""
 
-        def handle_message(data: Any) -> None:
+        def handle_message(data: object) -> None:
             """Handle im.message.receive_v1 events from Feishu WebSocket."""
             try:
-                # The data object carries the raw event body
-                raw_body = getattr(data, "raw_body", None)
                 logger.info(f"[Feishu WS] Received event: {data}")
-                if not raw_body:
-                    # Some SDK versions pass the dict directly
-                    if isinstance(data, dict):
-                        body_dict = data
-                    else:
-                        # Handle lark_oapi.event.custom.CustomizedEvent
-                        body_dict = {}
-                        if hasattr(data, "header"):
-                            header_obj = data.header
-                            body_dict["header"] = (
-                                vars(header_obj)
-                                if hasattr(header_obj, "__dict__")
-                                else {
-                                    "event_type": getattr(header_obj, "event_type", "im.message.receive_v1"),
-                                    "event_id": getattr(header_obj, "event_id", ""),
-                                    "create_time": getattr(header_obj, "create_time", ""),
-                                }
-                            )
-                            # Ensure event_type is present as it's required downstream
-                            if "event_type" not in body_dict["header"]:
-                                body_dict["header"]["event_type"] = getattr(
-                                    header_obj, "event_type", "im.message.receive_v1"
-                                )
-                        else:
-                            body_dict["header"] = {"event_type": "im.message.receive_v1"}
-
-                        if hasattr(data, "event"):
-                            body_dict["event"] = data.event
-                        elif hasattr(data, "content") and isinstance(data.content, str):
-                            try:
-                                body_dict["event"] = json.loads(data.content)
-                            except json.JSONDecodeError:
-                                body_dict["event"] = {"content": data.content}
-
-                        if not hasattr(data, "header") and not hasattr(data, "event"):
-                            logger.warning(
-                                f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
-                            )
-                            return
-                else:
-                    body_dict = json.loads(raw_body.decode("utf-8"))
+                if _feishu_event_body(data) is None:
+                    logger.warning(
+                        f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
+                    )
+                    return
 
                 loop = asyncio.get_running_loop()
                 task = loop.create_task(self._async_handle_message(agent_id, data))
@@ -160,69 +236,39 @@ class FeishuWSManager:
                         logger.warning("[Feishu WS] No active main task found for event dispatch")
                         return
                     main_loop = main_task.get_loop()
-                    asyncio.run_coroutine_threadsafe(self._async_handle_message(agent_id, data), main_loop)
+                    _ = asyncio.run_coroutine_threadsafe(self._async_handle_message(agent_id, data), main_loop)
                 except Exception as e:
                     logger.exception(f"[Feishu WS] Could not dispatch event to main loop: {e}")
 
-        return (
-            lark.EventDispatcherHandler.builder("", "")
-            .register_p2_customized_event("im.message.receive_v1", handle_message)
-            .build()
-        )
+        if _lark_mod is None:
+            raise RuntimeError("lark-oapi package is not installed")
+        handler_cls: object = getattr(_lark_mod, "EventDispatcherHandler", None)
+        builder_fn: object = getattr(handler_cls, "builder", None)
+        if not callable(builder_fn):
+            raise RuntimeError("lark-oapi EventDispatcherHandler.builder is unavailable")
+        started: object = builder_fn("", "")
+        if not _is_event_builder(started):
+            raise RuntimeError("lark-oapi EventDispatcherHandler.builder returned an unexpected object")
+        return started.register_p2_customized_event("im.message.receive_v1", handle_message).build()
 
-    async def _async_handle_message(self, agent_id: uuid.UUID, data: dict[str, Any]) -> None:
+    async def _async_handle_message(self, agent_id: uuid.UUID, data: object) -> None:
         """Handle im.message.receive_v1 events from Feishu WebSocket asynchronously."""
         try:
-            # The data object carries the raw event body
-            raw_body = getattr(data, "raw_body", None)
-            if not raw_body:
-                # Some SDK versions pass the dict directly
-                if isinstance(data, dict):
-                    body_dict = data
-                else:
-                    # Handle lark_oapi.event.custom.CustomizedEvent
-                    body_dict = {}
-                    if hasattr(data, "header"):
-                        header_obj = data.header
-                        body_dict["header"] = (
-                            vars(header_obj)
-                            if hasattr(header_obj, "__dict__")
-                            else {
-                                "event_type": getattr(header_obj, "event_type", "im.message.receive_v1"),
-                                "event_id": getattr(header_obj, "event_id", ""),
-                                "create_time": getattr(header_obj, "create_time", ""),
-                            }
-                        )
-                        if "event_type" not in body_dict["header"]:
-                            body_dict["header"]["event_type"] = getattr(
-                                header_obj, "event_type", "im.message.receive_v1"
-                            )
-                    else:
-                        body_dict["header"] = {"event_type": "im.message.receive_v1"}
+            body_dict = _feishu_event_body(data)
+            if body_dict is None:
+                logger.warning(
+                    f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
+                )
+                return
 
-                    if hasattr(data, "event"):
-                        body_dict["event"] = data.event
-                    elif hasattr(data, "content") and isinstance(data.content, str):
-                        try:
-                            body_dict["event"] = json.loads(data.content)
-                        except json.JSONDecodeError:
-                            body_dict["event"] = {"content": data.content}
-
-                    if not hasattr(data, "header") and not hasattr(data, "event"):
-                        logger.warning(
-                            f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}"
-                        )
-                        return
-            else:
-                body_dict = json.loads(raw_body.decode("utf-8"))
-
-            event_type = body_dict.get("header", {}).get("event_type", "unknown")
+            event_type = json_as_str_or(_json_object(body_dict.get("header")).get("event_type"), "unknown")
             logger.info(f"[Feishu WS] Event received for agent {agent_id}: {event_type}")
 
             # Import here to avoid circular dependencies
             from app.api.feishu import process_feishu_event
 
-            await process_feishu_event(agent_id, body_dict)
+            _handled: JsonObject = await process_feishu_event(agent_id, body_dict)
+            del _handled
 
         except Exception as e:
             logger.exception(f"[Feishu WS] Error processing event for {agent_id}: {e}")
@@ -259,11 +305,11 @@ class FeishuWSManager:
         if stop_existing and agent_id in self._tasks:
             old_task = self._tasks.pop(agent_id, None)
             if old_task and not old_task.done():
-                old_task.cancel()
+                _ = old_task.cancel()
                 logger.info(f"[Feishu WS] Cancelled old WS task for {agent_id}")
         previous_ping_task = self._ping_tasks.pop(agent_id, None)
         if previous_ping_task and not previous_ping_task.done():
-            previous_ping_task.cancel()
+            _ = previous_ping_task.cancel()
 
         try:
             event_handler = self._create_event_handler(agent_id)
@@ -273,13 +319,26 @@ class FeishuWSManager:
 
         # Instantiate Client - SDK manages connect + receive + ping internally.
         # We set auto_reconnect=True so the SDK handles reconnections.
-        client = ws.Client(
+        if _lark_ws_mod is None or _lark_mod is None:
+            logger.error("[Feishu WS] lark-oapi package is not installed")
+            return
+        client_cls: object = getattr(_lark_ws_mod, "Client", None)
+        if not callable(client_cls):
+            logger.error("[Feishu WS] lark-oapi ws Client is unavailable")
+            return
+        log_level_info: object = getattr(getattr(_lark_mod, "LogLevel", None), "INFO", None)
+        built = _construct_ws_client(
+            client_cls,
             app_id,
             app_secret,
             event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=log_level_info,
             auto_reconnect=True,
         )
+        if not _is_lark_ws_client(built):
+            logger.error("[Feishu WS] lark-oapi ws Client constructor returned an unexpected object")
+            return
+        client = built
         self._clients[agent_id] = client
 
         # Build scoped proxy bypass: active only during _connect() to avoid
@@ -313,24 +372,24 @@ class FeishuWSManager:
             # SDK handles reconnect internally via _receive_message_loop → _reconnect.
             # We do NOT call _connect() or _ping_loop() again to avoid creating
             # duplicate connections that cause "kicked by new connection".
-            _last_conn_id = getattr(client, "_conn_id", None)
+            _last_conn_id: object = getattr(client, "_conn_id", None)
             _was_disconnected = False
             while True:
                 try:
                     await asyncio.sleep(30)  # Check every 30 seconds
 
-                    conn = client._conn
-                    curr_conn_id = getattr(client, "_conn_id", None)
+                    conn: object = getattr(client, "_conn", None)
+                    curr_conn_id: object = getattr(client, "_conn_id", None)
 
                     if conn is None:
                         if not _was_disconnected:
                             logger.warning(
                                 f"[Feishu WS] Connection lost for agent {agent_id} "
-                                f"(last conn_id={_last_conn_id}), "
-                                "waiting for SDK auto-reconnect..."
+                                + f"(last conn_id={_last_conn_id}), "
+                                + "waiting for SDK auto-reconnect..."
                             )
                             _was_disconnected = True
-                    elif hasattr(conn, "closed") and conn.closed:
+                    elif bool(getattr(conn, "closed", False)):
                         if not _was_disconnected:
                             logger.warning(
                                 f"[Feishu WS] WebSocket closed for agent {agent_id}, waiting for SDK auto-reconnect..."
@@ -345,7 +404,7 @@ class FeishuWSManager:
                         if curr_conn_id != _last_conn_id and curr_conn_id:
                             logger.info(
                                 f"[Feishu WS] Connection ID changed for agent {agent_id}: "
-                                f"{_last_conn_id} → {curr_conn_id}"
+                                + f"{_last_conn_id} → {curr_conn_id}"
                             )
                             _last_conn_id = curr_conn_id
                 except asyncio.CancelledError:
@@ -366,11 +425,11 @@ class FeishuWSManager:
         """Stops an actively running WebSocket client for an agent."""
         ping_task = self._ping_tasks.pop(agent_id, None)
         if ping_task and not ping_task.done():
-            ping_task.cancel()
+            _ = ping_task.cancel()
         if agent_id in self._tasks:
             task = self._tasks.pop(agent_id)
             if not task.done():
-                task.cancel()
+                _ = task.cancel()
                 logger.info(f"[Feishu WS] Stopped client task for agent {agent_id}")
         if agent_id in self._clients:
             client = self._clients.pop(agent_id)
@@ -389,7 +448,8 @@ class FeishuWSManager:
 
         for config in configs:
             extra = config.extra_config or {}
-            mode = extra.get("connection_mode", "webhook")
+            mode_raw: object = extra.get("connection_mode", "webhook")
+            mode = json_as_str_or(mode_raw, "webhook")
             if mode == "websocket":
                 if config.app_id and config.app_secret:
                     await self.start_client(config.agent_id, config.app_id, config.app_secret, stop_existing=False)

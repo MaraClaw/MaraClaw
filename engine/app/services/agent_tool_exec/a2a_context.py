@@ -4,7 +4,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 
 from app.core.logging import logger
 from app.core.permissions import evaluate_agent_relationship_status
@@ -14,14 +14,16 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
+from app.records.agent import AgentRecord
+from app.records.llm import LLMModelRecord
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.llm.types import OpenAIMessage
 
 
 @dataclass
 class A2AContext:
-    source_agent: Any
-    target_agent: Any
+    source_agent: AgentRecord
+    target_agent: AgentRecord
     chat_session_id: str
     session_agent_id: uuid.UUID
     owner_id: uuid.UUID
@@ -31,9 +33,9 @@ class A2AContext:
     message_text: str
     origin_source_channel: str
     origin_session_id: str | None
-    primary_model: Any | None = None
-    fallback_model: Any | None = None
-    conversation_history: list[OpenAIMessage] = field(default_factory=list)
+    primary_model: LLMModelRecord | None = None
+    fallback_model: LLMModelRecord | None = None
+    conversation_history: list[OpenAIMessage] = field(default_factory=list[OpenAIMessage])
 
 
 async def _resolve_target_agent(
@@ -41,7 +43,7 @@ async def _resolve_target_agent(
     from_agent_id: uuid.UUID,
     agent_name: str,
     source_tenant_id: uuid.UUID | None,
-) -> Any | None:
+) -> AgentRecord | None:
     """Exact name match first, then fuzzy ILIKE-style contains match within tenant."""
     if source_tenant_id:
         exact = await agent_dao.list_by_names_for_tenant(source_tenant_id, [agent_name], exclude_stopped=False)
@@ -105,13 +107,13 @@ async def _build_a2a_context(
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
+                + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target.is_expired or (target.expires_at and datetime.now(UTC) >= target.expires_at):
             return (
                 f"⚠️ {target.name} is currently unavailable - their service period has ended. "
-                f"Please contact the platform administrator."
+                + f"Please contact the platform administrator."
             )
 
         rels = await agent_agent_relationship_dao.list_for_agent(from_agent_id)
@@ -119,14 +121,14 @@ async def _build_a2a_context(
         if not rel:
             return (
                 f"❌ You do not have a relationship with {target.name}. Only agents in your relationship list "
-                f"can be contacted. Ask your administrator to add a relationship if needed."
+                + f"can be contacted. Ask your administrator to add a relationship if needed."
             )
         status_info = await evaluate_agent_relationship_status(None, rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target.name} is not active "
-                f"({status_info['access_status_reason'] or 'restricted'}). "
-                f"Ask a manager of both agents to review Relationships."
+                + f"({status_info['access_status_reason'] or 'restricted'}). "
+                + f"Ask a manager of both agents to review Relationships."
             )
 
         src_participant = await participant_dao.get_by_type_ref("agent", from_agent_id)
@@ -153,7 +155,7 @@ async def _build_a2a_context(
             )
 
         session_id = str(chat_session.id)
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=session_agent_id,
             user_id=owner_id,
             role="user",
@@ -161,7 +163,7 @@ async def _build_a2a_context(
             conversation_id=session_id,
             participant_id=src_participant_id,
         )
-        await chat_session_dao.update(
+        _ = await chat_session_dao.update(
             db_obj=chat_session,
             obj_in={"last_message_at": datetime.now(UTC)},
         )

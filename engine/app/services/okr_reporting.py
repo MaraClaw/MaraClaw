@@ -467,35 +467,35 @@ async def _generate_llm_report_content(
     )
     system_prompt = (
         "You are the OKR reporting copilot for an enterprise workspace. "
-        "Write a concise management-style markdown report in Simplified Chinese. "
-        "Use only the provided facts. Do not invent progress, risks, or actions. "
-        "Do not expose raw extraction mechanics such as bucket labels. "
-        "Merge similar updates into coherent summaries."
+        + "Write a concise management-style markdown report in Simplified Chinese. "
+        + "Use only the provided facts. Do not invent progress, risks, or actions. "
+        + "Do not expose raw extraction mechanics such as bucket labels. "
+        + "Merge similar updates into coherent summaries."
     )
     user_prompt = (
         f"Generate a {report_type} company OKR report.\n"
-        "Return markdown only.\n"
-        "Use this exact structure:\n"
-        f"# {title}\n"
-        f"{period_key}: {period_value}\n\n"
-        "## Executive Summary\n"
-        "- 2 to 4 bullets.\n\n"
-        "## Key Progress\n"
-        "- Group related updates into clear bullets.\n\n"
-        "## Risks and Blockers\n"
-        "- Summarize meaningful risks. If none, say so briefly.\n\n"
-        "## Follow-up Actions\n"
-        "- Concrete next steps or reminders.\n\n"
-        "## Submission Status\n"
-        "- Describe submission coverage and who is still missing if relevant.\n\n"
-        "Rules:\n"
-        "- Keep narrative text in Simplified Chinese.\n"
-        "- Preserve member names exactly as given.\n"
-        "- Avoid repeating the same fact across sections.\n"
-        "- Do not copy raw entries line by line if they can be merged.\n"
-        "- If the source data is sparse, state that clearly and keep the structure complete.\n\n"
-        "Source data (JSON):\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        + "Return markdown only.\n"
+        + "Use this exact structure:\n"
+        + f"# {title}\n"
+        + f"{period_key}: {period_value}\n\n"
+        + "## Executive Summary\n"
+        + "- 2 to 4 bullets.\n\n"
+        + "## Key Progress\n"
+        + "- Group related updates into clear bullets.\n\n"
+        + "## Risks and Blockers\n"
+        + "- Summarize meaningful risks. If none, say so briefly.\n\n"
+        + "## Follow-up Actions\n"
+        + "- Concrete next steps or reminders.\n\n"
+        + "## Submission Status\n"
+        + "- Describe submission coverage and who is still missing if relevant.\n\n"
+        + "Rules:\n"
+        + "- Keep narrative text in Simplified Chinese.\n"
+        + "- Preserve member names exactly as given.\n"
+        + "- Avoid repeating the same fact across sections.\n"
+        + "- Do not copy raw entries line by line if they can be merged.\n"
+        + "- If the source data is sparse, state that clearly and keep the structure complete.\n\n"
+        + "Source data (JSON):\n"
+        + f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
 
     async def _try_model(model: LLMModelRecord) -> str:
@@ -527,7 +527,7 @@ async def _generate_llm_report_content(
         except Exception as exc:
             logger.warning(
                 f"[OKR] LLM company report generation failed tenant={tenant_id} "
-                f"report_type={report_type} model={getattr(candidate, 'model', '?')}: {exc}"
+                + f"report_type={report_type} model={getattr(candidate, 'model', '?')}: {exc}"
             )
 
     return fallback_content

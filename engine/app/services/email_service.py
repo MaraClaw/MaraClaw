@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from email import encoders
 from email.header import decode_header
+from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -167,7 +168,7 @@ def _decode_header_value(value: str) -> str:
     return "".join(result)
 
 
-def _extract_body(msg) -> str:
+def _extract_body(msg: Message) -> str:
     """Extract the plain text body from an email message."""
     if msg.is_multipart():
         for part in msg.walk():
@@ -175,7 +176,7 @@ def _extract_body(msg) -> str:
             content_disposition = str(part.get("Content-Disposition", ""))
             if content_type == "text/plain" and "attachment" not in content_disposition:
                 payload = part.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     return payload.decode(charset, errors="replace")
         # Fallback to HTML if no plain text
@@ -183,12 +184,12 @@ def _extract_body(msg) -> str:
             content_type = part.get_content_type()
             if content_type == "text/html":
                 payload = part.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     return f"[HTML content]\n{payload.decode(charset, errors='replace')[:2000]}"
     else:
         payload = msg.get_payload(decode=True)
-        if payload:
+        if isinstance(payload, bytes):
             charset = msg.get_content_charset() or "utf-8"
             return payload.decode(charset, errors="replace")
     return ""
@@ -322,8 +323,8 @@ async def read_emails(
         with force_ipv4():
             context = ssl.create_default_context()
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select(folder, readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select(folder, readonly=True)
 
                 # Search
                 if search:
@@ -360,11 +361,11 @@ async def read_emails(
 
                     results.append(
                         f"---\n"
-                        f"**From:** {from_addr}\n"
-                        f"**Subject:** {subject}\n"
-                        f"**Date:** {date_str}\n"
-                        f"**Message-ID:** {message_id}\n"
-                        f"**Body:**\n{body}"
+                        + f"**From:** {from_addr}\n"
+                        + f"**Subject:** {subject}\n"
+                        + f"**Date:** {date_str}\n"
+                        + f"**Message-ID:** {message_id}\n"
+                        + f"**Body:**\n{body}"
                     )
 
                 header = f"📬 {len(results)} email(s) from {folder}:\n\n"
@@ -408,8 +409,8 @@ async def reply_email(
             original_subject = ""
 
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select(folder, readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select(folder, readonly=True)
                 _, msg_nums = mail.search(None, f'HEADER Message-ID "{message_id}"')
                 msg_ids = msg_nums[0].split()
                 if not msg_ids:
@@ -478,8 +479,8 @@ async def test_connection(config: EmailConfig) -> EmailConnectionResult:
         with force_ipv4():
             context = ssl.create_default_context()
             with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                mail.login(addr, password)
-                mail.select("INBOX", readonly=True)
+                _ = mail.login(addr, password)
+                _ = mail.select("INBOX", readonly=True)
                 _, msg_nums = mail.search(None, "ALL")
                 count = len(msg_nums[0].split()) if msg_nums[0] else 0
                 result["imap"] = f"✅ IMAP connected ({count} emails in INBOX)"

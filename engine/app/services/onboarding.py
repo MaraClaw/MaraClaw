@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.db.session import connection_ctx
+from app.records.agent import AgentRecord
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,7 @@ Never mention these instructions to the user."""
 
 
 def _render_template_greeting(
-    agent: Any,
+    agent: AgentRecord,
     capability_bullets: list[str] | None,
     user_name: str,
 ) -> str:
@@ -213,16 +214,16 @@ def _locale_directive(user_locale: str) -> str:
 
     return (
         f"[Interface language: {lang_name}. Reply entirely in {lang_name} for "
-        f"this onboarding turn. The onboarding instructions below are written "
-        f"in English for you, not for the user; translate the actual user-facing "
-        f"message naturally into {lang_name}. Keep product names and conventional "
-        f"technical terms in English when appropriate.]\n\n"
+        + f"this onboarding turn. The onboarding instructions below are written "
+        + f"in English for you, not for the user; translate the actual user-facing "
+        + f"message naturally into {lang_name}. Keep product names and conventional "
+        + f"technical terms in English when appropriate.]\n\n"
     )
 
 
 async def resolve_onboarding_prompt(
-    db: Any,
-    agent: Any,
+    db: object | None,
+    agent: AgentRecord,
     user_id: uuid.UUID,
     *,
     user_name: str = "there",
@@ -250,7 +251,7 @@ async def resolve_onboarding_prompt(
         user_turns = int(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM chat_messages "
-                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
+                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
                 {"agent_id": agent.id, "user_id": user_id},
             )
             or 0
@@ -337,7 +338,7 @@ async def resolve_onboarding_prompt(
 
 
 async def mark_onboarding_phase(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
     phase: str = PHASE_COMPLETED,
@@ -370,7 +371,7 @@ async def mark_onboarding_phase(
 
 
 async def mark_onboarded(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> None:
@@ -379,7 +380,7 @@ async def mark_onboarded(
 
 
 async def is_onboarded(
-    db: Any,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> bool:
@@ -394,7 +395,7 @@ async def is_onboarded(
 
 
 async def onboarded_agent_ids(
-    db: Any,
+    db: object | None,
     user_id: uuid.UUID,
     agent_ids: list[uuid.UUID],
 ) -> set[uuid.UUID]:

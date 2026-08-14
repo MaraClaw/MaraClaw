@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, mapping_from_row
 from app.services.trigger_runtime.executions import (
     build_execution_runtime_trigger,
     claim_pending_trigger_executions,
@@ -14,11 +14,12 @@ from app.services.trigger_runtime.executions import (
 )
 from app.services.trigger_runtime.keys import build_scheduled_execution_key
 from app.services.trigger_runtime.queue import enqueue_trigger_execution
+from app.records.trigger import AgentTriggerRecord
 
 
-def runtime_execution_payload(trigger: Any) -> JsonObject:
+def runtime_execution_payload(trigger: AgentTriggerRecord) -> JsonObject:
     """Capture ephemeral trigger evaluation context into an execution payload."""
-    cfg = trigger.config or {}
+    cfg = mapping_from_row(trigger.config)
     payload: JsonObject = {}
     for key in (
         "_matched_message",
@@ -37,8 +38,8 @@ def runtime_execution_payload(trigger: Any) -> JsonObject:
     return payload
 
 
-async def enqueue_due_trigger(trigger: Any, now: datetime) -> None:
-    await enqueue_trigger_execution(
+async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> None:
+    _ = await enqueue_trigger_execution(
         None,
         trigger=trigger,
         source=trigger.type,

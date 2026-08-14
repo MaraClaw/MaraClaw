@@ -5,26 +5,35 @@ import importlib
 import ipaddress
 import re
 import socket
-from types import ModuleType
+from collections.abc import Callable
 from urllib.parse import urljoin, urlparse
+
+import httpx
+from bs4 import BeautifulSoup
 
 from app.services.agent_tool_exec.registry import ToolArguments
 
+from . import search_providers
 
-def _httpx_module() -> ModuleType:
+
+def _httpx_module():
     return importlib.import_module("httpx")
 
 
-def _search_providers_module() -> ModuleType:
-    return importlib.import_module("app.services.agent_tool_exec.search_providers")
+def _httpx_client(**kwargs: object) -> httpx.AsyncClient:
+    return _httpx_module().AsyncClient(**kwargs)
 
 
-def _beautiful_soup():
-    return importlib.import_module("bs4").BeautifulSoup
+def _search_providers_module():
+    return search_providers
 
 
-def _trafilatura_module() -> ModuleType:
-    return importlib.import_module("trafilatura")
+def _beautiful_soup() -> type[BeautifulSoup]:
+    return BeautifulSoup
+
+
+def _trafilatura_extract() -> Callable[..., object]:
+    return importlib.import_module("trafilatura").extract
 
 
 async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
@@ -42,7 +51,7 @@ async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
 
     hostname = parsed.hostname
     try:
-        ipaddress.ip_address(hostname)
+        _ = ipaddress.ip_address(hostname)
         host_is_ip = True
     except ValueError:
         host_is_ip = False
@@ -100,7 +109,11 @@ def _extract_page_links(html: str, base_url: str, limit: int = 30) -> list[str]:
     links: list[str] = []
     seen: set[str] = set()
     for anchor in soup.find_all("a", href=True):
-        href = urljoin(base_url, anchor["href"].strip())
+        href_raw = anchor.get("href")
+        href_text = href_raw.strip() if isinstance(href_raw, str) else ""
+        if not href_text:
+            continue
+        href = urljoin(base_url, href_text)
         if not href.startswith(("http://", "https://")) or href in seen:
             continue
         label = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True))[:80] or href
@@ -122,12 +135,12 @@ def _integer_argument(arguments: ToolArguments, name: str, default: int) -> int:
 
 
 async def _read_webpage(arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
-    trafilatura = _trafilatura_module()
+    httpx_mod = _httpx_module()
+    extract_readable = _trafilatura_extract()
     beautiful_soup = _beautiful_soup()
     url, validation_error = await _validate_public_http_url(_string_argument(arguments, "url"))
-    if validation_error:
-        return validation_error
+    if validation_error or url is None:
+        return validation_error or "❌ Please provide a URL"
 
     max_chars = min(max(_integer_argument(arguments, "max_chars", 12000), 500), 50000)
     include_links = arguments.get("include_links") is True
@@ -139,7 +152,7 @@ async def _read_webpage(arguments: ToolArguments) -> str:
 
     try:
         async with (
-            httpx.AsyncClient(follow_redirects=True, timeout=15) as client,
+            _httpx_client(follow_redirects=True, timeout=15) as client,
             client.stream("GET", url, headers=headers) as resp,
         ):
             content_length = resp.headers.get("content-length")
@@ -180,19 +193,21 @@ async def _read_webpage(arguments: ToolArguments) -> str:
         if content_type in {"", "text/html", "application/xhtml+xml"} or "<html" in text[:500].lower():
             soup = beautiful_soup(text, "html.parser")
             if soup.title and soup.title.string:
-                title = soup.title.string.strip()
+                title = str(soup.title.string).strip()
             meta_description = soup.find("meta", attrs={"name": "description"})
-            if meta_description and meta_description.get("content"):
-                description = meta_description["content"].strip()
+            meta_content = meta_description.get("content") if meta_description else None
+            if isinstance(meta_content, str) and meta_content:
+                description = meta_content.strip()
 
-            extracted = trafilatura.extract(
+            extracted_raw = extract_readable(
                 text,
                 url=final_url,
                 output_format="markdown",
                 include_links=include_links,
                 include_comments=False,
                 include_tables=True,
-            ) or _fallback_extract_visible_text(text)
+            )
+            extracted = extracted_raw if isinstance(extracted_raw, str) and extracted_raw else _fallback_extract_visible_text(text)
             if include_links:
                 links = _extract_page_links(text, final_url)
         elif content_type.startswith("text/") or content_type in {"application/json", "application/xml", "text/xml"}:
@@ -226,14 +241,13 @@ async def _read_webpage(arguments: ToolArguments) -> str:
             result += "\n\n---\n\nLinks:\n" + "\n".join(links)
         return result
 
-    except httpx.TimeoutException:
+    except httpx_mod.TimeoutException:
         return f"❌ Webpage fetch timed out: {url}"
     except Exception as e:
         return f"❌ Webpage read error: {str(e)[:300]}"
 
 
 async def _jina_read(arguments: ToolArguments) -> str:
-    httpx = _httpx_module()
     url = _string_argument(arguments, "url").strip()
     if not url:
         return "❌ Please provide a URL"
@@ -252,7 +266,7 @@ async def _jina_read(arguments: ToolArguments) -> str:
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        async with _httpx_client(follow_redirects=True, timeout=30) as client:
             resp = await client.get(
                 f"https://r.jina.ai/{url}",
                 headers=headers,

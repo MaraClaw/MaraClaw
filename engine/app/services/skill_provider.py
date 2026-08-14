@@ -2,7 +2,7 @@ import base64
 import os
 import re
 from collections.abc import Callable
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import httpx
 import yaml
@@ -198,10 +198,11 @@ def parse_skill_md_frontmatter(content: str) -> SkillFrontmatter:
     if not isinstance(loaded, dict):
         return {}
     frontmatter: SkillFrontmatter = {}
-    name = loaded.get("name")
+    loaded_map = dict[str, Any](loaded)
+    name = loaded_map.get("name")
     if isinstance(name, str):
         frontmatter["name"] = name
-    description = loaded.get("description")
+    description = loaded_map.get("description")
     if isinstance(description, str):
         frontmatter["description"] = description
     return frontmatter
@@ -235,13 +236,15 @@ async def fetch_github_directory(
             raise HTTPException(429, "GitHub API rate limit exceeded. Try again later.")
         if response.status_code != 200:
             raise HTTPException(502, f"GitHub API error: {response.status_code}")
-        items = [raw_items] if isinstance(raw_items := response.json(), dict) else raw_items
-        if not isinstance(items, list):
+        raw_items = response.json()
+        items: list[Any] = [raw_items] if isinstance(raw_items, dict) else list(raw_items) if isinstance(raw_items, list) else []
+        if not isinstance(raw_items, (dict, list)):
             raise HTTPException(502, "GitHub API returned invalid payload")
         parsed_items: list[GitHubDirectoryItem] = []
-        for item in items:
-            if not isinstance(item, dict):
+        for item_raw in items:
+            if not isinstance(item_raw, dict):
                 raise HTTPException(502, "GitHub API returned invalid payload")
+            item = dict[str, Any](item_raw)
             name, item_type, item_path, item_url = item.get("name"), item.get("type"), item.get("path"), item.get("url")
             if (
                 not isinstance(name, str)

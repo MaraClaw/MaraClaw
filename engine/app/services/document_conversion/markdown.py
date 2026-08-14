@@ -62,7 +62,7 @@ def _convert_markdown_to_docx(src_file: Path, tgt_file: Path, target_path: str) 
                 if candidate:
                     table_lines.append(candidate)
                 index += 1
-            data_rows = []
+            data_rows: list[list[str]] = []
             for raw in table_lines:
                 cells = [cell.strip() for cell in raw.strip("|").split("|")]
                 if cells and all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
@@ -163,17 +163,17 @@ def _convert_markdown_to_pdf(src_file: Path, tgt_file: Path, target_path: str, w
     html_text = "\n".join(html_parts)
     full_html = (
         "<html><head><meta charset='utf-8'><style>"
-        "body{font-family:'WenQuanYi Micro Hei','Noto Sans CJK SC',sans-serif;line-height:1.65;padding:2em;color:#111827;}"
-        "h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;}"
-        "p{margin:.55em 0;}"
-        "table{width:100%;border-collapse:collapse;margin:1em 0;font-size:12px;}"
-        "th,td{border:1px solid #d8dee9;padding:7px 9px;text-align:left;vertical-align:top;}"
-        "th{background:#f3f4f6;font-weight:700;}"
-        "code{background:#f3f4f6;padding:1px 4px;border-radius:4px;}"
-        "a{color:#2563eb;text-decoration:none;}"
-        "</style></head><body>"
-        f"{html_text}"
-        "</body></html>"
+        + "body{font-family:'WenQuanYi Micro Hei','Noto Sans CJK SC',sans-serif;line-height:1.65;padding:2em;color:#111827;}"
+        + "h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;}"
+        + "p{margin:.55em 0;}"
+        + "table{width:100%;border-collapse:collapse;margin:1em 0;font-size:12px;}"
+        + "th,td{border:1px solid #d8dee9;padding:7px 9px;text-align:left;vertical-align:top;}"
+        + "th{background:#f3f4f6;font-weight:700;}"
+        + "code{background:#f3f4f6;padding:1px 4px;border-radius:4px;}"
+        + "a{color:#2563eb;text-decoration:none;}"
+        + "</style></head><body>"
+        + f"{html_text}"
+        + "</body></html>"
     )
     tgt_file.parent.mkdir(parents=True, exist_ok=True)
     weasyprint.HTML(string=full_html, base_url=str(ws.resolve())).write_pdf(str(tgt_file))

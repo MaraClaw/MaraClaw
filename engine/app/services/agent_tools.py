@@ -11,11 +11,16 @@ The agent's workspace uses well-known paths:
 The agent reads/writes these files directly. No per-concept tools needed.
 """
 
+from __future__ import annotations
+
 import importlib
 import multiprocessing as mp
 import uuid
 from pathlib import Path
-from typing import TypeIs
+from typing import TYPE_CHECKING, TypeIs
+
+if TYPE_CHECKING:
+    from app.services.agentbay_client import AgentBayClient
 
 from app.config import get_settings
 from app.core.json_types import JsonObject, JsonValue
@@ -88,7 +93,7 @@ from .agent_tool_exec.a2a_triggers import (
     _create_on_message_trigger as _create_on_message_trigger,
     _wake_agent_async as _wake_agent_async,
 )
-from .agent_tool_exec.registry import ToolArgumentMapping, ToolArgumentValue
+from .agent_tool_exec.registry import ToolArgumentMapping, ToolArguments, ToolArgumentValue, ToolOutputCallback
 from .agent_tool_exec.workspace import (
     _execute_workspace_mutation as _execute_workspace_mutation,
     _run_with_temp_workspace as _run_with_temp_workspace,
@@ -186,8 +191,8 @@ async def _agent_has_any_channel(agent_id: uuid.UUID) -> bool:
     return await _tool_runtime_catalog.agent_has_any_channel(agent_id)
 
 
-_agent_has_feishu._uses_catalog_channel_presence = True
-_agent_has_any_channel._uses_catalog_channel_presence = True
+setattr(_agent_has_feishu, "_uses_catalog_channel_presence", True)
+setattr(_agent_has_any_channel, "_uses_catalog_channel_presence", True)
 
 
 # ─── Dynamic Tool Loading from DB ──────────────────────────────
@@ -201,14 +206,16 @@ def _is_json_value(value: object) -> TypeIs[JsonValue]:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
+        items: list[object] = list(value)
+        return all(_is_json_value(item) for item in items)
     return _is_json_object(value)
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
     if not isinstance(value, dict):
         return False
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    mapping: dict[object, object] = dict(value)
+    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
 
 
 def _is_catalog_tool_definition(value: object) -> TypeIs[ToolDefinition]:
@@ -232,11 +239,17 @@ def _is_catalog_tool_definition(value: object) -> TypeIs[ToolDefinition]:
 
 
 def _is_catalog_tool_definitions(value: object) -> TypeIs[list[ToolDefinition]]:
-    return isinstance(value, list) and all(_is_catalog_tool_definition(tool) for tool in value)
+    if not isinstance(value, list):
+        return False
+    tools: list[object] = list(value)
+    return all(_is_catalog_tool_definition(tool) for tool in tools)
 
 
 def _is_storage_entries(value: object) -> TypeIs[list[StorageEntry]]:
-    return isinstance(value, list) and all(isinstance(entry, StorageEntry) for entry in value)
+    if not isinstance(value, list):
+        return False
+    entries: list[object] = list(value)
+    return all(isinstance(entry, StorageEntry) for entry in entries)
 
 
 async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
@@ -259,9 +272,9 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
     return await _tool_runtime_catalog.get_agent_tools_for_llm(agent_id, dependencies=dependencies)
 
 
-async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path):
+async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path) -> None:
     tasks_tool = importlib.import_module("app.services.agent_tool_exec.tasks_tool")
-    return await tasks_tool._sync_tasks_to_file(agent_id, ws)
+    await tasks_tool._sync_tasks_to_file(agent_id, ws)
 
 
 # ─── Tool Executors ─────────────────────────────────────────────
@@ -303,7 +316,7 @@ async def execute_tool(
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
     session_id: str = "",
-    on_output=None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Execute a tool call and return the result as a string."""
     from app.services.agent_tool_exec.dispatcher import execute_tool as _impl
@@ -420,14 +433,14 @@ async def _bing_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | Non
     return await web_search._bing_search_tool(arguments, agent_id)
 
 
-async def _execute_mcp_tool(tool_name: str, arguments: ToolParameters, agent_id=None) -> str:
+async def _execute_mcp_tool(tool_name: str, arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
     from app.services.agent_tool_exec.mcp_tools import _execute_mcp_tool as execute_mcp_tool
 
     return await execute_mcp_tool(tool_name, arguments, agent_id=agent_id)
 
 
 async def _execute_via_smithery_connect(
-    mcp_url: str, tool_name: str, arguments: ToolParameters, config: JsonObject, agent_id=None
+    mcp_url: str, tool_name: str, arguments: ToolParameters, config: JsonObject, agent_id: uuid.UUID | None = None
 ) -> str:
     from app.services.agent_tool_exec.mcp_smithery import _execute_via_smithery_connect as execute_via_smithery_connect
 
@@ -435,7 +448,7 @@ async def _execute_via_smithery_connect(
 
 
 async def _smithery_auto_recover(
-    api_key: str, mcp_url: str, namespace: str, connection_id: str, agent_id=None
+    api_key: str, mcp_url: str, namespace: str, connection_id: str, agent_id: uuid.UUID | None = None
 ) -> str | None:
     from app.services.agent_tool_exec.mcp_smithery import _smithery_auto_recover as smithery_auto_recover
 
@@ -820,7 +833,10 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
 async def _send_channel_message(agent_id: uuid.UUID, args: ToolArgumentMapping) -> str:
     from app.services.agent_tool_exec.channel_messaging import _send_channel_message as _impl
 
-    return await _impl(agent_id, args)
+    channel_args: ToolArguments = {
+        key: str(value) if isinstance(value, uuid.UUID) else value for key, value in args.items()
+    }
+    return await _impl(agent_id, channel_args)
 
 
 # Plaza Tools - Agent Square social feed
@@ -865,7 +881,7 @@ async def _execute_code(
     arguments: ToolParameters,
     *,
     tool_name: str = "execute_code",
-    on_output=None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     from app.services.agent_tool_exec.code_exec import _execute_code as execute_code
 
@@ -873,7 +889,11 @@ async def _execute_code(
 
 
 async def _execute_code_legacy(
-    ws: Path, arguments: ToolParameters, allow_network: bool = False, max_timeout: int = 60, on_output=None
+    ws: Path,
+    arguments: ToolParameters,
+    allow_network: bool = False,
+    max_timeout: int = 60,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     from app.services.agent_tool_exec.code_exec import _execute_code_legacy as execute_code_legacy
 
@@ -1190,7 +1210,7 @@ async def _list_published_pages(agent_id: uuid.UUID) -> str:
 # ─── AgentBay Tool Handlers ─────────────────────────────────────
 
 
-def _agentbay_normalize_image_bytes(data) -> bytes | None:
+def _agentbay_normalize_image_bytes(data: object) -> bytes | None:
     from app.services.agent_tool_exec.agentbay_media import _agentbay_normalize_image_bytes as extracted
 
     return extracted(data)
@@ -1282,13 +1302,13 @@ async def _agentbay_command_exec(agent_id: uuid.UUID | None, ws: Path, arguments
     return await extracted(agent_id, ws, arguments)
 
 
-def _agentbay_extract_screen_dimensions(screen_data) -> tuple[int | None, int | None, str]:
+def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None, int | None, str]:
     from app.services.agent_tool_exec.agentbay_screen import _agentbay_extract_screen_dimensions as extracted
 
     return extracted(screen_data)
 
 
-async def _agentbay_get_screen_metadata(client) -> tuple[int | None, int | None, str]:
+async def _agentbay_get_screen_metadata(client: AgentBayClient) -> tuple[int | None, int | None, str]:
     from app.services.agent_tool_exec.agentbay_screen import _agentbay_get_screen_metadata as extracted
 
     return await extracted(client)
@@ -1389,7 +1409,7 @@ async def _agentbay_computer_get_screen_size(agent_id: uuid.UUID | None, ws: Pat
     return await extracted(agent_id, ws, arguments)
 
 
-def _agentbay_normalize_text(value) -> str:
+def _agentbay_normalize_text(value: object) -> str:
     from app.services.agent_tool_exec.agentbay_apps import _agentbay_normalize_text as extracted
 
     return extracted(value)
@@ -1419,7 +1439,7 @@ def _agentbay_uncertain_start_error(error_message: str) -> bool:
     return extracted(error_message)
 
 
-async def _agentbay_visible_apps_note(client) -> str:
+async def _agentbay_visible_apps_note(client: AgentBayClient) -> str:
     from app.services.agent_tool_exec.agentbay_apps import _agentbay_visible_apps_note as extracted
 
     return await extracted(client)
@@ -1507,7 +1527,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolParameters) -> 
 
 
 async def _load_okr_request_context(
-    db,
+    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID | None,
 ) -> _agent_tool_exec_okr_access._OKRRequestContext:

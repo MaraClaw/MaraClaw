@@ -10,12 +10,13 @@ from uuid import uuid4
 from app.core.json_types import JsonObject
 from app.dao.trigger_dao import trigger_execution_dao
 from app.records.trigger import TriggerExecutionRecord
+from app.records.trigger import AgentTriggerRecord
 
 
 async def enqueue_trigger_execution(
-    db: Any,
+    db: object | None,
     *,
-    trigger: Any,
+    trigger: AgentTriggerRecord,
     source: str,
     idempotency_key: str,
     payload_text: str = "",
@@ -43,9 +44,9 @@ async def enqueue_trigger_execution(
 
 
 async def enqueue_webhook_execution(
-    db: Any,
+    db: object | None,
     *,
-    trigger: Any,
+    trigger: AgentTriggerRecord,
     body: bytes,
     payload_text: str,
     payload_obj: JsonObject | None,

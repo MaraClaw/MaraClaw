@@ -6,6 +6,7 @@ workspace files and composes a comprehensive system prompt.
 
 import uuid
 from pathlib import Path
+from typing import Any
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -155,20 +156,23 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
     from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
     from app.dao.agent_relationship_dao import agent_relationship_dao
 
-    def _display_provider_name(pn, pt):
+    def _display_provider_name(pn: str | None, pt: str | None) -> str | None:
         if not pn and not pt:
             return None
         if (pt or "").lower() in ("web", "platform") or (pn or "").lower() == "web":
             return "Platform"
         return pn
 
-    human_rows = []
+    from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
+    from app.records.agent_relationship import AgentRelationshipRecord
+
+    human_rows: list[tuple[AgentRelationshipRecord, str | None]] = []
     for rel in await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id):
         status_info = await evaluate_human_relationship_status(None, rel)
         if status_info["access_status"] == "active":
             human_rows.append((rel, _display_provider_name(rel.provider_name, rel.provider_type)))
 
-    agent_rels = []
+    agent_rels: list[AgentAgentRelationshipRecord] = []
     for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id):
         status_info = await evaluate_agent_relationship_status(None, rel)
         if status_info["access_status"] == "active":
@@ -177,7 +181,7 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
     if not human_rows and not agent_rels:
         return ""
 
-    lines = []
+    lines: list[str] = []
 
     if human_rows:
         lines.append("## Human Colleagues\n")
@@ -429,7 +433,8 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
                         {"tenant_id": _agent_tenant_id, "key": "company_intro"},
                     )
                 if row and row.get("value"):
-                    content = row["value"].get("content") if isinstance(row["value"], dict) else None
+                    value: Any = row["value"]
+                    content: Any = value.get("content") if isinstance(value, dict) else None
                     if isinstance(content, str) and content:
                         company_intro = content.strip()
             except Exception as exc:

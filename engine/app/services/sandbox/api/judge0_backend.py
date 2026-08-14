@@ -1,7 +1,7 @@
 """Judge0 API-based sandbox backend."""
 
 import time
-from typing import override
+from typing import Any, override
 
 import anyio
 import httpx
@@ -37,8 +37,8 @@ class Judge0Backend(BaseSandboxBackend):
         return "judge0"
 
     def __init__(self, config: SandboxConfig):
-        self.config = config
-        self.api_url = config.api_url or _DEFAULT_JUDGE0_URL
+        self.config: SandboxConfig = config
+        self.api_url: object = config.api_url or _DEFAULT_JUDGE0_URL
 
         if not config.api_key:
             # Judge0 has a free tier that doesn't require API key
@@ -72,7 +72,7 @@ class Judge0Backend(BaseSandboxBackend):
         language: str,
         timeout: int = 30,
         work_dir: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ExecutionResult:
         """Execute code using Judge0 API."""
         start_time = time.time()
@@ -129,7 +129,7 @@ class Judge0Backend(BaseSandboxBackend):
                 # Step 2: Poll for result
                 max_retries = timeout * 2  # Poll every 0.5 seconds
                 for _ in range(max_retries):
-                    await client.get(f"{self.api_url}/submissions/{token}")
+                    _ = await client.get(f"{self.api_url}/submissions/{token}")
 
                     result_response = await client.get(
                         f"{self.api_url}/submissions/{token}",

@@ -5,14 +5,18 @@ from __future__ import annotations
 import json as _json
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TypedDict
 
+from app.core.json_types import json_as_str, json_as_str_or, mapping_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
 from app.db.session import connection_ctx
+from app.records.agent import AgentRecord
+from app.records.trigger import AgentTriggerRecord
+from app.services.llm.base import ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
 from app.services.trigger_runtime import (
@@ -28,15 +32,15 @@ class TriggerDeliveryTarget(TypedDict):
     source_channel: str
 
 
-async def resolve_trigger_delivery_target(agent: Any, triggers: list[Any]) -> TriggerDeliveryTarget | None:
+async def resolve_trigger_delivery_target(
+    agent: AgentRecord, triggers: list[AgentTriggerRecord]
+) -> TriggerDeliveryTarget | None:
     from app.services.chat_session_service import ensure_primary_platform_session
 
     for trigger in triggers:
-        cfg = trigger.config or {}
-        a2a_sid = cfg.get("_a2a_session_id")
+        cfg = mapping_from_row(trigger.config)
+        a2a_sid = json_as_str(cfg.get("_a2a_session_id"))
         if a2a_sid:
-            if not isinstance(a2a_sid, str):
-                return None
             try:
                 session = await chat_session_dao.get(uuid.UUID(a2a_sid))
                 if not session:
@@ -50,22 +54,20 @@ async def resolve_trigger_delivery_target(agent: Any, triggers: list[Any]) -> Tr
             except Exception:
                 return None
 
-    origin_cfg = None
+    origin_cfg: dict[str, object] | None = None
     for trigger in triggers:
-        cfg = trigger.config or {}
+        cfg = mapping_from_row(trigger.config)
         if cfg.get("_origin_session_id") or cfg.get("_origin_user_id"):
             origin_cfg = cfg
             break
     if not origin_cfg:
         return None
 
-    origin_source_channel = origin_cfg.get("_origin_source_channel")
-    origin_session_id = origin_cfg.get("_origin_session_id")
-    origin_user_id = origin_cfg.get("_origin_user_id")
+    origin_source_channel = json_as_str(origin_cfg.get("_origin_source_channel"))
+    origin_session_id = json_as_str(origin_cfg.get("_origin_session_id"))
+    origin_user_id = json_as_str(origin_cfg.get("_origin_user_id"))
 
     if origin_source_channel == "agent" and origin_session_id:
-        if not isinstance(origin_session_id, str):
-            return None
         try:
             session = await chat_session_dao.get(uuid.UUID(origin_session_id))
             if not session:
@@ -96,7 +98,7 @@ async def resolve_trigger_delivery_target(agent: Any, triggers: list[Any]) -> Tr
     return None
 
 
-async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
+async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]):
     from app.services.audit_logger import write_audit_log
     from app.services.llm import call_llm
 
@@ -131,43 +133,39 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
             if t.name == "daily_okr_collection":
                 part += (
                     "\nExecution requirements: First call get_okr_settings to confirm whether daily report collection is enabled. "
-                    "If enabled, contact only members and digital employees in your relationship network to collect today's final daily reports, "
-                    "then organize them into a formal report of no more than 2,000 words. "
-                    "If it is disabled, state that no action is needed and stop."
+                    + "If enabled, contact only members and digital employees in your relationship network to collect today's final daily reports, "
+                    + "then organize them into a formal report of no more than 2,000 words. "
+                    + "If it is disabled, state that no action is needed and stop."
                 )
             elif t.name in ("daily_okr_report", "weekly_okr_report", "monthly_okr_report"):
                 part += (
                     "\nExecution requirements: The system automatically generates this company-wide report. "
-                    "If you are awakened, provide only necessary clarification and do not collect reports from members again."
+                    + "If you are awakened, provide only necessary clarification and do not collect reports from members again."
                 )
             elif t.name == "biweekly_okr_checkin":
                 part += (
                     "\nExecution requirements: First call get_okr_settings to confirm whether OKRs are enabled. "
-                    "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
-                    "If they are disabled, state that no action is needed and stop."
+                    + "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
+                    + "If they are disabled, state that no action is needed and stop."
                 )
             if t.focus_ref:
                 part += f"\nRelated Focus: {t.focus_ref}"
-            cfg = t.config or {}
-            matched_message = cfg.get("_matched_message")
+            cfg = mapping_from_row(t.config)
+            matched_message = json_as_str(cfg.get("_matched_message"))
             if t.type == "on_message" and matched_message:
-                if not isinstance(matched_message, str):
-                    raise TypeError("Trigger matched message must be a string")
                 part += f'\nMessage received from {cfg.get("_matched_from", "?")}:\n"{matched_message[:500]}"'
             if t.type == "on_message" and cfg.get("okr_member_id") and cfg.get("okr_report_date"):
                 part += (
                     "\nExecution requirements: This event stores a daily-report reply."
-                    f"\n1. Organize the response into a final daily report of no more than 2,000 words."
-                    f'\n2. Immediately call upsert_member_daily_report(report_date="{cfg["okr_report_date"]}", '
-                    f'member_type="{cfg.get("okr_member_type", "user")}", '
-                    f'member_id="{cfg["okr_member_id"]}", content="<organized daily report>").'
-                    "\n3. After the tool call succeeds, send a brief confirmation that clearly says the response was received and recorded."
-                    "\n4. Do not only acknowledge receipt without calling the tool, and do not store the raw long conversation unchanged as the daily report."
+                    + f"\n1. Organize the response into a final daily report of no more than 2,000 words."
+                    + f'\n2. Immediately call upsert_member_daily_report(report_date="{cfg["okr_report_date"]}", '
+                    + f'member_type="{cfg.get("okr_member_type", "user")}", '
+                    + f'member_id="{cfg["okr_member_id"]}", content="<organized daily report>").'
+                    + "\n3. After the tool call succeeds, send a brief confirmation that clearly says the response was received and recorded."
+                    + "\n4. Do not only acknowledge receipt without calling the tool, and do not store the raw long conversation unchanged as the daily report."
                 )
-            webhook_payload = cfg.get("_webhook_payload")
+            webhook_payload = json_as_str(cfg.get("_webhook_payload"))
             if t.type == "webhook" and webhook_payload:
-                if not isinstance(webhook_payload, str):
-                    raise TypeError("Trigger webhook payload must be a string")
                 payload_str = webhook_payload
                 if len(payload_str) > 2000:
                     payload_str = payload_str[:2000] + "... (truncated)"
@@ -177,7 +175,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
 
         trigger_context = (
             "===== Current Wake Context =====\n"
-            f"Wake source: trigger ({'multiple triggers fired simultaneously' if len(triggers) > 1 else 'trigger fired'})\n\n"
+            + f"Wake source: trigger ({'multiple triggers fired simultaneously' if len(triggers) > 1 else 'trigger fired'})\n\n"
             + "\n---\n".join(context_parts)
             + "\n==========================="
         )
@@ -198,7 +196,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
         session_id = session.id
         trigger_message: OpenAIMessage = {"role": "user", "content": trigger_context}
         messages = [trigger_message]
-        await chat_message_dao.insert_message(
+        _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=agent.creator_id,
             role="user",
@@ -210,10 +208,10 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
         collected_content: list[str] = []
         delivered_platform_message_via_tool = False
 
-        async def on_chunk(text):
+        async def on_chunk(text: str) -> None:
             collected_content.append(text)
 
-        async def on_tool_call(data):
+        async def on_tool_call(data: ToolCallbackData) -> None:
             nonlocal delivered_platform_message_via_tool
             try:
                 tool_name = data.get("name")
@@ -223,25 +221,25 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
                     if result_text.startswith("✅"):
                         delivered_platform_message_via_tool = True
 
-                if data["status"] == "running":
-                    await chat_message_dao.insert_message(
+                if tool_status == "running":
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
                         role="tool_call",
                         content=_json.dumps(
-                            {"name": data["name"], "args": data["args"]}, ensure_ascii=False, default=str
+                            {"name": tool_name, "args": data.get("args")}, ensure_ascii=False, default=str
                         ),
                         conversation_id=str(session_id),
                         participant_id=agent_participant_id,
                     )
-                elif data["status"] == "done":
+                elif tool_status == "done":
                     result_str = str(data.get("result", ""))[:2000]
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
                         role="tool_call",
                         content=_json.dumps(
-                            {"name": data["name"], "result": result_str}, ensure_ascii=False, default=str
+                            {"name": tool_name, "result": result_str}, ensure_ascii=False, default=str
                         ),
                         conversation_id=str(session_id),
                         participant_id=agent_participant_id,
@@ -251,8 +249,8 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
 
         from_agent_name: str | None = None
         for t in triggers:
-            cfg = t.config or {}
-            candidate_name = cfg.get("from_agent_name")
+            cfg = mapping_from_row(t.config)
+            candidate_name = json_as_str(cfg.get("from_agent_name"))
             if isinstance(candidate_name, str) and candidate_name:
                 from_agent_name = candidate_name
                 break
@@ -279,7 +277,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
 
         async with connection_ctx():
             agent_participant = await participant_dao.get_by_type_ref("agent", agent_id)
-            await chat_message_dao.insert_message(
+            _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=agent.creator_id,
                 role="assistant",
@@ -289,16 +287,13 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
             )
 
         for t in triggers:
-            a2a_sid = (t.config or {}).get("_a2a_session_id")
+            a2a_sid = json_as_str((t.config or {}).get("_a2a_session_id"))
             if not (a2a_sid and final_reply):
                 continue
-            if not isinstance(a2a_sid, str):
-                logger.warning("[A2A] Trigger A2A session ID is not a string; skipping persist")
-                break
             try:
                 async with connection_ctx():
                     participant = await participant_dao.get_by_type_ref("agent", agent_id)
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
                         role="assistant",
@@ -308,7 +303,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
                     )
                     chat_session = await chat_session_dao.get(uuid.UUID(a2a_sid))
                     if chat_session:
-                        await chat_session_dao.update(
+                        _ = await chat_session_dao.update(
                             db_obj=chat_session,
                             obj_in={"last_message_at": datetime.now(UTC)},
                         )
@@ -322,9 +317,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
             try:
                 trigger_reasons = []
                 for t in triggers:
-                    summary_value = (t.config or {}).get("_notification_summary", "")
-                    if not isinstance(summary_value, str):
-                        raise TypeError("Trigger notification summary must be a string")
+                    summary_value = json_as_str_or((t.config or {}).get("_notification_summary", ""))
                     ns = summary_value.strip()
                     if ns:
                         trigger_reasons.append(ns)
@@ -340,7 +333,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
                 notify_owner_user_id = delivery_target.get("owner_user_id")
 
                 async with connection_ctx():
-                    await chat_message_dao.insert_message(
+                    _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
                         role="assistant",
@@ -349,14 +342,14 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[Any]):
                     )
                     session_row = await chat_session_dao.get(uuid.UUID(notify_session_id))
                     if session_row:
-                        await chat_session_dao.update(
+                        _ = await chat_session_dao.update(
                             db_obj=session_row,
                             obj_in={"last_message_at": datetime.now(UTC)},
                         )
                     if notify_owner_user_id:
                         from app.api.websocket import maybe_mark_session_read_for_active_viewer
 
-                        await maybe_mark_session_read_for_active_viewer(
+                        _ = await maybe_mark_session_read_for_active_viewer(
                             None,
                             agent_id=agent_id,
                             session_id=notify_session_id,

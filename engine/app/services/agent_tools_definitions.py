@@ -2,12 +2,10 @@ from typing import Any
 
 from app.services.llm.finish import FINISH_TOOL_DEFINITION, FINISH_TOOL_NAME
 
-ToolDefinition = dict[str, Any]
-
 # allow: SIZE_OK - static OpenAI tool catalog extracted verbatim; pure data table.
 # ─── Tool Definitions (OpenAI function-calling format) ──────────
 
-AGENT_TOOLS: list[ToolDefinition] = [
+AGENT_TOOLS: list[Any] = [
     FINISH_TOOL_DEFINITION,
     {
         "type": "function",
@@ -379,9 +377,9 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "send_feishu_message",
             "description": (
                 "Send a Feishu IM message to a colleague. "
-                "You can provide either the colleague's name "
-                "or their Feishu user_id directly. "
-                "To contact digital employees use send_message_to_agent instead."
+                + "You can provide either the colleague's name "
+                + "or their Feishu user_id directly. "
+                + "To contact digital employees use send_message_to_agent instead."
             ),
             "parameters": {
                 "type": "object",
@@ -409,10 +407,10 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "send_channel_message",
             "description": (
                 "Send a message to a colleague via their configured external channel "
-                "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat). "
-                "Automatically detects the recipient's channel based on their org relationship. "
-                "Use this only for channel users. "
-                "For relationships labeled Platform User / 平台用户, use send_platform_message instead."
+                + "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat). "
+                + "Automatically detects the recipient's channel based on their org relationship. "
+                + "Use this only for channel users. "
+                + "For relationships labeled Platform User / 平台用户, use send_platform_message instead."
             ),
             "parameters": {
                 "type": "object",
@@ -429,8 +427,8 @@ AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Optional: Specific channel to use when the recipient exists on multiple channels. "
-                            "Accepted values: feishu, dingtalk, wecom, slack, teams, microsoft_teams, "
-                            "google_chat, gchat, wechat."
+                            + "Accepted values: feishu, dingtalk, wecom, slack, teams, microsoft_teams, "
+                            + "google_chat, gchat, wechat."
                         ),
                         "enum": [
                             "feishu",
@@ -927,8 +925,8 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_doc_search",
             "description": (
                 "Search Feishu cloud documents by keyword using the official Feishu document search API. "
-                "Use this when a wiki folder or knowledge base contains too many documents for feishu_wiki_list to be practical. "
-                "Returns matching titles, document tokens, and document types so you can then read, share, or delete the target file."
+                + "Use this when a wiki folder or knowledge base contains too many documents for feishu_wiki_list to be practical. "
+                + "Returns matching titles, document tokens, and document types so you can then read, share, or delete the target file."
             ),
             "parameters": {
                 "type": "object",
@@ -964,10 +962,10 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_wiki_list",
             "description": (
                 "List all sub-pages (child nodes) of a Feishu Wiki (知识库) page. "
-                "Works with wiki URLs like 'https://xxx.feishu.cn/wiki/NodeToken'. "
-                "Use this when a wiki page has child pages you need to explore. "
-                "Returns titles, node_tokens, and obj_tokens for each sub-page. "
-                "Each sub-page can then be read with feishu_doc_read using its node_token."
+                + "Works with wiki URLs like 'https://xxx.feishu.cn/wiki/NodeToken'. "
+                + "Use this when a wiki page has child pages you need to explore. "
+                + "Returns titles, node_tokens, and obj_tokens for each sub-page. "
+                + "Each sub-page can then be read with feishu_doc_read using its node_token."
             ),
             "parameters": {
                 "type": "object",
@@ -991,10 +989,10 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_doc_read",
             "description": (
                 "Read the text content of a Feishu document or Wiki page. "
-                "Works with both regular docx URLs (https://xxx.feishu.cn/docx/Token) "
-                "and Wiki page URLs (https://xxx.feishu.cn/wiki/Token). "
-                "Automatically handles wiki node tokens. "
-                "If the page has sub-pages, use feishu_wiki_list to list them."
+                + "Works with both regular docx URLs (https://xxx.feishu.cn/docx/Token) "
+                + "and Wiki page URLs (https://xxx.feishu.cn/wiki/Token). "
+                + "Automatically handles wiki node tokens. "
+                + "If the page has sub-pages, use feishu_wiki_list to list them."
             ),
             "parameters": {
                 "type": "object",
@@ -1186,10 +1184,10 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_drive_share",
             "description": (
                 "Manage Feishu Drive file collaborators and permissions. "
-                "Supports ALL file types: docx, bitable, sheet, doc, folder, mindnote, slides. "
-                "Can add or remove collaborators with viewer/editor/full_access roles, "
-                "or get the current collaborator list. "
-                "Accepts colleague names (auto-searched) or open_ids directly."
+                + "Supports ALL file types: docx, bitable, sheet, doc, folder, mindnote, slides. "
+                + "Can add or remove collaborators with viewer/editor/full_access roles, "
+                + "or get the current collaborator list. "
+                + "Accepts colleague names (auto-searched) or open_ids directly."
             ),
             "parameters": {
                 "type": "object",
@@ -1235,9 +1233,9 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_drive_delete",
             "description": (
                 "Delete a file or folder from Feishu Drive (cloud space). "
-                "The file will be moved to the recycle bin, not permanently deleted. "
-                "For folders, the deletion is asynchronous. "
-                "Requires ownership + parent folder edit permission, or parent folder full_access."
+                + "The file will be moved to the recycle bin, not permanently deleted. "
+                + "For folders, the deletion is asynchronous. "
+                + "Requires ownership + parent folder edit permission, or parent folder full_access."
             ),
             "parameters": {
                 "type": "object",
@@ -1262,9 +1260,9 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_user_search",
             "description": (
                 "Search for a colleague in the Feishu (Lark) directory by name. "
-                "Returns their open_id, email, and department so you can send messages, "
-                "invite them to calendar events, or share documents. "
-                "Use this whenever you need to find a colleague's Feishu identity."
+                + "Returns their open_id, email, and department so you can send messages, "
+                + "invite them to calendar events, or share documents. "
+                + "Use this whenever you need to find a colleague's Feishu identity."
             ),
             "parameters": {
                 "type": "object",
@@ -1692,16 +1690,16 @@ AGENT_TOOLS: list[ToolDefinition] = [
             "name": "agentbay_file_transfer",
             "description": (
                 "Transfer a file between any two endpoints: the agent workspace, "
-                "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
-                "VERIFIED PATH CONVENTIONS (all Linux environments run as user 'wuying', HOME=/home/wuying/):\n"
-                "- code env:     use /home/wuying/<filename>  (working directory, e.g. /home/wuying/data.csv)\n"
-                "- browser env:  use /home/wuying/下载/<filename>  (download folder, e.g. /home/wuying/下载/file.pdf)\n"
-                "- computer env: use /home/wuying/桌面/<filename>  (Desktop, e.g. /home/wuying/桌面/report.xlsx)\n"
-                "- workspace:    use relative path, e.g. 'workspace/data.csv'\n\n"
-                "Transfer directions:\n"
-                "- workspace -> env: upload a workspace file into a cloud environment\n"
-                "- env -> workspace: download a file from a cloud environment into the workspace\n"
-                "- env A -> env B:   transfer between environments (transparent backend temp, no workspace involvement)"
+                + "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
+                + "VERIFIED PATH CONVENTIONS (all Linux environments run as user 'wuying', HOME=/home/wuying/):\n"
+                + "- code env:     use /home/wuying/<filename>  (working directory, e.g. /home/wuying/data.csv)\n"
+                + "- browser env:  use /home/wuying/下载/<filename>  (download folder, e.g. /home/wuying/下载/file.pdf)\n"
+                + "- computer env: use /home/wuying/桌面/<filename>  (Desktop, e.g. /home/wuying/桌面/report.xlsx)\n"
+                + "- workspace:    use relative path, e.g. 'workspace/data.csv'\n\n"
+                + "Transfer directions:\n"
+                + "- workspace -> env: upload a workspace file into a cloud environment\n"
+                + "- env -> workspace: download a file from a cloud environment into the workspace\n"
+                + "- env A -> env B:   transfer between environments (transparent backend temp, no workspace involvement)"
             ),
             "parameters": {
                 "type": "object",
@@ -1715,8 +1713,8 @@ AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Source path. Relative if workspace (e.g. 'workspace/data.csv'). "
-                            "Absolute if env: code → /home/wuying/file, "
-                            "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
+                            + "Absolute if env: code → /home/wuying/file, "
+                            + "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
                         ),
                     },
                     "to_type": {
@@ -1728,8 +1726,8 @@ AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Destination path. Relative if workspace (e.g. 'workspace/output.csv'). "
-                            "Absolute if env: code → /home/wuying/file, "
-                            "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
+                            + "Absolute if env: code → /home/wuying/file, "
+                            + "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
                         ),
                     },
                 },
@@ -1786,6 +1784,6 @@ _FEISHU_TOOL_NAMES: set[str] = {
     "feishu_approval_query",
     "feishu_approval_get",
 }
-_always_core_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if t["function"]["name"] in _ALWAYS_INCLUDE_CORE]
-_feishu_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if t["function"]["name"] in _FEISHU_TOOL_NAMES]
-_channel_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if t["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES]
+_always_core_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _ALWAYS_INCLUDE_CORE]
+_feishu_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _FEISHU_TOOL_NAMES]
+_channel_tools: list[Any] = [t for t in AGENT_TOOLS if t["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES]

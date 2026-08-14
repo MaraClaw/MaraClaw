@@ -6,6 +6,7 @@ import re
 import secrets
 import unicodedata
 from dataclasses import dataclass
+from uuid import UUID
 
 from anyascii import anyascii
 from pypinyin import lazy_pinyin
@@ -25,14 +26,14 @@ class AdminEmailTakenError(Exception):
     """The requested org-admin email already belongs to an identity."""
 
 
-async def _claim_genesis_admin_email_domain(tenant_id, email: str) -> None:
+async def _claim_genesis_admin_email_domain(tenant_id: UUID, email: str) -> None:
     """Claim the genesis admin host as this company's default email domain."""
     from app.services.org_membership import add_email_domain, email_domain
 
     domain = email_domain(email)
     if domain is None:
         return
-    await add_email_domain(tenant_id, domain, is_default=True)
+    _ = await add_email_domain(tenant_id, domain, is_default=True)
 
 
 @dataclass(slots=True, frozen=True)
@@ -141,7 +142,7 @@ async def create_tenant_with_org_admin(
             )
             # Identity-backed email/phone properties require the association for org directory bind.
             org_admin.identity = identity
-            await participant_dao.create_for_user(
+            _ = await participant_dao.create_for_user(
                 org_admin.id,
                 display_name=org_admin.display_name,
                 avatar_url=org_admin.avatar_url,
@@ -163,7 +164,7 @@ class GenesisOrgAdminExistsError(Exception):
 
 async def attach_genesis_org_admin(
     *,
-    tenant_id,
+    tenant_id: UUID,
     admin_email: str,
     admin_password: str,
     admin_display_name: str | None = None,
@@ -213,7 +214,7 @@ async def attach_genesis_org_admin(
                 }
             )
             org_admin.identity = identity
-            await participant_dao.create_for_user(
+            _ = await participant_dao.create_for_user(
                 org_admin.id,
                 display_name=org_admin.display_name,
                 avatar_url=org_admin.avatar_url,
@@ -227,9 +228,9 @@ async def attach_genesis_org_admin(
     return ProvisionedTenant(tenant=tenant, org_admin=org_admin, admin_email=email)
 
 
-async def delete_tenant_and_release_identities(tenant_id) -> None:
+async def delete_tenant_and_release_identities(tenant_id: UUID) -> None:
     """Cascade-delete a company and tombstone identities that have no remaining membership."""
     async with connection_ctx():
         identity_ids = await user_dao.list_identity_ids_for_tenant(tenant_id)
         await tenant_dao.delete_cascade(tenant_id)
-        await identity_dao.tombstone_orphans(identity_ids)
+        _ = await identity_dao.tombstone_orphans(identity_ids)

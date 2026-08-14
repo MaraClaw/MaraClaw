@@ -186,7 +186,7 @@ async def _write_log(
         if organization_id:
             full_details["organization_id"] = str(organization_id)
 
-        await audit_log_dao.create(
+        _ = await audit_log_dao.create(
             obj_in={
                 "action": action,
                 "details": full_details,

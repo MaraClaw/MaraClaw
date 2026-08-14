@@ -16,6 +16,7 @@ from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.sso_service import sso_service
+from app.records.agent import AgentRecord
 
 
 class ChannelUserResolutionError(ValueError):
@@ -78,11 +79,11 @@ class ChannelUserService:
 
     async def resolve_channel_user(
         self,
-        agent: Any,
+        agent: AgentRecord,
         channel_type: str,
         external_user_id: str | None,
         extra_info: dict[str, Any] | None = None,
-        db: Any = None,
+        db: object | None = None,
     ) -> UserRecord:
         """Resolve channel user identity, find or create platform User."""
         del db
@@ -119,7 +120,7 @@ class ChannelUserService:
         if user:
             if should_persist_member:
                 if org_member and not org_member.user_id:
-                    await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+                    _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
                 elif not org_member:
                     existing_member = await self._find_existing_org_member_for_user(
                         None, user.id, provider.id, tenant_id
@@ -136,13 +137,13 @@ class ChannelUserService:
                         if external_id and not existing_member.external_id:
                             updates["external_id"] = external_id
                         if updates:
-                            await org_member_dao.update(db_obj=existing_member, obj_in=updates)
+                            _ = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
                         logger.info(
                             f"[{channel_type}] Reusing org-synced OrgMember {existing_member.id} "
-                            f"for user {user.id} instead of creating a duplicate shell"
+                            + f"for user {user.id} instead of creating a duplicate shell"
                         )
                     else:
-                        await self._create_org_member_shell(
+                        _ = await self._create_org_member_shell(
                             None, provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
                         )
             return user
@@ -152,16 +153,16 @@ class ChannelUserService:
         if channel_type == "feishu" and not org_member and not (unionid or external_id):
             raise ChannelUserResolutionError(
                 "Feishu sender could not be resolved to a stable user_id/union_id; "
-                "refusing to lazily create a duplicate user from open_id only."
+                + "refusing to lazily create a duplicate user from open_id only."
             )
 
         user = await self._create_channel_user(None, channel_type, external_user_id, extra_info, tenant_id)
 
         if should_persist_member:
             if org_member:
-                await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+                _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
             else:
-                await self._create_org_member_shell(
+                _ = await self._create_org_member_shell(
                     None, provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
                 )
         logger.info(f"[{channel_type}] Created new user: {user.id} for external_id: {external_user_id}")
@@ -169,7 +170,7 @@ class ChannelUserService:
         return user
 
     async def _ensure_provider(
-        self, db: Any, provider_type: str, tenant_id: uuid.UUID | None
+        self, db: object | None, provider_type: str, tenant_id: uuid.UUID | None
     ) -> IdentityProviderRecord:
         """Get or create IdentityProvider record."""
         del db
@@ -198,7 +199,7 @@ class ChannelUserService:
 
     async def _find_org_member(
         self,
-        db: Any,
+        db: object | None,
         provider_id: uuid.UUID,
         channel_type: str,
         external_user_id: str | None,
@@ -243,7 +244,7 @@ class ChannelUserService:
 
     async def _create_org_member_shell(
         self,
-        db: Any,
+        db: object | None,
         provider: IdentityProviderRecord | Any,
         channel_type: str,
         external_user_id: str | None,
@@ -275,7 +276,7 @@ class ChannelUserService:
 
     async def _find_existing_org_member_for_user(
         self,
-        db: Any,
+        db: object | None,
         user_id: uuid.UUID,
         provider_id: uuid.UUID,
         tenant_id: uuid.UUID | None,
@@ -289,7 +290,7 @@ class ChannelUserService:
 
     async def _create_channel_user(
         self,
-        db: Any,
+        db: object | None,
         channel_type: str,
         external_user_id: str | None,
         extra_info: dict[str, Any],
@@ -350,7 +351,7 @@ channel_user_service = ChannelUserService()
 async def get_platform_user_by_org_member(
     org_member: OrgMemberRecord | Any,
     agent_tenant_id: uuid.UUID | None = None,
-    db: Any = None,
+    db: object | None = None,
 ) -> UserRecord:
     """Get or create platform User from an existing OrgMember."""
     del db
@@ -368,7 +369,7 @@ async def get_platform_user_by_org_member(
         user = await sso_service.match_user_by_mobile(org_member.phone, agent_tenant_id_text or "")
 
     if user:
-        await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+        _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
         loaded = await user_dao.get_with_identity(user.id)
         return loaded or user
 
@@ -418,7 +419,7 @@ async def get_platform_user_by_org_member(
             "is_active": True,
         }
     )
-    await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+    _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
     logger.info(f"[channel_user_service] Created User {user.id} for OrgMember {org_member.id} ({name})")
     loaded = await user_dao.get_with_identity(user.id)
     return loaded or user
