@@ -91,7 +91,11 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/tenants/{tenant_id}` | platform / org | — | Org: own tenant only. **Res:** `TenantOut` |
-| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped |
+| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. Cannot disable the default end-user org. |
+| `GET` | `/api/tenants/{tenant_id}/email-domains` | platform / org | — | Claimed email domains for the company |
+| `POST` | `/api/tenants/{tenant_id}/email-domains` | platform / org | `{ domain, is_default? }` | **201**. **409** if another company already claims the domain |
+| `PATCH` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | `{ is_default: true }` | Make this the default invite domain |
+| `DELETE` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | — | **204**. Promotes another default when needed |
 | `POST` | `/api/tenants/{tenant_id}/logo` | platform / org | Multipart image PNG/JPEG/WebP, ≤1 MB, 1:1 square | `TenantOut` |
 | `DELETE` | `/api/tenants/{tenant_id}/logo` | platform / org | — | `TenantOut` |
 | `DELETE` | `/api/tenants/{tenant_id}` | own org_admin **or** platform | — | Cascade delete. `{ status: "deleted", fallback_tenant_id }` |
@@ -100,16 +104,21 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 
 ```text
 id, name, slug, im_provider, timezone, country_region, is_active,
-sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_at
+sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_at,
+is_system, is_default_end_user_org
 ```
 
 #### Related non-admin tenant routes (context only)
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/join` | Invite code join. Always `member`. Refuses to rewrite a genesis or platform-admin membership. |
+| `POST` | `/api/tenants/join` | Invite code join. Requires an **active** user (`get_current_user`). Always `member`. **409** if the user already belongs to another organization. Invalid invites are **400**. |
+| `POST` | `/api/tenants/transfer` | Move a member to another org. Body `{ password, invitation_code? , tenant_id? }`. Password required. Invite or **verified** email-domain / OpenClaw target. Genesis / platform admin blocked. |
+| `POST` | `/api/tenants/join-suggested` | Confirm the **verified** email-domain match. Active user required. Genesis / platform admin blocked. |
+| `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
+| `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
 | `GET` | `/api/tenants/registration-config` | Public. Always `{ allow_self_create_company: false, tenant_creation: "platform_admin_only" }`. |
-| `DELETE` | `/api/tenants/{tenant_id}` | Cascade delete, then tombstone identities that have no remaining membership so the email can be reused. |
+| `DELETE` | `/api/tenants/{tenant_id}` | Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
 | `GET` | `/api/tenants/me` | Any member; company + default model |
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |
