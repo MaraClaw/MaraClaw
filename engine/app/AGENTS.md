@@ -7,8 +7,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - `main.py` - `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`.
 - `lifespan()`: `init_pool()` first (roles `all|bootstrap|api|worker|connector`), then seeders (including **fail-closed** platform admin), then realtime/worker/connector tasks.
 - `config.py` is the only pydantic-settings surface. New env vars need `.env.example` (includes `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`).
-- `db/` is the live data layer. `database.py`: `async_session` raises; `transaction()` forwards to `app.db.session` (explicit session is yielded as-is for tests).
-- Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/`.
+- `db/` is the live data layer. Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/` or `app/database.py`.
 
 ## Local Rules
 

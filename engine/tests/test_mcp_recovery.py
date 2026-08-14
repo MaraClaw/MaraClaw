@@ -285,14 +285,10 @@ async def test_smithery_recovery_does_not_store_auth_required_connection(monkeyp
             "auth_url": "https://smithery.run/shadowsseven/new-auth-required/setup",
         }
 
-    def fail_if_db_touched():
-        raise AssertionError("auth-required Smithery connections must not overwrite stored config")
-
     monkeypatch.setattr(
         "app.services.resource_discovery._ensure_smithery_connection",
         fake_ensure_connection,
     )
-    monkeypatch.setattr(agent_tools_module, "async_session", fail_if_db_touched, raising=False)
 
     result = await agent_tools_module._smithery_auto_recover(
         "smithery-key",

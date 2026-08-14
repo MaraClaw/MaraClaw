@@ -18,35 +18,6 @@ type EmailServiceCall = dict[str, EmailServiceCallValue]
 type FacadeCallValue = str | uuid.UUID | Path | JsonObject
 
 
-class FakeResult:
-    def __init__(self, value: object) -> None:
-        self.value = value
-
-    def scalar_one_or_none(self) -> object:
-        return self.value
-
-
-class FakeSession:
-    def __init__(self, values: list[object]) -> None:
-        self.values = values
-
-    async def __aenter__(self) -> FakeSession:
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-    async def execute(self, _: object) -> FakeResult:
-        return FakeResult(self.values.pop(0))
-
-
-def install_fake_session(monkeypatch: pytest.MonkeyPatch, *values: object) -> None:
-    from app import database
-
-    session = FakeSession(list(values))
-    monkeypatch.setattr(database, "async_session", lambda: session)
-
-
 def install_fake_email_service(monkeypatch: pytest.MonkeyPatch, **functions: object) -> None:
     monkeypatch.setitem(sys.modules, "app.services.email_service", SimpleNamespace(**functions))
 

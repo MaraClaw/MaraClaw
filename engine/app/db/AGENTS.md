@@ -4,7 +4,7 @@ Live psycopg3 data-access layer. SQLAlchemy is gone from `app/`.
 
 ## Status
 
-- This package **is** the runtime path. `app/database.py`: `async_session` raises; `transaction()` forwards here; `transaction(session=obj)` yields `obj` unchanged (tests).
+- This package **is** the runtime path. There is no `app/database.py` shim.
 - Do **not** import SQLAlchemy here (`check_no_new_sqlalchemy.py` forbids `app/db/`).
 
 ## Layout

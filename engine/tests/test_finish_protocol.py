@@ -292,11 +292,7 @@ async def test_execute_tool_finish_is_noop_control_signal(monkeypatch):
     async def fail_tenant_lookup(_agent_id):
         raise AssertionError("finish must not require tenant lookup")
 
-    def fail_async_session():
-        raise AssertionError("finish must not open a database session")
-
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", fail_tenant_lookup)
-    monkeypatch.setattr(agent_tools, "async_session", fail_async_session, raising=False)
 
     result = await agent_tools.execute_tool(
         "finish",

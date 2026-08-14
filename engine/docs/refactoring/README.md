@@ -78,7 +78,6 @@ awk '!/^[[:space:]]*$/ && !/^[[:space:]]*#/' app/api/files.py | wc -l
 
 The fixture checks used during scanning were:
 
-- `app/database.py`: 60 pure LOC, 3 AST symbols.
 - `app/api/files.py`: 988 pure LOC, 43 AST symbols.
 
 ## Verification Checklist

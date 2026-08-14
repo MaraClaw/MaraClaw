@@ -27,6 +27,5 @@ Cascade gaps vs baseline (will 23503 on real data): `skill_files` before `skills
 
 ## Avoid
 
-- Do not open `app.database.async_session` (raises).
 - Do not delete `identities` in tenant cascade (global login rows).
 - Do not f-string user input into SQL.

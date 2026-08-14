@@ -19,7 +19,6 @@ MaraClaw-r2/
 │   ├── db/                      # live psycopg pool/session/errors
 │   ├── dao/                     # parameterized SQL repositories
 │   ├── records/                 # dataclasses + from_row (not ORM)
-│   ├── database.py              # raise-shim; async_session is gone
 │   ├── schemas/                 # schemas.py grab-bag + agent_credential
 │   ├── scripts/                 # bootstrap_db + one-off modules
 │   └── services/                # mixed flat files + runtime packages
@@ -49,7 +48,7 @@ No `alembic/`, no `app/models/`.
 | Admin APIs / RBAC inventory | `docs/admin-apis.md` | Platform vs org admin; genesis + `must_change_password` |
 | Auth deps | `app/core/security.py` | JWT, bcrypt, `get_current_user` / force-change gate |
 | Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
-| DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs. `app/database.py` raises |
+| DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
@@ -102,7 +101,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - Do not add SQLAlchemy, `app/models/`, or Alembic. Schema changes go in `schema_baseline.sql` + `PATCHES`.
-- Do not call `app.database.async_session` (raises). Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
+- Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
 - Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `llm/client.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`.
 - Do not start process-wide connector/`start_all`/trigger loops from request handlers (one `start_client` after save is the existing exception). Do not start them before `init_pool`.
 - Do not inject sandbox guest proxy from process `HTTP_PROXY`. Do not put authenticated proxy URLs on bwrap `--setenv`.

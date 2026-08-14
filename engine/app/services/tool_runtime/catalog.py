@@ -5,9 +5,7 @@ from __future__ import annotations
 import copy
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any
 
 from app.core.logging import logger
 from app.core.tool_types import ToolDefinition
@@ -20,7 +18,6 @@ from app.db.session import connection_ctx, get_connection
 class CatalogDependencies:
     """Facade collaborators captured for one catalog assembly request."""
 
-    session_factory: Callable[[], AbstractAsyncContextManager[Any]]
     agent_has_feishu: Callable[[uuid.UUID], Awaitable[bool]]
     agent_has_any_channel: Callable[[uuid.UUID], Awaitable[bool]]
     get_computer_os_type: Callable[[uuid.UUID], Awaitable[str]]
@@ -72,24 +69,14 @@ async def _resolve_channel_presence(
     return await feishu_fn(agent_id), await any_fn(agent_id)
 
 
-async def agent_has_feishu(
-    agent_id: uuid.UUID,
-    *,
-    session_factory: Callable[[], AbstractAsyncContextManager[Any]] | None = None,
-) -> bool:
+async def agent_has_feishu(agent_id: uuid.UUID) -> bool:
     """Check whether an agent has a configured Feishu channel."""
-    del session_factory
     has_feishu, _has_any = await _channel_presence(agent_id)
     return has_feishu
 
 
-async def agent_has_any_channel(
-    agent_id: uuid.UUID,
-    *,
-    session_factory: Callable[[], AbstractAsyncContextManager[Any]] | None = None,
-) -> bool:
+async def agent_has_any_channel(agent_id: uuid.UUID) -> bool:
     """Check whether an agent has any configured external channel."""
-    del session_factory
     _has_feishu, has_any = await _channel_presence(agent_id)
     return has_any
 
