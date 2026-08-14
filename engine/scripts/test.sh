@@ -3,4 +3,4 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-uv run --extra dev pytest
+uv run --extra dev pytest --cov-fail-under=90

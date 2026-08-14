@@ -221,3 +221,4 @@ __marimo__/
 *.omgb/
 *.docker/
 *docker-data/
+engine/coverage.json

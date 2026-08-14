@@ -64,6 +64,7 @@ teams = [
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=6.0.0",
     "httpx>=0.28.1",
     "ruff>=0.16.1",
     "ty>=0.0.65",
@@ -177,6 +178,38 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+# 90% gate on the admin / tenant / auth surface
+addopts = [
+    "--cov=app.api.admin",
+    "--cov=app.api.users",
+    "--cov=app.services.admin_provisioning",
+    "--cov=app.services.admin_audit",
+    "--cov=app.services.tenant_provisioning",
+    "--cov=app.services.platform_admin_seeder",
+    "--cov=app.dao.admin_audit_dao",
+    "--cov=app.core.security",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=90",
+]
+
+[tool.coverage.run]
+branch = true
+omit = [
+    "app/services/skill_creator_files/*",
+    "app/services/gogcli_skill_files/*",
+    "app/services/clawsec_skill_files/*",
+    "app/templates/*",
+    "app/scripts/test_cleanup_duplicate_feishu_users.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == [\"']__main__[\"']:",
+]
 
 [build-system]
 requires = ["setuptools>=82.0.1", "wheel"]
