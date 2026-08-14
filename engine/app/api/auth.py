@@ -448,7 +448,7 @@ async def _handle_normal_register(
     token = create_access_token(str(user.id), user.role)
     return RegisterInitResponse(
         user_id=user.id,
-        email=user.email or "",
+        email=data.email,
         access_token=token,
         user=UserOut.model_validate(user),
         message="Registration successful. Please verify your email."
