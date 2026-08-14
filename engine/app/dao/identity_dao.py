@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
@@ -27,6 +27,7 @@ _IDENTITY_COLUMNS = (
 )
 
 
+@final
 class IdentityDAO(BaseDAO[IdentityRecord]):
     """DAO for Identity records handling authentication credentials."""
 

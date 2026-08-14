@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
@@ -30,6 +30,7 @@ def _skill_from_row(row: Mapping[str, object]) -> SkillRecord:
     return SkillRecord.from_row(row)
 
 
+@final
 class SkillDAO(BaseDAO[SkillRecord]):
     """DAO for global skill registry rows."""
 
@@ -254,6 +255,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         return skill
 
 
+@final
 class SkillFileDAO(BaseDAO[SkillFileRecord]):
     """DAO for skill file rows."""
 

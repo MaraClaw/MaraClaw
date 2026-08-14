@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
@@ -89,6 +89,7 @@ _HEARTBEAT_CANDIDATE_COLUMNS = (
 )
 
 
+@final
 class AgentDAO(BaseDAO[AgentRecord]):
     """DAO for Agent records."""
 
@@ -757,6 +758,7 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
 )
 
 
+@final
 class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
     """DAO for AgentPermission records."""
 

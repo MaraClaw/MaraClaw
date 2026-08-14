@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -25,6 +25,7 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
     table: ClassVar[str] = "agent_credentials"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

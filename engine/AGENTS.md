@@ -127,6 +127,7 @@ SKIP_INSTALL=1 SKIP_MIGRATIONS=1 ./start-from-sourcecode.sh
 
 uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
+uv run --extra dev basedpyright --project pyrightconfig.json app
 uv run --extra dev ty check .
 uv run python scripts/check_no_new_sqlalchemy.py
 uv run python scripts/check_no_direct_loguru.py
@@ -137,7 +138,7 @@ uv run python -m app.scripts.bootstrap_db
 
 ## NOTES
 
-- No `.github/workflows` in this checkout. Documented local gates: ruff, both freeze scripts, ty, pytest. No Docker/schema job. Local `scripts/lint.sh` does **not** run the freeze scripts.
+- No `.github/workflows` in this checkout. Documented local gates: ruff, basedpyright (`reportAny`), both freeze scripts, ty, pytest. No Docker/schema job. Local `scripts/lint.sh` does **not** run the freeze scripts.
 - Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
 - `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. Source start always bootstraps unless `SKIP_MIGRATIONS=1`.
 - `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
@@ -41,6 +41,7 @@ class AuditLogRecord:
 _COLUMNS = ("id", "user_id", "agent_id", "action", "details", "ip_address", "created_at")
 
 
+@final
 class AuditLogDAO(BaseDAO[AuditLogRecord]):
     table: ClassVar[str] = "audit_logs"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

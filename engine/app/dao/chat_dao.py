@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID, uuid4
 
 from app.core.json_types import (
@@ -48,6 +48,7 @@ _MESSAGE_COLUMNS = (
 )
 
 
+@final
 class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
     """DAO for chat session rows."""
 
@@ -474,6 +475,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             ]
 
 
+@final
 class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
     """DAO for chat message rows."""
 

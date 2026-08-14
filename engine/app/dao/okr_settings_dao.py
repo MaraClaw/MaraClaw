@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -24,6 +24,7 @@ _COLUMNS = (
 )
 
 
+@final
 class OKRSettingsDAO(BaseDAO[OKRSettingsRecord]):
     """Minimal DAO for per-tenant OKR configuration."""
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row
@@ -33,6 +33,7 @@ _TASK_COLUMNS = (
 _LOG_COLUMNS = ("id", "task_id", "content", "created_at")
 
 
+@final
 class TaskDAO(BaseDAO[TaskRecord]):
     table: ClassVar[str] = "tasks"
     columns: ClassVar[tuple[str, ...]] = _TASK_COLUMNS
@@ -127,6 +128,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
             return TaskRecord.from_row(row) if row else None
 
 
+@final
 class TaskLogDAO(BaseDAO[TaskLogRecord]):
     table: ClassVar[str] = "task_logs"
     columns: ClassVar[tuple[str, ...]] = _LOG_COLUMNS

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import str_from_row
@@ -27,6 +27,7 @@ _COLUMNS = (
 )
 
 
+@final
 class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
     """DAO for per-agent channel connector rows."""
 

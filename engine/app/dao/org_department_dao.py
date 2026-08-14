@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_list_from_rows
@@ -25,6 +25,7 @@ _COLUMNS = (
 )
 
 
+@final
 class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
     """DAO for organization department rows."""
 

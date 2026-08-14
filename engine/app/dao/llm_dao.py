@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row_opt
@@ -29,6 +29,7 @@ _LLM_COLUMNS = (
 )
 
 
+@final
 class LLMModelDAO(BaseDAO[LLMModelRecord]):
     """DAO for LLM model pool rows."""
 

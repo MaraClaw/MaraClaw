@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -40,6 +40,7 @@ _LOCK_COLUMNS = (
 )
 
 
+@final
 class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
     table: ClassVar[str] = "workspace_file_revisions"
     columns: ClassVar[tuple[str, ...]] = _REVISION_COLUMNS
@@ -98,6 +99,7 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
             return WorkspaceFileRevisionRecord.from_row(row) if row else None
 
 
+@final
 class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
     table: ClassVar[str] = "workspace_edit_locks"
     columns: ClassVar[tuple[str, ...]] = _LOCK_COLUMNS

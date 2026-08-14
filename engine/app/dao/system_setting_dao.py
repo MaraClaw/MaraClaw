@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, final
 
 from app.core.json_types import is_str_dict
 from app.dao.base import BaseDAO
@@ -11,6 +11,7 @@ from app.records.system_setting import SystemSettingRecord
 _COLUMNS = ("key", "value", "updated_at")
 
 
+@final
 class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
     """Typed access layer for platform-level system settings."""
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import date_from_row_opt, uuid_from_row
@@ -96,6 +96,7 @@ _COMPANY_REPORT_COLUMNS = (
 )
 
 
+@final
 class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
     """DAO for okr_objectives."""
 
@@ -189,6 +190,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
             return {uuid_from_row(row["owner_id"]) for row in rows if row.get("owner_id") is not None}
 
 
+@final
 class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
     """DAO for okr_key_results."""
 
@@ -235,6 +237,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
             return kr, obj
 
 
+@final
 class OKRProgressLogDAO(BaseDAO[OKRProgressLogRecord]):
     """DAO for okr_progress_logs."""
 
@@ -251,6 +254,7 @@ class OKRProgressLogDAO(BaseDAO[OKRProgressLogRecord]):
             return len(rows)
 
 
+@final
 class WorkReportDAO(BaseDAO[WorkReportRecord]):
     """DAO for work_reports."""
 
@@ -280,6 +284,7 @@ class WorkReportDAO(BaseDAO[WorkReportRecord]):
             return [WorkReportRecord.from_row(row) for row in rows]
 
 
+@final
 class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
     """DAO for member_daily_reports."""
 
@@ -319,6 +324,7 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
             return [MemberDailyReportRecord.from_row(row) for row in rows]
 
 
+@final
 class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
     """DAO for company_reports."""
 

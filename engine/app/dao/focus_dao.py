@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -28,6 +28,7 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
     table: ClassVar[str] = "agent_focus_items"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

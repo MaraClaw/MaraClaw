@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import (
@@ -89,6 +89,7 @@ def _user_from_joined_row(row: dict[str, Any]) -> UserRecord:
     return UserRecord.from_row(user_row, identity=identity)
 
 
+@final
 class UserDAO(BaseDAO[UserRecord]):
     """DAO for User records handling tenant-scoped members."""
 

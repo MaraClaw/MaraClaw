@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -25,6 +25,7 @@ _COLUMNS = (
 )
 
 
+@final
 class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
     table: ClassVar[str] = "gogcli_credential_states"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

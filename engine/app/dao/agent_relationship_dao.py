@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import str_from_row, uuid_from_row, uuid_from_row_opt
@@ -24,6 +24,7 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
     table: ClassVar[str] = "agent_relationships"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

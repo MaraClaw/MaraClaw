@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import (
@@ -39,6 +39,7 @@ _COLUMNS = (
 )
 
 
+@final
 class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
     """DAO for OrgMember records."""
 

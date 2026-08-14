@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID, uuid4
 
 from app.dao.base import BaseDAO
@@ -22,6 +22,7 @@ _COLUMNS = (
 )
 
 
+@final
 class UserTenantOnboardingDAO(BaseDAO[UserTenantOnboardingRecord]):
     table: ClassVar[str] = "user_tenant_onboardings"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

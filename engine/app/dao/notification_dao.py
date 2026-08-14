@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -25,6 +25,7 @@ _NOTIFICATION_COLUMNS = (
 )
 
 
+@final
 class NotificationDAO(BaseDAO[NotificationRecord]):
     """DAO for notification rows."""
 

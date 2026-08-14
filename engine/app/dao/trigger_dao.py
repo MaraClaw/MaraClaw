@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -49,6 +49,7 @@ _EXECUTION_COLUMNS = (
 )
 
 
+@final
 class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     """DAO for agent trigger definitions."""
 
@@ -126,6 +127,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             return len(rows)
 
 
+@final
 class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     """DAO for durable trigger execution queue rows."""
 

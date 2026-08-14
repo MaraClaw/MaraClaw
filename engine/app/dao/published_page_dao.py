@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -22,6 +22,7 @@ _COLUMNS = (
 )
 
 
+@final
 class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
     table: ClassVar[str] = "published_pages"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

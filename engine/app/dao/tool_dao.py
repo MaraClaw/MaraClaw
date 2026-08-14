@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, uuid_list_from_rows
@@ -44,6 +44,7 @@ _AGENT_TOOL_COLUMNS = (
 )
 
 
+@final
 class ToolDAO(BaseDAO[ToolRecord]):
     """DAO for the tools catalog."""
 
@@ -313,6 +314,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
             return len(rows)
 
 
+@final
 class AgentToolDAO(BaseDAO[AgentToolRecord]):
     """DAO for agent tool assignments."""
 

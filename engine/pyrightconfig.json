@@ -6,6 +6,7 @@
   "venvPath": ".",
   "venv": ".venv",
   "reportUnannotatedClassAttribute": "error",
+  "reportAny": "error",
   "exclude": [
     "**/skill_creator_files/**",
     "**/clawsec_skill_files/**",

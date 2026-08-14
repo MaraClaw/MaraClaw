@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID, uuid4
 
 from app.core.json_types import int_from_row
@@ -24,6 +24,7 @@ _COLUMNS = (
 )
 
 
+@final
 class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
     """DAO for L3 autonomy approval requests."""
 

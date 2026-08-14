@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import date_from_row, int_from_row
@@ -22,6 +22,7 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
     table: ClassVar[str] = "agent_activity_logs"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS

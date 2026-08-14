@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_findall, uuid_from_row
@@ -54,6 +54,7 @@ _TENANT_COLUMNS = (
 )
 
 
+@final
 class TenantDAO(BaseDAO[TenantRecord]):
     """DAO for Tenant records."""
 

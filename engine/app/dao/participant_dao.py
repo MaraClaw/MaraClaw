@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -11,6 +11,7 @@ from app.records.participant import ParticipantRecord
 _COLUMNS = ("id", "type", "ref_id", "display_name", "avatar_url", "created_at")
 
 
+@final
 class ParticipantDAO(BaseDAO[ParticipantRecord]):
     """DAO for Participant records."""
 

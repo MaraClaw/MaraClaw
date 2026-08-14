@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -22,6 +22,7 @@ _COLUMNS = (
 )
 
 
+@final
 class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
     """DAO for InvitationCode records."""
 

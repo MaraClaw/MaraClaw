@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row
@@ -54,6 +54,7 @@ _PRIVATE_OR_SYSTEM_POST = (
 )
 
 
+@final
 class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
     """DAO for plaza_posts rows."""
 
@@ -170,6 +171,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             return PlazaPostRecord.from_row(row) if row else None
 
 
+@final
 class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
     """DAO for plaza_comments rows."""
 
@@ -210,6 +212,7 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
             return [(uuid_from_row(row["author_id"]), str_from_row(row["author_type"])) for row in rows]
 
 
+@final
 class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
     """DAO for plaza_likes rows."""
 

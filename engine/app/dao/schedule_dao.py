@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -25,6 +25,7 @@ _COLUMNS = (
 )
 
 
+@final
 class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
     table: ClassVar[str] = "agent_schedules"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
