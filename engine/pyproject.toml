@@ -129,9 +129,16 @@ combine-as-imports = true
 "tests/**/*.py" = ["S101", "S105", "S106", "S108", "S311", "PT011"]
 "app/scripts/**/*.py" = ["T201", "S608"]
 "scripts/**/*.py" = ["T201"]
-# DAO/service SQL builders use class-constant fragments and named parameters.
+# DAO SQL builders use class-constant fragments and named parameters.
 "app/dao/**/*.py" = ["S608"]
-"app/services/**/*.py" = ["S608"]
+# Parameterized fragment SQL (%(name)s). Bandit S608 flags concatenation, not interpolation.
+"app/api/schedules.py" = ["S608"]
+"app/api/skills.py" = ["S608"]
+"app/services/agent_tool_exec/a2a_triggers.py" = ["S608"]
+"app/services/agent_tool_exec/trigger_helpers.py" = ["S608"]
+"app/services/onboarding.py" = ["S608"]
+"app/services/org_sync/departments.py" = ["S608"]
+"app/services/tool_config.py" = ["S608"]
 # Protocol methods/args must match third-party APIs (boto3, docx, pptx).
 "app/services/storage_runtime/s3.py" = ["N803"]
 "app/services/text_extractor.py" = ["N802"]
@@ -140,7 +147,7 @@ combine-as-imports = true
 "app/services/agent_tool_exec/document_reading.py" = ["N802"]
 
 [tool.ruff.lint.extend-per-file-ignores]
-"app/api/**/*.py" = ["B008", "FAST002", "S608"]
+"app/api/**/*.py" = ["B008", "FAST002"]
 "app/core/security.py" = ["B008"]
 "app/main.py" = ["E402"]
 "check_agentbay_config.py" = ["T201"]
