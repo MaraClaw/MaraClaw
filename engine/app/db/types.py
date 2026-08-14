@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from psycopg import AsyncConnection
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 from psycopg.types.json import Jsonb
 
 
-def configure_connection(conn: AsyncConnection[Any]) -> None:
+def configure_connection(conn: AsyncConnection[DictRow]) -> None:
     """Apply project-wide connection defaults.
 
     Called for every pooled connection. Prefer JSONB for dict/list payloads

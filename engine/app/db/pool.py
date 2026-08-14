@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import get_settings
@@ -12,10 +11,12 @@ from app.core.logging import logger
 from app.db.types import configure_connection
 from app.db.url import normalize_psycopg_conninfo
 
-_pool: AsyncConnectionPool[Any] | None = None
+type EnginePool = AsyncConnectionPool[AsyncConnection[DictRow]]
+
+_pool: EnginePool | None = None
 
 
-def get_pool() -> AsyncConnectionPool[Any]:
+def get_pool() -> EnginePool:
     """Return the process-global pool, or raise if not initialized."""
     if _pool is None:
         raise RuntimeError("psycopg pool is not initialized; call init_pool() during startup")
@@ -28,7 +29,7 @@ async def init_pool(
     min_size: int | None = None,
     max_size: int | None = None,
     pool_timeout: float | None = None,
-) -> AsyncConnectionPool[Any]:
+) -> EnginePool:
     """Create and open the global async connection pool."""
     global _pool
     if _pool is not None:
@@ -48,10 +49,10 @@ async def init_pool(
     max_idle = float(getattr(settings, "DATABASE_POOL_MAX_IDLE", 600.0) or 600.0)
     max_lifetime = float(getattr(settings, "DATABASE_POOL_MAX_LIFETIME", 1800.0) or 1800.0)
 
-    async def _configure(conn: AsyncConnection[Any]) -> None:
+    async def _configure(conn: AsyncConnection[DictRow]) -> None:
         configure_connection(conn)
 
-    pool = AsyncConnectionPool(
+    pool = AsyncConnectionPool[AsyncConnection[DictRow]](
         conninfo=info,
         min_size=pool_min,
         max_size=pool_max,
@@ -59,7 +60,7 @@ async def init_pool(
         open=False,
         configure=_configure,
         check=_check_pooled_connection,
-        kwargs={"autocommit": False},
+        kwargs={"autocommit": False, "row_factory": dict_row},
         name="maraclaw",
         max_idle=max_idle,
         max_lifetime=max_lifetime,
@@ -73,9 +74,9 @@ async def init_pool(
     return pool
 
 
-async def _check_pooled_connection(conn: AsyncConnection[Any]) -> None:
+async def _check_pooled_connection(conn: AsyncConnection[DictRow]) -> None:
     """Reject already-closed sockets without a checkout-time ``SELECT 1``."""
-    if getattr(conn, "closed", False):
+    if conn.closed:
         raise OSError("psycopg connection is closed")
 
 
@@ -91,11 +92,13 @@ async def close_pool() -> None:
 
 async def ping_pool() -> bool:
     """Return True when the pool can run ``SELECT 1``."""
+    from app.core.json_types import int_from_row
+    from app.db.connection import DbConnection
+
     pool = get_pool()
-    async with pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute("SELECT 1 AS ok")
-        row = await cur.fetchone()
-        return bool(row and (row.get("ok") == 1 if isinstance(row, dict) else row[0] == 1))
+    async with pool.connection() as conn:
+        db = DbConnection(conn)
+        return int_from_row(await db.fetchval("SELECT 1")) == 1
 
 
 def reset_pool_for_tests() -> None:

@@ -7,13 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 from croniter import croniter
 
-from app.core.json_types import mapping_from_row
+from app.core.json_types import json_object_from
 from app.records.trigger import AgentTriggerRecord
 
 
 def build_scheduled_execution_key(trigger: AgentTriggerRecord, now: datetime) -> str:
     """Build a deterministic idempotency key for non-webhook trigger runs."""
-    cfg = mapping_from_row(trigger.config)
+    cfg = json_object_from(trigger.config)
     trigger_type = trigger.type
 
     if trigger_type == "once":

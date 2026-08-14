@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from croniter import croniter
 
-from app.core.json_types import JsonObject, JsonValue, str_from_row, uuid_from_row
+from app.core.json_types import JsonObject, JsonValue, json_value_from_response, str_from_row, uuid_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
@@ -327,7 +327,7 @@ async def poll_check(trigger: AgentTriggerRecord) -> bool:
             resp = await client.request(method, url, headers=headers)
             _ = resp.raise_for_status()
 
-        data = resp.json()
+        data = json_value_from_response(resp)
         json_path = cfg.get("json_path", "$")
         if not isinstance(json_path, str):
             return False

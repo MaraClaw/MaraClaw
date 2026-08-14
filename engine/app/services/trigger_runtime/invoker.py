@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
 
-from app.core.json_types import json_as_str, json_as_str_or, mapping_from_row
+from app.core.json_types import json_as_str, json_as_str_or, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -157,7 +157,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
             if t.type == "on_message" and cfg.get("okr_member_id") and cfg.get("okr_report_date"):
                 part += (
                     "\nExecution requirements: This event stores a daily-report reply."
-                    + f"\n1. Organize the response into a final daily report of no more than 2,000 words."
+                    + "\n1. Organize the response into a final daily report of no more than 2,000 words."
                     + f'\n2. Immediately call upsert_member_daily_report(report_date="{cfg["okr_report_date"]}", '
                     + f'member_type="{cfg.get("okr_member_type", "user")}", '
                     + f'member_id="{cfg["okr_member_id"]}", content="<organized daily report>").'
@@ -317,7 +317,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
             try:
                 trigger_reasons = []
                 for t in triggers:
-                    summary_value = json_as_str_or((t.config or {}).get("_notification_summary", ""))
+                    summary_value = json_as_str_or(json_object_from(t.config).get("_notification_summary"))
                     ns = summary_value.strip()
                     if ns:
                         trigger_reasons.append(ns)

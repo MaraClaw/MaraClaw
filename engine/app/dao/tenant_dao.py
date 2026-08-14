@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 from uuid import UUID
 
-from app.core.json_types import int_from_row, uuid_from_row
+from app.core.json_types import int_from_row, str_findall, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO
@@ -20,7 +20,7 @@ _DEFAULT_SEARCH_LIMIT = 50
 
 def tenant_name_tsquery(raw: str) -> str | None:
     """Build a prefix ``simple`` tsquery so ``mara`` matches ``MaraClaw``."""
-    tokens = _SEARCH_TOKEN.findall((raw or "").strip().lower())
+    tokens = str_findall(_SEARCH_TOKEN, (raw or "").strip().lower())
     if not tokens:
         return None
     return " & ".join(f"{token}:*" for token in tokens[:_MAX_SEARCH_TOKENS])

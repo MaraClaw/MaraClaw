@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from app.config import get_settings
+from app.core.json_types import str_findall
 from app.core.logging import logger
 from app.dao.base import as_uuid
 from app.records.agent import AgentRecord
@@ -274,7 +275,7 @@ def _convert_messages_for_vision(api_messages: list[LLMMessage], supports_vision
 
             content_str = msg.content
             pattern = r"\[image_data:(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)\]"
-            images = _re_v.findall(pattern, content_str)
+            images = str_findall(_re_v.compile(pattern), content_str)
 
             if not images:
                 continue

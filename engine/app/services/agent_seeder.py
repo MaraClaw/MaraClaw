@@ -1,9 +1,10 @@
 """Seed default agents (Morty & Meeseeks) on first platform startup."""
 
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 from app.config import get_settings
+from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao, agent_permission_dao
@@ -478,7 +479,15 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
         system=True,
     )
 
-    triggers_to_create: list[dict[str, Any]] = [
+    class _SeedTrigger(TypedDict):
+        name: str
+        type: str
+        config: JsonObject
+        reason: str
+        cooldown_seconds: int
+        is_system: bool
+
+    triggers_to_create: list[_SeedTrigger] = [
         {
             "name": "daily_okr_collection",
             "type": "cron",

@@ -172,13 +172,18 @@ def _decode_header_value(value: str) -> str:
     """Decode an email header value (handles encoded words)."""
     if not value:
         return ""
-    decoded_parts = decode_header(value)
+    decoded_parts: object = decode_header(value)
     result: list[str] = []
-    for part, charset in decoded_parts:
+    items = list[object](decoded_parts) if isinstance(decoded_parts, list) else []
+    for item in items:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        part = item[0]
+        charset = item[1]
         encoding = charset if isinstance(charset, str) else "utf-8"
         if isinstance(part, bytes):
             result.append(part.decode(encoding, errors="replace"))
-        else:
+        elif isinstance(part, str):
             result.append(part)
     return "".join(result)
 
@@ -379,7 +384,7 @@ async def read_emails(
                         body = body[:500] + "..."
 
                     results.append(
-                        f"---\n"
+                        "---\n"
                         + f"**From:** {from_addr}\n"
                         + f"**Subject:** {subject}\n"
                         + f"**Date:** {date_str}\n"

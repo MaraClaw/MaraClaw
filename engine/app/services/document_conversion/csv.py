@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol, cast
+
+
+class _Worksheet(Protocol):
+    def append(self, values: list[str]) -> object: ...
+
+
+class _Workbook(Protocol):
+    worksheets: Sequence[_Worksheet]
+
+    def save(self, filename: str) -> object: ...
+
+
+class _OpenpyxlModule(Protocol):
+    Workbook: type[_Workbook]
 
 
 def _convert_csv_to_xlsx(src_file: Path, tgt_file: Path, target_path: str) -> str:
     import csv
 
-    openpyxl = importlib.import_module("openpyxl")
+    openpyxl = cast(_OpenpyxlModule, importlib.import_module("openpyxl"))
 
     text = src_file.read_text(encoding="utf-8-sig")
     lines = [line.strip() for line in text.splitlines() if line.strip()][:10]

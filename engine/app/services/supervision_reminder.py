@@ -12,6 +12,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import NotRequired, TypedDict
 
+from app.core.json_types import json_loads_object
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -43,7 +44,7 @@ def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
     if not remind_schedule:
         return None
     try:
-        sched = json.loads(remind_schedule)
+        sched = json_loads_object(remind_schedule)
         if isinstance(sched, dict):
             sched_map = dict[str, object](sched)
             frequency = sched_map.get("freq")

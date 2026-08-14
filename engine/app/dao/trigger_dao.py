@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import ClassVar
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -132,7 +133,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
     record_factory = staticmethod(TriggerExecutionRecord.from_row)
 
-    async def try_enqueue(self, *, obj_in: dict[str, Any]) -> tuple[TriggerExecutionRecord | None, bool]:
+    async def try_enqueue(self, *, obj_in: Mapping[str, object]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
 
         Uses a savepoint so a unique violation does not abort an outer request
@@ -148,7 +149,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         cols = list(dict.fromkeys([c for c in data if c in self.columns or c == self.pk]))
         if not cols:
             raise ValueError("try_enqueue() requires at least one column value")
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         for col in cols:
             value: object = data[col]
             params[col] = as_jsonb(value) if isinstance(value, dict) else value

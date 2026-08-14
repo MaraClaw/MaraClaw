@@ -77,7 +77,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
             )
             return int_from_row(value)
 
-    async def bulk_insert_ignore(self, rows: list[dict[str, Any]]) -> int:
+    async def bulk_insert_ignore(self, rows: list[dict[str, object]]) -> int:
         if not rows:
             return 0
         inserted = 0

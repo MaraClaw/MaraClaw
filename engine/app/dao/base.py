@@ -12,6 +12,7 @@ from dataclasses import MISSING, fields, is_dataclass
 from typing import ClassVar
 from uuid import UUID, uuid4
 
+from app.core.json_types import object_attr, object_call
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.db.types import as_jsonb
@@ -77,19 +78,20 @@ class BaseDAO[RecordT]:
 
     def _record_defaults(self) -> dict[str, object]:
         """Return dataclass field defaults for columns this DAO owns."""
-        record_cls = getattr(self.record_factory, "__self__", None)
+        record_cls = object_attr(self.record_factory, "__self__", None)
         if record_cls is None or not is_dataclass(record_cls):
             return {}
         defaults: dict[str, object] = {}
         for item in fields(record_cls):
             if item.name not in self.columns:
                 continue
-            if item.default is not MISSING:
-                default_value: object = item.default
+            default_value = object_attr(item, "default", MISSING)
+            if default_value is not MISSING:
                 defaults[item.name] = default_value
-            elif item.default_factory is not MISSING:  # type: ignore[misc]
-                factory_value: object = item.default_factory()
-                defaults[item.name] = factory_value
+                continue
+            factory = object_attr(item, "default_factory", MISSING)
+            if factory is not MISSING:
+                defaults[item.name] = object_call(factory)
         return defaults
 
     async def create(self, *, obj_in: Mapping[str, object]) -> RecordT:
@@ -126,7 +128,7 @@ class BaseDAO[RecordT]:
         data = {k: v for k, v in obj_in.items() if k in self.columns and k != self.pk}
         if not data:
             return db_obj
-        pk_value: object = getattr(db_obj, self.pk)
+        pk_value = object_attr(db_obj, self.pk)
         params: dict[str, object] = {self.pk: pk_value}
         assignments: list[str] = []
         for col, raw_value in data.items():

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Final
 
@@ -44,7 +43,9 @@ def load_clawsec_manifest() -> dict[str, object]:
             "default_skills": [],
             "catalog_only_skills": [],
         }
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    from app.core.json_types import json_loads_object
+
+    payload = json_loads_object(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         return {
             "skills": [],

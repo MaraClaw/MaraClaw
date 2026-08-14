@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from app.records.channel_config import ChannelConfigRecord
@@ -27,15 +28,17 @@ def _mask(value: str | None, *, present_label: str = "***") -> str | None:
     return present_label
 
 
-def redact_extra_config(extra: dict[str, Any] | None) -> dict[str, Any] | None:
+def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | None:
+    if extra is None:
+        return None
     if not extra:
-        return extra
+        return {}
     out: dict[str, Any] = {}
     for key, value in extra.items():
         if key in _SECRET_EXTRA_KEYS or "secret" in key.lower() or "private" in key.lower() or "token" in key.lower():
             if isinstance(value, dict):
                 # SA JSON: keep non-secret metadata only
-                secret_obj = dict[str, Any](value)
+                secret_obj = dict[str, object](value)
                 meta: dict[str, Any] = {
                     k: v
                     for k, v in secret_obj.items()

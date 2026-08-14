@@ -9,6 +9,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from uuid import UUID
 
+from app.core.json_types import object_attr
+
 _memo: ContextVar[dict[tuple[str, str], object] | None] = ContextVar("row_memo", default=None)
 
 
@@ -60,7 +62,8 @@ def memo_drop_kind(kind: str, *, identity_id: UUID | str | None = None) -> None:
         if want is None:
             stale.append(key)
             continue
-        linked = getattr(value, "identity_id", None) or getattr(getattr(value, "identity", None), "id", None)
+        identity = object_attr(value, "identity")
+        linked = object_attr(value, "identity_id") or object_attr(identity, "id")
         if linked is not None and str(linked) == want:
             stale.append(key)
     for key in stale:

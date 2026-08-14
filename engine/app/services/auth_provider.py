@@ -11,7 +11,13 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from app.core.json_types import JsonObject, is_json_object, json_as_str
+from app.core.json_types import (
+    JsonObject,
+    is_json_object,
+    json_as_str,
+    json_loads_value,
+    json_value_from_response,
+)
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, user_dao
 from app.dao.base import as_uuid
@@ -34,7 +40,9 @@ def _as_payload(value: object) -> AuthProviderPayload:
 
 
 def _payload_from_response(resp: httpx.Response) -> AuthProviderPayload:
-    return _as_payload(resp.json())
+    from app.core.json_types import json_value_from_response
+
+    return _as_payload(json_value_from_response(resp))
 
 
 @dataclass
@@ -488,7 +496,7 @@ class WeComAuthProvider(BaseAuthProvider):
         """
         base_url = "https://open.work.weixin.qq.com/wwlogin/sso/login"
         params = (
-            f"loginType=CorpPinCorp"
+            "loginType=CorpPinCorp"
             + f"&appid={self.corp_id}"
             + f"&agentid={self.agent_id}"
             + f"&redirect_uri={quote(redirect_uri)}"
@@ -606,10 +614,9 @@ class WeComAuthProvider(BaseAuthProvider):
           - mobile: sensitive_data only (restricted post-2022 in user/get)
           - name: basic_data (non-sensitive, from user/get)
         """
-        import json
 
         try:
-            data = _as_payload(json.loads(access_token))
+            data = _as_payload(json_loads_value(access_token))
             userid = self._payload_string(data, "userid")
             sensitive = _as_payload(data.get("sensitive"))
             basic = _as_payload(data.get("basic"))
@@ -696,11 +703,11 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
         params = (
             f"client_id={quote(self.client_id or '')}"
             + f"&redirect_uri={quote(redirect_uri)}"
-            + f"&response_type=code"
+            + "&response_type=code"
             + f"&scope={quote(scope_value)}"
             + f"&state={quote(state or '')}"
             + f"&access_type={quote(access_type)}"
-            + f"&include_granted_scopes=true"
+            + "&include_granted_scopes=true"
             + f"&prompt={quote(prompt)}"
         )
         return f"{self.GOOGLE_AUTHORIZE_URL}?{params}"
@@ -930,7 +937,7 @@ class GitHubAuthProvider(BaseAuthProvider):
             email = self._payload_string(user_data, "email")
             if not email:
                 emails_resp = await client.get(self.GITHUB_EMAILS_URL, headers=headers)
-                emails_raw: object = emails_resp.json()
+                emails_raw = json_value_from_response(emails_resp)
                 if emails_resp.status_code == 200 and isinstance(emails_raw, list):
                     emails: list[AuthProviderPayload] = [
                         item for item in list[object](emails_raw) if _is_payload(item)

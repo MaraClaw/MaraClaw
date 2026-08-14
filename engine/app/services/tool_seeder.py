@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, TypedDict, TypeIs
 from uuid import UUID
 
-from app.core.json_types import JsonObject, JsonValue, json_as_str, object_list_from_row
+from app.core.json_types import JsonObject, JsonValue, json_as_str, json_object_from, object_list_from_row
 from app.core.logging import logger
 from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tenant_dao, tool_dao
@@ -332,13 +332,17 @@ async def seed_builtin_tools():
                         config_schema,
                     )
                     migrated += 1
-                schema_fields = object_list_from_row((tool.config_schema or {}).get("fields", []))
+                schema = json_object_from(tool.config_schema)
+                schema_fields = object_list_from_row(schema.get("fields"))
                 sensitive_keys = {
                     key
                     for field in schema_fields
                     if json_as_str(field.get("type")) == "password" and (key := json_as_str(field.get("key")))
                 }
-                clean_config = {key: value for key, value in (tool.config or {}).items() if key not in sensitive_keys}
+                config = json_object_from(tool.config)
+                clean_config: JsonObject = {
+                    key: config[key] for key in config if key not in sensitive_keys
+                }
                 if clean_config != tool.config:
                     _ = await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})
             if migrated:

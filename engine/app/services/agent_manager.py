@@ -5,13 +5,13 @@ import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from python_on_whales import ClientNotFoundError, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_loads_object
 from app.core.logging import logger
 from app.dao import llm_model_dao
 from app.records.agent import AgentRecord
@@ -96,19 +96,18 @@ class AgentManager:
             import time
 
             t_start_files = time.perf_counter()
-            tasks: list[Any] = []
+
+            async def _write_template(dest: str, payload: bytes) -> None:
+                await storage.write_bytes(dest, payload)
+
+            tasks: list[asyncio.Task[None]] = []
             for src in template_dir.rglob("*"):
                 if src.is_dir():
                     continue
                 rel = src.relative_to(template_dir).as_posix()
                 if rel == "tasks.json" or rel == "todo.json" or rel.startswith("enterprise_info/"):
                     continue
-                tasks.append(
-                    storage.write_bytes(
-                        f"{agent_prefix}/{rel}",
-                        src.read_bytes(),
-                    )
-                )
+                tasks.append(asyncio.create_task(_write_template(f"{agent_prefix}/{rel}", src.read_bytes())))
             if tasks:
                 _ = await asyncio.gather(*tasks)
             logger.info(
@@ -207,7 +206,7 @@ class AgentManager:
         # Customize state.json
         state_key = f"{agent_prefix}/state.json"
         if await storage.exists(state_key):
-            state = json.loads(await storage.read_text(state_key, encoding="utf-8", errors="replace"))
+            state = json_loads_object(await storage.read_text(state_key, encoding="utf-8", errors="replace"))
             state["agent_id"] = str(agent.id)
             state["name"] = agent.name
             await storage.write_text(state_key, json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")

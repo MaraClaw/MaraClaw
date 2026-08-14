@@ -62,9 +62,12 @@ def _disable_wecom_sdk_proxy() -> None:
 
 
 async def _await_maybe(value: object) -> object:
-    if asyncio.iscoroutine(value):
-        return await value
-    return value
+    if not asyncio.iscoroutine(value):
+        return value
+    from collections.abc import Awaitable
+    from typing import cast
+
+    return await cast(Awaitable[object], value)
 
 
 async def _reply_stream(client: object, frame: object, stream_id: str, content: str) -> None:

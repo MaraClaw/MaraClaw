@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, cast
+from typing import cast
 
 from psycopg import AsyncConnection, AsyncCursor
 from psycopg.abc import Params as PgParams, QueryNoTemplate
+from psycopg.rows import DictRow
 
 from app.db.errors import map_psycopg_error
 
@@ -28,11 +29,11 @@ class DbConnection:
     positional ``%s`` for sequences. Never interpolate user input into SQL.
     """
 
-    def __init__(self, conn: AsyncConnection[Any]) -> None:
-        self._conn: AsyncConnection[Any] = conn
+    def __init__(self, conn: AsyncConnection[DictRow]) -> None:
+        self._conn: AsyncConnection[DictRow] = conn
 
     @property
-    def raw(self) -> AsyncConnection[Any]:
+    def raw(self) -> AsyncConnection[DictRow]:
         """Expose the underlying psycopg connection for advanced use."""
         return self._conn
 
@@ -82,7 +83,7 @@ class DbConnection:
             return values[column] if column < len(values) else None
         return row.get(column)
 
-    async def cursor(self) -> AsyncCursor[Any]:
+    async def cursor(self) -> AsyncCursor[DictRow]:
         """Open a raw cursor (caller owns lifecycle via async with)."""
         return self._conn.cursor()
 

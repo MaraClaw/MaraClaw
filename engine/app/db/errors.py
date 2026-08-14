@@ -54,10 +54,12 @@ class CheckViolationError(DbError):
 
 
 def _constraint_name(exc: object) -> str | None:
-    diag = getattr(exc, "diag", None)
+    from app.core.json_types import object_attr
+
+    diag = object_attr(exc, "diag")
     if diag is None:
         return None
-    name = getattr(diag, "constraint_name", None)
+    name = object_attr(diag, "constraint_name")
     return str(name) if name else None
 
 

@@ -64,8 +64,10 @@ def get_agent_timezone_sync(agent: _HasTimezone, tenant: object | None = None) -
     """
     if agent.timezone:
         return agent.timezone
-    tenant_timezone = getattr(tenant, "timezone", None) if tenant is not None else None
-    if tenant_timezone:
+    from app.core.json_types import object_attr
+
+    tenant_timezone = object_attr(tenant, "timezone") if tenant is not None else None
+    if isinstance(tenant_timezone, str) and tenant_timezone:
         return tenant_timezone
     return "UTC"
 

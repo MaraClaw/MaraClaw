@@ -5,13 +5,21 @@ for browser and code execution operations.
 """
 
 import asyncio
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, JsonValue, RootModel
 
-from app.core.json_types import json_as_str, json_as_str_or, json_loads_value, json_object_from
+from app.core.json_types import (
+    json_as_str,
+    json_as_str_or,
+    json_loads_value,
+    json_object_from,
+    object_attr,
+    object_call,
+)
 from app.core.logging import configure_logging, disable_agentbay_logger_override, logger
 from app.core.logging.agentbay import disable_agentbay_logger_override as _disable_before_sdk
 
@@ -37,11 +45,7 @@ def _sdk_item(value: object) -> dict[str, object] | str:
     attrs = _sdk_attr(value, "__dict__")
     if not isinstance(attrs, dict):
         return str(value)
-    mapped: dict[str, object] = {}
-    for key, item in attrs.items():
-        if isinstance(key, str):
-            mapped[key] = item
-    return mapped
+    return {key: item for key, item in attrs.items() if isinstance(key, str)}
 
 
 def _sdk_items(value: object) -> list[dict[str, object] | str]:
@@ -51,9 +55,11 @@ def _sdk_items(value: object) -> list[dict[str, object] | str]:
 
 
 disable_agentbay_logger_override()
-_agentbay_loguru = __import__("sys").modules.get("loguru")
+_agentbay_loguru = sys.modules.get("loguru")
 if _agentbay_loguru is not None:
-    _agentbay_loguru.logger.remove()
+    remove = object_attr(object_attr(_agentbay_loguru, "logger"), "remove")
+    if callable(remove):
+        _ = object_call(remove)
 _ = configure_logging()
 
 
@@ -233,9 +239,9 @@ class AgentBayClient:
                 f"The text '{text}' appears to be a verification/OTP code. "
                 + f"Find the verification code input area near '{selector}'. "
                 + f"Click on the first input box, then paste or type the full code '{text}'. "
-                + f"If the input is split into individual digit boxes, click the first box "
+                + "If the input is split into individual digit boxes, click the first box "
                 + f"and type each digit one at a time: {', '.join(text)}. "
-                + f"Each box should auto-advance to the next after entering a digit."
+                + "Each box should auto-advance to the next after entering a digit."
             )
         else:
             # Standard input: click to focus, then type character by character
@@ -243,7 +249,7 @@ class AgentBayClient:
             action_msg = (
                 f"Click on the element matching '{selector}' to focus it, "
                 + f"then use the keyboard to type the text '{text}' character by character. "
-                + f"This ensures modern web frameworks like React register the input."
+                + "This ensures modern web frameworks like React register the input."
             )
 
         _ = await asyncio.to_thread(session.browser.operator.act, ActOptions(action=action_msg))

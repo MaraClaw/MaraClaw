@@ -64,8 +64,7 @@ def json_loads_value(value: str | bytes | bytearray) -> object:
     """Parse JSON text and return the decoded value."""
     import json
 
-    loaded: object = json.loads(value)
-    return loaded
+    return object_call(json.loads, value)
 
 
 def json_object_from_response(response: SupportsJson) -> JsonObject:
@@ -81,13 +80,11 @@ def json_value_from_response(response: SupportsJson) -> object:
 def object_from_literal(value: str) -> object:
     """Decode a JSON document or Python literal as ``object``."""
     import ast
-    import json
 
     try:
-        loaded: object = ast.literal_eval(value)
-        return loaded
+        return object_call(ast.literal_eval, value)
     except ValueError, SyntaxError:
-        loaded = json.loads(value)
+        loaded = json_loads_value(value)
         return loaded if is_json_value(loaded) else None
 
 
@@ -162,6 +159,31 @@ def object_attr(value: object, name: str, default: object = None) -> object:
     from typing import cast
 
     return cast(object, getattr(value, name, default))
+
+
+def object_call(fn: object, *args: object) -> object:
+    """Call ``fn`` when it is callable and return the result as ``object``."""
+    if not callable(fn):
+        raise TypeError(f"expected callable, got {type(fn)!r}")
+    return fn(*args)
+
+
+def yaml_load_object(value: str) -> object:
+    """Parse a YAML document and return the decoded value as ``object``."""
+    import yaml
+
+    return object_call(yaml.safe_load, value)
+
+
+def str_findall(pattern: object, text: str) -> list[str]:
+    """Return string matches from a compiled regex ``findall``."""
+    findall = object_attr(pattern, "findall")
+    if not callable(findall):
+        return []
+    found: object = findall(text)
+    if not isinstance(found, list):
+        return []
+    return [item for item in list[object](found) if isinstance(item, str)]
 
 
 def str_from_row(value: object, default: str = "") -> str:

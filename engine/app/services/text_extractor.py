@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol, TypeIs
 
+from app.core.json_types import object_attr
 from app.core.logging import logger
 
 # File extensions that need text extraction
@@ -300,21 +301,21 @@ def _extract_pptx(data: bytes) -> str:
     prs: object = pptx_mod.Presentation(io.BytesIO(data))
     parts: list[str] = []
 
-    for i, slide in enumerate(_object_sequence(getattr(prs, "slides", []))):
+    for i, slide in enumerate(_object_sequence(object_attr(prs, "slides", []))):
         texts: list[str] = []
         tables: list[str] = []
-        for shape in _object_sequence(getattr(slide, "shapes", [])):
-            text_frame = getattr(shape, "text_frame", None) if getattr(shape, "has_text_frame", False) else None
+        for shape in _object_sequence(object_attr(slide, "shapes", [])):
+            text_frame = object_attr(shape, "text_frame") if object_attr(shape, "has_text_frame") else None
             if text_frame is not None:
-                for para in _object_sequence(getattr(text_frame, "paragraphs", [])):
+                for para in _object_sequence(object_attr(text_frame, "paragraphs", [])):
                     text = _attr_text(para)
                     if text:
                         texts.append(text)
-            table = getattr(shape, "table", None) if getattr(shape, "has_table", False) else None
+            table = object_attr(shape, "table") if object_attr(shape, "has_table") else None
             if table is not None:
                 rows = [
-                    [_attr_text(cell) for cell in _object_sequence(getattr(row, "cells", []))]
-                    for row in _object_sequence(getattr(table, "rows", []))
+                    [_attr_text(cell) for cell in _object_sequence(object_attr(row, "cells", []))]
+                    for row in _object_sequence(object_attr(table, "rows", []))
                 ]
                 table_md = _markdown_table(rows)
                 if table_md:

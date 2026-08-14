@@ -5,10 +5,15 @@ from collections.abc import Callable
 from typing import NotRequired, TypedDict
 
 import httpx
-import yaml
 from fastapi import HTTPException
 
-from app.core.json_types import JsonValue, json_object_from, json_value_from_response, mapping_from_row
+from app.core.json_types import (
+    JsonValue,
+    json_object_from,
+    json_value_from_response,
+    mapping_from_row,
+    yaml_load_object,
+)
 
 CLAWHUB_BASE = os.getenv("CLAWHUB_BASE", "https://clawhub.ai/api").rstrip("/")
 CLAWHUB_MIRROR_BASE = os.getenv("CLAWHUB_MIRROR_BASE", "https://cn.clawhub-mirror.com/api").rstrip("/")
@@ -192,7 +197,7 @@ def parse_skill_md_frontmatter(content: str) -> SkillFrontmatter:
     if not match:
         return {}
     try:
-        loaded: object = yaml.safe_load(match.group(1))
+        loaded = yaml_load_object(match.group(1))
     except Exception:
         return {}
     if not isinstance(loaded, dict):
