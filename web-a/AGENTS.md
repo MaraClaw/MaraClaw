@@ -21,7 +21,7 @@ Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`
 
 Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password` (new password must differ from current).
 
-**Companies:** `/companies` lists orgs (platform: all; org admin: own). `/companies/:id` manages claimed email domains (`GET/POST/PATCH/DELETE /api/tenants/{id}/email-domains`). System orgs and the default end-user org (OpenClaw) are badged; the fallback org cannot be disabled. No create-company UI yet.
+**Companies:** Platform-admin only (`/companies`, `/companies/:id`). Org admins do not see the nav item and are redirected to Overview. Platform admin can create a company (`POST /api/admin/companies`) with a genesis org admin. `/companies/:id` manages claimed email domains. System orgs and the default end-user org (OpenClaw) are badged. Disable/Enable is hidden when `can_disable` is false (MaraClaw + OpenClaw).
 
 Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
 
@@ -64,6 +64,8 @@ web-a/
 | Change password | `src/pages/account.tsx` |
 | Sign out / theme | `src/pages/settings.tsx` |
 | Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
+| Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` — prefix FTS on name/slug |
+| Create company | `src/components/companies/create-company-form.tsx` — platform admin only |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |

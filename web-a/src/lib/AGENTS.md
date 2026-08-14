@@ -14,7 +14,7 @@ Thin fetch clients. No React Query here except callers. Engine owns behavior.
 | `http.ts` | `apiRequest`, `ApiError`, `formatApiDetail`. Bearer from storage unless `token: null`. 401 + stored token → `clearStoredToken()` (does not reset AuthContext). |
 | `auth-storage.ts` | `maraclaw-admin-token` only. |
 | `auth-api.ts` | login, `/me`, forgot/reset/change password. |
-| `companies-api.ts` | tenants list/toggle + email-domain CRUD. |
+| `companies-api.ts` | list/create/toggle companies + email-domain CRUD. |
 | `types/auth.ts` | `UserOut` / `must_change_password` helpers (OR token + user + identity). |
 
 ## CONVENTIONS

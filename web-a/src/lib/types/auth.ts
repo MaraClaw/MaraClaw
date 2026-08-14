@@ -111,3 +111,8 @@ export function isAdminUser(user: UserOut | null | undefined): boolean {
   if (user.is_platform_admin) return true
   return user.role === 'platform_admin' || user.role === 'org_admin'
 }
+
+export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
+  if (!user) return false
+  return user.is_platform_admin === true || user.role === 'platform_admin'
+}

@@ -10,6 +10,7 @@ import { OverviewPage } from '@/pages/overview'
 import { PlaceholderPage } from '@/pages/placeholder'
 import { ResetPasswordPage } from '@/pages/reset-password'
 import { SettingsPage } from '@/pages/settings'
+import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 
 export function AppRouter() {
@@ -24,8 +25,10 @@ export function AppRouter() {
           <Route element={<AdminShell />}>
             <Route index element={<OverviewPage />} />
             <Route path="account" element={<AccountPage />} />
-            <Route path="companies" element={<CompaniesPage />} />
-            <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+            <Route element={<PlatformAdminRoute />}>
+              <Route path="companies" element={<CompaniesPage />} />
+              <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+            </Route>
             <Route
               path="users"
               element={

@@ -9,6 +9,7 @@ export type CompanyStats = {
   sso_domain: string | null
   is_system: boolean
   is_default_end_user_org: boolean
+  can_disable: boolean
   created_at: string | null
   user_count: number
   agent_count: number
@@ -23,8 +24,30 @@ export type EmailDomain = {
   created_at: string | null
 }
 
-export async function listCompanies(): Promise<CompanyStats[]> {
-  return apiRequest<CompanyStats[]>('/api/admin/companies')
+export type CreateCompanyInput = {
+  name: string
+  admin_email: string
+  admin_password: string
+  admin_display_name?: string
+}
+
+export type CreateCompanyResponse = {
+  company: CompanyStats
+  org_admin_email: string
+  must_change_password: boolean
+}
+
+export async function listCompanies(q?: string): Promise<CompanyStats[]> {
+  const query = q?.trim()
+  const suffix = query ? `?q=${encodeURIComponent(query)}` : ''
+  return apiRequest<CompanyStats[]>(`/api/admin/companies${suffix}`)
+}
+
+export async function createCompany(input: CreateCompanyInput): Promise<CreateCompanyResponse> {
+  return apiRequest<CreateCompanyResponse>('/api/admin/companies', {
+    method: 'POST',
+    body: input,
+  })
 }
 
 export async function getTenant(tenantId: string): Promise<CompanyStats> {
@@ -35,7 +58,10 @@ export async function getTenant(tenantId: string): Promise<CompanyStats> {
     is_active: boolean
     is_system?: boolean
     is_default_end_user_org?: boolean
+    can_disable?: boolean
   }>(`/api/tenants/${tenantId}`)
+  const isSystem = Boolean(tenant.is_system)
+  const isDefaultEndUserOrg = Boolean(tenant.is_default_end_user_org)
   return {
     id: tenant.id,
     name: tenant.name,
@@ -43,8 +69,9 @@ export async function getTenant(tenantId: string): Promise<CompanyStats> {
     is_active: tenant.is_active,
     sso_enabled: false,
     sso_domain: null,
-    is_system: Boolean(tenant.is_system),
-    is_default_end_user_org: Boolean(tenant.is_default_end_user_org),
+    is_system: isSystem,
+    is_default_end_user_org: isDefaultEndUserOrg,
+    can_disable: tenant.can_disable ?? (!isSystem && !isDefaultEndUserOrg),
     created_at: null,
     user_count: 0,
     agent_count: 0,
