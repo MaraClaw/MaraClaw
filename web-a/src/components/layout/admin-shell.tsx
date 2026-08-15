@@ -1,16 +1,8 @@
-import {
-  Building2,
-  KeyRound,
-  LayoutDashboard,
-  LogOut,
-  Search,
-  Settings2,
-  Users,
-  Wrench,
-} from 'lucide-react'
+import { LogOut } from 'lucide-react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
+import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
@@ -20,17 +12,17 @@ import { cn } from '@/lib/utils'
 const navItems: {
   to: string
   label: string
-  icon: typeof LayoutDashboard
+  icon: NavIconName
   end?: boolean
   platformAdminOnly?: boolean
 }[] = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/companies', label: 'Companies', icon: Building2, platformAdminOnly: true },
-  { to: '/search-engine', label: 'Search', icon: Search, platformAdminOnly: true },
-  { to: '/users', label: 'Users', icon: Users },
-  { to: '/tools', label: 'Tools', icon: Wrench },
-  { to: '/account', label: 'Account', icon: KeyRound },
-  { to: '/settings', label: 'Settings', icon: Settings2 },
+  { to: '/', label: 'Overview', icon: 'overview', end: true },
+  { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
+  { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
+  { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/tools', label: 'Tools', icon: 'tools' },
+  { to: '/account', label: 'Account', icon: 'account' },
+  { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 
 function NavItems({
@@ -45,17 +37,18 @@ function NavItems({
 
   return (
     <>
-      {navItems.map(({ to, label, icon: Icon, end, platformAdminOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
           return compact ? (
             <span
               key={to}
-              className="shrink-0 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground/50"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground/50"
               title="Change your password to open the rest of the console"
               aria-disabled="true"
             >
+              <NavIcon name={icon} className="size-5 opacity-50" />
               {label}
             </span>
           ) : (
@@ -65,7 +58,7 @@ function NavItems({
               title="Change your password to open the rest of the console"
               aria-disabled="true"
             >
-              <Icon className="size-5" aria-hidden />
+              <NavIcon name={icon} className="opacity-50" />
               {label}
             </span>
           )
@@ -79,7 +72,7 @@ function NavItems({
             className={({ isActive }) =>
               compact
                 ? cn(
-                    'shrink-0 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground',
+                    'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground',
                     isActive && 'bg-muted text-foreground',
                   )
                 : cn(
@@ -88,12 +81,8 @@ function NavItems({
                   )
             }
           >
-            {compact ? label : (
-              <>
-                <Icon className="size-5" aria-hidden />
-                {label}
-              </>
-            )}
+            <NavIcon name={icon} className={cn(compact && 'size-5')} />
+            {label}
           </NavLink>
         )
       })}
