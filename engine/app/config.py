@@ -191,6 +191,8 @@ class Settings(BaseSettings):
 
     # Linkup API key: seeds the DB ring when empty; proxy uses the ring after that.
     LINKUP_API_KEY: str = ""
+    # xAI key for Search X and Grok Imagine when the tool config api_key is empty.
+    XAI_API_KEY: str = ""
     # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
     LINKUP_PROXY_ENABLED: bool = True
     LINKUP_PROXY_BASE_URL: str = "http://maraclaw-engine:8000/api/linkup"

@@ -374,6 +374,13 @@ async def execute_tool(
                 lambda temp_ws: agent_tools._generate_image(agent_id, temp_ws, arguments, "google"),
                 sync_back=True,
             )
+        elif tool_name == "generate_image_grok":
+            result = await agent_tools._run_with_temp_workspace(
+                agent_id,
+                agent_tenant_id,
+                lambda temp_ws: agent_tools._generate_image(agent_id, temp_ws, arguments, "grok"),
+                sync_back=True,
+            )
         elif tool_name == "generate_image_custom":
             result = await agent_tools._run_with_temp_workspace(
                 agent_id,

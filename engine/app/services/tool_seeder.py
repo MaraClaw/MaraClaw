@@ -21,6 +21,8 @@ SYNC_IS_DEFAULT_TOOL_NAMES = {
     "finish",
     "read_webpage",
     "update_objective",
+    "generate_image_grok",
+    "search_x",
     # AgentBay tools should NOT be is_default=True. Older seeder versions may
     # have set them to True; include them here so the seeder corrects the DB.
     "agentbay_browser_navigate",
@@ -229,6 +231,8 @@ async def seed_builtin_tools():
                 if t["name"] in SYNC_IS_DEFAULT_TOOL_NAMES and existing.is_default != t["is_default"]:
                     updates["is_default"] = t["is_default"]
                     updated_fields.append("is_default")
+                    if t["is_default"]:
+                        new_tool_ids.append(existing.id)
                 config: dict[str, Any] = dict(existing.config or {})
                 config_schema = dict(existing.config_schema or {})
                 if t.get("config_schema") and config_schema != t["config_schema"]:

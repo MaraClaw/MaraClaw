@@ -984,6 +984,12 @@ async def _generate_image_google(api_key: str, model: str, base_url: str, prompt
     return await extracted(api_key, model, base_url, prompt, size)
 
 
+async def _generate_image_grok(api_key: str, model: str, base_url: str, prompt: str, size: str) -> bytes:
+    from app.services.agent_tool_exec.images_providers import _generate_image_grok as extracted
+
+    return await extracted(api_key, model, base_url, prompt, size)
+
+
 async def _get_agent_calendar_id(token: str) -> tuple[str | None, str | None]:
     return await _agent_tool_exec_feishu_calendar._get_agent_calendar_id(token)
 
