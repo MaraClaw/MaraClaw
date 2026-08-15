@@ -66,12 +66,22 @@ export function CompanyDetailPage() {
 
   if (!companyId) return null
 
+  const companyMissing = !companies.isLoading && !companies.error && !company
+  const canEditDomains = Boolean(company) && !companies.error && !domains.error
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <Button type="button" variant="outline" size="sm" className="w-fit" onClick={goBack}>
         <ArrowLeft className="size-3.5" aria-hidden />
         Back
       </Button>
+
+      {companies.error ? (
+        <p className="text-sm text-destructive">
+          {companies.error instanceof ApiError ? companies.error.message : 'Failed to load company'}
+        </p>
+      ) : null}
+      {companyMissing ? <p className="text-sm text-muted-foreground">That company was not found.</p> : null}
 
       <div>
         <h1 className="flex items-center gap-2.5 font-display text-2xl font-semibold tracking-tight">
@@ -113,10 +123,16 @@ export function CompanyDetailPage() {
               placeholder="acme.com"
               className="max-w-xs"
             />
-            <Button type="submit" disabled={add.isPending || !domain.trim()}>
+            <Button type="submit" disabled={!canEditDomains || add.isPending || !domain.trim()}>
               Add domain
             </Button>
           </form>
+
+          {domains.error ? (
+            <p className="text-sm text-destructive">
+              {domains.error instanceof ApiError ? domains.error.message : 'Failed to load domains'}
+            </p>
+          ) : null}
 
           {(domains.data ?? []).map((item) => (
             <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 last:border-0">

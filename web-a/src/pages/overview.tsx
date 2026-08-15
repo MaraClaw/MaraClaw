@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { Building2, LineChart, Settings2, Users } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,12 +13,14 @@ const placeholders = [
     title: 'Companies',
     description: 'Platform company list, create, enable/disable - /api/admin/companies',
     icon: Building2,
+    href: '/companies',
     platformAdminOnly: true,
   },
   {
     title: 'Users & roles',
-    description: 'Tenant membership, quotas, org_admin / platform_admin roles',
+    description: 'Activate members and additional admins for the selected company',
     icon: Users,
+    href: '/users',
   },
   {
     title: 'Metrics',
@@ -77,7 +80,13 @@ export function OverviewPage() {
                 <CardDescription>{item.description}</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xs text-muted-foreground">Coming in following tasks</p>
+                {'href' in item && item.href ? (
+                  <Link to={item.href} className="text-xs font-medium text-primary hover:underline">
+                    Open
+                  </Link>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Coming in following tasks</p>
+                )}
               </CardContent>
             </Card>
           </motion.div>

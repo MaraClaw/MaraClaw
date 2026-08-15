@@ -83,30 +83,15 @@ export function UsersPage() {
     enabled: platformAdmin,
   })
 
-  const rows = useMemo(() => {
-    const byId = new Map<string, AdminUser>()
-    for (const row of users.data ?? []) byId.set(row.id, row)
-    if (platformAdmin) {
-      for (const admin of platformAdmins.data ?? []) {
-        const existing = byId.get(admin.id)
-        if (existing) {
-          byId.set(admin.id, { ...existing, is_genesis: admin.is_genesis, role: 'platform_admin' })
-        } else {
-          byId.set(admin.id, asAdminUser(admin))
-        }
-      }
-    }
-    return [...byId.values()]
-  }, [platformAdmin, platformAdmins.data, users.data])
+  const companyRows = useMemo(() => users.data ?? [], [users.data])
 
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase()
-    if (!needle) return rows
-    return rows.filter((row) => {
-      const haystack = `${row.display_name ?? ''} ${row.email ?? ''} ${row.username ?? ''}`.toLowerCase()
-      return haystack.includes(needle)
-    })
-  }, [search, rows])
+  const platformRows = useMemo(
+    () => (platformAdmins.data ?? []).map((admin) => asAdminUser(admin)),
+    [platformAdmins.data],
+  )
+
+  const visibleCompany = useMemo(() => filterUsers(companyRows, search), [companyRows, search])
+  const visiblePlatform = useMemo(() => filterUsers(platformRows, search), [platformRows, search])
 
   function canToggle(row: AdminUser): boolean {
     if (!user || row.id === user.id || row.is_genesis) return false
@@ -136,6 +121,7 @@ export function UsersPage() {
     onSuccess: (updated) => {
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       void queryClient.invalidateQueries({ queryKey: ['admin-platform-admins'] })
+      void queryClient.invalidateQueries({ queryKey: ['admin-companies'] })
       toast.success(updated.is_active ? `Activated ${updated.display_name || updated.email}` : `Deactivated ${updated.display_name || updated.email}`)
     },
     onError: (error) => {
@@ -148,7 +134,7 @@ export function UsersPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">Users</h1>
         <p className="mt-2 text-muted-foreground">
-          Activate or deactivate people in this company. Genesis admins can also manage additional admins.
+          Activate or deactivate people in this company. Platform admins are listed separately.
         </p>
       </div>
 
@@ -193,60 +179,136 @@ export function UsersPage() {
         </label>
       </div>
 
-      {users.isLoading || (platformAdmin && platformAdmins.isLoading) ? (
-        <p className="text-sm text-muted-foreground">Loading users…</p>
+      {companies.error ? (
+        <p className="text-sm text-destructive">
+          {companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'}
+        </p>
       ) : null}
+
+      {platformAdmin && !companies.isLoading && !companies.error && (companies.data?.length ?? 0) === 0 ? (
+        <p className="text-sm text-muted-foreground">No companies yet.</p>
+      ) : null}
+
+      {users.isLoading ? <p className="text-sm text-muted-foreground">Loading users…</p> : null}
       {users.error ? (
         <p className="text-sm text-destructive">
           {users.error instanceof ApiError ? users.error.message : 'Failed to load users'}
         </p>
       ) : null}
 
-      {!users.isLoading && visible.length === 0 ? (
+      {!users.isLoading && !users.error && companyId && visibleCompany.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {search.trim() ? `No users match “${search.trim()}”.` : 'No users in this company.'}
         </p>
       ) : null}
 
       <div className="grid gap-4">
-        {visible.map((row) => (
-            <Card key={row.id} className="relative transition-colors hover:bg-muted/40">
-              <Link
-                to={`/users/${row.id}`}
-                aria-label={`Open ${row.display_name || row.email || 'user'}`}
-                className="absolute inset-0 z-10 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                onClick={() => sessionStorage.setItem('web-a:users-scroll', String(window.scrollY))}
-              />
-              <CardHeader className="flex flex-row items-start justify-between gap-4">
-                <div>
-                  <CardTitle>{row.display_name || row.email || 'User'}</CardTitle>
-                  <CardDescription>{row.email || row.username}</CardDescription>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">{roleLabel(row.role)}</Badge>
-                  {row.is_genesis ? <Badge variant="soft">Genesis</Badge> : null}
-                  <Badge variant={row.is_active ? 'success' : 'destructive'}>
-                    {row.is_active ? 'Active' : 'Inactive'}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-3">
-                <span className="text-sm text-muted-foreground">{row.agents_count} agents</span>
-                {canToggle(row) ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="relative z-20"
-                    disabled={toggle.isPending}
-                    onClick={() => toggle.mutate({ row, isActive: !row.is_active })}
-                  >
-                    {row.is_active ? 'Deactivate' : 'Activate'}
-                  </Button>
-                ) : null}
-              </CardContent>
-            </Card>
-          ))}
+        {visibleCompany.map((row) => (
+          <UserCard
+            key={row.id}
+            row={row}
+            canToggle={canToggle(row)}
+            pending={toggle.isPending}
+            onToggle={() => toggle.mutate({ row, isActive: !row.is_active })}
+          />
+        ))}
       </div>
+
+      {platformAdmin ? (
+        <div className="flex flex-col gap-4">
+          <div>
+            <h2 className="font-display text-lg font-semibold tracking-tight">Platform admins</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Not members of the selected company. Genesis can activate additional platform admins.
+            </p>
+          </div>
+          {platformAdmins.isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading platform admins…</p>
+          ) : null}
+          {platformAdmins.error ? (
+            <p className="text-sm text-destructive">
+              {platformAdmins.error instanceof ApiError
+                ? platformAdmins.error.message
+                : 'Failed to load platform admins'}
+            </p>
+          ) : null}
+          {!platformAdmins.isLoading && !platformAdmins.error && visiblePlatform.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {search.trim() ? `No platform admins match “${search.trim()}”.` : 'No platform admins.'}
+            </p>
+          ) : null}
+          <div className="grid gap-4">
+            {visiblePlatform.map((row) => (
+              <UserCard
+                key={row.id}
+                row={row}
+                canToggle={canToggle(row)}
+                pending={toggle.isPending}
+                onToggle={() => toggle.mutate({ row, isActive: !row.is_active })}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+function filterUsers(rows: AdminUser[], search: string): AdminUser[] {
+  const needle = search.trim().toLowerCase()
+  if (!needle) return rows
+  return rows.filter((row) => {
+    const haystack = `${row.display_name ?? ''} ${row.email ?? ''} ${row.username ?? ''}`.toLowerCase()
+    return haystack.includes(needle)
+  })
+}
+
+function UserCard({
+  row,
+  canToggle,
+  pending,
+  onToggle,
+}: {
+  row: AdminUser
+  canToggle: boolean
+  pending: boolean
+  onToggle: () => void
+}) {
+  return (
+    <Card className="relative transition-colors hover:bg-muted/40">
+      <Link
+        to={`/users/${row.id}`}
+        aria-label={`Open ${row.display_name || row.email || 'user'}`}
+        className="absolute inset-0 z-10 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onClick={() => sessionStorage.setItem('web-a:users-scroll', String(window.scrollY))}
+      />
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>{row.display_name || row.email || 'User'}</CardTitle>
+          <CardDescription>{row.email || row.username}</CardDescription>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{roleLabel(row.role)}</Badge>
+          {row.is_genesis ? <Badge variant="soft">Genesis</Badge> : null}
+          <Badge variant={row.is_active ? 'success' : 'destructive'}>
+            {row.is_active ? 'Active' : 'Inactive'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <span className="text-sm text-muted-foreground">{row.agents_count} agents</span>
+        {canToggle ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="relative z-20"
+            disabled={pending}
+            onClick={onToggle}
+          >
+            {row.is_active ? 'Deactivate' : 'Activate'}
+          </Button>
+        ) : null}
+      </CardContent>
+    </Card>
   )
 }
