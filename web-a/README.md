@@ -109,5 +109,4 @@ Shell + **login/session** shipped. Feature screens remain placeholders wired to 
 | Package | Role |
 |---------|------|
 | `engine/` | Backend API source of truth |
-| `web-l/` | Public marketing landing |
-| `web-e/` | End-user product UI (separate) |
+| `web-l/` | Public marketing landing + member auth |
