@@ -127,11 +127,32 @@ export function SearchEnginePage() {
         </p>
       </div>
 
-      <div className="flex gap-2" role="tablist" aria-label="Search engine sections">
+      <div
+        className="flex gap-2"
+        role="tablist"
+        aria-label="Search engine sections"
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+            event.preventDefault()
+            setTab(tab === 'keys' ? 'analytics' : 'keys')
+          }
+          if (event.key === 'Home') {
+            event.preventDefault()
+            setTab('keys')
+          }
+          if (event.key === 'End') {
+            event.preventDefault()
+            setTab('analytics')
+          }
+        }}
+      >
         <button
           type="button"
+          id="search-engine-tab-keys"
           role="tab"
           aria-selected={tab === 'keys'}
+          aria-controls="search-engine-panel-keys"
+          tabIndex={tab === 'keys' ? 0 : -1}
           className={cn(
             'rounded-xl px-3 py-1.5 text-sm font-medium',
             tab === 'keys' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
@@ -142,8 +163,11 @@ export function SearchEnginePage() {
         </button>
         <button
           type="button"
+          id="search-engine-tab-analytics"
           role="tab"
           aria-selected={tab === 'analytics'}
+          aria-controls="search-engine-panel-analytics"
+          tabIndex={tab === 'analytics' ? 0 : -1}
           className={cn(
             'rounded-xl px-3 py-1.5 text-sm font-medium',
             tab === 'analytics' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
@@ -154,10 +178,18 @@ export function SearchEnginePage() {
         </button>
       </div>
 
-      {tab === 'analytics' ? <SearchEngineAnalytics /> : null}
+      {tab === 'analytics' ? (
+        <div
+          id="search-engine-panel-analytics"
+          role="tabpanel"
+          aria-labelledby="search-engine-tab-analytics"
+        >
+          <SearchEngineAnalytics />
+        </div>
+      ) : null}
 
       {tab === 'keys' ? (
-      <>
+      <div id="search-engine-panel-keys" role="tabpanel" aria-labelledby="search-engine-tab-keys">
       <Card>
         <CardHeader>
           <CardTitle>Add Linkup key</CardTitle>
@@ -233,7 +265,7 @@ export function SearchEnginePage() {
           />
         ))}
       </div>
-      </>
+      </div>
       ) : null}
     </div>
   )

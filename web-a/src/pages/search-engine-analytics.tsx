@@ -69,6 +69,21 @@ function rateLabel(part: number, total: number): string {
   return `${pct(part, total)}%`
 }
 
+function padSeries(points: SearchAnalyticsPoint[], startIso: string, endIso: string): SearchAnalyticsPoint[] {
+  const byDate = new Map(points.map((point) => [point.date.slice(0, 10), point]))
+  const start = new Date(startIso)
+  const end = new Date(endIso)
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
+  const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()))
+  const filled: SearchAnalyticsPoint[] = []
+  while (cursor < last) {
+    const key = cursor.toISOString().slice(0, 10)
+    filled.push(byDate.get(key) ?? { date: key, event_count: 0, error_count: 0, quota_count: 0 })
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+  return filled
+}
+
 export function SearchEngineAnalytics() {
   const [params, setParams] = useSearchParams()
   const range = asRange(params.get('range'))
@@ -112,13 +127,16 @@ export function SearchEngineAnalytics() {
 
   const systemWide = !tenantId
   const selectedCompany = (companies.data ?? []).find((company) => company.id === tenantId)
+  const unknownCompany = Boolean(tenantId && !selectedCompany && !companies.isLoading)
   const totals = summary.data
   const platform = systemSummary.data
   const kindMix = totals?.by_kind ?? []
-  const chartData = (series.data ?? []).map((point) => ({
-    ...point,
-    label: shortDate(point.date),
-  }))
+  const chartData = series.isLoading
+    ? []
+    : padSeries(series.data ?? [], window.start, window.end).map((point) => ({
+        ...point,
+        label: shortDate(point.date),
+      }))
   const insights = buildInsights({
     systemWide,
     companyName: selectedCompany?.name ?? 'This company',
@@ -144,7 +162,7 @@ export function SearchEngineAnalytics() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-xl font-semibold tracking-tight">
-              {systemWide ? 'Entire system' : selectedCompany?.name || 'One company'}
+              {systemWide ? 'Entire system' : selectedCompany?.name || 'Unknown company'}
             </h2>
             <Badge variant={systemWide ? 'secondary' : 'outline'}>
               {systemWide ? 'All companies' : 'Per organization'}
@@ -178,6 +196,7 @@ export function SearchEngineAnalytics() {
               aria-label="Analytics scope"
             >
               <option value="">Entire system</option>
+              {unknownCompany ? <option value={tenantId}>Unknown company</option> : null}
               {(companies.data ?? []).map((company) => (
                 <option key={company.id} value={company.id}>
                   {company.name}
@@ -313,7 +332,8 @@ export function SearchEngineAnalytics() {
 
       {exportStatus.data ? (
         <p className="text-xs text-muted-foreground">
-          Warehouse export {exportStatus.data.export_enabled ? 'on' : 'off'}
+          Capture {exportStatus.data.capture_enabled ? 'on' : 'off'}. Warehouse export{' '}
+          {exportStatus.data.export_enabled ? 'on' : 'off'}
           {exportStatus.data.bucket ? ` → ${exportStatus.data.prefix}` : ''}.{' '}
           {exportStatus.data.pending} pending.
         </p>
@@ -350,22 +370,33 @@ export function SearchAnalyticsSnapshot() {
         </Link>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {summary.error instanceof ApiError ? (
+        {summary.isLoading || orgs.isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading last 7 days…</p>
+        ) : summary.error instanceof ApiError ? (
           <p className="text-sm text-destructive">{summary.error.message}</p>
+        ) : summary.error ? (
+          <p className="text-sm text-destructive">Failed to load search analytics</p>
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-4">
               <MiniStat label="Searches" value={formatCount(data?.event_count)} />
               <MiniStat label="Error rate" value={data ? rateLabel(data.error_count, data.event_count) : '—'} />
-              <MiniStat label="Quota" value={data ? rateLabel(data.quota_count, data.event_count) : '—'} />
+              <MiniStat
+                label="Quota pressure"
+                value={data ? rateLabel(data.quota_count, data.event_count) : '—'}
+              />
               <MiniStat label="Companies" value={formatCount(data?.unique_orgs)} />
             </div>
-            {top.length > 0 ? (
+            {(data?.event_count ?? 0) === 0 ? (
+              <p className="text-sm text-muted-foreground">No billed searches yet this week.</p>
+            ) : top.length > 0 ? (
               <p className="text-sm text-muted-foreground">
                 Busiest: {top.map((org) => org.name).join(', ')}.
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">No billed searches yet this week.</p>
+              <p className="text-sm text-muted-foreground">
+                {formatCount(data?.event_count)} searches, none attributed to a company.
+              </p>
             )}
           </>
         )}
@@ -606,9 +637,24 @@ function ShareOfPlatform({
     return <p className="text-sm text-muted-foreground">Not enough platform volume to compare.</p>
   }
   const rows = [
-    { label: 'Searches', part: scoped.event_count, whole: platform.event_count },
-    { label: 'Quota hits', part: scoped.quota_count, whole: Math.max(platform.quota_count, 1) },
-    { label: 'Errors', part: scoped.error_count, whole: Math.max(platform.error_count, 1) },
+    {
+      label: 'Share of searches',
+      value: rateLabel(scoped.event_count, platform.event_count),
+      width: pct(scoped.event_count, platform.event_count),
+      hint: `${scoped.event_count.toLocaleString()} of ${platform.event_count.toLocaleString()}`,
+    },
+    {
+      label: 'Quota pressure',
+      value: rateLabel(scoped.quota_count, scoped.event_count),
+      width: pct(scoped.quota_count, scoped.event_count),
+      hint: `platform ${rateLabel(platform.quota_count, platform.event_count)}`,
+    },
+    {
+      label: 'Error rate',
+      value: rateLabel(scoped.error_count, scoped.event_count),
+      width: pct(scoped.error_count, scoped.event_count),
+      hint: `platform ${rateLabel(platform.error_count, platform.event_count)}`,
+    },
   ]
   return (
     <div className="grid gap-3">
@@ -616,10 +662,15 @@ function ShareOfPlatform({
         <div key={row.label} className="grid gap-1">
           <div className="flex items-center justify-between text-sm">
             <span>{row.label}</span>
-            <span className="tabular-nums text-muted-foreground">{rateLabel(row.part, row.whole)} of system</span>
+            <span className="tabular-nums text-muted-foreground">
+              {row.value} · {row.hint}
+            </span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.max(pct(row.part, row.whole), row.part ? 2 : 0)}%` }} />
+            <div
+              className="h-full rounded-full bg-primary/70"
+              style={{ width: `${Math.max(row.width, row.width > 0 ? 2 : 0)}%` }}
+            />
           </div>
         </div>
       ))}
