@@ -189,8 +189,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5175",
     ]
 
-    # Linkup API key injected into official OpenClaw Linkup skill env.
+    # Linkup API key: seeds the DB ring when empty; proxy uses the ring after that.
     LINKUP_API_KEY: str = ""
+    # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
+    LINKUP_PROXY_ENABLED: bool = True
+    LINKUP_PROXY_BASE_URL: str = "http://maraclaw-engine:8000/api/linkup"
 
     # Sandbox configuration
     SANDBOX_TYPE: SandboxType = SandboxType.SUBPROCESS

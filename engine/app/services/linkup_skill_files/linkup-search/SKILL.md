@@ -12,10 +12,10 @@ A Linkup query is an **instruction to a retrieval system**, not a question to an
 ## How to call it
 
 - If the **`linkup-search` MCP tool** is available, use it: pass a natural-language query and a `depth`.
-- Otherwise — or when you need **structured JSON output**, **domain filters** (`includeDomains`/`excludeDomains`), or **date filters** (`fromDate`/`toDate`) — call the **REST Search API** directly. Requires `LINKUP_API_KEY`:
+- Otherwise — or when you need **structured JSON output**, **domain filters** (`includeDomains`/`excludeDomains`), or **date filters** (`fromDate`/`toDate`) — call the **REST Search API** directly. Requires `LINKUP_API_KEY`. If `LINKUP_API_BASE` is set, POST to `$LINKUP_API_BASE/v1/search` instead of `https://api.linkup.so/v1/search`.
 
 ```shell
-curl -sS -X POST "https://api.linkup.so/v1/search" \
+curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/search" \
   -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
   -d '{"q":"...","depth":"standard","outputType":"searchResults"}'
 ```

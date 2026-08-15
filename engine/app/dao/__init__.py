@@ -15,6 +15,7 @@ from app.dao.gogcli_credential_dao import gogcli_credential_state_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.invitation_code_dao import invitation_code_dao
+from app.dao.linkup_api_key_dao import linkup_api_key_dao, linkup_async_job_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.okr_dao import (
@@ -70,6 +71,8 @@ __all__ = [
     "identity_dao",
     "identity_provider_dao",
     "invitation_code_dao",
+    "linkup_api_key_dao",
+    "linkup_async_job_dao",
     "llm_model_dao",
     "member_daily_report_dao",
     "notification_dao",

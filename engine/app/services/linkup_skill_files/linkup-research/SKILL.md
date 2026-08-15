@@ -7,7 +7,7 @@ description: ONLY when the user explicitly wants a thorough, exhaustive, or comp
 
 The Research endpoint is an autonomous agent that investigates the web iteratively for minutes, cross-checks claims across sources, and returns a synthesized, cited answer. Reach for it only when a single `deep` search can't cover the job — many entities, many facets, verification needed, or a report-style deliverable.
 
-This uses the REST API, so it needs `LINKUP_API_KEY` in the environment:
+This uses the REST API, so it needs `LINKUP_API_KEY` in the environment. If `LINKUP_API_BASE` is set, POST/GET `$LINKUP_API_BASE/v1/research` instead of `https://api.linkup.so/v1/research`.
 
 ```shell
 test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
@@ -26,11 +26,11 @@ Always set `mode` and `reasoningDepth` for predictable latency, cost, and output
 `POST /v1/research` returns `{id, status: "pending"}` immediately. Poll `GET /v1/research/{id}` with exponential backoff (start 2s, cap 10s) until `status` is `completed` or `failed`. Never poll faster than once per second. Failed tasks are not charged.
 
 ```shell
-curl -sS -X POST "https://api.linkup.so/v1/research" \
+curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/research" \
   -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
   -d '{"q":"Compare 2024 cloud revenue growth for Microsoft, Amazon, and Google from primary sources.","mode":"answer","reasoningDepth":"M","outputType":"sourcedAnswer"}'
 
-curl -sS "https://api.linkup.so/v1/research/RESEARCH_ID" -H "Authorization: Bearer $LINKUP_API_KEY"
+curl -sS "${LINKUP_API_BASE:-https://api.linkup.so}/v1/research/RESEARCH_ID" -H "Authorization: Bearer $LINKUP_API_KEY"
 ```
 
 ## Write a well-scoped prompt

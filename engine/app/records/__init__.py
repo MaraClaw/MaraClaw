@@ -12,6 +12,7 @@ from app.records.focus import AgentFocusItemRecord
 from app.records.gogcli_credential import GogcliCredentialStateRecord
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.invitation import InvitationCodeRecord
+from app.records.linkup_api_key import LinkupApiKeyRecord, LinkupAsyncJobRecord
 from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.org import OrgMemberRecord
@@ -51,6 +52,8 @@ __all__ = [
     "IdentityProviderRecord",
     "IdentityRecord",
     "InvitationCodeRecord",
+    "LinkupApiKeyRecord",
+    "LinkupAsyncJobRecord",
     "LLMModelRecord",
     "OrgDepartmentRecord",
     "OrgMemberRecord",

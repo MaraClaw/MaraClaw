@@ -10,10 +10,10 @@ When you already have the exact URL, use **Fetch** instead of search. It is fast
 ## How to call it
 
 - If the **`linkup-fetch` MCP tool** is available, pass it the URL.
-- Otherwise call the REST API directly. Requires `LINKUP_API_KEY`:
+- Otherwise call the REST API directly. Requires `LINKUP_API_KEY`. If `LINKUP_API_BASE` is set, POST to `$LINKUP_API_BASE/v1/fetch` instead of `https://api.linkup.so/v1/fetch`.
 
 ```shell
-curl -sS -X POST "https://api.linkup.so/v1/fetch" \
+curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/fetch" \
   -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
   -d '{"url":"https://example.com/pricing","renderJs":true}'
 ```

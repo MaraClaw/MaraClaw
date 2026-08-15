@@ -64,6 +64,9 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
 | `GET` | `/api/admin/platform-settings` | — | `{ allow_self_create_company, invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
+| `GET` | `/api/admin/linkup-keys` | — | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
+| `POST` | `/api/admin/linkup-keys` | `{ label?, api_key }` | **201** add a key. Duplicate secret → **409**. Appends to the rotation cycle. |
+| `DELETE` | `/api/admin/linkup-keys/{key_id}` | — | Remove a key and retarget the cursor. **404** if missing. |
 
 ### A2. Tenants — platform-only pieces
 

@@ -447,6 +447,8 @@ app.add_middleware(
 # Register API routes
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
+from app.api.admin_linkup import router as admin_linkup_router
+from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agentbay_control import router as agentbay_control_router
@@ -533,6 +535,8 @@ app.include_router(webhooks_router)  # Public endpoint, no API prefix
 app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_linkup_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(linkup_proxy_router, dependencies=_CRUD_DB)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)  # Public endpoint for /p/{short_id}, no API prefix
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

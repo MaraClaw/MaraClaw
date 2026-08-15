@@ -214,9 +214,14 @@ class AgentManager:
 
         logger.info(f"Initialized agent files at {agent_dir}")
 
-    def _generate_openclaw_config(self, agent: AgentRecord, model: LLMModelRecord | None) -> JsonObject:
+    def _generate_openclaw_config(
+        self,
+        agent: AgentRecord,
+        model: LLMModelRecord | None,
+        *,
+        linkup_proxy: bool = False,
+    ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
-        del agent  # reserved for future per-agent openclaw knobs
         config: JsonObject = {
             "agent": {
                 "model": f"{model.provider}/{model.model}" if model else "anthropic/claude-sonnet-4-5",
@@ -234,7 +239,12 @@ class AgentManager:
             }
 
         linkup_skill_env: JsonObject = {}
-        if settings.LINKUP_API_KEY:
+        if linkup_proxy:
+            from app.services.linkup.tokens import make_proxy_token
+
+            linkup_skill_env["LINKUP_API_BASE"] = settings.LINKUP_PROXY_BASE_URL
+            linkup_skill_env["LINKUP_API_KEY"] = make_proxy_token(agent.id)
+        elif settings.LINKUP_API_KEY:
             linkup_skill_env["LINKUP_API_KEY"] = settings.LINKUP_API_KEY
         config["skills"] = {
             "entries": {
@@ -302,8 +312,13 @@ class AgentManager:
         if agent.primary_model_id:
             model = await llm_model_dao.get(agent.primary_model_id)
 
-        # Generate OpenClaw config
-        config = self._generate_openclaw_config(agent, model)
+        # Generate OpenClaw config. Proxy on/off is settings-only so container
+        # start does not need the key-ring tables to exist.
+        config = self._generate_openclaw_config(
+            agent,
+            model,
+            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
+        )
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         _ = (agent_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")

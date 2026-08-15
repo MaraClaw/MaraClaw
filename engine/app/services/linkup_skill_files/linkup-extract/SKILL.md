@@ -7,7 +7,7 @@ description: Use to pull many structured records from ONE known listing page —
 
 The Extract endpoint turns a known web page into a table of structured records. Give it a seed URL plus a natural-language description of the rows you want, and it returns one JSON object per line (NDJSON), handling pagination automatically. It's built for 10s–1000s of records from a single listing page.
 
-This uses the REST API, so it needs `LINKUP_API_KEY`:
+This uses the REST API, so it needs `LINKUP_API_KEY`. If `LINKUP_API_BASE` is set, POST/GET `$LINKUP_API_BASE/v1/extract` instead of `https://api.linkup.so/v1/extract`.
 
 ```shell
 test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
@@ -27,7 +27,7 @@ test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
 Always provide a `schema` for production use (consistent output, clear required fields). Enable `verifyUrls` when extracted URLs will be used downstream (adds latency).
 
 ```shell
-curl -sS -X POST "https://api.linkup.so/v1/extract" \
+curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/extract" \
   -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
   -d '{
     "q": "All pricing plans with plan name, monthly price, annual price, features, and usage limits",

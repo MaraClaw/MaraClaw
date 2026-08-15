@@ -86,7 +86,8 @@ def test_official_linkup_search_skill_payload_teaches_rest_search() -> None:
     assert LINKUP_SEARCH_SKILL_FOLDER in linkup_default_skill_folder_names()
     assert skill_md.is_file()
     assert "name: linkup-search" in skill_text
-    assert "POST https://api.linkup.so/v1/search" in skill_text
+    assert "https://api.linkup.so/v1/search" in skill_text
+    assert "LINKUP_API_BASE" in skill_text
     assert '"q":' in skill_text
     assert "depth" in skill_text
     assert "standard" in skill_text
@@ -107,6 +108,7 @@ def test_official_linkup_fetch_skill_payload_teaches_rest_fetch() -> None:
     assert skill_md.is_file()
     assert "name: linkup-fetch" in skill_text
     assert "https://api.linkup.so/v1/fetch" in skill_text
+    assert "LINKUP_API_BASE" in skill_text
     assert "-X POST" in skill_text
     assert '"url":' in skill_text
 
@@ -123,6 +125,7 @@ def test_official_linkup_research_skill_payload_teaches_rest_research() -> None:
     assert skill_md.is_file()
     assert "name: linkup-research" in skill_text
     assert "https://api.linkup.so/v1/research" in skill_text
+    assert "LINKUP_API_BASE" in skill_text
     assert "mode" in skill_text
     assert "reasoningDepth" in skill_text
 
@@ -139,6 +142,7 @@ def test_official_linkup_extract_skill_payload_teaches_rest_extract() -> None:
     assert skill_md.is_file()
     assert "name: linkup-extract" in skill_text
     assert "https://api.linkup.so/v1/extract" in skill_text
+    assert "LINKUP_API_BASE" in skill_text
     assert '"url":' in skill_text
     assert "schema" in skill_text
 
@@ -188,11 +192,17 @@ def test_generate_openclaw_config_enables_linkup_skill_and_denies_native_web_sea
 ) -> None:
     # Given
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "lk_test_key", raising=False)
+    monkeypatch.setattr(
+        agent_manager_module.settings,
+        "LINKUP_PROXY_BASE_URL",
+        "http://maraclaw-engine:8000/api/linkup",
+        raising=False,
+    )
     manager = AgentManager.__new__(AgentManager)
     agent = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
 
-    # When
-    config = manager._generate_openclaw_config(agent, model=None)
+    # When: proxy off keeps today's single-key inject
+    config = manager._generate_openclaw_config(agent, model=None, linkup_proxy=False)
 
     # Then
     skills = config["skills"]["entries"]
@@ -200,8 +210,32 @@ def test_generate_openclaw_config_enables_linkup_skill_and_denies_native_web_sea
     for folder_name in DEFAULT_LINKUP_SKILLS:
         assert skills[folder_name]["enabled"] is True
         assert skills[folder_name]["env"]["LINKUP_API_KEY"] == "lk_test_key"
+        assert "LINKUP_API_BASE" not in skills[folder_name]["env"]
     assert "web_search" in config["tools"]["deny"]
     assert config["tools"]["web"]["search"]["enabled"] is False
+
+
+def test_generate_openclaw_config_proxy_sets_base_and_hides_raw_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "lk_raw_must_not_leak", raising=False)
+    monkeypatch.setattr(
+        agent_manager_module.settings,
+        "LINKUP_PROXY_BASE_URL",
+        "http://maraclaw-engine:8000/api/linkup",
+        raising=False,
+    )
+    monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "cfg-secret", raising=False)
+    manager = AgentManager.__new__(AgentManager)
+    agent = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+
+    config = manager._generate_openclaw_config(agent, model=None, linkup_proxy=True)
+    skills = config["skills"]["entries"]
+    for folder_name in DEFAULT_LINKUP_SKILLS:
+        env = skills[folder_name]["env"]
+        assert env["LINKUP_API_BASE"] == "http://maraclaw-engine:8000/api/linkup"
+        assert env["LINKUP_API_KEY"] != "lk_raw_must_not_leak"
+        assert "lk_raw_must_not_leak" not in env["LINKUP_API_KEY"]
 
 
 def test_generate_openclaw_config_omits_empty_linkup_key(monkeypatch: pytest.MonkeyPatch) -> None:
