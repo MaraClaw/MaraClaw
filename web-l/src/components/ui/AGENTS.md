@@ -1,6 +1,6 @@
 # ui/ - shadcn-style primitives
 
-**Generated:** 2026-08-13 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-15 · Parent: `web-l/AGENTS.md`
 
 ## OVERVIEW
 

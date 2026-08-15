@@ -1,9 +1,8 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-08-14  
-**Commit:** 08ac4f7  
-**Branch:** enhance-web-search  
-**Mode:** update (init-deep --max-depth=7)
+**Generated:** 2026-08-15  
+**Commit:** 04d89c0  
+**Branch:** main
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
 **Product:** MaraClaw - OpenClaw digital employees for teams and companies.
@@ -20,9 +19,9 @@ Loose sibling checkout (no root workspace / turbo / compose / CI). Four packages
 
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
-| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python ≥3.14.5 | Mature |
-| **`web-l/`** | Marketing landing | Anonymous | React 19, Vite 8 :5173, Tailwind v4, Framer, shadcn-style | Implemented (no auth/API) |
-| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + email domains |
+| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python ≥3.14.5 (pin 3.14.7) | Mature |
+| **`web-l/`** | Marketing landing | Anonymous | React 19, Vite 8 :5173, Tailwind v4, Framer, shadcn-style | Implemented (no auth/API; Sign in is `#contact`) |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Linkup keys + search analytics |
 | **`web-e/`** | End-user product | Members | React 19, Vite 8 :5175, RR | Live: register / login / join / transfer. Chat not built |
 
 **Rule:** one concern → one package. No admin screens in `web-e`, no member chat in `web-a`, no marketing in either app, no HTML marketing in `engine`.
@@ -55,9 +54,10 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 |--------|---------|-----------|
 | REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
-| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS |
-| Landing copy / channels list | `web-l` | `web-l/AGENTS.md` |
+| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup is `linkup/` + `linkup_skill_files/` (not a function-calling tool) |
+| Landing copy / channels list | `web-l` | `web-l/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
+| Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` - chat is not built yet |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
@@ -74,9 +74,9 @@ cd engine && uv run --extra dev pytest
 
 **`web-l/`** - public marketing SPA only (hash nav, no API, no `VITE_*`). Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains. `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains, platform-admin Linkup keys + search analytics (`/search-engine`). `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
-**`web-e/`** - member product. JWT `maraclaw-enduser-token`. Live: register / login / org join / transfer. Home is a chat placeholder. Admin company controls stay in `web-a`. Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5175).
+**`web-e/`** - member product. JWT `maraclaw-enduser-token`. Live: register / login / org join / transfer. Home is a chat placeholder. No force-change UI, no multi-tenant picker. Admin company controls stay in `web-a`. Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5175).
 
 ---
 

@@ -1,10 +1,12 @@
 # web-e
 
+**Generated:** 2026-08-15 · **Commit:** 04d89c0 · Parent: `../AGENTS.md`
+
 End-user product UI. Talks to `engine` with member auth.
 
 ## OVERVIEW
 
-Register, login, org join, and tenant transfer. `/` is a chat placeholder. Do **not** put admin company controls here (`web-a`) or marketing here (`web-l`). Chat/agent workspace belongs here when built - not in `web-l` or `web-a`.
+Register, login, org join, and tenant transfer. `/` is a chat placeholder. Do **not** put admin company controls here (`web-a`) or marketing here (`web-l`). Chat/agent workspace belongs here when built - not in `web-l` or `web-a`. Title/home copy still say **OpenClaw** (leftover).
 
 ## Stack
 
@@ -45,8 +47,16 @@ cd web-e && npm install && npm run dev    # :5175
 npm run build                             # tsc -b && vite build
 ```
 
+## Gaps vs engine (do not invent)
+
+- No `must_change_password` / account page (web-a has `/account`; privileged engine routes will 403).
+- Login has no tenant picker: `requires_tenant_selection` is an error string.
+- No email-verify, forgot/reset, SSO, or invite-join-while-logged-in UI.
+- Home does not resume pending `needs_org_confirm`.
+
 ## ANTI-PATTERNS
 
 - Admin company / platform-admin surfaces belong in `web-a`.
 - Do not invent a second JWT key or share `maraclaw-admin-token`.
+- Do not treat `PLATFORM_ADMIN_EMAIL` as a member login.
 - No lint/Docker yet - do not assume `npm run lint` exists.

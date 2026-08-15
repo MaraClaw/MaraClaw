@@ -1,6 +1,6 @@
 # tests
 
-Root-level `test_*.py` (~130 files). No shared `conftest.py`. Shared helper: `agent_tools_catalog_fakes.py`. OpenClaw image tests also use `openclaw_*_fixtures.py` / `openclaw_officecli_smoke_*.py` in this same directory.
+Root-level `test_*.py` (~148 files). No shared `conftest.py`. Shared helper: `agent_tools_catalog_fakes.py`. OpenClaw image tests also use `openclaw_*_fixtures.py` / `openclaw_officecli_smoke_*.py` in this same directory.
 
 Pytest has no `testpaths`, so it also collects `app/scripts/test_cleanup_duplicate_feishu_users.py`. Repo-root `test_sandbox_config.py` is a print script, not a pytest module. OpenClaw `test_pinned_node_26_5_0_exposes_expected_acorn_ast` needs **host** Node `v26.7.0`; CI has no Node service. Guest image is `node:26.7.0-bookworm-slim`; sandbox docker is `node:26.5.0-slim`. `openclaw_officecli_smoke_probe.py` asserts container `v26.7.0`. The 90% coverage fail-under gate is in `scripts/test.sh`, not default `addopts`.
 

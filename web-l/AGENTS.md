@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-13  
-**Commit:** 0ef7bf3  
-**Branch:** init-one-platform  
+**Generated:** 2026-08-15  
+**Commit:** 04d89c0  
+**Branch:** implement-web-l-login  
 **Package:** `web-l` (MaraClaw marketing landing)
 
 > Monorepo routing (where admin vs product vs engine live): `../AGENTS.md`.  
@@ -10,7 +10,7 @@
 
 ## OVERVIEW
 
-Public single-page marketing site for **MaraClaw** (OpenClaw agents for teams). Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 (`@tailwindcss/vite`) + Framer Motion + shadcn-style UI (Radix + CVA + Lucide). No router, no API client, no tests - static SPA.
+Public single-page marketing site for **MaraClaw** (OpenClaw agents for teams). Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 (`@tailwindcss/vite`) + Framer Motion + shadcn-style UI (Radix + CVA + Lucide). No router, no API client, no tests, no `VITE_*` - static SPA. Header **Sign in** is a hash link to `#contact` (footer), not auth. Member login lives in `web-e`; admin in `web-a`.
 
 ## STRUCTURE
 
@@ -45,7 +45,7 @@ web-l/
 | Hero copy / CTAs | `sections/hero.tsx` | Trust bullets only; no embedded mock |
 | Role catalog copy | `sections/agents.tsx` | Align with `../engine/agent_templates/` when claiming truth |
 | Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors; keep in sync with section `id`s |
-| Footer / `#contact` | `layout/site-footer.tsx` | Sign-in targets `#contact` |
+| Footer / `#contact` | `layout/site-footer.tsx` | Sign in + Contact + legal hashes land here |
 | Design tokens / dark palette | `src/index.css` | OKLCH; warm paper light / warm dark |
 | Theme FOUC + React theme | `index.html` script + `hooks/use-theme.tsx` | Same storage key + meta colors |
 | Motion presets / wrappers | `lib/motion.ts`, `components/motion.tsx` | Prefer Reveal/Stagger; honor reduced motion |

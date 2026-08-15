@@ -1,7 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
+**Generated:** 2026-08-15  
+**Commit:** 04d89c0  
+**Branch:** implement-web-l-login  
 **Package:** `web-a` (MaraClaw admin console)  
-**Status:** Live auth + companies + Linkup search keys (2026-08-15). `/users` and `/tools` still placeholders.
+**Status:** Live auth + companies + Linkup keys + search analytics. `/users` and `/tools` still placeholders.
 
 > Monorepo routing: `../AGENTS.md`.  
 > Admin HTTP contracts: `../engine/docs/admin-apis.md`.
