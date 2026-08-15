@@ -168,12 +168,10 @@ async def place_new_registration(
     email: str | None = None,
     invitation_code: str | None = None,
 ) -> NewUserPlacement:
-    """Invite and unmatched emails attach now; claimed domains wait for confirm."""
+    """Invites attach now; every other new member joins OpenClaw (the default Org)."""
     resolution = await resolve_registration_org(email=email, invitation_code=invitation_code)
     if resolution.source == "invite" and resolution.matched is not None:
         return NewUserPlacement(tenant_id=resolution.matched.id, suggested=None, needs_org_confirm=False)
-    if resolution.source == "domain" and resolution.matched is not None:
-        return NewUserPlacement(tenant_id=None, suggested=resolution.matched, needs_org_confirm=True)
     return NewUserPlacement(tenant_id=resolution.fallback.id, suggested=None, needs_org_confirm=False)
 
 

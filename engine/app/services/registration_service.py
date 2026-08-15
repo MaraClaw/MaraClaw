@@ -370,8 +370,8 @@ class RegistrationService:
     ) -> tuple[TenantRecord | None, str | None]:
         """Determine tenant for new user registration.
 
-        Invite codes attach immediately. Claimed email domains are returned as a
-        match for the caller to confirm. Unmatched emails fall back to OpenClaw.
+        Invite codes attach immediately. Every other new member joins OpenClaw
+        (the default end-user Org). Claimed domains can be joined later via transfer.
         """
         from app.services.org_membership import DefaultOrgUnavailableError, InvitationError, resolve_registration_org
 
@@ -382,8 +382,6 @@ class RegistrationService:
         except DefaultOrgUnavailableError as exc:
             return None, str(exc)
         if resolution.source == "invite":
-            return resolution.matched, None
-        if resolution.source == "domain":
             return resolution.matched, None
         return resolution.fallback, None
 

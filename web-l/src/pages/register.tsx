@@ -32,7 +32,7 @@ const highlights = [
   {
     icon: Sparkles,
     title: 'Ready workspace',
-    body: 'Otherwise you land in OpenClaw, the default member organization.',
+    body: 'New accounts join OpenClaw. Transfer later if you belong to a company.',
   },
   {
     icon: Lock,
@@ -89,9 +89,9 @@ export function RegisterPage() {
     <AuthShell
       headingId={`${formId}-heading`}
       title="Create your account"
-      description="If your work email matches a company, we will ask you to join it. Otherwise you join OpenClaw."
+      description="New member accounts join OpenClaw, the default organization. Use an invitation code to join a company instead."
       brandTitle="Start working with digital employees"
-      brandBody="One account gets you into your company workspace - or OpenClaw if you are joining on your own."
+      brandBody="Create an account to land in OpenClaw. You can transfer to a company later with an invite or a matching email domain."
       highlights={highlights}
     >
       {formError ? (
