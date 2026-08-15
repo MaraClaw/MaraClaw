@@ -81,8 +81,12 @@ function NavItems({
                   )
             }
           >
-            <NavIcon name={icon} className={cn(compact && 'size-5')} />
-            {label}
+            {({ isActive }) => (
+              <>
+                <NavIcon name={icon} active={isActive} className={cn(compact && 'size-5')} />
+                {label}
+              </>
+            )}
           </NavLink>
         )
       })}
