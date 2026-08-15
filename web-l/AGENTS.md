@@ -3,14 +3,14 @@
 **Generated:** 2026-08-15  
 **Commit:** 04d89c0  
 **Branch:** implement-web-l-login  
-**Package:** `web-l` (MaraClaw marketing landing)
+**Package:** `web-l` (MaraClaw marketing + member workspace)
 
 > Monorepo routing (where admin vs product vs engine live): `../AGENTS.md`.  
 > This file is **package implementation** truth for the landing SPA only.
 
 ## OVERVIEW
 
-Public marketing site plus member auth for **MaraClaw**. Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 + Framer Motion + React Router + RHF/Zod + shadcn-style UI (Radix + CVA + Lucide). JWT `localStorage` key **`maraclaw-enduser-token`**. Admin login stays in `web-a`.
+Public marketing site plus member workspace for **MaraClaw**. Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 + Framer Motion + React Router + TanStack Query + RHF/Zod + shadcn-style UI (Radix + CVA + Lucide). JWT `localStorage` key **`maraclaw-enduser-token`**. Admin login stays in `web-a`. `/` is marketing; signed-in product lives under `/app/*`.
 
 ## STRUCTURE
 
@@ -26,7 +26,8 @@ web-l/
     ├── main.tsx            # ThemeProvider → App
     ├── App.tsx             # AuthProvider + router
     ├── routes.tsx          # / landing, /login, /register, /join, /transfer, /app
-    ├── pages/              # landing + member auth + workspace placeholder
+    ├── pages/              # landing, auth, /app workspace (agents, chat, files, …)
+    ├── routes/             # ProtectedRoute for /app
     ├── index.css           # Tailwind v4 + OKLCH tokens + @utility
     ├── hooks/use-theme.tsx # light|dark|system, localStorage key maraclaw-theme
     ├── hooks/use-auth.tsx  # member session; rejects platform_admin
@@ -47,7 +48,8 @@ web-l/
 | Page section order / skip-link | `src/pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
 | Member login / register | `src/pages/login.tsx`, `register.tsx` | web-a visual language via `components/auth/auth-shell.tsx` |
 | Org join / transfer | `src/pages/join-org.tsx`, `transfer.tsx` | Same engine contracts as the retired `web-e` app |
-| Signed-in home | `src/pages/app-home.tsx` | Chat placeholder |
+| Signed-in workspace | `src/pages/app/*`, `components/layout/app-shell.tsx` | Agents, chat WS, files, tools, channels |
+| Auth completeness | `forgot-password`, `reset-password`, `verify-email`, `sso-callback` | Member token; Origin-based reset emails |
 | Hero copy / CTAs | `sections/hero.tsx` | Account CTAs + role explore |
 | Role catalog copy | `sections/agents.tsx` | Align with `../engine/agent_templates/` when claiming truth |
 | Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors on `/`; Sign in → `/login` |
@@ -81,7 +83,8 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 - **Alias:** `@/*` → `src/*` (Vite + tsconfig). Prefer `@/` imports in app code.
 - **Files:** kebab-case (`how-it-works.tsx`); components **named** PascalCase exports. Only `App` is default export.
 - **No barrels** - import concrete files (`@/components/sections/hero`).
-- **React Router** for `/login`, `/register`, `/join`, `/transfer`, `/app`. Landing hash anchors (`#features`, …) stay on `/`.
+- **React Router** for `/login`, `/register`, `/join`, `/transfer`, `/forgot-password`, `/reset-password`, `/verify-email`, `/sso/callback`, `/app/*`. Landing hash anchors (`#features`, …) stay on `/`.
+- Vite proxies `/api` and `/ws` to the engine. Production nginx `client_max_body_size` is 25m; CSP `connect-src` includes `ws:`/`wss:`.
 - **Tailwind v4 CSS-first** - no `tailwind.config.*` / PostCSS. Tokens live in `index.css` (`@theme inline`, `:root`, `.dark`).
 - **Lint:** oxlint (`.oxlintrc.json`), not ESLint/Prettier. `npm run lint`.
 - **TS:** `verbatimModuleSyntax` → use `import type`. Build runs `tsc -b` then Vite.
@@ -127,6 +130,7 @@ docker run --rm -p 8080:8080 maraclaw-web-l
 
 - **No automated tests** - verification = `npm run build` (+ optional lint).
 - Public `VITE_API_BASE_URL` / `VITE_DEV_API_PROXY` only. JWT key is `maraclaw-enduser-token`, never `maraclaw-admin-token`.
+- Password reset / verify emails use the requesting frontend Origin when it is in engine `CORS_ORIGINS`; fallback `PUBLIC_BASE_URL` is the member site.
 - `src/assets/` empty; brand assets in `public/`. `public/icons.svg` is unused Vite leftover.
 - `@radix-ui/react-navigation-menu` is a dependency without a UI file.
 - CSP in `docker/nginx.conf` is strict (`connect-src 'self'`); external analytics/APIs need CSP edits.
