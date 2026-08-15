@@ -240,10 +240,10 @@ async def lifespan(app: FastAPI):
     from app.services.dingtalk_stream import dingtalk_stream_manager
     from app.services.discord_gateway import discord_gateway_manager
     from app.services.feishu_ws import feishu_ws_manager
+    from app.services.linkup.export import start_web_search_export_daemon
     from app.services.template_seeder import seed_agent_templates
     from app.services.tool_seeder import seed_builtin_tools
     from app.services.trigger_daemon import start_trigger_daemon
-    from app.services.linkup.export import start_web_search_export_daemon
     from app.services.wechat_channel import wechat_poll_manager
     from app.services.wecom_stream import wecom_stream_manager
 
@@ -451,7 +451,6 @@ from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
 from app.api.admin_linkup import router as admin_linkup_router
 from app.api.admin_search_analytics import router as admin_search_analytics_router
-from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agentbay_control import router as agentbay_control_router
@@ -469,6 +468,7 @@ from app.api.gateway import router as gateway_router
 from app.api.gogcli import router as gogcli_router
 from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
+from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
 from app.api.okr import router as okr_router

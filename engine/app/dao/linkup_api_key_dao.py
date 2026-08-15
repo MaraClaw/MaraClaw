@@ -96,8 +96,7 @@ class LinkupAsyncJobDAO(BaseDAO[LinkupAsyncJobRecord]):
     async def get_by_job_id(self, upstream_job_id: str) -> LinkupAsyncJobRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM linkup_async_jobs "
-                + "WHERE upstream_job_id = %(upstream_job_id)s",
+                f"SELECT {self._select_list()} FROM linkup_async_jobs " + "WHERE upstream_job_id = %(upstream_job_id)s",
                 {"upstream_job_id": upstream_job_id},
             )
             return LinkupAsyncJobRecord.from_row(row) if row else None

@@ -144,11 +144,14 @@ async def test_picker_cycles_three_keys_and_wraps(key_dao: MemoryKeyDao) -> None
     c = await add_key(label="c", api_key="kc")
     assert (await current_key()).id == a.id
     nxt = await advance_cursor(a.id)
-    assert nxt is not None and nxt.id == b.id
+    assert nxt is not None
+    assert nxt.id == b.id
     nxt = await advance_cursor(b.id)
-    assert nxt is not None and nxt.id == c.id
+    assert nxt is not None
+    assert nxt.id == c.id
     nxt = await advance_cursor(c.id)
-    assert nxt is not None and nxt.id == a.id
+    assert nxt is not None
+    assert nxt.id == a.id
 
 
 @pytest.mark.asyncio
@@ -159,7 +162,8 @@ async def test_picker_skips_exhausted_and_disabled(key_dao: MemoryKeyDao) -> Non
     b.status = "disabled"
     a.exhausted_until = datetime.now(UTC) + timedelta(hours=1)
     current = await current_key()
-    assert current is not None and current.id == c.id
+    assert current is not None
+    assert current.id == c.id
 
 
 @pytest.mark.asyncio

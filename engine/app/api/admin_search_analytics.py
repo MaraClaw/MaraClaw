@@ -43,9 +43,7 @@ async def get_search_analytics_summary(
 ) -> dict[str, object]:
     del current_user
     window_start, window_end = _window(start, end)
-    payload = await web_search_event_dao.summary(
-        start=window_start, end=window_end, tenant_id=tenant_id
-    )
+    payload = await web_search_event_dao.summary(start=window_start, end=window_end, tenant_id=tenant_id)
     payload["scope"] = "org" if tenant_id is not None else "system"
     return payload
 
@@ -59,9 +57,7 @@ async def get_search_analytics_timeseries(
 ) -> list[dict[str, object]]:
     del current_user
     window_start, window_end = _window(start, end)
-    return await web_search_event_dao.timeseries(
-        start=window_start, end=window_end, tenant_id=tenant_id
-    )
+    return await web_search_event_dao.timeseries(start=window_start, end=window_end, tenant_id=tenant_id)
 
 
 @router.get("/orgs")

@@ -104,9 +104,9 @@ async def test_execute_runs_python_container_with_python_on_whales_kwargs():
     assert result.stderr == "stderr text"
     assert result.exit_code == 0
     assert result.error is None
-    assert client.image.exists_calls == ["python:3.14.7-slim"]
+    assert client.image.exists_calls == ["python:3.14.7-slim-trixie"]
     assert client.image.pull_calls == []
-    assert client.run_args == ("python:3.14.7-slim", ["python3", "-c", "print('hello')"])
+    assert client.run_args == ("python:3.14.7-slim-trixie", ["python3", "-c", "print('hello')"])
     assert client.run_kwargs == {
         "detach": True,
         "memory": "256m",
@@ -195,8 +195,8 @@ async def test_execute_pulls_image_when_image_is_missing():
 
     # Then
     assert result.success is True
-    assert client.image.exists_calls == ["node:26.5.0-slim"]
-    assert client.image.pull_calls == ["node:26.5.0-slim"]
+    assert client.image.exists_calls == ["node:26.7.0-slim"]
+    assert client.image.pull_calls == ["node:26.7.0-slim"]
 
 
 async def test_execute_unsupported_language_does_not_touch_docker_client(monkeypatch):

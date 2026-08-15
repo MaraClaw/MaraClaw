@@ -16,9 +16,7 @@ async def bind_job(*, upstream_job_id: str, key_id: UUID, kind: str) -> None:
     existing = await linkup_async_job_dao.get_by_job_id(upstream_job_id)
     if existing is not None:
         return
-    _ = await linkup_async_job_dao.create(
-        obj_in={"upstream_job_id": upstream_job_id, "key_id": key_id, "kind": kind}
-    )
+    _ = await linkup_async_job_dao.create(obj_in={"upstream_job_id": upstream_job_id, "key_id": key_id, "kind": kind})
 
 
 async def key_for_job(upstream_job_id: str) -> LinkupApiKeyRecord:

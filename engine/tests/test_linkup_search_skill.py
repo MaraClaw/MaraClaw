@@ -9,8 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.config import Settings
-from app.services import agent_manager as agent_manager_module
-from app.services import linkup_runtime
+from app.services import agent_manager as agent_manager_module, linkup_runtime
 from app.services.agent_manager import AgentManager
 from app.services.agent_tool_exec import registry
 from app.services.agent_tools_definitions import AGENT_TOOLS
@@ -25,6 +24,8 @@ from app.services.linkup_runtime import (
     load_linkup_manifest,
     seed_linkup_skills,
 )
+from app.services.tool_definitions import BUILTIN_TOOLS
+from app.services.tool_seeder import SYNC_IS_DEFAULT_TOOL_NAMES
 
 DEFAULT_LINKUP_SKILLS = (
     LINKUP_SEARCH_SKILL_FOLDER,
@@ -32,8 +33,6 @@ DEFAULT_LINKUP_SKILLS = (
     LINKUP_RESEARCH_SKILL_FOLDER,
     LINKUP_EXTRACT_SKILL_FOLDER,
 )
-from app.services.tool_definitions import BUILTIN_TOOLS
-from app.services.tool_seeder import SYNC_IS_DEFAULT_TOOL_NAMES
 
 REMOVED_SEARCH_TOOL_NAMES = (
     "web_search",
