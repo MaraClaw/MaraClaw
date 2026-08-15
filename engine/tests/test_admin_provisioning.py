@@ -437,6 +437,54 @@ async def test_set_peer_admin_active_rejects_non_platform_target(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
+    tenant_id = uuid.uuid4()
+    actor = _user(role="org_admin", tenant_id=tenant_id)
+    target = _user(role="member", tenant_id=tenant_id, is_active=True)
+    monkeypatch.setattr(provisioning.user_dao, "update", AsyncMock(return_value=_user(role="member", tenant_id=tenant_id, is_active=False, user_id=target.id)))
+    with patch("app.services.admin_provisioning.connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock()
+        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()):
+            updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    assert updated.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_set_end_user_active_rejects_self():
+    user = _user(role="member")
+    with pytest.raises(provisioning.AdminActivationError):
+        await provisioning.set_end_user_active(actor=user, target=user, is_active=False)
+
+
+@pytest.mark.asyncio
+async def test_set_end_user_active_rejects_org_admin_target():
+    tenant_id = uuid.uuid4()
+    actor = _user(role="org_admin", tenant_id=tenant_id)
+    target = _user(role="org_admin", tenant_id=tenant_id)
+    with pytest.raises(provisioning.AdminActivationError) as exc:
+        await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_end_user_active_rejects_other_company():
+    actor = _user(role="org_admin", tenant_id=uuid.uuid4())
+    target = _user(role="member", tenant_id=uuid.uuid4())
+    with pytest.raises(provisioning.AdminActivationError) as exc:
+        await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_set_end_user_active_rejects_org_admin_without_company():
+    actor = _user(role="org_admin", tenant_id=None)
+    target = _user(role="member", tenant_id=uuid.uuid4())
+    with pytest.raises(provisioning.AdminActivationError) as exc:
+        await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    assert exc.value.status_code == 403
+
+
 async def test_set_peer_admin_active_activates_inactive_platform_admin(monkeypatch):
     genesis = _user(role="platform_admin")
     target = _user(role="platform_admin", is_active=False)

@@ -57,6 +57,8 @@ class CompanyStats(BaseModel):
     is_default_end_user_org: bool = False
     created_at: datetime | None = None
     user_count: int = 0
+    active_user_count: int = 0
+    inactive_user_count: int = 0
     agent_count: int = 0
     agent_running_count: int = 0
     total_tokens: int = 0
@@ -158,6 +160,7 @@ async def list_companies(
     for tenant in tenants:
         tid = tenant.id
         user_count = await user_dao.count_for_tenant(tid)
+        active_user_count = await user_dao.count_for_tenant(tid, is_active=True)
         agent_count = await agent_dao.count_for_tenant(tid)
         agent_running = await agent_dao.count_for_tenant(tid, status="running")
         total_tokens, cache_read_tokens_total = await agent_dao.sum_tokens_for_tenant(tid)
@@ -175,6 +178,8 @@ async def list_companies(
                 is_default_end_user_org=getattr(tenant, "is_default_end_user_org", False),
                 created_at=tenant.created_at,
                 user_count=user_count,
+                active_user_count=active_user_count,
+                inactive_user_count=max(user_count - active_user_count, 0),
                 agent_count=agent_count,
                 agent_running_count=agent_running,
                 total_tokens=total_tokens,
@@ -233,6 +238,8 @@ async def create_company(
             is_default_end_user_org=getattr(tenant, "is_default_end_user_org", False),
             created_at=tenant.created_at,
             user_count=1,
+            active_user_count=1,
+            inactive_user_count=0,
             org_admin_email=provisioned.admin_email,
         ),
         org_admin_email=provisioned.admin_email,

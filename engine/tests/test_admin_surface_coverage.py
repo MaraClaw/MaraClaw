@@ -99,7 +99,12 @@ async def test_get_client_ip_none_and_host():
 async def test_list_companies(monkeypatch):
     tenant = _tenant()
     monkeypatch.setattr(admin_api.tenant_dao, "list_ordered_by_created_at", AsyncMock(return_value=[tenant]))
-    monkeypatch.setattr(admin_api.user_dao, "count_for_tenant", AsyncMock(return_value=3))
+    async def count_for_tenant(_tid, *, is_active=None):
+        if is_active is True:
+            return 2
+        return 3
+
+    monkeypatch.setattr(admin_api.user_dao, "count_for_tenant", AsyncMock(side_effect=count_for_tenant))
     monkeypatch.setattr(admin_api.agent_dao, "count_for_tenant", AsyncMock(return_value=2))
     monkeypatch.setattr(admin_api.agent_dao, "sum_tokens_for_tenant", AsyncMock(return_value=(10, 1)))
     monkeypatch.setattr(admin_api.user_dao, "first_org_admin_email", AsyncMock(return_value="oa@acme.com"))
@@ -107,6 +112,9 @@ async def test_list_companies(monkeypatch):
     assert len(result) == 1
     assert result[0].org_admin_email == "oa@acme.com"
     assert result[0].user_count == 3
+    assert result[0].active_user_count == 2
+    assert result[0].inactive_user_count == 1
+    assert result[0].agent_count == 2
     assert result[0].can_disable is True
 
 
@@ -281,6 +289,54 @@ async def test_users_list_quota_and_org_admin_surface(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await users_api.update_user_quota(uuid.uuid4(), users_api.UserQuotaUpdate(), org)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_user_active_org_admin(monkeypatch):
+    tenant_id = uuid.uuid4()
+    org = _user(role="org_admin", tenant_id=tenant_id)
+    member = _user(role="member", tenant_id=tenant_id, is_active=True)
+    deactivated = _user(role="member", tenant_id=tenant_id, user_id=member.id, is_active=False)
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(side_effect=[member, deactivated]))
+    monkeypatch.setattr(users_api, "set_end_user_active", AsyncMock(return_value=deactivated))
+    monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    out = await users_api.set_user_active(member.id, users_api.UserActiveUpdate(is_active=False), org)
+    assert out.is_active is False
+
+    with pytest.raises(HTTPException):
+        await users_api.set_user_active(member.id, users_api.UserActiveUpdate(is_active=False), _user(role="member"))
+
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as missing:
+        await users_api.set_user_active(uuid.uuid4(), users_api.UserActiveUpdate(is_active=False), org)
+    assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_user_active_org_admin_cannot_change_other_company(monkeypatch):
+    org = _user(role="org_admin", tenant_id=uuid.uuid4())
+    outsider = _user(role="member", tenant_id=uuid.uuid4(), is_active=True)
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=outsider))
+    activate = AsyncMock()
+    monkeypatch.setattr(users_api, "set_end_user_active", activate)
+    with pytest.raises(HTTPException) as exc:
+        await users_api.set_user_active(outsider.id, users_api.UserActiveUpdate(is_active=False), org)
+    assert exc.value.status_code == 403
+    activate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_users_org_admin_ignores_foreign_tenant_id(monkeypatch):
+    tenant_id = uuid.uuid4()
+    org = _user(role="org_admin", tenant_id=tenant_id)
+    member = _user(role="member", tenant_id=tenant_id)
+    listed = AsyncMock(return_value=[member])
+    monkeypatch.setattr(users_api.user_dao, "list_for_tenant_ordered", listed)
+    monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    rows = await users_api.list_users(tenant_id=str(uuid.uuid4()), current_user=org)
+    assert len(rows) == 1
+    listed.assert_awaited_once()
+    assert listed.await_args.args[0] == tenant_id
 
 
 @pytest.mark.asyncio

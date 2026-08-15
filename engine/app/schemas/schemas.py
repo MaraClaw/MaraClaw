@@ -185,6 +185,7 @@ class UserOut(BaseModel):
     primary_mobile: str | None = None
     registration_source: str | None = None
     is_active: bool
+    is_genesis: bool = False
     email_verified: bool = True
     must_change_password: bool = False
     created_at: datetime

@@ -371,3 +371,43 @@ async def set_peer_admin_active(
         ip_address=ip_address,
     )
     return updated
+
+
+END_USER_ROLES: frozenset[str] = frozenset({"member", "agent_admin"})
+
+
+async def set_end_user_active(
+    *,
+    actor: UserRecord,
+    target: UserRecord,
+    is_active: bool,
+    ip_address: str | None = None,
+) -> UserRecord:
+    """Org or platform admin activates or deactivates an end user (not an admin)."""
+    if target.id == actor.id:
+        raise AdminActivationError(400, "Cannot change your own active status")
+    if getattr(actor, "role", None) not in ("org_admin", "platform_admin"):
+        raise AdminActivationError(403, "Admin access required")
+    if getattr(target, "role", None) not in END_USER_ROLES:
+        raise AdminActivationError(400, "Can only activate or deactivate end users")
+    if actor.role == "org_admin":
+        if actor.tenant_id is None or target.tenant_id is None or target.tenant_id != actor.tenant_id:
+            raise AdminActivationError(403, "Can only change users in your own company")
+
+    if target.is_active == is_active:
+        return target
+
+    async with connection_ctx():
+        updated = await user_dao.update(db_obj=target, obj_in={"is_active": is_active}) or target
+
+    await write_admin_audit(
+        actor=actor,
+        action="user_activate" if is_active else "user_deactivate",
+        target_type="user",
+        target_id=target.id,
+        tenant_id=getattr(target, "tenant_id", None),
+        changes={"is_active": field_change(target.is_active, is_active)},
+        details={"target_role": target.role, "target_email": getattr(target, "email", None)},
+        ip_address=ip_address,
+    )
+    return updated
