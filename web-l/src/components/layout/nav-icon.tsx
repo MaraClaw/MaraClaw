@@ -3,25 +3,25 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
 const ICONS = {
-  agents: '/nav-icons/agents.png',
-  plaza: '/nav-icons/plaza.png',
-  okr: '/nav-icons/okr.png',
-  directory: '/nav-icons/directory.png',
-  inbox: '/nav-icons/inbox.png',
-  account: '/nav-icons/account.png',
-  settings: '/nav-icons/settings.png',
+  agents: '/nav-icons/agents.svg',
+  plaza: '/nav-icons/plaza.svg',
+  okr: '/nav-icons/okr.svg',
+  directory: '/nav-icons/directory.svg',
+  inbox: '/nav-icons/inbox.svg',
+  account: '/nav-icons/account.svg',
+  settings: '/nav-icons/settings.svg',
 } as const
 
 export type NavIconName = keyof typeof ICONS
 
 const INACTIVE_ICONS: Record<NavIconName, string> = {
-  agents: '/nav-icons/agents-inactive.png',
-  plaza: '/nav-icons/plaza-inactive.png',
-  okr: '/nav-icons/okr-inactive.png',
-  directory: '/nav-icons/directory-inactive.png',
-  inbox: '/nav-icons/inbox-inactive.png',
-  account: '/nav-icons/account-inactive.png',
-  settings: '/nav-icons/settings-inactive.png',
+  agents: '/nav-icons/agents-inactive.svg',
+  plaza: '/nav-icons/plaza-inactive.svg',
+  okr: '/nav-icons/okr-inactive.svg',
+  directory: '/nav-icons/directory-inactive.svg',
+  inbox: '/nav-icons/inbox-inactive.svg',
+  account: '/nav-icons/account-inactive.svg',
+  settings: '/nav-icons/settings-inactive.svg',
 }
 
 export function NavIcon({
