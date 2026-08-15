@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.security import hash_password_async
+from app.dao.agent_dao import agent_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.participant_dao import participant_dao
+from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.tenant_dao import tenant_dao
+from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
@@ -359,6 +362,59 @@ async def set_peer_admin_active(
         # across companies, so login filters inactive memberships instead.
         if target.role == "platform_admin" and target.identity is not None:
             _ = await identity_dao.update(db_obj=target.identity, obj_in={"is_active": is_active})
+
+    await write_admin_audit(
+        actor=actor,
+        action="user_activate" if is_active else "user_deactivate",
+        target_type="user",
+        target_id=target.id,
+        tenant_id=getattr(target, "tenant_id", None),
+        changes={"is_active": field_change(target.is_active, is_active)},
+        details={"target_role": target.role, "target_email": getattr(target, "email", None)},
+        ip_address=ip_address,
+    )
+    return updated
+
+
+END_USER_ROLES: frozenset[str] = frozenset({"member", "agent_admin"})
+
+
+async def set_end_user_active(
+    *,
+    actor: UserRecord,
+    target: UserRecord,
+    is_active: bool,
+    ip_address: str | None = None,
+) -> UserRecord:
+    """Org or platform admin activates or deactivates an end user (not an admin)."""
+    if target.id == actor.id:
+        raise AdminActivationError(400, "Cannot change your own active status")
+    if getattr(actor, "role", None) not in ("org_admin", "platform_admin"):
+        raise AdminActivationError(403, "Admin access required")
+    if getattr(target, "role", None) not in END_USER_ROLES:
+        raise AdminActivationError(400, "Can only activate or deactivate end users")
+    if actor.role == "org_admin" and (
+        actor.tenant_id is None or target.tenant_id is None or target.tenant_id != actor.tenant_id
+    ):
+        raise AdminActivationError(403, "Can only change users in your own company")
+
+    if target.is_active == is_active:
+        return target
+
+    to_stop = []
+    async with connection_ctx():
+        updated = await user_dao.update(db_obj=target, obj_in={"is_active": is_active}) or target
+        if not is_active:
+            tenant_id = getattr(target, "tenant_id", None)
+            to_stop = list(await agent_dao.disable_for_creator(target.id, tenant_id=tenant_id))
+            _ = await agent_trigger_dao.disable_for_creator(target.id, tenant_id=tenant_id)
+            _ = await agent_schedule_dao.disable_for_creator(target.id, tenant_id=tenant_id)
+
+    if to_stop:
+        from app.services.agent_manager import agent_manager
+
+        for agent in to_stop:
+            _ = await agent_manager.stop_container(agent)
 
     await write_admin_audit(
         actor=actor,

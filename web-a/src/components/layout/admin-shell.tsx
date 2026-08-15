@@ -25,6 +25,48 @@ const navItems: {
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 
+function navItemClass(compact: boolean, extra?: string) {
+  return cn(
+    'relative flex touch-manipulation select-none flex-col items-center justify-center text-muted-foreground',
+    compact
+      ? 'min-h-14 shrink-0 gap-1 rounded-lg px-3 py-2'
+      : 'min-h-18 w-full gap-1.5 rounded-xl px-2 py-2.5',
+    extra,
+  )
+}
+
+function NavItemContent({
+  icon,
+  label,
+  compact,
+  active = false,
+  dimmed = false,
+}: {
+  icon: NavIconName
+  label: string
+  compact?: boolean
+  active?: boolean
+  dimmed?: boolean
+}) {
+  return (
+    <>
+      <NavIcon
+        name={icon}
+        active={active}
+        className={cn(compact ? 'size-8' : 'size-12', dimmed && 'opacity-50')}
+      />
+      <span
+        className={cn(
+          'max-w-full text-center font-medium leading-tight text-pretty',
+          compact ? 'text-xs' : 'text-sm',
+        )}
+      >
+        {label}
+      </span>
+    </>
+  )
+}
+
 function NavItems({
   onNavigate,
   compact,
@@ -41,25 +83,19 @@ function NavItems({
         if (platformAdminOnly && !platformAdmin) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
-          return compact ? (
+          return (
             <span
               key={to}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground/50"
+              className={navItemClass(
+                Boolean(compact),
+                compact
+                  ? 'text-muted-foreground/50'
+                  : 'cursor-not-allowed text-muted-foreground/40',
+              )}
               title="Change your password to open the rest of the console"
               aria-disabled="true"
             >
-              <NavIcon name={icon} className="size-5 opacity-50" />
-              {label}
-            </span>
-          ) : (
-            <span
-              key={to}
-              className="flex cursor-not-allowed items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-base font-medium text-muted-foreground/40"
-              title="Change your password to open the rest of the console"
-              aria-disabled="true"
-            >
-              <NavIcon name={icon} className="opacity-50" />
-              {label}
+              <NavItemContent icon={icon} label={label} compact={compact} dimmed />
             </span>
           )
         }
@@ -70,22 +106,19 @@ function NavItems({
             end={end}
             onClick={onNavigate}
             className={({ isActive }) =>
-              compact
-                ? cn(
-                    'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground',
-                    isActive && 'bg-muted text-foreground',
-                  )
-                : cn(
-                    'flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-base font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                    isActive && 'bg-muted text-foreground',
-                  )
+              navItemClass(
+                Boolean(compact),
+                cn(
+                  'transition-[color,transform] duration-150 ease-out hover:text-foreground',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  'active:scale-[0.96]',
+                  isActive && 'text-foreground',
+                ),
+              )
             }
           >
             {({ isActive }) => (
-              <>
-                <NavIcon name={icon} active={isActive} className={cn(compact && 'size-5')} />
-                {label}
-              </>
+              <NavItemContent icon={icon} label={label} compact={compact} active={isActive} />
             )}
           </NavLink>
         )
@@ -99,18 +132,18 @@ export function AdminShell() {
 
   return (
     <div className="flex min-h-svh bg-background">
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
+      <aside className="hidden w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
         <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
             <p className="font-display text-sm font-semibold">MaraClaw</p>
-            <p className="truncate text-xs text-muted-foreground">Admin console</p>
+            <p className="truncate text-xs text-muted-foreground">Admin Console</p>
           </div>
         </Link>
-        <nav className="flex flex-1 flex-col gap-0.5 px-2" aria-label="Admin">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Admin">
           <NavItems />
           {mustChangePassword ? (
-            <p className="px-3.5 pt-2 text-xs leading-relaxed text-muted-foreground">
+            <p className="px-2 pt-2 text-center text-xs leading-relaxed text-muted-foreground">
               Change your password on Account to unlock the rest of the console.
             </p>
           ) : null}
@@ -142,7 +175,10 @@ export function AdminShell() {
               </Button>
             </div>
           </div>
-          <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Admin">
+          <nav
+            className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
+            aria-label="Admin"
+          >
             <NavItems compact />
           </nav>
         </header>

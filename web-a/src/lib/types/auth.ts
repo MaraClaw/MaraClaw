@@ -27,9 +27,14 @@ export type UserOut = {
   primary_mobile: string | null
   registration_source: string | null
   is_active: boolean
+  is_genesis?: boolean
   email_verified: boolean
   must_change_password?: boolean
   created_at: string
+}
+
+export function isGenesisAdmin(user: UserOut | null | undefined): boolean {
+  return user?.is_genesis === true
 }
 
 export type TokenResponse = {

@@ -566,10 +566,15 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return int_from_row(value)
 
-    async def count_for_tenant(self, tenant_id: UUID) -> int:
+    async def count_for_tenant(self, tenant_id: UUID, *, is_active: bool | None = None) -> int:
+        clauses = ["tenant_id = %(tenant_id)s"]
+        if is_active is True:
+            clauses.append("is_active IS TRUE")
+        elif is_active is False:
+            clauses.append("is_active IS FALSE")
         async with self.session() as db:
             value = await db.fetchval(
-                "SELECT COUNT(*) FROM users WHERE tenant_id = %(tenant_id)s",
+                f"SELECT COUNT(*) FROM users WHERE {' AND '.join(clauses)}",
                 {"tenant_id": tenant_id},
             )
             return int_from_row(value)

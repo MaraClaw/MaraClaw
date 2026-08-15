@@ -54,7 +54,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
-| `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
+| `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]` including `user_count`, `active_user_count`, `inactive_user_count`, `agent_count`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
 | `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
 | `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/OpenClaw (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
@@ -141,6 +141,8 @@ is_system, is_default_end_user_org, can_disable
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/users/` | platform / org | Query: `tenant_id?` (platform only) | `UserOut[]` with quotas + `agents_count` |
+| `GET` | `/api/users/{user_id}` | platform / org | - | `UserDetailOut`: user fields plus `agents[]` (`id`, `name`, `status`, `is_expired`, `role_description`, `last_active_at`). Org admin: own company only. |
+| `PATCH` | `/api/users/{user_id}/active` | platform / org | `{ is_active }` | Activate or deactivate an **end user** (`member` or `agent_admin`). Org admin: own company only. Cannot target self or admins (use org-admin / platform-admin active routes). Deactivate also stops that user's agents and turns off their triggers/schedules. `UserOut` |
 | `PATCH` | `/api/users/{user_id}/quota` | platform / org | `UserQuotaUpdate`: `quota_message_limit?`, `quota_message_period?` (`permanent`\|`daily`\|`weekly`\|`monthly`), `quota_max_agents?`, `quota_agent_ttl_hours?` | Same-tenant only. `UserOut` |
 | `POST` | `/api/users/org-admins` | genesis org_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, tenant_id, admin_email, must_change_password: true }`. Own tenant only. |
 | `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
@@ -151,7 +153,7 @@ is_system, is_default_end_user_org, can_disable
 #### `UserOut` (users router)
 
 ```text
-id, username, email, display_name, role, is_active,
+id, username, email, display_name, role, is_active, is_genesis, tenant_id,
 quota_message_limit, quota_message_period, quota_messages_used,
 quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 ```
@@ -363,6 +365,7 @@ These are **not** dedicated admin routers; admins receive wider access:
 | Create another org admin | No | Genesis OA only |
 | Activate / deactivate other platform admins | Genesis PA only | No |
 | Activate / deactivate other org admins | No | Genesis OA only |
+| Activate / deactivate end users | Any tenant | Own tenant (`member` / `agent_admin`) |
 | LLM pool, IDPs, invitations, KB, skills, tools catalog | Yes (global/tenant) | Own tenant |
 | System setting key `platform` | Yes | **No** |
 | Broadcast / OKR company settings | With tenant context | Yes |

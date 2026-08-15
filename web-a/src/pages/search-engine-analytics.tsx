@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
@@ -362,12 +363,9 @@ export function SearchAnalyticsSnapshot() {
           <CardTitle>Search analytics</CardTitle>
           <CardDescription>Last 7 days across the entire system.</CardDescription>
         </div>
-        <Link
-          to="/search-engine?tab=analytics"
-          className="text-sm font-medium text-primary hover:underline"
-        >
-          Open dashboard
-        </Link>
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/search-engine?tab=analytics">Open dashboard</Link>
+        </Button>
       </CardHeader>
       <CardContent className="grid gap-4">
         {summary.isLoading || orgs.isLoading ? (

@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { LogOut } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -8,7 +9,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { fetchCurrentUser, fetchMyTenants, switchTenant } from '@/lib/auth-api'
 
 export function SettingsPage() {
-  const { applySession, refreshUser, logout } = useAuth()
+  const { user, applySession, refreshUser, logout } = useAuth()
   const tenants = useQuery({ queryKey: ['my-tenants'], queryFn: fetchMyTenants })
 
   async function onSwitch(tenantId: string | null) {
@@ -28,7 +29,7 @@ export function SettingsPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Theme, organization, and session.</p>
+        <p className="text-sm text-muted-foreground">Organization and session.</p>
       </div>
 
       <Card>
@@ -57,9 +58,14 @@ export function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Session</CardTitle>
+          <CardDescription>
+            Signed in as {user?.display_name || user?.email || 'this member'}. Sign out ends this
+            browser session.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" onClick={logout}>
+          <Button type="button" variant="outline" onClick={logout}>
+            <LogOut className="size-4" aria-hidden />
             Sign out
           </Button>
         </CardContent>

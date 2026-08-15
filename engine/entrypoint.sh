@@ -27,6 +27,27 @@ if [ "$(id -u)" = '0' ]; then
         echo "[entrypoint] Directory ${TARGET_DIR} is already owned by maraclaw:maraclaw, skipping chown."
     fi
 
+    if [ -e /var/run/docker.sock ]; then
+        SOCK_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+        echo "[entrypoint] docker.sock mode=$(stat -c '%a' /var/run/docker.sock) gid=${SOCK_GID:-unknown}"
+        if [ -n "$SOCK_GID" ]; then
+            if ! getent group "$SOCK_GID" >/dev/null 2>&1; then
+                groupadd --gid "$SOCK_GID" dockerhost
+            fi
+            usermod -aG "$SOCK_GID" maraclaw
+        fi
+        if ! gosu maraclaw sh -c "test -w /var/run/docker.sock"; then
+            echo "[entrypoint] docker.sock not writable by maraclaw; adjusting group"
+            chgrp maraclaw /var/run/docker.sock 2>/dev/null || true
+            chmod g+rw /var/run/docker.sock 2>/dev/null || true
+        fi
+        if ! gosu maraclaw sh -c "test -w /var/run/docker.sock"; then
+            echo "[entrypoint] ERROR: docker.sock is not writable by maraclaw."
+            echo "[entrypoint] Grant the container the socket GID (start-from-docker.sh --group-add) and do not chmod the host socket."
+            exit 1
+        fi
+    fi
+
     echo "[entrypoint] Dropping privileges to 'maraclaw' and re-executing..."
     exec gosu maraclaw /bin/bash "$0" "$@"
 fi

@@ -18,6 +18,7 @@ from app.services.admin_provisioning import (
     apply_user_role_change,
     create_additional_org_admin,
     is_genesis_org_admin,
+    set_end_user_active,
     set_peer_admin_active,
 )
 from app.services.tenant_provisioning import AdminEmailTakenError
@@ -39,6 +40,10 @@ class UserQuotaUpdate(BaseModel):
     quota_agent_ttl_hours: int | None = None
 
 
+class UserActiveUpdate(BaseModel):
+    is_active: bool
+
+
 class UserOut(BaseModel):
     id: uuid.UUID
     # username/email/display_name can be None for SSO-created users whose Identity
@@ -49,6 +54,8 @@ class UserOut(BaseModel):
     display_name: str | None = None
     role: str
     is_active: bool
+    is_genesis: bool = False
+    tenant_id: uuid.UUID | None = None
     # Quota fields
     quota_message_limit: int
     quota_message_period: str
@@ -72,6 +79,8 @@ def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
         display_name=u.display_name or u.username or "",
         role=u.role,
         is_active=u.is_active,
+        is_genesis=bool(getattr(u, "is_genesis", False)),
+        tenant_id=u.tenant_id,
         quota_message_limit=u.quota_message_limit,
         quota_message_period=u.quota_message_period,
         quota_messages_used=u.quota_messages_used,
@@ -91,8 +100,15 @@ async def list_users(
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
-    # Platform admins can view any tenant; org_admins only their own
-    tid = tenant_id if tenant_id and current_user.role == "platform_admin" else str(current_user.tenant_id)
+    # Platform admins can view any tenant; org admins are locked to their company.
+    if current_user.role == "org_admin":
+        if current_user.tenant_id is None:
+            raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+        tid = str(current_user.tenant_id)
+    else:
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        tid = tenant_id
     try:
         tenant_uuid = uuid.UUID(tid)
     except (TypeError, ValueError) as exc:
@@ -147,6 +163,60 @@ async def update_user_quota(
 
     agents_count = await agent_dao.count_active_for_creator(user.id)
     return _user_out(user, agents_count=agents_count)
+
+
+class UserAgentOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    status: str
+    is_expired: bool = False
+    role_description: str | None = None
+    last_active_at: datetime | None = None
+
+
+class UserDetailOut(UserOut):
+    agents: list[UserAgentOut] = Field(default_factory=list)
+
+
+def _require_admin_user_scope(actor: UserRecord, target: UserRecord) -> None:
+    if actor.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    if actor.role == "org_admin" and (actor.tenant_id is None or target.tenant_id != actor.tenant_id):
+        raise HTTPException(status_code=403, detail="Can only view users in your own company")
+
+
+@router.patch("/{user_id}/active", response_model=UserOut)
+async def set_user_active(
+    user_id: uuid.UUID,
+    data: UserActiveUpdate,
+    current_user: UserRecord = Depends(get_current_user),
+    client_ip: str | None = Depends(get_client_ip),
+):
+    """Activate or deactivate an end user. Org admin: own company. Platform admin: any company."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if current_user.role == "org_admin" and (
+        current_user.tenant_id is None or target.tenant_id != current_user.tenant_id
+    ):
+        raise HTTPException(status_code=403, detail="Can only change users in your own company")
+
+    try:
+        updated = await set_end_user_active(
+            actor=current_user,
+            target=target,
+            is_active=data.is_active,
+            ip_address=client_ip,
+        )
+    except AdminActivationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    refreshed = await user_dao.get_with_identity(updated.id) or updated
+    agents_count = await agent_dao.count_active_for_creator(refreshed.id)
+    return _user_out(refreshed, agents_count=agents_count)
 
 
 # ─── Role Management ───────────────────────────────────
@@ -313,6 +383,39 @@ async def list_org_admin_audit_logs(
         limit=min(max(limit, 1), 500),
     )
     return [AdminAuditLogOut.model_validate(log) for log in logs]
+
+
+@router.get("/{user_id}", response_model=UserDetailOut)
+async def get_user_detail(
+    user_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+) -> UserDetailOut:
+    """Return one company user plus the agents they created."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    _require_admin_user_scope(current_user, target)
+
+    agents = await agent_dao.list_for_creator(target.id, tenant_id=target.tenant_id)
+    agents_count = len(agents)
+    base = _user_out(target, agents_count=agents_count)
+    return UserDetailOut(
+        **base.model_dump(),
+        agents=[
+            UserAgentOut(
+                id=agent.id,
+                name=agent.name,
+                status=agent.status,
+                is_expired=bool(agent.is_expired),
+                role_description=agent.role_description or None,
+                last_active_at=agent.last_active_at,
+            )
+            for agent in agents
+        ],
+    )
 
 
 @router.patch("/{user_id}/role")

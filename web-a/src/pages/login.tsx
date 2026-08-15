@@ -280,7 +280,7 @@ export function LoginPage() {
             <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
-              <p className="text-xs text-muted-foreground">Admin console</p>
+              <p className="text-xs text-muted-foreground">Admin Console</p>
             </div>
           </div>
           <ThemeToggle />

@@ -4,7 +4,7 @@
 **Commit:** 04d89c0  
 **Branch:** implement-web-l-login  
 **Package:** `web-a` (MaraClaw admin console)  
-**Status:** Live auth + companies + Linkup keys + search analytics. `/users` and `/tools` still placeholders.
+**Status:** Live auth + companies + Linkup keys + search analytics + users. `/tools` still a placeholder.
 
 > Monorepo routing: `../AGENTS.md`.  
 > Admin HTTP contracts: `../engine/docs/admin-apis.md`.
@@ -43,7 +43,7 @@ web-a/
 └── src/
     ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
     ├── routes/          # route table + ProtectedRoute
-    ├── pages/           # login, account, companies, search-engine live; users/tools placeholders
+    ├── pages/           # login, account, companies, search-engine, users live; tools placeholder
     ├── components/
     │   ├── layout/admin-shell.tsx
     │   ├── ui/          # primitives
@@ -70,6 +70,7 @@ web-a/
 | Change password | `src/pages/account.tsx` |
 | Sign out / theme | `src/pages/settings.tsx` |
 | Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
+| Users / activate | `src/pages/users.tsx`, `src/pages/user-detail.tsx`, `src/lib/users-api.ts` | Org and platform admin; `GET /api/users/{id}` for detail + agents; activate routes as before |
 | Search engine / Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
 | Search analytics | `src/pages/search-engine-analytics.tsx`, `src/lib/search-analytics-api.ts` |
 | Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` - prefix FTS on name/slug |

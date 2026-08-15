@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
 import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
 import { isNeedsVerificationDetail } from '@/lib/types/auth'
 
 const registerSchema = z.object({
@@ -24,6 +24,8 @@ const registerSchema = z.object({
 })
 
 type RegisterFormValues = z.infer<typeof registerSchema>
+
+const duplicateEmailMessage = 'That email is already registered.'
 
 const highlights = [
   {
@@ -94,11 +96,7 @@ export function RegisterPage() {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
         return
       }
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ?? error.message)
-          : 'Registration failed. Try again.',
-      )
+      setFormError(userFacingRequestError(error, 'Unable to create an account. Try again.'))
     }
   }
 
@@ -133,10 +131,18 @@ export function RegisterPage() {
               {...register('email', {
                 onBlur: (event) => {
                   const email = event.target.value.trim()
-                  if (!email) return
-                  void checkDuplicate({ email }).then((result) => {
-                    if (result.email_exists) setFormError('That email is already registered.')
-                  })
+                  if (!email) {
+                    setFormError((current) => (current === duplicateEmailMessage ? null : current))
+                    return
+                  }
+                  void checkDuplicate({ email })
+                    .then((result) => {
+                      setFormError((current) => {
+                        if (result.email_exists) return duplicateEmailMessage
+                        return current === duplicateEmailMessage ? null : current
+                      })
+                    })
+                    .catch(() => undefined)
                 },
               })}
             />
