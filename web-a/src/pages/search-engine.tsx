@@ -114,7 +114,7 @@ export function SearchEnginePage() {
         <CardHeader>
           <CardTitle>Add Linkup key</CardTitle>
           <CardDescription>
-            The secret is stored encrypted. The list shows a fingerprint only — you cannot read the
+            The secret is stored encrypted. The list shows a fingerprint only - you cannot read the
             key back after saving.
           </CardDescription>
         </CardHeader>

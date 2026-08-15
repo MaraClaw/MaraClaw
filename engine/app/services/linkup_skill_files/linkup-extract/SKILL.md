@@ -1,6 +1,6 @@
 ---
 name: linkup-extract
-description: Use to pull many structured records from ONE known listing page — team directories, product/pricing catalogs, job listings, conference speakers, paginated lists. ALSO read this when writing code that integrates the /v1/extract endpoint (schema, async polling, NDJSON results). Uses Linkup's async /v1/extract REST endpoint and returns NDJSON rows. Requires LINKUP_API_KEY. For a single page's prose use linkup-fetch; for web discovery use linkup-search.
+description: Use to pull many structured records from ONE known listing page - team directories, product/pricing catalogs, job listings, conference speakers, paginated lists. ALSO read this when writing code that integrates the /v1/extract endpoint (schema, async polling, NDJSON results). Uses Linkup's async /v1/extract REST endpoint and returns NDJSON rows. Requires LINKUP_API_KEY. For a single page's prose use linkup-fetch; for web discovery use linkup-search.
 ---
 
 # Linkup Bulk Extract
@@ -17,7 +17,7 @@ test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
 
 | Use `linkup-extract` when... | Use instead... |
 | --- | --- |
-| You have one URL and want many structured rows (team, catalog, jobs, speakers) | — |
+| You have one URL and want many structured rows (team, catalog, jobs, speakers) | - |
 | You want one page's content as prose/Markdown | `linkup-fetch` |
 | You need to find information across the web | `linkup-search` |
 | You need synthesis across many sources | `linkup-research` |
@@ -38,7 +38,7 @@ curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/extract" \
 
 ## Async lifecycle
 
-`POST /v1/extract` returns `{id, status: "pending"}`. Poll `GET /v1/extract/{id}` about every 30s (crawls run longer than research). When `completed`, the output has a `resultUrl` (24h expiry) — download it and parse one JSON object per line.
+`POST /v1/extract` returns `{id, status: "pending"}`. Poll `GET /v1/extract/{id}` about every 30s (crawls run longer than research). When `completed`, the output has a `resultUrl` (24h expiry) - download it and parse one JSON object per line.
 
 If you don't know the URL yet, first discover it with `linkup-search` (`"Find the careers page URL for {company}"`), then extract from the result.
 

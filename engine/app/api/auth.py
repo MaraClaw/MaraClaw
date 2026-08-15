@@ -211,7 +211,7 @@ async def register_init(
         password_hash = await hash_password_async(data.password)
 
     # 3. Check duplicate/existing identity first (outside transaction)
-    # Platform admin is seeded from PLATFORM_ADMIN_EMAIL/PASSWORD — open registration
+    # Platform admin is seeded from PLATFORM_ADMIN_EMAIL/PASSWORD - open registration
     # never elevates to platform_admin.
     identity = await identity_dao.get_by_email(data.email)
     if identity:
@@ -387,7 +387,7 @@ async def _handle_normal_register(
     email_config = await resolve_email_config_async()
 
     # 3. Check if this email is already registered globally outside transaction
-    # Platform admin is seeded from env — open registration never elevates to platform_admin.
+    # Platform admin is seeded from env - open registration never elevates to platform_admin.
     identity = await identity_dao.get_by_email(data.email)
     if identity:
         raise HTTPException(

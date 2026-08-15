@@ -24,7 +24,7 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 
 ## Page read (no built-in search-engine tools)
 
-- `web_read.py` — `read_webpage` only.
+- `web_read.py` - `read_webpage` only.
 - Register page-read names in `_agent_tool_exec_search.py`. Do not re-add search-engine tools.
 - Web search/fetch/research/extract for OpenClaw agents are the vendored Linkup skills (`app/services/linkup_runtime.py`).
 - Tests: `tests/test_search_web_tools.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.

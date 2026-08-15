@@ -12,7 +12,7 @@ export function getApiBaseUrl(): string {
         return ''
       }
     } catch {
-      // Relative or invalid — keep the trimmed value.
+      // Relative or invalid - keep the trimmed value.
     }
     return base
   }

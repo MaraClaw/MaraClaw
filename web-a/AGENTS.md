@@ -25,7 +25,7 @@ Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SM
 
 **Companies:** Platform-admin only (`/companies`, `/companies/:id`). Org admins do not see the nav item and are redirected to Overview. Platform admin can create a company (`POST /api/admin/companies`) with a genesis org admin. `/companies/:id` manages claimed email domains. System orgs and the default end-user org (OpenClaw) are badged. Disable/Enable is hidden when `can_disable` is false (MaraClaw + OpenClaw).
 
-Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
+Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs - clients call `engine`.
 
 ## STRUCTURE
 
@@ -68,8 +68,8 @@ web-a/
 | Sign out / theme | `src/pages/settings.tsx` |
 | Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
 | Search engine / Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
-| Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` — prefix FTS on name/slug |
-| Create company | `src/components/companies/create-company-form.tsx` — platform admin only |
+| Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` - prefix FTS on name/slug |
+| Create company | `src/components/companies/create-company-form.tsx` - platform admin only |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |
@@ -106,9 +106,9 @@ Production image: multi-stage Node **26.7.0** + `nginxinc/nginx-unprivileged` on
 ## ANTI-PATTERNS
 
 - Do not put marketing pages or end-user chat here.
-- Do not invent REST handlers in Vite — extend `engine`.
+- Do not invent REST handlers in Vite - extend `engine`.
 - Do not hardcode absolute API hosts in components; use `apiUrl()`.
 - Do not dump admin UI into `web-l` or `web-e`.
-- Do not ignore `must_change_password` after login — gated admin APIs will 403 and the operator will look "stuck".
-- Do not treat `VITE_AUTH_BYPASS` as implemented — README mentions it; code does not.
+- Do not ignore `must_change_password` after login - gated admin APIs will 403 and the operator will look "stuck".
+- Do not treat `VITE_AUTH_BYPASS` as implemented - README mentions it; code does not.
 - Do not use `0.0.0.0` as a browser API host (`getApiBaseUrl` maps it to same-origin).

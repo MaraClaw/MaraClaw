@@ -183,7 +183,7 @@ export function LoginPage() {
           result.must_change_password === true ||
           result.user.must_change_password === true ||
           result.identity?.must_change_password === true
-        toast.success(forceChange ? 'Signed in — change your password to continue' : 'Signed in')
+        toast.success(forceChange ? 'Signed in - change your password to continue' : 'Signed in')
         navigate(forceChange ? '/account' : from, { replace: true })
         return
       }
@@ -232,7 +232,7 @@ export function LoginPage() {
           result.identity?.must_change_password === true
         toast.success(
           forceChange
-            ? `Signed in to ${tenant.tenant_name} — change your password to continue`
+            ? `Signed in to ${tenant.tenant_name} - change your password to continue`
             : `Signed in to ${tenant.tenant_name}`,
         )
         navigate(forceChange ? '/account' : from, { replace: true })

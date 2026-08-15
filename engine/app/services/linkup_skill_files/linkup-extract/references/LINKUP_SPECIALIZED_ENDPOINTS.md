@@ -59,7 +59,7 @@ Choose the mode that matches your question type:
 
 ### Prompt Detail Levels
 
-Research runs as an agentic loop: the agent interprets the question, plans retrieval, executes parallel searches, verifies claims, and synthesizes. Both terse and detailed inputs work — more precise input produces more thorough, predictable, aligned output.
+Research runs as an agentic loop: the agent interprets the question, plans retrieval, executes parallel searches, verifies claims, and synthesizes. Both terse and detailed inputs work - more precise input produces more thorough, predictable, aligned output.
 
 **Dimensions to specify for best results:**
 
@@ -75,15 +75,15 @@ Research runs as an agentic loop: the agent interprets the question, plans retri
 **Example progression:**
 
 ```text
-# Terse — agent chooses angles and detail level
+# Terse - agent chooses angles and detail level
 What's going on in the European AI inference market?
 
-# Medium — angle and deliverable constrained
+# Medium - angle and deliverable constrained
 Survey the European AI inference market in 2026: identify the main hyperscalers 
 and independent inference providers, their pricing posture, and regulatory pressure 
 under the EU AI Act.
 
-# Fully specified — all dimensions defined
+# Fully specified - all dimensions defined
 Produce a competitive landscape of European AI inference providers operating in 2026.
 
 Scope:
@@ -399,9 +399,9 @@ Do you have a specific URL to extract structured records from?
 
 Replace the enrichment workflow's Linkup calls with Research when:
 
-1. **Data quality > speed** — Research's cross-checking produces more reliable firmographics
-2. **Conflicting sources common** — Research resolves contradictions with reasoning
-3. **Batch/async acceptable** — Can run overnight, not needed in real-time
+1. **Data quality > speed** - Research's cross-checking produces more reliable firmographics
+2. **Conflicting sources common** - Research resolves contradictions with reasoning
+3. **Batch/async acceptable** - Can run overnight, not needed in real-time
 
 **Example:** Overnight enrichment batch using Research:
 

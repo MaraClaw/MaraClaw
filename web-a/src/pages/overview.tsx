@@ -9,7 +9,7 @@ import { isPlatformAdminUser } from '@/lib/types/auth'
 const placeholders = [
   {
     title: 'Companies',
-    description: 'Platform company list, create, enable/disable — /api/admin/companies',
+    description: 'Platform company list, create, enable/disable - /api/admin/companies',
     icon: Building2,
     platformAdminOnly: true,
   },
@@ -20,7 +20,7 @@ const placeholders = [
   },
   {
     title: 'Metrics',
-    description: 'Timeseries, leaderboards, retention — /api/admin/metrics/*',
+    description: 'Timeseries, leaderboards, retention - /api/admin/metrics/*',
     icon: LineChart,
   },
   {

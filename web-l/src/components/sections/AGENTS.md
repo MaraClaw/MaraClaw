@@ -1,4 +1,4 @@
-# sections/ — landing blocks
+# sections/ - landing blocks
 
 **Generated:** 2026-08-13 · Parent: `web-l/AGENTS.md`
 
@@ -26,8 +26,8 @@ App order: Hero → Features → Agents → HowItWorks → Integrations → Ente
 | Task | File |
 |------|------|
 | Change hero copy / primary CTA | `hero.tsx` |
-| Add/edit agent roles | `agents.tsx` (`agents[]`) — keep aligned with `engine/agent_templates/` |
-| Channel / integration badges | `integrations.tsx` — don’t invent unsupported connectors |
+| Add/edit agent roles | `agents.tsx` (`agents[]`) - keep aligned with `engine/agent_templates/` |
+| Channel / integration badges | `integrations.tsx` - don’t invent unsupported connectors |
 | FAQ answers | `faq.tsx` |
 | Section animation pattern | Most use `@/components/motion` (`Reveal`/`Stagger`) |
 | On-mount motion (not viewport) | `hero.tsx` intro only |
@@ -44,10 +44,10 @@ App order: Hero → Features → Agents → HowItWorks → Integrations → Ente
 ## ANTI-PATTERNS
 
 - Inventing channel brands engine does not plan to support.
-- Editing only landing role cards when runtime/template behavior must change — fix engine first.
+- Editing only landing role cards when runtime/template behavior must change - fix engine first.
 - Duplicating nav labels here without updating `site-header.tsx` / footer hashes.
-- Brittle layout: `how-it-works.tsx` desktop connectors use `calc((100% - 3rem) / 3)` — recalculate if grid/gap changes.
+- Brittle layout: `how-it-works.tsx` desktop connectors use `calc((100% - 3rem) / 3)` - recalculate if grid/gap changes.
 
 ## NOTES
 
-- Product facts (channels, template counts, tenancy claims) appear in multiple sections — multi-file update when truth changes.
+- Product facts (channels, template counts, tenancy claims) appear in multiple sections - multi-file update when truth changes.

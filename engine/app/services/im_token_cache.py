@@ -1,7 +1,7 @@
 """Shared Redis cache for IM provider access tokens (Feishu / WeCom / DingTalk).
 
 Keys hash the public id **and** the secret so a caller cannot reuse another
-app's token. Tokens are bearer secrets — never log them. Redis errors fall
+app's token. Tokens are bearer secrets - never log them. Redis errors fall
 open to a fresh HTTP mint.
 """
 

@@ -1,11 +1,11 @@
 ---
 name: linkup-research
-description: ONLY when the user explicitly wants a thorough, exhaustive, or comprehensive multi-source investigation or report that can run for minutes — due diligence, market landscapes, "compare X across many entities", verified fact-finding. ALSO read this when writing code that integrates the /v1/research endpoint (modes, reasoning depths, async polling). Slower and more expensive than linkup-search. For normal lookups and research use linkup-search instead; for bulk records from a page use linkup-extract. Uses Linkup's async /v1/research REST endpoint. Requires LINKUP_API_KEY.
+description: ONLY when the user explicitly wants a thorough, exhaustive, or comprehensive multi-source investigation or report that can run for minutes - due diligence, market landscapes, "compare X across many entities", verified fact-finding. ALSO read this when writing code that integrates the /v1/research endpoint (modes, reasoning depths, async polling). Slower and more expensive than linkup-search. For normal lookups and research use linkup-search instead; for bulk records from a page use linkup-extract. Uses Linkup's async /v1/research REST endpoint. Requires LINKUP_API_KEY.
 ---
 
 # Linkup Deep Research
 
-The Research endpoint is an autonomous agent that investigates the web iteratively for minutes, cross-checks claims across sources, and returns a synthesized, cited answer. Reach for it only when a single `deep` search can't cover the job — many entities, many facets, verification needed, or a report-style deliverable.
+The Research endpoint is an autonomous agent that investigates the web iteratively for minutes, cross-checks claims across sources, and returns a synthesized, cited answer. Reach for it only when a single `deep` search can't cover the job - many entities, many facets, verification needed, or a report-style deliverable.
 
 This uses the REST API, so it needs `LINKUP_API_KEY` in the environment. If `LINKUP_API_BASE` is set, POST/GET `$LINKUP_API_BASE/v1/research` instead of `https://api.linkup.so/v1/research`.
 
@@ -17,9 +17,9 @@ test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
 
 Always set `mode` and `reasoningDepth` for predictable latency, cost, and output shape.
 
-- **mode** — `answer` (a precise question with one correct answer, self-verified), `investigate` (deep analysis of one defined entity), `research` (broad, multi-angle exploration across many entities). Rule of thumb: ends with "?" and expects one answer → `answer`; "the state of / analysis of" → `research`; one entity comprehensively → `investigate`.
-- **reasoningDepth** — `S` (~2-5 min), `M` (~3-7 min, default for a bounded report), `L` (~5-10 min, market maps / multi-company), `XL` (~10-20 min, only when the user wants exhaustive coverage).
-- **outputType** — `sourcedAnswer` for reports; `structured` only with a `structuredOutputSchema`.
+- **mode** - `answer` (a precise question with one correct answer, self-verified), `investigate` (deep analysis of one defined entity), `research` (broad, multi-angle exploration across many entities). Rule of thumb: ends with "?" and expects one answer → `answer`; "the state of / analysis of" → `research`; one entity comprehensively → `investigate`.
+- **reasoningDepth** - `S` (~2-5 min), `M` (~3-7 min, default for a bounded report), `L` (~5-10 min, market maps / multi-company), `XL` (~10-20 min, only when the user wants exhaustive coverage).
+- **outputType** - `sourcedAnswer` for reports; `structured` only with a `structuredOutputSchema`.
 
 ## Submit, then poll with backoff
 
