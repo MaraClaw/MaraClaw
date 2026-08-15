@@ -11,6 +11,7 @@ import { PlaceholderPage } from '@/pages/placeholder'
 import { ResetPasswordPage } from '@/pages/reset-password'
 import { SearchEnginePage } from '@/pages/search-engine'
 import { SettingsPage } from '@/pages/settings'
+import { UsersPage } from '@/pages/users'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 
@@ -31,16 +32,7 @@ export function AppRouter() {
               <Route path="companies/:companyId" element={<CompanyDetailPage />} />
               <Route path="search-engine" element={<SearchEnginePage />} />
             </Route>
-            <Route
-              path="users"
-              element={
-                <PlaceholderPage
-                  title="Users"
-                  description="Tenant membership, quotas, and role assignment."
-                  apiHint="/api/users"
-                />
-              }
-            />
+            <Route path="users" element={<UsersPage />} />
             <Route
               path="tools"
               element={
