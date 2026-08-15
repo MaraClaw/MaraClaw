@@ -20,7 +20,7 @@ Loose sibling checkout (no root workspace / turbo / compose / CI). Three package
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
 | **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python ≥3.14.5 (pin 3.14.7) | Mature |
-| **`web-l/`** | Marketing + member product | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, files, tools, channels) |
+| **`web-l/`** | Marketing + member product | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, Take Control) |
 | **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Linkup keys + search analytics |
 
 **Rule:** one concern → one package. No admin screens in `web-l`, no marketing in `web-a`, no HTML marketing in `engine`.
@@ -56,7 +56,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Landing copy / channels list | `web-l` | `web-l/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
-| Chat / member workspace | `web-l` | `web-l/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}` |
+| Chat / member workspace | `web-l` | `web-l/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
 ---
@@ -70,7 +70,7 @@ cd engine && ./start-from-sourcecode.sh   # or ./start-from-docker.sh
 cd engine && uv run --extra dev pytest
 ```
 
-**`web-l/`** - public marketing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173, `/api` and `/ws` → engine).
+**`web-l/`** - public marketing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
 **`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains, platform-admin Linkup keys + search analytics (`/search-engine`). `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 

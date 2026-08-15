@@ -48,8 +48,10 @@ web-l/
 | Page section order / skip-link | `src/pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
 | Member login / register | `src/pages/login.tsx`, `register.tsx` | web-a visual language via `components/auth/auth-shell.tsx` |
 | Org join / transfer | `src/pages/join-org.tsx`, `transfer.tsx` | Same engine contracts as the retired `web-e` app |
-| Signed-in workspace | `src/pages/app/*`, `components/layout/app-shell.tsx` | Agents, chat WS, files, tools, channels |
+| Signed-in workspace | `src/pages/app/*`, `components/layout/app-shell.tsx` | Agents, chat WS, files, tools, channels, Plaza, OKR, directory |
 | Auth completeness | `forgot-password`, `reset-password`, `verify-email`, `sso-callback` | Member token; Origin-based reset emails |
+| Plaza / OKR / directory | `pages/app/plaza.tsx`, `okr.tsx`, `directory.tsx` | Tenant-scoped engine APIs |
+| Take Control / vault / pages | `agent-control`, `agent-credentials`, `agent-pages`, `agent-playwright` | AgentBay, gogcli, `/p/{id}` |
 | Hero copy / CTAs | `sections/hero.tsx` | Account CTAs + role explore |
 | Role catalog copy | `sections/agents.tsx` | Align with `../engine/agent_templates/` when claiming truth |
 | Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors on `/`; Sign in → `/login` |
@@ -84,7 +86,7 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 - **Files:** kebab-case (`how-it-works.tsx`); components **named** PascalCase exports. Only `App` is default export.
 - **No barrels** - import concrete files (`@/components/sections/hero`).
 - **React Router** for `/login`, `/register`, `/join`, `/transfer`, `/forgot-password`, `/reset-password`, `/verify-email`, `/sso/callback`, `/app/*`. Landing hash anchors (`#features`, …) stay on `/`.
-- Vite proxies `/api` and `/ws` to the engine. Production nginx `client_max_body_size` is 25m; CSP `connect-src` includes `ws:`/`wss:`.
+- Vite proxies `/api`, `/ws`, and `/p` to the engine. Production nginx `client_max_body_size` is 25m; CSP `connect-src` includes `ws:`/`wss:`.
 - **Tailwind v4 CSS-first** - no `tailwind.config.*` / PostCSS. Tokens live in `index.css` (`@theme inline`, `:root`, `.dark`).
 - **Lint:** oxlint (`.oxlintrc.json`), not ESLint/Prettier. `npm run lint`.
 - **TS:** `verbatimModuleSyntax` → use `import type`. Build runs `tsc -b` then Vite.
@@ -120,6 +122,7 @@ npm run dev       # Vite :5173, host true
 npm run lint      # oxlint
 npm run build     # tsc -b && vite build → dist/
 npm run preview
+npm run test:e2e  # Playwright landing smoke (needs `npx playwright install chromium`)
 
 docker build -t maraclaw-web-l .
 docker run --rm -p 8080:8080 maraclaw-web-l
