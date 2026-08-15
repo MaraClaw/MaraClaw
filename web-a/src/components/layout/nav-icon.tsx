@@ -3,25 +3,25 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
 const ICONS = {
-  overview: '/nav-icons/overview.png',
-  companies: '/nav-icons/companies.png',
-  search: '/nav-icons/search.png',
-  users: '/nav-icons/users.png',
-  tools: '/nav-icons/tools.png',
-  account: '/nav-icons/account.png',
-  settings: '/nav-icons/settings.png',
+  overview: '/nav-icons/overview.svg',
+  companies: '/nav-icons/companies.svg',
+  search: '/nav-icons/search.svg',
+  users: '/nav-icons/users.svg',
+  tools: '/nav-icons/tools.svg',
+  account: '/nav-icons/account.svg',
+  settings: '/nav-icons/settings.svg',
 } as const
 
 export type NavIconName = keyof typeof ICONS
 
 const INACTIVE_ICONS: Record<NavIconName, string> = {
-  overview: '/nav-icons/overview-inactive.png',
-  companies: '/nav-icons/companies-inactive.png',
-  search: '/nav-icons/search-inactive.png',
-  users: '/nav-icons/users-inactive.png',
-  tools: '/nav-icons/tools-inactive.png',
-  account: '/nav-icons/account-inactive.png',
-  settings: '/nav-icons/settings-inactive.png',
+  overview: '/nav-icons/overview-inactive.svg',
+  companies: '/nav-icons/companies-inactive.svg',
+  search: '/nav-icons/search-inactive.svg',
+  users: '/nav-icons/users-inactive.svg',
+  tools: '/nav-icons/tools-inactive.svg',
+  account: '/nav-icons/account-inactive.svg',
+  settings: '/nav-icons/settings-inactive.svg',
 }
 
 export function NavIcon({
