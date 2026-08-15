@@ -22,6 +22,67 @@ const nav: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/app/settings', label: 'Settings', icon: 'settings' },
 ]
 
+function WorkspaceNavLink({
+  item,
+  unread,
+  compact = false,
+}: {
+  item: (typeof nav)[number]
+  unread: number
+  compact?: boolean
+}) {
+  const showUnread = item.to === '/app/notifications' && unread > 0
+  const unreadLabel = unread > 99 ? '99+' : String(unread)
+
+  return (
+    <NavLink
+      to={item.to}
+      className={({ isActive }) =>
+        cn(
+          'relative flex touch-manipulation select-none flex-col items-center justify-center text-muted-foreground',
+          'transition-[color,transform] duration-150 ease-out',
+          'hover:text-foreground',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'active:scale-[0.96]',
+          isActive && 'text-foreground',
+          compact
+            ? 'min-h-14 shrink-0 gap-1 rounded-lg px-3 py-2'
+            : 'min-h-18 w-full gap-1.5 rounded-xl px-2 py-2.5',
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <span className="relative inline-flex">
+            <NavIcon
+              name={item.icon}
+              active={isActive}
+              className={compact ? 'size-8' : 'size-12'}
+            />
+            {showUnread ? (
+              <span
+                aria-hidden
+                className="absolute -top-1 -end-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium leading-none tabular-nums text-primary-foreground"
+              >
+                {unreadLabel}
+              </span>
+            ) : null}
+          </span>
+          <span
+            className={cn(
+              'max-w-full text-center font-medium leading-tight text-pretty',
+              compact ? 'text-xs' : 'text-sm',
+            )}
+          >
+            {item.label}
+          </span>
+          {showUnread ? <span className="sr-only">{`, ${unread} unread`}</span> : null}
+        </>
+      )}
+    </NavLink>
+  )
+}
+
 function AppShellFrame() {
   const { user, logout } = useAuth()
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
@@ -34,7 +95,7 @@ function AppShellFrame() {
 
   return (
     <div className="flex min-h-svh bg-background">
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
+      <aside className="hidden w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
         <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
@@ -44,30 +105,9 @@ function AppShellFrame() {
             </p>
           </div>
         </Link>
-        <nav className="flex flex-1 flex-col gap-0.5 px-2" aria-label="Workspace">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Workspace">
           {nav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-base font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                  isActive && 'bg-muted text-foreground',
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <NavIcon name={item.icon} active={isActive} />
-                  {item.label}
-                  {item.to === '/app/notifications' && unread > 0 ? (
-                    <span className="ml-auto rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
-                      {unread}
-                    </span>
-                  ) : null}
-                </>
-              )}
-            </NavLink>
+            <WorkspaceNavLink key={item.to} item={item} unread={unread} />
           ))}
         </nav>
         <div className="border-t border-border p-3">
@@ -91,26 +131,12 @@ function AppShellFrame() {
             </Link>
             <ThemeToggle />
           </div>
-          <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Workspace">
+          <nav
+            className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
+            aria-label="Workspace"
+          >
             {nav.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground',
-                    isActive && 'bg-muted text-foreground',
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <NavIcon name={item.icon} active={isActive} className="size-5" />
-                    {item.label}
-                    {item.to === '/app/notifications' && unread > 0 ? ` (${unread})` : ''}
-                  </>
-                )}
-              </NavLink>
+              <WorkspaceNavLink key={item.to} item={item} unread={unread} compact />
             ))}
           </nav>
         </header>
