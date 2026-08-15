@@ -76,9 +76,9 @@ def _get_docker() -> DockerClientFactory:
 
 # Language to docker image mapping
 _DOCKER_IMAGES = {
-    "python": "python:3.14.6-slim",
+    "python": "python:3.14.7-slim-trixie",
     "bash": "bash:5.3",
-    "node": "node:26.5.0-slim",
+    "node": "node:26.7.0-slim",
 }
 
 # Docker run command mapping

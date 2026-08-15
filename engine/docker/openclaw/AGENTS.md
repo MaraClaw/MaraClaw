@@ -21,7 +21,7 @@ USER: node
 
 ## Pins
 
-- Base: `node:26.7.0-bookworm-slim` (not backend `python:3.14.6-slim-trixie`, not sandbox `node:26.5.0-slim`).
+- Base: `node:26.7.0-bookworm-slim` (not backend `python:3.14.7-slim-trixie`, not sandbox `node:26.7.0-slim`).
 - gogcli **linux/arm64 only**. `build-openclaw-local-dockerfile.sh` and `publish-openclaw-local-dockerfile.sh` use **docker buildx** and exit if `DOCKER_PLATFORM` is anything else.
 - Publish requires `DOCKERHUB_NAMESPACE` or `OPENCLAW_PUBLISH_IMAGE` and an existing `docker login`. It tags `openclaw:local` then pushes `${repo}:${OPENCLAW_VERSION}` (and `:latest` when `PUSH_LATEST=1`).
 - OfficeCLI is **runtime** download, never baked into the Dockerfile.

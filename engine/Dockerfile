@@ -1,6 +1,6 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
-FROM python:3.14.6-slim-trixie AS deps
+FROM python:3.14.7-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
 WORKDIR /app
@@ -33,7 +33,7 @@ RUN if [ -n "$MARACLAW_PIP_INDEX_URL" ] && [ -n "$MARACLAW_PIP_TRUSTED_HOST" ]; 
     fi
 
 # ─── Production ─────────────────────────────────────────
-FROM python:3.14.6-slim-trixie AS production
+FROM python:3.14.7-slim-trixie AS production
 
 ARG APT_MIRROR=deb.debian.org
 ARG TINI_VERSION=0.19.0-3+b7

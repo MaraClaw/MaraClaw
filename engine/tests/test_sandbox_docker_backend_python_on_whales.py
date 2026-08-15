@@ -104,9 +104,9 @@ async def test_execute_runs_python_container_with_python_on_whales_kwargs():
     assert result.stderr == "stderr text"
     assert result.exit_code == 0
     assert result.error is None
-    assert client.image.exists_calls == ["python:3.14.6-slim"]
+    assert client.image.exists_calls == ["python:3.14.7-slim"]
     assert client.image.pull_calls == []
-    assert client.run_args == ("python:3.14.6-slim", ["python3", "-c", "print('hello')"])
+    assert client.run_args == ("python:3.14.7-slim", ["python3", "-c", "print('hello')"])
     assert client.run_kwargs == {
         "detach": True,
         "memory": "256m",
