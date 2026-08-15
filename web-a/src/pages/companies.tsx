@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Building2, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { CreateCompanyForm } from '@/components/companies/create-company-form'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -109,8 +110,8 @@ export function CompaniesPage() {
           <Card key={company.id}>
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Building2 className="size-4" />
+                <CardTitle className="flex items-center gap-2.5">
+                  <CompanyStatusIcon active={company.is_active} />
                   {company.name}
                 </CardTitle>
                 <CardDescription>

@@ -189,7 +189,12 @@ export function SearchEnginePage() {
       ) : null}
 
       {tab === 'keys' ? (
-      <div id="search-engine-panel-keys" role="tabpanel" aria-labelledby="search-engine-tab-keys">
+      <div
+        id="search-engine-panel-keys"
+        role="tabpanel"
+        aria-labelledby="search-engine-tab-keys"
+        className="flex flex-col gap-6"
+      >
       <Card>
         <CardHeader>
           <CardTitle>Add Linkup key</CardTitle>
