@@ -32,9 +32,13 @@ class BotoAnalyticsSink:
 
         def _put() -> None:
             import boto3
+            from botocore.config import Config
 
             settings = get_settings()
-            kwargs: dict[str, object] = {"region_name": settings.S3_REGION or None}
+            kwargs: dict[str, object] = {
+                "region_name": settings.S3_REGION or None,
+                "config": Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2}),
+            }
             if settings.S3_ENDPOINT_URL:
                 kwargs["endpoint_url"] = settings.S3_ENDPOINT_URL
             if settings.S3_ACCESS_KEY_ID:
@@ -42,9 +46,15 @@ class BotoAnalyticsSink:
             if settings.S3_SECRET_ACCESS_KEY:
                 kwargs["aws_secret_access_key"] = settings.S3_SECRET_ACCESS_KEY
             client = boto3.client("s3", **kwargs)
-            client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
+            client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
+                ServerSideEncryption="AES256",
+            )
 
-        await asyncio.to_thread(_put)
+        await asyncio.wait_for(asyncio.to_thread(_put), timeout=45)
 
 
 def _sink() -> AnalyticsObjectSink:
@@ -74,9 +84,7 @@ def object_key(*, now: datetime, instance_id: str, object_id: str) -> str:
     )
 
 
-def event_to_export_row(
-    record: WebSearchEventRecord, *, raw_query: str | None
-) -> dict[str, object]:
+def event_to_export_row(record: WebSearchEventRecord, *, raw_query: str | None) -> dict[str, object]:
     occurred = record.occurred_at.isoformat() if record.occurred_at else None
     return {
         "event_id": str(record.id),
@@ -108,16 +116,16 @@ async def drain_pending_exports(*, sink: AnalyticsObjectSink | None = None) -> i
     """Claim pending rows, PUT one object, mark exported. Returns exported count."""
     settings = get_settings()
     if not settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED:
+        _ = await web_search_event_dao.reclaim_exporting()
         return 0
     bucket = analytics_bucket()
     if not bucket:
         logger.warning("web search export enabled but ANALYTICS_S3_BUCKET/S3_BUCKET is empty")
+        _ = await web_search_event_dao.reclaim_exporting()
         return 0
 
     now = datetime.now(UTC)
-    claimed = await web_search_event_dao.claim_pending_export(
-        now=now, limit=_CLAIM_LIMIT, stale_after=_STALE
-    )
+    claimed = await web_search_event_dao.claim_pending_export(now=now, limit=_CLAIM_LIMIT, stale_after=_STALE)
     if not claimed:
         return 0
 
@@ -125,13 +133,16 @@ async def drain_pending_exports(*, sink: AnalyticsObjectSink | None = None) -> i
     raw_map = await web_search_event_dao.payloads_for([row.id for row in claimed]) if include_raw else {}
     rows: list[dict[str, object]] = []
     ids: list = []
-    for record in claimed:
+    leftover: list = []
+    for index, record in enumerate(claimed):
         raw = raw_map.get(record.id) if include_raw else None
-        rows.append(event_to_export_row(record, raw_query=raw))
-        ids.append(record.id)
-        if len(json.dumps(rows, default=str).encode("utf-8")) > _MAX_BYTES:
+        candidate = event_to_export_row(record, raw_query=raw)
+        trial = [*rows, candidate]
+        if rows and len(json.dumps(trial, default=str).encode("utf-8")) > _MAX_BYTES:
+            leftover = [item.id for item in claimed[index:]]
             break
-    leftover = [row.id for row in claimed if row.id not in ids]
+        rows.append(candidate)
+        ids.append(record.id)
     if leftover:
         await web_search_event_dao.release_export(leftover)
 
@@ -150,9 +161,7 @@ async def drain_pending_exports(*, sink: AnalyticsObjectSink | None = None) -> i
         await web_search_event_dao.release_export(ids)
         return 0
 
-    await web_search_event_dao.mark_exported(ids, now=now)
-    if include_raw:
-        await web_search_event_dao.delete_payloads(ids)
+    await web_search_event_dao.finish_export(ids, now=now, delete_payloads=include_raw)
     return len(ids)
 
 
@@ -169,16 +178,19 @@ async def start_web_search_export_daemon() -> None:
     ticks = 0
     while True:
         try:
-            if get_settings().WEB_SEARCH_ANALYTICS_EXPORT_ENABLED:
+            if get_settings().WEB_SEARCH_ANALYTICS_EXPORT_ENABLED and analytics_bucket():
                 _ = await drain_pending_exports()
+            else:
+                _ = await web_search_event_dao.reclaim_exporting()
         except Exception:
             logger.exception("web search export drain failed")
         ticks += 1
         if ticks % 240 == 1:
             try:
                 deleted = await expire_old_events()
-                if deleted:
-                    logger.info(f"web search analytics expired {deleted} events")
+                orphaned = await web_search_event_dao.delete_orphaned_payloads()
+                if deleted or orphaned:
+                    logger.info(f"web search analytics expired {deleted} events, {orphaned} orphan payloads")
             except Exception:
                 logger.exception("web search analytics retention failed")
         await asyncio.sleep(15)

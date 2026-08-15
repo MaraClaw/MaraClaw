@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import time
+from json import JSONDecodeError
+from typing import final
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.json_types import json_as_str, json_object_from
+from app.core.json_types import json_as_str, json_loads_value, json_object_from
 from app.services.linkup.errors import is_quota_error, is_transient_error
 from app.services.linkup.jobs import LinkupJobKeyRemovedError, bind_job, key_for_job
 from app.services.linkup.keys import (
@@ -25,7 +26,11 @@ UPSTREAM_BASE = "https://api.linkup.so"
 ALLOWED_PREFIXES = ("search", "fetch", "research", "extract")
 
 
+@final
 class LinkupProxyError(Exception):
+    status_code: int
+    body: str
+
     def __init__(self, status_code: int, body: str) -> None:
         super().__init__(body)
         self.status_code = status_code
@@ -63,8 +68,8 @@ async def _send(
 
 def _extract_job_id(body: str) -> str | None:
     try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
+        payload = json_loads_value(body)
+    except JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -96,6 +101,7 @@ async def _record_result(
     content: bytes | None,
     key_id: UUID | None,
     started: float,
+    quota_rotated: bool = False,
 ) -> tuple[int, str, dict[str, str]]:
     from app.services.linkup.analytics import record_linkup_call
 
@@ -109,8 +115,23 @@ async def _record_result(
         body=body,
         latency_ms=max(0, int((time.perf_counter() - started) * 1000)),
         key_id=key_id,
+        quota_rotated=quota_rotated,
     )
     return result
+
+
+async def _send_or_unavailable(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    content: bytes | None,
+    api_key: str,
+) -> tuple[int, str, dict[str, str]]:
+    try:
+        return await _send(method=method, url=url, headers=headers, content=content, api_key=api_key)
+    except Exception as exc:
+        raise LinkupProxyError(502, "Linkup upstream unavailable") from exc
 
 
 async def proxy_linkup(
@@ -136,7 +157,7 @@ async def proxy_linkup(
             bound = await key_for_job(rest.split("/", 1)[0])
         except LinkupJobKeyRemovedError as exc:
             raise LinkupProxyError(410, str(exc)) from exc
-        status, body, out_headers = await _send(
+        status, body, out_headers = await _send_or_unavailable(
             method=method,
             url=url,
             headers=headers,
@@ -149,8 +170,18 @@ async def proxy_linkup(
     if start is None:
         env_key = await _env_fallback_key()
         if env_key is None:
+            raise LinkupProxyError(503, "no Linkup API keys configured")
+        try:
+            status, body, out_headers = await _send_or_unavailable(
+                method=method,
+                url=url,
+                headers=headers,
+                content=content,
+                api_key=env_key,
+            )
+        except LinkupProxyError as exc:
             await _record_result(
-                (503, "no Linkup API keys configured", {}),
+                (exc.status_code, exc.body, {}),
                 agent_id=agent_id,
                 method=method,
                 path=path,
@@ -158,14 +189,7 @@ async def proxy_linkup(
                 key_id=None,
                 started=started,
             )
-            raise LinkupProxyError(503, "no Linkup API keys configured")
-        status, body, out_headers = await _send(
-            method=method,
-            url=url,
-            headers=headers,
-            content=content,
-            api_key=env_key,
-        )
+            raise
         return await _record_result(
             (status, body, out_headers),
             agent_id=agent_id,
@@ -181,23 +205,38 @@ async def proxy_linkup(
     last: tuple[int, str, dict[str, str]] | None = None
     last_key_id: UUID | None = None
     transient_retries = 0
+    quota_rotated = False
 
     while record is not None and record.id not in seen:
         seen.add(record.id)
         last_key_id = record.id
         await touch_used(record.id)
-        status, body, out_headers = await _send(
-            method=method,
-            url=url,
-            headers=headers,
-            content=content,
-            api_key=decrypt_api_key(record),
-        )
+        try:
+            status, body, out_headers = await _send_or_unavailable(
+                method=method,
+                url=url,
+                headers=headers,
+                content=content,
+                api_key=decrypt_api_key(record),
+            )
+        except LinkupProxyError as exc:
+            await _record_result(
+                (exc.status_code, exc.body, {}),
+                agent_id=agent_id,
+                method=method,
+                path=path,
+                content=content,
+                key_id=record.id,
+                started=started,
+                quota_rotated=quota_rotated,
+            )
+            raise
         last = (status, body, out_headers)
 
         if is_quota_error(status, body):
             await mark_exhausted(record.id, message=body[:200])
             record = await advance_cursor(record.id)
+            quota_rotated = True
             transient_retries = 0
             continue
 
@@ -209,7 +248,20 @@ async def proxy_linkup(
         if status < 400 and kind in {"research", "extract"} and method.upper() == "POST":
             job_id = _extract_job_id(body)
             if job_id:
-                await bind_job(upstream_job_id=job_id, key_id=record.id, kind=kind)
+                try:
+                    await bind_job(upstream_job_id=job_id, key_id=record.id, kind=kind)
+                except Exception:
+                    await _record_result(
+                        (status, body, out_headers),
+                        agent_id=agent_id,
+                        method=method,
+                        path=path,
+                        content=content,
+                        key_id=record.id,
+                        started=started,
+                        quota_rotated=quota_rotated,
+                    )
+                    raise
         return await _record_result(
             (status, body, out_headers),
             agent_id=agent_id,
@@ -218,18 +270,10 @@ async def proxy_linkup(
             content=content,
             key_id=record.id,
             started=started,
+            quota_rotated=quota_rotated,
         )
 
     if last is None:
-        await _record_result(
-            (503, "no Linkup API keys configured", {}),
-            agent_id=agent_id,
-            method=method,
-            path=path,
-            content=content,
-            key_id=None,
-            started=started,
-        )
         raise LinkupProxyError(503, "no Linkup API keys configured")
     return await _record_result(
         last,
@@ -239,4 +283,5 @@ async def proxy_linkup(
         content=content,
         key_id=last_key_id,
         started=started,
+        quota_rotated=quota_rotated,
     )

@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import require_role
 from app.records.user import UserRecord
@@ -26,6 +26,11 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 class LinkupKeyCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     api_key: str = Field(min_length=1, max_length=512)
+
+    @field_validator("label", "api_key", mode="before")
+    @classmethod
+    def strip_required(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class LinkupKeyOut(BaseModel):

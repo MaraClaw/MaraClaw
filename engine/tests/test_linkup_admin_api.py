@@ -8,8 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.api.admin_linkup import create_linkup_key, delete_linkup_key, list_linkup_keys
-from app.api.admin_linkup import LinkupKeyCreateRequest
+from app.api.admin_linkup import LinkupKeyCreateRequest, create_linkup_key, delete_linkup_key, list_linkup_keys
 from app.records.linkup_api_key import LinkupApiKeyRecord
 from app.services.linkup.keys import DuplicateLinkupKeyError
 
@@ -142,6 +141,8 @@ def test_create_request_requires_label() -> None:
         LinkupKeyCreateRequest(api_key="lk-secret")
     with pytest.raises(ValidationError):
         LinkupKeyCreateRequest(label="", api_key="lk-secret")
+    with pytest.raises(ValidationError):
+        LinkupKeyCreateRequest(label="   ", api_key="lk-secret")
 
 
 def test_duplicate_error_type_is_public() -> None:

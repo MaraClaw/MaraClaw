@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import hmac
-import json
 import unicodedata
 from hashlib import sha256
-from typing import Any
+from json import JSONDecodeError
 from urllib.parse import urlparse
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.json_types import json_as_str, json_object_from
+from app.core.json_types import json_as_str, json_loads_object, json_loads_value, json_object_from
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.web_search_event_dao import web_search_event_dao
@@ -21,6 +20,8 @@ from app.services.linkup.errors import is_quota_error
 BILLED_KINDS = frozenset({"search", "fetch", "research", "extract"})
 SCHEMA_VERSION = 1
 _QUERY_MAX = 500
+_DEPTH_MAX = 20
+_OUTPUT_TYPE_MAX = 40
 
 
 def is_billed_call(method: str, path: str) -> bool:
@@ -59,22 +60,16 @@ def status_class_for(status_code: int, body: str) -> str:
     return "upstream_error"
 
 
-def _parse_body(content: bytes | None) -> dict[str, Any]:
+def _parse_body(content: bytes | None) -> dict[str, object]:
     if not content:
         return {}
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return dict(json_object_from(payload))
+    return dict(json_loads_object(content))
 
 
 def cheap_result_count(body: str) -> int | None:
     try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
+        payload = json_loads_value(body)
+    except JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -92,7 +87,7 @@ def _hash_secret() -> str:
     return dedicated or settings.SECRET_KEY
 
 
-def _raw_and_normalized(kind: str, payload: dict[str, Any]) -> tuple[str, str, str]:
+def _raw_and_normalized(kind: str, payload: dict[str, object]) -> tuple[str, str, str]:
     """Return (raw_for_len, normalized, primary_domain)."""
     if kind in {"fetch", "extract"}:
         raw_url = json_as_str(payload.get("url")) or json_as_str(payload.get("link")) or ""
@@ -100,6 +95,22 @@ def _raw_and_normalized(kind: str, payload: dict[str, Any]) -> tuple[str, str, s
         return raw_url, host, host
     raw_query = json_as_str(payload.get("query")) or json_as_str(payload.get("q")) or ""
     return raw_query, normalize_text(raw_query), ""
+
+
+def _clip(value: str | None, limit: int) -> str | None:
+    if not value:
+        return None
+    return value[:limit]
+
+
+def should_stage_raw_query() -> bool:
+    """Raw text is staged only when export can actually land it."""
+    settings = get_settings()
+    if not settings.WEB_SEARCH_ANALYTICS_INCLUDE_RAW:
+        return False
+    if not settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED:
+        return False
+    return bool((settings.ANALYTICS_S3_BUCKET or settings.S3_BUCKET).strip())
 
 
 async def record_linkup_call(
@@ -112,6 +123,7 @@ async def record_linkup_call(
     body: str,
     latency_ms: int,
     key_id: UUID | None,
+    quota_rotated: bool = False,
 ) -> None:
     """Insert one event on a fresh connection. Never raises to the caller."""
     try:
@@ -124,6 +136,7 @@ async def record_linkup_call(
             body=body,
             latency_ms=latency_ms,
             key_id=key_id,
+            quota_rotated=quota_rotated,
         )
     except Exception:
         logger.exception("web search analytics capture failed")
@@ -139,6 +152,7 @@ async def _record_linkup_call(
     body: str,
     latency_ms: int,
     key_id: UUID | None,
+    quota_rotated: bool = False,
 ) -> None:
     settings = get_settings()
     if not settings.WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED:
@@ -152,8 +166,11 @@ async def _record_linkup_call(
     raw, normalized, domain = _raw_and_normalized(kind, payload)
     secret = _hash_secret()
     hashed = hash_text(normalized, secret=secret)
-    export_state = "pending" if settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED else "skipped"
-    include_raw = settings.WEB_SEARCH_ANALYTICS_INCLUDE_RAW and bool(raw)
+    export_ready = settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED and bool(
+        (settings.ANALYTICS_S3_BUCKET or settings.S3_BUCKET).strip()
+    )
+    export_state = "pending" if export_ready else "skipped"
+    include_raw = should_stage_raw_query() and bool(raw)
 
     tenant_id: UUID | None = None
     if agent_id is not None:
@@ -162,12 +179,14 @@ async def _record_linkup_call(
             tenant_id = agent.tenant_id
 
     klass = status_class_for(status, body)
-    error_class = None if klass == "ok" else klass
+    error_class = "quota_rotated" if quota_rotated and klass == "ok" else (None if klass == "ok" else klass)
+    depth = json_as_str(payload.get("depth")) or json_as_str(payload.get("reasoningDepth"))
+    output_type = json_as_str(payload.get("outputType") or payload.get("output_type"))
     job_id = None
     if kind in {"research", "extract"} and 200 <= status < 400:
         try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
+            parsed = json_loads_value(body)
+        except JSONDecodeError:
             parsed = None
         if isinstance(parsed, dict):
             job_id = json_as_str(json_object_from(parsed).get("id")) or None
@@ -187,8 +206,8 @@ async def _record_linkup_call(
                 "query_hash": hashed,
                 "query_normalized": normalized,
                 "query_char_len": len(raw),
-                "depth": json_as_str(payload.get("depth")) or None,
-                "output_type": json_as_str(payload.get("outputType") or payload.get("output_type")) or None,
+                "depth": _clip(depth, _DEPTH_MAX),
+                "output_type": _clip(output_type, _OUTPUT_TYPE_MAX),
                 "primary_domain": domain or None,
                 "result_count": cheap_result_count(body),
                 "error_class": error_class,

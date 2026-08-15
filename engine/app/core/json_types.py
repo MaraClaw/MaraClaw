@@ -210,6 +210,13 @@ def float_from_row(value: object, default: float = 0.0) -> float:
         return default
     if isinstance(value, (int, float)):
         return float(value)
+    try:
+        from decimal import Decimal
+
+        if isinstance(value, Decimal):
+            return float(value)
+    except Exception:
+        return default
     return default
 
 

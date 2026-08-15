@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import int_from_row, str_from_row, uuid_from_row_opt
+from app.core.json_types import float_from_row, int_from_row, str_from_row, uuid_from_row_opt
 from app.dao.base import BaseDAO
 from app.records.web_search_event import WebSearchEventRecord
 
@@ -48,6 +48,7 @@ def _range_clause(alias: str = "") -> str:
     )
 
 
+@final
 class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
     """Append-only billed Linkup events."""
 
@@ -69,8 +70,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             return {}
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT event_id, raw_query FROM web_search_export_payloads "
-                "WHERE event_id = ANY(%(ids)s)",
+                "SELECT event_id, raw_query FROM web_search_export_payloads WHERE event_id = ANY(%(ids)s)",
                 {"ids": event_ids},
             )
         out: dict[UUID, str] = {}
@@ -119,14 +119,43 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
         return [WebSearchEventRecord.from_row(row) for row in rows]
 
     async def mark_exported(self, event_ids: list[UUID], *, now: datetime) -> None:
+        await self.finish_export(event_ids, now=now, delete_payloads=False)
+
+    async def finish_export(self, event_ids: list[UUID], *, now: datetime, delete_payloads: bool) -> None:
         if not event_ids:
             return
         async with self.session() as db:
             _ = await db.execute(
-                "UPDATE web_search_events SET export_state = 'exported', exported_at = %(now)s "
-                "WHERE id = ANY(%(ids)s)",
+                "UPDATE web_search_events SET export_state = 'exported', exported_at = %(now)s WHERE id = ANY(%(ids)s)",
                 {"now": now, "ids": event_ids},
             )
+            if delete_payloads:
+                _ = await db.execute(
+                    "DELETE FROM web_search_export_payloads WHERE event_id = ANY(%(ids)s)",
+                    {"ids": event_ids},
+                )
+
+    async def reclaim_exporting(self) -> int:
+        async with self.session() as db:
+            value = await db.fetchval(
+                "WITH moved AS ("
+                "UPDATE web_search_events SET export_state = 'pending', export_claimed_at = NULL "
+                "WHERE export_state = 'exporting' RETURNING 1"
+                ") SELECT count(*) FROM moved"
+            )
+            return int_from_row(value)
+
+    async def delete_orphaned_payloads(self) -> int:
+        async with self.session() as db:
+            value = await db.fetchval(
+                "WITH removed AS ("
+                "DELETE FROM web_search_export_payloads p "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM web_search_events e WHERE e.id = p.event_id AND e.export_state IN ('pending', 'exporting')"
+                ") RETURNING 1"
+                ") SELECT count(*) FROM removed"
+            )
+            return int_from_row(value)
 
     async def release_export(self, event_ids: list[UUID]) -> None:
         if not event_ids:
@@ -179,19 +208,17 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             "last_exported_at": row.get("last_exported_at"),
         }
 
-    async def summary(
-        self, *, start: datetime, end: datetime, tenant_id: UUID | None
-    ) -> dict[str, Any]:
+    async def summary(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> dict[str, Any]:
         params = {"start": start, "end": end, "tenant_id": tenant_id}
         async with self.session() as db:
             totals = await db.fetchone(
                 "SELECT count(*) AS event_count, "
-                "count(*) FILTER (WHERE status_class <> 'ok') AS error_count, "
-                "count(*) FILTER (WHERE status_class = 'quota') AS quota_count, "
+                "count(*) FILTER (WHERE status_class NOT IN ('ok', 'quota')) AS error_count, "
+                "count(*) FILTER (WHERE status_class = 'quota' OR error_class = 'quota_rotated') AS quota_count, "
                 "count(DISTINCT tenant_id) AS unique_orgs, "
                 "count(DISTINCT agent_id) AS unique_agents, "
                 "count(*) FILTER (WHERE tenant_id IS NULL) AS unattributed_count, "
-                "COALESCE(avg(latency_ms), 0) AS avg_latency_ms "
+                "COALESCE(avg(latency_ms), 0)::float8 AS avg_latency_ms "
                 f"FROM web_search_events WHERE {_range_clause()}",
                 params,
             )
@@ -209,22 +236,20 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             "unique_orgs": int_from_row(totals.get("unique_orgs")),
             "unique_agents": int_from_row(totals.get("unique_agents")),
             "unattributed_count": int_from_row(totals.get("unattributed_count")),
-            "avg_latency_ms": float(int_from_row(totals.get("avg_latency_ms"))),
+            "avg_latency_ms": float_from_row(totals.get("avg_latency_ms")),
             "by_kind": [
                 {"kind": str_from_row(row.get("kind")), "event_count": int_from_row(row.get("event_count"))}
                 for row in by_kind
             ],
         }
 
-    async def timeseries(
-        self, *, start: datetime, end: datetime, tenant_id: UUID | None
-    ) -> list[dict[str, Any]]:
+    async def timeseries(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> list[dict[str, Any]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT (occurred_at AT TIME ZONE 'UTC')::date AS bucket_date, "
                 "count(*) AS event_count, "
-                "count(*) FILTER (WHERE status_class <> 'ok') AS error_count, "
-                "count(*) FILTER (WHERE status_class = 'quota') AS quota_count "
+                "count(*) FILTER (WHERE status_class NOT IN ('ok', 'quota')) AS error_count, "
+                "count(*) FILTER (WHERE status_class = 'quota' OR error_class = 'quota_rotated') AS quota_count "
                 f"FROM web_search_events WHERE {_range_clause()} "
                 "GROUP BY 1 ORDER BY 1",
                 {"start": start, "end": end, "tenant_id": tenant_id},
@@ -243,13 +268,11 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             )
         return series
 
-    async def top_orgs(
-        self, *, start: datetime, end: datetime, limit: int
-    ) -> list[dict[str, Any]]:
+    async def top_orgs(self, *, start: datetime, end: datetime, limit: int) -> list[dict[str, Any]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT e.tenant_id, t.name AS tenant_name, count(*) AS event_count, "
-                "count(*) FILTER (WHERE e.status_class = 'quota') AS quota_count "
+                "count(*) FILTER (WHERE e.status_class = 'quota' OR e.error_class = 'quota_rotated') AS quota_count "
                 "FROM web_search_events e "
                 "LEFT JOIN tenants t ON t.id = e.tenant_id "
                 "WHERE e.occurred_at >= %(start)s AND e.occurred_at < %(end)s "

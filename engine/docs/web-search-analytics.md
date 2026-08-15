@@ -9,7 +9,7 @@ GET polls for async research/extract jobs are **not** counted.
 | Place | Query text |
 |-------|------------|
 | `web_search_events` | Normalized query or **host only** (fetch/extract). HMAC-SHA256 hash. No raw string, no response body. |
-| `web_search_export_payloads` | Raw query **only** when `WEB_SEARCH_ANALYTICS_INCLUDE_RAW=true`. Deleted after a successful PUT. |
+| `web_search_export_payloads` | Raw query only when `INCLUDE_RAW` **and** export is enabled **and** a bucket is set. Deleted in the same transaction as `exported`. |
 | PA APIs / web-a | Counts, orgs, and top-N `query_normalized`. Never `query_raw`. |
 | Logs | Path + status only. Do not log `q` / URL / body. |
 
@@ -49,7 +49,7 @@ Partition clock is **export time** (UTC). `occurred_at` is inside each row. Obje
 
 Each JSON line includes `schema_version` (starts at `1`). Add columns additively; bump the version when a field meaning changes.
 
-IAM: write-only on `web-search/`. Bucket not public. SSE-S3 minimum; SSE-KMS if raw export is on.
+IAM: write-only on `web-search/`. Bucket not public. PUTs set `ServerSideEncryption=AES256`.
 
 ## Lakehouse (not in this repo)
 
@@ -64,11 +64,13 @@ IAM: write-only on `web-search/`. Bucket not public. SSE-S3 minimum; SSE-KMS if 
 Databricks Autoloader example:
 
 ```python
-(spark.readStream.format("cloudFiles")
+(
+    spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", "json")
     .option("pathGlobFilter", "*.jsonl.gz")
     .load("s3://YOUR_BUCKET/web-search/")
-    .dropDuplicates(["event_id"]))
+    .dropDuplicates(["event_id"])
+)
 ```
 
 ### Business gold (decisions, not engine SQL)

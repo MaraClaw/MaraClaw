@@ -10,6 +10,7 @@ import pytest
 from app.records.web_search_event import WebSearchEventRecord
 from app.services.linkup.analytics import (
     cheap_result_count,
+    hash_text,
     host_only,
     is_billed_call,
     normalize_text,
@@ -54,6 +55,8 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "WEB_SEARCH_ANALYTICS_INCLUDE_RAW": False,
         "WEB_SEARCH_ANALYTICS_HASH_KEY": "analytics-secret",
         "SECRET_KEY": "app-secret",
+        "ANALYTICS_S3_BUCKET": "",
+        "S3_BUCKET": "",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -232,7 +235,11 @@ async def test_include_raw_writes_side_table_only(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         analytics_mod,
         "get_settings",
-        lambda: _settings(WEB_SEARCH_ANALYTICS_EXPORT_ENABLED=True, WEB_SEARCH_ANALYTICS_INCLUDE_RAW=True),
+        lambda: _settings(
+            WEB_SEARCH_ANALYTICS_EXPORT_ENABLED=True,
+            WEB_SEARCH_ANALYTICS_INCLUDE_RAW=True,
+            ANALYTICS_S3_BUCKET="lake",
+        ),
     )
     await record_linkup_call(
         agent_id=uuid4(),
@@ -248,3 +255,144 @@ async def test_include_raw_writes_side_table_only(monkeypatch: pytest.MonkeyPatc
     assert row.export_state == "pending"
     assert "Exact Wording" not in row.query_normalized
     assert store.payloads[row.id] == "Exact Wording"
+
+
+@pytest.mark.asyncio
+async def test_include_raw_without_export_does_not_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.linkup import analytics as analytics_mod
+
+    store = MemoryEventDao()
+    monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
+    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
+    monkeypatch.setattr(
+        analytics_mod,
+        "get_settings",
+        lambda: _settings(WEB_SEARCH_ANALYTICS_INCLUDE_RAW=True, WEB_SEARCH_ANALYTICS_EXPORT_ENABLED=False),
+    )
+    await record_linkup_call(
+        agent_id=uuid4(),
+        method="POST",
+        path="search",
+        content=b'{"query":"secret raw"}',
+        status=200,
+        body="{}",
+        latency_ms=1,
+        key_id=None,
+    )
+    assert store.rows[0].export_state == "skipped"
+    assert store.payloads == {}
+
+
+def test_hmac_hash_uses_dedicated_secret() -> None:
+    assert hash_text("hello", secret="analytics-secret") != hash_text("hello", secret="other")
+    assert len(hash_text("hello", secret="analytics-secret")) == 64
+
+
+def test_float_from_row_accepts_decimal() -> None:
+    from decimal import Decimal
+
+    from app.core.json_types import float_from_row
+
+    assert float_from_row(Decimal("12.7")) == 12.7
+
+
+@pytest.mark.asyncio
+async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_linkup_proxy_client import FakeClient, FakeResponse, MemoryJobDao, MemoryKeyDao
+
+    from app.services.linkup import analytics as analytics_mod, client as client_mod, jobs as jobs_mod, keys as keys_mod
+    from app.services.linkup.client import proxy_linkup
+    from app.services.linkup.keys import add_key
+
+    keys = MemoryKeyDao()
+    jobs = MemoryJobDao()
+    events = MemoryEventDao()
+    agent = uuid4()
+    settings = SimpleNamespace(SECRET_KEY="test-secret", LINKUP_API_KEY="")
+    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", keys)
+    monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", keys)
+    monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", jobs)
+    monkeypatch.setattr(client_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(analytics_mod, "web_search_event_dao", events)
+    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(uuid4()))
+    monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
+
+    _ = await add_key(label="a", api_key="key-a")
+    calls: list[tuple[str, str, str]] = []
+    responses = [
+        FakeResponse(200, '{"results":[1]}'),
+        FakeResponse(200, '{"id":"job-1","status":"pending"}'),
+        FakeResponse(200, '{"id":"job-1","status":"completed"}'),
+    ]
+    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: FakeClient(responses, calls))
+
+    status, _body, _h = await proxy_linkup(
+        method="POST",
+        path="search",
+        headers={},
+        content=b'{"q":"Stripe CEO"}',
+        agent_id=agent,
+    )
+    assert status == 200
+    assert len(events.rows) == 1
+    assert events.rows[0].agent_id == agent
+    assert events.rows[0].kind == "search"
+
+    status, _body, _h = await proxy_linkup(
+        method="POST",
+        path="research",
+        headers={},
+        content=b'{"q":"deep"}',
+        agent_id=agent,
+    )
+    assert status == 200
+    assert len(events.rows) == 2
+
+    status, _body, _h = await proxy_linkup(
+        method="GET",
+        path="research/job-1",
+        headers={},
+        content=None,
+        agent_id=agent,
+    )
+    assert status == 200
+    assert len(events.rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_quota_rotated_marks_error_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.linkup import analytics as analytics_mod
+
+    store = MemoryEventDao()
+    monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
+    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
+    monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
+    await record_linkup_call(
+        agent_id=uuid4(),
+        method="POST",
+        path="search",
+        content=b'{"q":"x"}',
+        status=200,
+        body="{}",
+        latency_ms=3,
+        key_id=None,
+        quota_rotated=True,
+    )
+    assert store.rows[0].status_class == "ok"
+    assert store.rows[0].error_class == "quota_rotated"
+
+
+@pytest.mark.asyncio
+async def test_proxy_v1_rejects_bad_token() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from app.api.linkup_proxy import proxy_v1
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"{}")
+    with pytest.raises(HTTPException) as exc:
+        await proxy_v1("search", request, authorization="Bearer not-a-token")
+    assert exc.value.status_code == 401

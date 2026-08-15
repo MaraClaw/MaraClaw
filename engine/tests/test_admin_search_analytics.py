@@ -52,36 +52,26 @@ async def test_summary_and_trending_scope(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(api, "analytics_bucket", lambda: "")
     monkeypatch.setattr(api, "analytics_prefix", lambda: "web-search")
 
-    summary = await get_search_analytics_summary(
-        start=None, end=None, tenant_id=None, current_user=_pa()
-    )
+    summary = await get_search_analytics_summary(start=None, end=None, tenant_id=None, current_user=_pa())
     assert summary["event_count"] == 2
     assert summary["scope"] == "system"
 
-    trending = await get_search_analytics_trending(
-        start=None, end=None, tenant_id=None, scope=None, current_user=_pa()
-    )
+    trending = await get_search_analytics_trending(start=None, end=None, tenant_id=None, scope=None, current_user=_pa())
     assert trending[0]["query_normalized"] == "stripe ceo"
     assert "query_raw" not in trending[0]
     assert calls["trending"]["system_wide"] is True
     assert calls["trending"]["tenant_id"] is None
 
     tenant = uuid4()
-    org_summary = await get_search_analytics_summary(
-        start=None, end=None, tenant_id=tenant, current_user=_pa()
-    )
+    org_summary = await get_search_analytics_summary(start=None, end=None, tenant_id=tenant, current_user=_pa())
     assert org_summary["scope"] == "org"
-    _ = await get_search_analytics_trending(
-        start=None, end=None, tenant_id=tenant, scope=None, current_user=_pa()
-    )
+    _ = await get_search_analytics_trending(start=None, end=None, tenant_id=tenant, scope=None, current_user=_pa())
     assert calls["trending"]["tenant_id"] == tenant
     assert calls["trending"]["system_wide"] is False
 
     too_long_start = datetime.now(UTC) - timedelta(days=120)
     with pytest.raises(HTTPException) as too_long:
-        await get_search_analytics_summary(
-            start=too_long_start, end=None, tenant_id=None, current_user=_pa()
-        )
+        await get_search_analytics_summary(start=too_long_start, end=None, tenant_id=None, current_user=_pa())
     assert too_long.value.status_code == 400
 
     status = await get_search_analytics_export_status(current_user=_pa())
@@ -126,9 +116,13 @@ async def test_export_path_and_raw_flag(monkeypatch: pytest.MonkeyPatch) -> None
         async def payloads_for(self, event_ids):
             return {event_ids[0]: "Hello There"}
 
-        async def mark_exported(self, ids, *, now):
+        async def finish_export(self, ids, *, now, delete_payloads):
             del now
             self.exported.extend(ids)
+            self.deleted_payloads = bool(delete_payloads)
+
+        async def mark_exported(self, ids, *, now):
+            await self.finish_export(ids, now=now, delete_payloads=False)
 
         async def release_export(self, ids):
             self.released.extend(ids)
@@ -172,3 +166,38 @@ async def test_export_path_and_raw_flag(monkeypatch: pytest.MonkeyPatch) -> None
     assert '"query_raw":"Hello There"' in line
     assert '"query_normalized":"hello"' in line
     assert store.released == []
+    assert store.deleted_payloads is True
+
+
+@pytest.mark.asyncio
+async def test_export_disabled_reclaims_exporting(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.linkup import export as export_mod
+
+    class FakeDao:
+        def __init__(self) -> None:
+            self.reclaimed = 0
+
+        async def reclaim_exporting(self) -> int:
+            self.reclaimed += 1
+            return 2
+
+    store = FakeDao()
+    monkeypatch.setattr(export_mod, "web_search_event_dao", store)
+    monkeypatch.setattr(
+        export_mod,
+        "get_settings",
+        lambda: SimpleNamespace(WEB_SEARCH_ANALYTICS_EXPORT_ENABLED=False),
+    )
+    assert await export_mod.drain_pending_exports() == 0
+    assert store.reclaimed == 1
+
+
+@pytest.mark.asyncio
+async def test_search_analytics_forbid_org_admin() -> None:
+    from app.core.security import require_role
+
+    checker = require_role("platform_admin")
+    org_admin = SimpleNamespace(role="org_admin", identity=None)
+    with pytest.raises(HTTPException) as exc:
+        await checker(current_user=org_admin)
+    assert exc.value.status_code == 403

@@ -119,9 +119,7 @@ class FakeClient:
 
 @pytest.fixture
 def ring(monkeypatch: pytest.MonkeyPatch) -> MemoryKeyDao:
-    from app.services.linkup import client as client_mod
-    from app.services.linkup import jobs as jobs_mod
-    from app.services.linkup import keys as keys_mod
+    from app.services.linkup import client as client_mod, jobs as jobs_mod, keys as keys_mod
 
     store = MemoryKeyDao()
     jobs = MemoryJobDao()
@@ -145,8 +143,8 @@ def ring(monkeypatch: pytest.MonkeyPatch) -> MemoryKeyDao:
 async def test_proxy_rotates_on_quota_and_succeeds_on_next_key(
     ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.services.linkup import client as client_mod
     from app.core.security import decrypt_data
+    from app.services.linkup import client as client_mod
 
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
@@ -198,9 +196,7 @@ async def test_proxy_does_not_rotate_on_500_then_retries_same_key(
 
 
 @pytest.mark.asyncio
-async def test_research_post_and_get_use_same_bound_key(
-    ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_research_post_and_get_use_same_bound_key(ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.linkup import client as client_mod
 
     first = await add_key(label="a", api_key="key-a")
@@ -257,3 +253,4 @@ def test_path_allowlist_and_proxy_token() -> None:
     assert parse_proxy_token(token, secret="s") == agent_id
     assert parse_proxy_token(token, secret="other") is None
     assert parse_proxy_token("not-a-token", secret="s") is None
+    assert parse_proxy_token(f"{agent_id}.short", secret="s") is None
