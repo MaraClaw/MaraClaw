@@ -1,5 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, Bot, MessageSquare, ShieldCheck, Sparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -65,13 +66,13 @@ export function Hero() {
             className="mt-8 flex flex-col items-center gap-3 sm:flex-row"
           >
             <Button size="lg" asChild>
-              <a href="#cta">
-                Request a demo
+              <Link to="/register">
+                Create account
                 <ArrowRight className="size-4" aria-hidden />
-              </a>
+              </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <a href="#agents">Explore agent roles</a>
+              <Link to="/login">Sign in</Link>
             </Button>
           </motion.div>
 

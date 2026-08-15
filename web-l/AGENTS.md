@@ -10,7 +10,7 @@
 
 ## OVERVIEW
 
-Public single-page marketing site for **MaraClaw** (OpenClaw agents for teams). Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 (`@tailwindcss/vite`) + Framer Motion + shadcn-style UI (Radix + CVA + Lucide). No router, no API client, no tests, no `VITE_*` - static SPA. Header **Sign in** is a hash link to `#contact` (footer), not auth. Member login lives in `web-e`; admin in `web-a`.
+Public marketing site plus member auth for **MaraClaw**. Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 + Framer Motion + React Router + RHF/Zod + shadcn-style UI (Radix + CVA + Lucide). JWT `localStorage` key **`maraclaw-enduser-token`**. Admin login stays in `web-a`.
 
 ## STRUCTURE
 
@@ -24,10 +24,13 @@ web-l/
 ├── public/                 # favicon.svg, maraclaw-mark.svg (brand source)
 └── src/
     ├── main.tsx            # ThemeProvider → App
-    ├── App.tsx             # section composition order
+    ├── App.tsx             # AuthProvider + router
+    ├── routes.tsx          # / landing, /login, /register, /join, /transfer, /app
+    ├── pages/              # landing + member auth + workspace placeholder
     ├── index.css           # Tailwind v4 + OKLCH tokens + @utility
     ├── hooks/use-theme.tsx # light|dark|system, localStorage key maraclaw-theme
-    ├── lib/                # cn(), motion presets
+    ├── hooks/use-auth.tsx  # member session; rejects platform_admin
+    ├── lib/                # cn(), motion, api/http/auth
     └── components/
         ├── brand/          # MaraClawLogo (full | mark)
         ├── layout/         # SiteHeader, SiteFooter
@@ -41,11 +44,14 @@ web-l/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Page section order / skip-link | `src/App.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
-| Hero copy / CTAs | `sections/hero.tsx` | Trust bullets only; no embedded mock |
+| Page section order / skip-link | `src/pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
+| Member login / register | `src/pages/login.tsx`, `register.tsx` | web-a visual language via `components/auth/auth-shell.tsx` |
+| Org join / transfer | `src/pages/join-org.tsx`, `transfer.tsx` | Same engine contracts as the retired `web-e` app |
+| Signed-in home | `src/pages/app-home.tsx` | Chat placeholder |
+| Hero copy / CTAs | `sections/hero.tsx` | Account CTAs + role explore |
 | Role catalog copy | `sections/agents.tsx` | Align with `../engine/agent_templates/` when claiming truth |
-| Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors; keep in sync with section `id`s |
-| Footer / `#contact` | `layout/site-footer.tsx` | Sign in + Contact + legal hashes land here |
+| Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors on `/`; Sign in → `/login` |
+| Footer / `#contact` | `layout/site-footer.tsx` | Contact + legal hashes land here |
 | Design tokens / dark palette | `src/index.css` | OKLCH; warm paper light / warm dark |
 | Theme FOUC + React theme | `index.html` script + `hooks/use-theme.tsx` | Same storage key + meta colors |
 | Motion presets / wrappers | `lib/motion.ts`, `components/motion.tsx` | Prefer Reveal/Stagger; honor reduced motion |
@@ -60,7 +66,7 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 
 | Symbol | Type | Location | Refs (approx) | Role |
 |--------|------|----------|---------------|------|
-| `App` | default component | `src/App.tsx` | entry | Page composition |
+| `App` | default component | `src/App.tsx` | entry | Auth + router |
 | `ThemeProvider` / `useTheme` | context | `hooks/use-theme.tsx` | main, ThemeToggle | Theme root |
 | `cn` | util | `lib/utils.ts` | ~12 files | Class merge |
 | `Reveal` / `Stagger` / `StaggerItem` | components | `components/motion.tsx` | most sections | Scroll reveal |
@@ -75,7 +81,7 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 - **Alias:** `@/*` → `src/*` (Vite + tsconfig). Prefer `@/` imports in app code.
 - **Files:** kebab-case (`how-it-works.tsx`); components **named** PascalCase exports. Only `App` is default export.
 - **No barrels** - import concrete files (`@/components/sections/hero`).
-- **No React Router** - hash anchors (`#features`, `#agents`, …). Sticky header uses `scroll-mt-*` on sections.
+- **React Router** for `/login`, `/register`, `/join`, `/transfer`, `/app`. Landing hash anchors (`#features`, …) stay on `/`.
 - **Tailwind v4 CSS-first** - no `tailwind.config.*` / PostCSS. Tokens live in `index.css` (`@theme inline`, `:root`, `.dark`).
 - **Lint:** oxlint (`.oxlintrc.json`), not ESLint/Prettier. `npm run lint`.
 - **TS:** `verbatimModuleSyntax` → use `import type`. Build runs `tsc -b` then Vite.
@@ -87,7 +93,7 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- Admin UI, end-user chat, auth/session, or privileged API calls in this package.
+- Admin UI or privileged operator APIs in this package (those stay in `web-a`).
 - Inventing channel badges / role claims engine does not support (`../engine`).
 - Shipping server secrets or treating this as full-stack (backend is `../engine`).
 - Adding ESLint/Prettier/tailwind.config as if they already exist - they don’t.
@@ -120,7 +126,7 @@ docker run --rm -p 8080:8080 maraclaw-web-l
 ## NOTES
 
 - **No automated tests** - verification = `npm run build` (+ optional lint).
-- **No `VITE_*` env** - static marketing only.
+- Public `VITE_API_BASE_URL` / `VITE_DEV_API_PROXY` only. JWT key is `maraclaw-enduser-token`, never `maraclaw-admin-token`.
 - `src/assets/` empty; brand assets in `public/`. `public/icons.svg` is unused Vite leftover.
 - `@radix-ui/react-navigation-menu` is a dependency without a UI file.
 - CSP in `docker/nginx.conf` is strict (`connect-src 'self'`); external analytics/APIs need CSP edits.

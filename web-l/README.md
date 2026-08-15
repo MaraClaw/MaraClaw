@@ -1,6 +1,10 @@
 # MaraClaw Landing (`web-l`)
 
-🦞 Marketing landing page for **MaraClaw** - OpenClaw agents for teams & companies.
+🦞 Marketing landing and member auth for **MaraClaw** - OpenClaw agents for teams & companies.
+
+- `/` marketing
+- `/register`, `/login`, `/join`, `/transfer` member account flows
+- `/app` signed-in workspace placeholder
 
 ## Stack
 
