@@ -13,6 +13,17 @@ export class ApiError extends Error {
   }
 }
 
+export function userFacingRequestError(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback
+  if (error.status >= 500) return fallback
+  const detail = formatApiDetail(error.detail)
+  if (!detail) return fallback
+  if (/^request failed \(\d+\)$/i.test(detail) || detail.startsWith('<') || detail.length > 180) {
+    return fallback
+  }
+  return detail
+}
+
 export function formatApiDetail(detail: unknown): string | null {
   if (detail == null) return null
   if (typeof detail === 'string') return detail

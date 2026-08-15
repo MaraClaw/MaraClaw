@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
 import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
 import { isNeedsVerificationDetail } from '@/lib/types/auth'
 
 const registerSchema = z.object({
@@ -94,11 +94,7 @@ export function RegisterPage() {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
         return
       }
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ?? error.message)
-          : 'Registration failed. Try again.',
-      )
+      setFormError(userFacingRequestError(error, 'Unable to create an account. Try again.'))
     }
   }
 

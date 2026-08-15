@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
 import {
   isMultiTenantResponse,
   isNeedsVerificationDetail,
@@ -129,11 +129,7 @@ export function LoginPage() {
       if (error instanceof ApiError && error.status === 401) {
         setFormError('Email or password is incorrect.')
       } else {
-        setFormError(
-          error instanceof ApiError
-            ? (formatApiDetail(error.detail) ?? error.message)
-            : 'Unable to sign in. Try again.',
-        )
+        setFormError(userFacingRequestError(error, 'Unable to sign in. Try again.'))
       }
       setFocus('password')
     }
@@ -158,11 +154,7 @@ export function LoginPage() {
       }
       setFormError('Unable to complete organization selection. Try again.')
     } catch (error) {
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ?? error.message)
-          : 'Unable to sign in. Try again.',
-      )
+      setFormError(userFacingRequestError(error, 'Unable to sign in. Try again.'))
     } finally {
       setSelectingTenantId(null)
     }
