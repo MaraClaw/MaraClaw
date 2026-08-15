@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -61,7 +62,10 @@ export function CompanyDetailPage() {
       </Button>
 
       <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">{company?.name ?? 'Company'}</h1>
+        <h1 className="flex items-center gap-2.5 font-display text-2xl font-semibold tracking-tight">
+          {company ? <CompanyStatusIcon active={company.is_active} /> : null}
+          {company?.name ?? 'Company'}
+        </h1>
         <p className="mt-2 text-muted-foreground">
           Claimed email domains route new registrations to this organization.
         </p>
