@@ -56,13 +56,17 @@ function AppShellFrame() {
                 )
               }
             >
-              <NavIcon name={item.icon} />
-              {item.label}
-              {item.to === '/app/notifications' && unread > 0 ? (
-                <span className="ml-auto rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
-                  {unread}
-                </span>
-              ) : null}
+              {({ isActive }) => (
+                <>
+                  <NavIcon name={item.icon} active={isActive} />
+                  {item.label}
+                  {item.to === '/app/notifications' && unread > 0 ? (
+                    <span className="ml-auto rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
+                      {unread}
+                    </span>
+                  ) : null}
+                </>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -99,9 +103,13 @@ function AppShellFrame() {
                   )
                 }
               >
-                <NavIcon name={item.icon} className="size-5" />
-                {item.label}
-                {item.to === '/app/notifications' && unread > 0 ? ` (${unread})` : ''}
+                {({ isActive }) => (
+                  <>
+                    <NavIcon name={item.icon} active={isActive} className="size-5" />
+                    {item.label}
+                    {item.to === '/app/notifications' && unread > 0 ? ` (${unread})` : ''}
+                  </>
+                )}
               </NavLink>
             ))}
           </nav>
