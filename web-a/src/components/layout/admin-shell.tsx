@@ -1,22 +1,18 @@
-import { motion, useReducedMotion } from 'framer-motion'
 import {
   Building2,
   KeyRound,
   LayoutDashboard,
-  Menu,
+  LogOut,
   Search,
   Settings2,
-  Shield,
   Users,
   Wrench,
-  X,
 } from 'lucide-react'
-import { useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 
-import { MaraClawMark } from '@/components/brand/maraclaw-mark'
+import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
@@ -30,37 +26,46 @@ const navItems: {
 }[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/companies', label: 'Companies', icon: Building2, platformAdminOnly: true },
-  { to: '/search-engine', label: 'Search engine', icon: Search, platformAdminOnly: true },
+  { to: '/search-engine', label: 'Search', icon: Search, platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: Users },
   { to: '/tools', label: 'Tools', icon: Wrench },
-  { to: '/settings', label: 'Settings', icon: Settings2 },
   { to: '/account', label: 'Account', icon: KeyRound },
+  { to: '/settings', label: 'Settings', icon: Settings2 },
 ]
 
-function roleLabel(role: string | undefined): string {
-  if (role === 'platform_admin') return 'Platform admin'
-  if (role === 'org_admin') return 'Org admin'
-  return role ?? 'Admin'
-}
-
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+function NavItems({
+  onNavigate,
+  compact,
+}: {
+  onNavigate?: () => void
+  compact?: boolean
+}) {
   const { mustChangePassword, user } = useAuth()
   const platformAdmin = isPlatformAdminUser(user)
 
   return (
-    <nav className="flex flex-col gap-1 px-2" aria-label="Admin">
+    <>
       {navItems.map(({ to, label, icon: Icon, end, platformAdminOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
-          return (
+          return compact ? (
             <span
               key={to}
-              className="flex cursor-not-allowed items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/40"
+              className="shrink-0 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground/50"
               title="Change your password to open the rest of the console"
               aria-disabled="true"
             >
-              <Icon className="size-4 shrink-0 opacity-70" aria-hidden />
+              {label}
+            </span>
+          ) : (
+            <span
+              key={to}
+              className="flex cursor-not-allowed items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-base font-medium text-muted-foreground/40"
+              title="Change your password to open the rest of the console"
+              aria-disabled="true"
+            >
+              <Icon className="size-5" aria-hidden />
               {label}
             </span>
           )
@@ -72,115 +77,83 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
             end={end}
             onClick={onNavigate}
             className={({ isActive }) =>
-              cn(
-                'flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                  : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-              )
+              compact
+                ? cn(
+                    'shrink-0 rounded-lg px-3 py-[0.45rem] text-sm font-medium text-muted-foreground',
+                    isActive && 'bg-muted text-foreground',
+                  )
+                : cn(
+                    'flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-base font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+                    isActive && 'bg-muted text-foreground',
+                  )
             }
           >
-            <Icon className="size-4 shrink-0 opacity-80" aria-hidden />
-            {label}
+            {compact ? label : (
+              <>
+                <Icon className="size-5" aria-hidden />
+                {label}
+              </>
+            )}
           </NavLink>
         )
       })}
-      {mustChangePassword ? (
-        <p className="px-3 pt-2 text-xs leading-relaxed text-muted-foreground">
-          Change your password on Account to unlock the rest of the console.
-        </p>
-      ) : null}
-    </nav>
+    </>
   )
 }
 
 export function AdminShell() {
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const { user } = useAuth()
-  const reduceMotion = useReducedMotion()
+  const { user, logout, mustChangePassword } = useAuth()
 
   return (
     <div className="flex min-h-svh bg-background">
-      {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <div className="flex items-center gap-2.5 px-4 py-5">
-          <MaraClawMark className="size-8" />
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
+        <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
+          <MaraClawLogo className="size-9" />
           <div className="min-w-0">
-            <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
-            <p className="text-xs text-muted-foreground">Admin console</p>
+            <p className="font-display text-sm font-semibold">MaraClaw</p>
+            <p className="truncate text-xs text-muted-foreground">Admin console</p>
           </div>
-        </div>
-        <Separator className="bg-sidebar-border" />
-        <div className="flex-1 overflow-y-auto py-4">
+        </Link>
+        <nav className="flex flex-1 flex-col gap-0.5 px-2" aria-label="Admin">
           <NavItems />
-        </div>
-        <div className="space-y-2 border-t border-sidebar-border p-3">
-          <div className="rounded-xl bg-muted/50 px-3 py-2">
-            <p className="truncate text-sm font-medium">
-              {user?.display_name || user?.email || 'Admin'}
+          {mustChangePassword ? (
+            <p className="px-3.5 pt-2 text-xs leading-relaxed text-muted-foreground">
+              Change your password on Account to unlock the rest of the console.
             </p>
-            <div className="mt-1 flex items-center gap-1.5">
-              <Shield className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-              <p className="truncate text-xs text-muted-foreground">{roleLabel(user?.role)}</p>
-            </div>
+          ) : null}
+        </nav>
+        <div className="border-t border-border p-3">
+          <p className="truncate px-2 text-xs text-muted-foreground">{user?.email}</p>
+          <div className="mt-2 flex items-center gap-1">
+            <ThemeToggle />
+            <Button variant="ghost" size="sm" className="flex-1" onClick={logout}>
+              <LogOut className="size-3.5" aria-hidden />
+              Sign out
+            </Button>
           </div>
         </div>
       </aside>
 
-      {/* Mobile drawer */}
-      {mobileOpen ? (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/40"
-            aria-label="Close menu"
-            onClick={() => setMobileOpen(false)}
-          />
-          <motion.aside
-            initial={reduceMotion ? false : { x: -280 }}
-            animate={{ x: 0 }}
-            transition={
-              reduceMotion
-                ? { duration: 0 }
-                : { type: 'spring', stiffness: 380, damping: 34 }
-            }
-            className="relative flex h-full w-64 flex-col border-r border-sidebar-border bg-sidebar shadow-elevated"
-          >
-            <div className="flex items-center justify-between px-4 py-4">
-              <div className="flex items-center gap-2">
-                <MaraClawMark className="size-7" />
-                <span className="font-display text-sm font-semibold">Admin</span>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setMobileOpen(false)}
-                aria-label="Close navigation"
-              >
-                <X className="size-4" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="border-b border-border px-4 py-3 md:hidden">
+          <div className="flex items-center justify-between">
+            <Link to="/" className="flex items-center gap-2">
+              <MaraClawLogo className="size-8" />
+              <span className="font-display text-sm font-semibold">Admin</span>
+            </Link>
+            <div className="flex items-center gap-1">
+              <ThemeToggle />
+              <Button variant="ghost" size="sm" onClick={logout}>
+                <LogOut className="size-3.5" aria-hidden />
+                Sign out
               </Button>
             </div>
-            <Separator className="bg-sidebar-border" />
-            <div className="flex-1 py-4">
-              <NavItems onNavigate={() => setMobileOpen(false)} />
-            </div>
-          </motion.aside>
-        </div>
-      ) : null}
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="fixed top-3 left-3 z-30 md:hidden"
-          onClick={() => setMobileOpen(true)}
-          aria-label="Open navigation"
-        >
-          <Menu className="size-4" />
-        </Button>
-        <main id="main" className="flex-1 px-4 py-6 md:px-6 md:py-8">
+          </div>
+          <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Admin">
+            <NavItems compact />
+          </nav>
+        </header>
+        <main id="main" className="min-w-0 flex-1 p-6">
           <Outlet />
         </main>
       </div>

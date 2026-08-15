@@ -26,7 +26,7 @@ export function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <div className="space-y-2">
-        <h1 className="font-display text-3xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">
           Session and console preferences. Password changes live on Account.
         </p>

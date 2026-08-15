@@ -76,7 +76,7 @@ web-a/
 | Create company | `src/components/companies/create-company-form.tsx` - platform admin only |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
-| Nav / shell | `src/components/layout/admin-shell.tsx` |
+| Nav / shell | `src/components/layout/admin-shell.tsx` | Matches `web-l` workspace chrome: logo, larger nav, email + theme + sign out |
 | Routes | `src/routes/index.tsx` |
 | HTTP client | `src/lib/` (see nested `AGENTS.md`) |
 | Design tokens | `src/index.css` |
@@ -90,7 +90,8 @@ web-a/
 - Prefer TanStack Query for server state; forms via RHF + Zod.
 - Tenant scoping: platform admin may pass `tenant_id`; org admin is own-tenant only (enforce in API client + UI).
 - Treat 403 `{ must_change_password: true }` from engine as force-password-change, not a generic logout.
-- Keep brand assets consistent with `web-l` (`public/maraclaw-mark.svg`, warm OKLCH tokens).
+- Keep brand assets consistent with `web-l` (`MaraClawLogo`, `public/maraclaw-mark.svg`, warm OKLCH tokens).
+- Workspace chrome follows `web-l` `app-shell`: `bg-card/70` sidebar, `text-base` nav, footer email + theme toggle + Sign out.
 - New screens: add under `pages/`, wire in `routes/`, link in shell nav when ready.
 
 ## COMMANDS

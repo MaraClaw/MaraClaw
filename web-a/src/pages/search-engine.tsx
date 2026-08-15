@@ -119,7 +119,7 @@ export function SearchEnginePage() {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       <div>
-        <h1 className="font-display text-3xl font-semibold tracking-tight">Search engine</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
         <p className="mt-2 text-muted-foreground">
           {tab === 'analytics'
             ? 'System-wide and per-company search activity from billed Linkup calls.'

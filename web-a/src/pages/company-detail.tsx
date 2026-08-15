@@ -61,7 +61,7 @@ export function CompanyDetailPage() {
       </Button>
 
       <div>
-        <h1 className="font-display text-3xl font-semibold tracking-tight">{company?.name ?? 'Company'}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{company?.name ?? 'Company'}</h1>
         <p className="mt-2 text-muted-foreground">
           Claimed email domains route new registrations to this organization.
         </p>
