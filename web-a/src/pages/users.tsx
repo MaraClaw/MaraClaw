@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -16,26 +17,39 @@ import {
   isEndUserRole,
   listPlatformAdmins,
   listUsers,
+  roleLabel,
   setOrgAdminActive,
   setPlatformAdminActive,
   setUserActive,
   type AdminUser,
 } from '@/lib/users-api'
 
-function roleLabel(role: string): string {
-  if (role === 'org_admin') return 'Org admin'
-  if (role === 'platform_admin') return 'Platform admin'
-  if (role === 'agent_admin') return 'Agent admin'
-  return 'Member'
-}
-
 export function UsersPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const platformAdmin = isPlatformAdminUser(user)
   const genesis = isGenesisAdmin(user)
-  const [search, setSearch] = useState('')
-  const [companyId, setCompanyId] = useState('')
+  const [params, setParams] = useSearchParams()
+  const search = params.get('q') ?? ''
+  const companyId = params.get('company') ?? ''
+
+  function updateListState(patch: { q?: string; company?: string }, replace = true) {
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        if (patch.q !== undefined) {
+          if (patch.q) next.set('q', patch.q)
+          else next.delete('q')
+        }
+        if (patch.company !== undefined) {
+          if (patch.company) next.set('company', patch.company)
+          else next.delete('company')
+        }
+        return next
+      },
+      { replace },
+    )
+  }
 
   const companies = useQuery({
     queryKey: ['admin-companies'],
@@ -46,8 +60,16 @@ export function UsersPage() {
   useEffect(() => {
     if (!platformAdmin || companyId || !companies.data?.length) return
     const own = companies.data.find((company) => company.id === user?.tenant_id)
-    setCompanyId(own?.id ?? companies.data[0].id)
+    updateListState({ company: own?.id ?? companies.data[0].id })
   }, [platformAdmin, companyId, companies.data, user?.tenant_id])
+
+  useEffect(() => {
+    const stored = sessionStorage.getItem('web-a:users-scroll')
+    if (stored) {
+      window.scrollTo(0, Number(stored))
+      sessionStorage.removeItem('web-a:users-scroll')
+    }
+  }, [])
 
   const users = useQuery({
     queryKey: ['admin-users', platformAdmin ? companyId : user?.tenant_id],
@@ -137,7 +159,7 @@ export function UsersPage() {
             <span className="relative">
               <select
                 value={companyId}
-                onChange={(event) => setCompanyId(event.target.value)}
+                onChange={(event) => updateListState({ company: event.target.value })}
                 className="h-11 w-full appearance-none rounded-xl border border-input bg-card px-3.5 pe-10 text-sm text-foreground shadow-sm outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35"
               >
                 {(companies.data ?? []).map((company) => (
@@ -163,7 +185,7 @@ export function UsersPage() {
             <Input
               type="search"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => updateListState({ q: event.target.value })}
               placeholder="Name or email"
               className="pl-10"
             />
@@ -188,7 +210,13 @@ export function UsersPage() {
 
       <div className="grid gap-4">
         {visible.map((row) => (
-            <Card key={row.id}>
+            <Card key={row.id} className="relative transition-colors hover:bg-muted/40">
+              <Link
+                to={`/users/${row.id}`}
+                aria-label={`Open ${row.display_name || row.email || 'user'}`}
+                className="absolute inset-0 z-10 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                onClick={() => sessionStorage.setItem('web-a:users-scroll', String(window.scrollY))}
+              />
               <CardHeader className="flex flex-row items-start justify-between gap-4">
                 <div>
                   <CardTitle>{row.display_name || row.email || 'User'}</CardTitle>
@@ -208,6 +236,7 @@ export function UsersPage() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="relative z-20"
                     disabled={toggle.isPending}
                     onClick={() => toggle.mutate({ row, isActive: !row.is_active })}
                   >

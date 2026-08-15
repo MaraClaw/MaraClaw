@@ -70,7 +70,7 @@ web-a/
 | Change password | `src/pages/account.tsx` |
 | Sign out / theme | `src/pages/settings.tsx` |
 | Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
-| Users / activate | `src/pages/users.tsx`, `src/lib/users-api.ts` | Org and platform admin; `PATCH /api/users/{id}/active` for end users |
+| Users / activate | `src/pages/users.tsx`, `src/pages/user-detail.tsx`, `src/lib/users-api.ts` | Org and platform admin; `GET /api/users/{id}` for detail + agents; activate routes as before |
 | Search engine / Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
 | Search analytics | `src/pages/search-engine-analytics.tsx`, `src/lib/search-analytics-api.ts` |
 | Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` - prefix FTS on name/slug |
