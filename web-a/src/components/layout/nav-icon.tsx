@@ -42,8 +42,8 @@ export function NavIcon({
       <img
         src={src}
         alt=""
-        width={24}
-        height={24}
+        width={48}
+        height={48}
         aria-hidden
         draggable={false}
         className={cn('size-6 shrink-0 select-none object-contain', className)}
@@ -58,8 +58,8 @@ export function NavIcon({
           key={state}
           src={src}
           alt=""
-          width={24}
-          height={24}
+          width={48}
+          height={48}
           draggable={false}
           className="size-full select-none object-contain"
           initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
