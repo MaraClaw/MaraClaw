@@ -14,6 +14,8 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { cn } from '@/lib/utils'
+import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
 
 const schema = z.object({
   label: z.string().trim().min(1, 'Enter a label').max(200, 'Label is too long'),
@@ -45,6 +47,7 @@ export function SearchEnginePage() {
   const formId = useId()
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
+  const [tab, setTab] = useState<'keys' | 'analytics'>('keys')
 
   const keys = useQuery({
     queryKey: ['admin-linkup-keys'],
@@ -110,6 +113,37 @@ export function SearchEnginePage() {
         </p>
       </div>
 
+      <div className="flex gap-2" role="tablist" aria-label="Search engine sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'keys'}
+          className={cn(
+            'rounded-xl px-3 py-1.5 text-sm font-medium',
+            tab === 'keys' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
+          )}
+          onClick={() => setTab('keys')}
+        >
+          Keys
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'analytics'}
+          className={cn(
+            'rounded-xl px-3 py-1.5 text-sm font-medium',
+            tab === 'analytics' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
+          )}
+          onClick={() => setTab('analytics')}
+        >
+          Analytics
+        </button>
+      </div>
+
+      {tab === 'analytics' ? <SearchEngineAnalytics /> : null}
+
+      {tab === 'keys' ? (
+      <>
       <Card>
         <CardHeader>
           <CardTitle>Add Linkup key</CardTitle>
@@ -185,6 +219,8 @@ export function SearchEnginePage() {
           />
         ))}
       </div>
+      </>
+      ) : null}
     </div>
   )
 }

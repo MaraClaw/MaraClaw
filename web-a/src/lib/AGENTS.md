@@ -16,6 +16,7 @@ Thin fetch clients. No React Query here except callers. Engine owns behavior.
 | `auth-api.ts` | login, `/me`, forgot/reset/change password. |
 | `companies-api.ts` | list/create/toggle companies + email-domain CRUD. |
 | `linkup-keys-api.ts` | platform-admin list/add/remove of Linkup API keys. |
+| `search-analytics-api.ts` | platform-admin search volume, trending, export status. |
 | `types/auth.ts` | `UserOut` / `must_change_password` helpers (OR token + user + identity). |
 
 ## CONVENTIONS
