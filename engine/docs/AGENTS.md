@@ -14,7 +14,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | OpenClaw image helpers | `../docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
 | ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
-| Refactoring packets | `refactoring/` | Top-module cleanup briefs. `psycopg-migration.md` is **historical dual-stack** - live policy is the freeze scripts + root `AGENTS.md`. |
+| Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Live split plan: repo `.omgb/plans/engine-top5-modularize-20260815.md`. `psycopg-migration.md` is **historical dual-stack**. |
 
 ## Update Triggers
 

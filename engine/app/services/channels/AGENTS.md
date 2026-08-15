@@ -6,7 +6,7 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 
 | Channel | Inbound module (legacy or new) | Outbound tool routing | In this package |
 |---------|--------------------------------|----------------------|-----------------|
-| Feishu | `api/feishu.py`, `feishu_ws.py` | yes | types + inbound (session/history/LLM/persist) + dedup |
+| Feishu | `api/feishu.py`, `feishu_ws.py` | yes | types + inbound + `llm_bridge` + dedup. Event/file/cards still in `api/feishu.py` |
 | WeCom | `api/wecom.py`, `wecom_stream.py` | yes | types only |
 | DingTalk | `api/dingtalk.py`, `dingtalk_stream.py` | yes | types only |
 | Slack | `api/slack.py` | yes | types + config + dedup |
@@ -22,7 +22,8 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 |------|------|
 | `types.py` | Canonical `channel_type` registry, aliases, outbound keys |
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
-| `inbound.py` | Shared session / history / persist / LLM reply helpers |
+| `inbound.py` | Shared session / history / persist / LLM reply helpers (imports `llm_bridge`) |
+| `llm_bridge.py` | `_load_agent_and_model` / `_call_llm_with_config` / `_call_agent_llm`. `api/feishu.py` re-exports the underscore names so Slack/WeCom/… keep working |
 | `dedup.py` | Process-local + Redis (`already_processed_shared` / `mark_processed_shared`) webhook event dedupe |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
 | `google_chat.py` | Verify JWT (iss+aud), parse events, chunked Chat API send |
@@ -40,3 +41,4 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 - Invent a second channel type string for the same product (use aliases in `types.py`).
 - Put Chat-specific OAuth for Workspace admin sync here - that lives in `google_workspace_*` / org_sync.
 - Grow `agent_tools.py` with channel branches; use `agent_tool_exec` + this package.
+- Move LLM orchestration back into `api/feishu.py`. New IM callers should import `llm_bridge`, not the router.

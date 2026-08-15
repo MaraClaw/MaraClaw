@@ -23,7 +23,6 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, NotRequired, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from app.api.auth import get_current_user
 from app.core.json_types import JsonObject, object_mapping_from, str_from_row, uuid_from_row
@@ -51,6 +50,24 @@ from app.records.okr import (
     OKRSettingsRecord,
 )
 from app.records.user import UserRecord
+from app.schemas.okr import (
+    CompanyReportOut,
+    CompanyReportRegenerate,
+    KeyResultCreate,
+    KeyResultOut,
+    KeyResultUpdate,
+    MemberDailyReportOut,
+    MemberDailyReportUpsert,
+    ObjectiveCreate,
+    ObjectiveOut,
+    ObjectiveUpdate,
+    OKRSettingsOut,
+    OKRSettingsUpdate,
+    PeriodOut,
+    ProgressUpdate,
+    WorkReportOut,
+)
+from app.services.okr_periods import advance_period, compute_current_period, compute_period_for_date
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
 
@@ -237,228 +254,9 @@ async def _sync_okr_report_triggers(settings: OKRSettingsRecord) -> None:
     )
 
 
-def _compute_current_period(frequency: str, length_days: int | None) -> tuple[date, date]:
-    """Compute the start and end dates of the current OKR period.
-
-    This is a simple deterministic calculation from today's date so the
-    frontend and API always agree on what "the current period" is.
-    """
-    today = datetime.now(UTC).date()
-    if frequency == "monthly":
-        start = today.replace(day=1)
-        # Last day of this month
-        if today.month == 12:
-            end = today.replace(month=12, day=31)
-        else:
-            end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
-    elif frequency == "custom" and length_days:
-        # Align to multiples of length_days from the Unix epoch
-        epoch = date(1970, 1, 1)
-        days_since_epoch = (today - epoch).days
-        period_index = days_since_epoch // length_days
-        start = epoch + timedelta(days=period_index * length_days)
-        end = start + timedelta(days=length_days - 1)
-    else:
-        # Default: quarterly (Q1/Q2/Q3/Q4)
-        quarter = (today.month - 1) // 3 + 1
-        start = date(today.year, (quarter - 1) * 3 + 1, 1)
-        end = date(today.year, 12, 31) if quarter == 4 else date(today.year, quarter * 3 + 1, 1) - timedelta(days=1)
-    return start, end
-
-
-def _compute_period_for_date(frequency: str, length_days: int | None, target: date) -> tuple[date, date]:
-    """Compute the OKR period containing a specific date."""
-    if frequency == "monthly":
-        start = target.replace(day=1)
-        if target.month == 12:
-            end = target.replace(month=12, day=31)
-        else:
-            end = target.replace(month=target.month + 1, day=1) - timedelta(days=1)
-    elif frequency == "custom" and length_days:
-        epoch = date(1970, 1, 1)
-        days_since_epoch = (target - epoch).days
-        period_index = days_since_epoch // length_days
-        start = epoch + timedelta(days=period_index * length_days)
-        end = start + timedelta(days=length_days - 1)
-    else:
-        quarter = (target.month - 1) // 3 + 1
-        start = date(target.year, (quarter - 1) * 3 + 1, 1)
-        end = date(target.year, 12, 31) if quarter == 4 else date(target.year, quarter * 3 + 1, 1) - timedelta(days=1)
-    return start, end
-
-
-def _advance_period(start: date, frequency: str, length_days: int | None, steps: int = 1) -> tuple[date, date]:
-    """Move a period start forward by a fixed number of OKR periods."""
-    if frequency == "monthly":
-        month_index = start.year * 12 + (start.month - 1) + steps
-        year = month_index // 12
-        month = month_index % 12 + 1
-        return _compute_period_for_date(frequency, length_days, date(year, month, 1))
-    if frequency == "custom" and length_days:
-        next_start = start + timedelta(days=length_days * steps)
-        return next_start, next_start + timedelta(days=length_days - 1)
-    quarter = (start.month - 1) // 3
-    quarter_index = start.year * 4 + quarter + steps
-    year = quarter_index // 4
-    next_quarter = quarter_index % 4 + 1
-    return _compute_period_for_date(frequency, length_days, date(year, (next_quarter - 1) * 3 + 1, 1))
-
-
-# ─── Pydantic schemas ─────────────────────────────────────────────────────────
-
-
-class OKRSettingsOut(BaseModel):
-    enabled: bool
-    first_enabled_at: str | None = None
-    daily_report_enabled: bool
-    daily_report_time: str
-    daily_report_skip_non_workdays: bool = True
-    weekly_report_enabled: bool
-    weekly_report_day: int
-    period_frequency: str
-    period_length_days: int | None = None
-    period_frequency_locked: bool = False
-    # OKR Agent UUID for the chat-link button in the UI
-    okr_agent_id: str | None = None
-
-
-class OKRSettingsUpdate(BaseModel):
-    enabled: bool | None = None
-    daily_report_enabled: bool | None = None
-    daily_report_time: str | None = None
-    daily_report_skip_non_workdays: bool | None = None
-    weekly_report_enabled: bool | None = None
-    weekly_report_day: int | None = None
-    period_frequency: str | None = None
-    period_length_days: int | None = None
-
-
-class KeyResultOut(BaseModel):
-    id: str
-    objective_id: str
-    title: str
-    target_value: float
-    current_value: float
-    unit: str | None = None
-    focus_ref: str | None = None
-    status: str
-    last_updated_at: str
-    created_at: str
-    # Alignment refs (read-only summary)
-    alignments: list[JsonObject] = []
-
-
-class ObjectiveOut(BaseModel):
-    id: str
-    title: str
-    description: str | None = None
-    owner_type: str
-    owner_id: str | None = None
-    # Resolved human-readable name of the owner (user display_name / agent name).
-    # None for company-level objectives.
-    owner_name: str | None = None
-    period_start: str
-    period_end: str
-    status: str
-    created_at: str
-    key_results: list[KeyResultOut] = []
-
-
-class ObjectiveCreate(BaseModel):
-    title: str
-    description: str | None = None
-    owner_type: str = "company"
-    owner_id: str | None = None
-    period_start: str
-    period_end: str
-
-
-class ObjectiveUpdate(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    status: str | None = None
-
-
-class KeyResultCreate(BaseModel):
-    title: str
-    target_value: float = 100.0
-    unit: str | None = None
-    focus_ref: str | None = None
-
-
-class KeyResultUpdate(BaseModel):
-    title: str | None = None
-    current_value: float | None = None
-    target_value: float | None = None
-    unit: str | None = None
-    focus_ref: str | None = None
-    status: str | None = None
-
-
-class ProgressUpdate(BaseModel):
-    value: float
-    note: str | None = None
-    # Optional explicit status override; when omitted, auto-computed from progress ratio
-    status: str | None = None
-
-
-class PeriodOut(BaseModel):
-    start: str
-    end: str
-    label: str
-    is_current: bool
-
-
-class WorkReportOut(BaseModel):
-    id: str
-    author_type: str
-    author_id: str
-    report_type: str
-    period_date: str
-    content: str
-    source: str
-    created_at: str
-
-
-class MemberDailyReportOut(BaseModel):
-    id: str
-    member_type: str
-    member_id: str
-    display_name: str
-    avatar_url: str | None = None
-    group_label: str
-    report_date: str
-    content: str
-    status: str
-    submitted_at: str | None = None
-    updated_at: str | None = None
-
-
-class MemberDailyReportUpsert(BaseModel):
-    report_date: str
-    content: str
-    member_type: str | None = None
-    member_id: str | None = None
-    source: str = "manual"
-
-
-class CompanyReportOut(BaseModel):
-    id: str
-    report_type: str
-    period_start: str
-    period_end: str
-    period_label: str
-    content: str
-    submitted_count: int
-    missing_count: int
-    needs_refresh: bool
-    generated_at: str
-    updated_at: str
-
-
-class CompanyReportRegenerate(BaseModel):
-    report_type: str
-    period_start: str
+_compute_current_period = compute_current_period
+_compute_period_for_date = compute_period_for_date
+_advance_period = advance_period
 
 
 # ─── Settings ─────────────────────────────────────────────────────────────────
