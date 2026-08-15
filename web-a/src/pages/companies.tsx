@@ -107,7 +107,12 @@ export function CompaniesPage() {
 
       <div className="grid gap-4">
         {(companies.data ?? []).map((company) => (
-          <Card key={company.id}>
+          <Card key={company.id} className="relative transition-colors hover:bg-muted/40">
+            <Link
+              to={`/companies/${company.id}`}
+              aria-label={`Open ${company.name}`}
+              className="absolute inset-0 z-10 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
                 <CardTitle className="flex items-center gap-2.5">
@@ -131,13 +136,11 @@ export function CompaniesPage() {
               <span className="text-sm text-muted-foreground">
                 {company.user_count} users · {company.agent_count} agents
               </span>
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/companies/${company.id}`}>Email domains</Link>
-              </Button>
               {canCreate && company.can_disable ? (
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="relative z-20"
                   disabled={toggle.isPending}
                   onClick={() => toggle.mutate(company.id)}
                 >

@@ -12,6 +12,8 @@ export type CompanyStats = {
   can_disable: boolean
   created_at: string | null
   user_count: number
+  active_user_count: number
+  inactive_user_count: number
   agent_count: number
   org_admin_email: string | null
 }
@@ -74,6 +76,8 @@ export async function getTenant(tenantId: string): Promise<CompanyStats> {
     can_disable: tenant.can_disable ?? (!isSystem && !isDefaultEndUserOrg),
     created_at: null,
     user_count: 0,
+    active_user_count: 0,
+    inactive_user_count: 0,
     agent_count: 0,
     org_admin_email: null,
   }
