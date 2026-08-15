@@ -1,5 +1,8 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
+# Linux docker CLI for python-on-whales (host binaries are the wrong OS).
+FROM docker:26-cli AS dockercli
+
 FROM python:3.14.7-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
@@ -72,6 +75,7 @@ RUN useradd --create-home maraclaw && \
 # Copy installed packages from deps stage
 COPY --from=deps /usr/local/lib/python3.14/site-packages/ /usr/local/lib/python3.14/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 # Copy application code
 COPY --chown=maraclaw:maraclaw . .
