@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
@@ -45,9 +46,21 @@ function statusVariant(status: string): 'success' | 'secondary' | 'destructive' 
 export function SearchEnginePage() {
   const queryClient = useQueryClient()
   const formId = useId()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
-  const [tab, setTab] = useState<'keys' | 'analytics'>('keys')
+  const tab = searchParams.get('tab') === 'analytics' ? 'analytics' : 'keys'
+
+  function setTab(next: 'keys' | 'analytics') {
+    const copy = new URLSearchParams(searchParams)
+    if (next === 'analytics') copy.set('tab', 'analytics')
+    else {
+      copy.delete('tab')
+      copy.delete('company')
+      copy.delete('range')
+    }
+    setSearchParams(copy, { replace: true })
+  }
 
   const keys = useQuery({
     queryKey: ['admin-linkup-keys'],
@@ -104,12 +117,13 @@ export function SearchEnginePage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       <div>
         <h1 className="font-display text-3xl font-semibold tracking-tight">Search engine</h1>
         <p className="mt-2 text-muted-foreground">
-          Linkup keys used by digital employees. When a key hits quota, the engine tries the next
-          one and wraps back to the first.
+          {tab === 'analytics'
+            ? 'System-wide and per-company search activity from billed Linkup calls.'
+            : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
         </p>
       </div>
 

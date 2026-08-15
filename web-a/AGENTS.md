@@ -21,7 +21,7 @@ Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`
 
 Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password` (new password must differ from current).
 
-**Search engine:** Platform-admin only (`/search-engine`). Add, list, and remove stored Linkup API keys (`/api/admin/linkup-keys`). Analytics tab defaults to **entire system**; a company filter drills into one org (`/api/admin/search-analytics/*`). Org admins do not see the nav item.
+**Search engine:** Platform-admin only (`/search-engine`). Add, list, and remove stored Linkup API keys (`/api/admin/linkup-keys`). Analytics tab (`?tab=analytics`) is a dashboard for **entire system** or one company (`?company=`). Overview shows a 7-day system snapshot for platform admins. Org admins do not see the nav item.
 
 **Companies:** Platform-admin only (`/companies`, `/companies/:id`). Org admins do not see the nav item and are redirected to Overview. Platform admin can create a company (`POST /api/admin/companies`) with a genesis org admin. `/companies/:id` manages claimed email domains. System orgs and the default end-user org (OpenClaw) are badged. Disable/Enable is hidden when `can_disable` is false (MaraClaw + OpenClaw).
 
