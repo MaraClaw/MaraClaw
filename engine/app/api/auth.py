@@ -107,6 +107,7 @@ async def _send_verification_email_task(
     user: UserRecord,
     background_tasks: BackgroundTasks,
     settings: Settings,
+    request: Request | None = None,
 ) -> None:
     """Helper to create verification token and add email task to background tasks."""
     from app.services.email_verification_service import email_verification_service
@@ -134,6 +135,10 @@ async def _send_verification_email_task(
             identity.id, identity.email
         )
         expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
+        from app.services.frontend_origin import resolve_frontend_base_url
+
+        base_url = await resolve_frontend_base_url(request)
+        verification_url = await email_verification_service.build_email_verification_url(base_url, raw_code)
 
         background_tasks.add_task(
             email_verification_service.send_verification_email,
@@ -141,6 +146,7 @@ async def _send_verification_email_task(
             user.display_name or identity.username or "User",
             raw_code,
             expiry_minutes,
+            verification_url,
         )
     except Exception as exc:
         logger.error(f"Failed to create verification token for {user.email}: {exc}")
@@ -166,6 +172,7 @@ async def _pending_org_fields(user: UserRecord, email: str | None) -> tuple[bool
 async def register(
     data: UserRegister,
     background_tasks: BackgroundTasks,
+    request: Request,
 ):
     """Legacy registration endpoint - kept for backward compatibility.
 
@@ -183,13 +190,14 @@ async def register(
         return await _handle_sso_register(data)
 
     # Regular username/password registration - delegate to new flow
-    return await _handle_normal_register(data, background_tasks, settings)
+    return await _handle_normal_register(data, background_tasks, settings, request)
 
 
 @router.post("/register/init", response_model=RegisterInitResponse, status_code=status.HTTP_201_CREATED)
 async def register_init(
     data: RegisterInitRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
 ):
     """Step 1: Initialize registration with account credentials.
 
@@ -291,7 +299,7 @@ async def register_init(
 
     # 6. Send verification email if not verified (outside transaction)
     if not identity.email_verified:
-        await _send_verification_email_task(user, background_tasks, settings)
+        await _send_verification_email_task(user, background_tasks, settings, request)
 
     return RegisterInitResponse(
         user_id=user.id,
@@ -370,7 +378,10 @@ async def register_sso(
 
 
 async def _handle_normal_register(
-    data: UserRegister, background_tasks: BackgroundTasks, settings: Settings
+    data: UserRegister,
+    background_tasks: BackgroundTasks,
+    settings: Settings,
+    request: Request | None = None,
 ) -> RegisterInitResponse:
     """Legacy normal registration handler."""
     logger.info(f"[REGISTER_LEGACY] email={data.email}")
@@ -442,7 +453,7 @@ async def _handle_normal_register(
 
     # 4. Send verification email only when the identity still needs it (outside transaction)
     if not identity.email_verified:
-        await _send_verification_email_task(user, background_tasks, settings)
+        await _send_verification_email_task(user, background_tasks, settings, request)
 
     # 5. Generate access token and build response payload outside transaction
     token = create_access_token(str(user.id), user.role)
@@ -470,7 +481,7 @@ async def _handle_sso_register(data: UserRegister) -> TokenResponse:
 
 
 @router.post("/login", response_model=Any)
-async def login(data: UserLogin, background_tasks: BackgroundTasks):
+async def login(data: UserLogin, background_tasks: BackgroundTasks, request: Request):
     """Login with email/phone/username and password. Supports multi-tenant selection."""
     # 1. Query Identity
     identity = await identity_dao.get_by_login_identifier(data.login_identifier)
@@ -514,7 +525,7 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
 
             # Trigger email delivery in background
             if user:
-                await _send_verification_email_task(user, background_tasks, get_settings())
+                await _send_verification_email_task(user, background_tasks, get_settings(), request)
 
             # Consistent with identity-first flow: Return 403 Forbidden with verification intent
             raise HTTPException(
@@ -649,6 +660,7 @@ async def get_email_hint(username: str):
 async def forgot_password(
     data: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
 ) -> dict[str, Any]:
     """Request a password reset link for a global Identity."""
     from app.services.system_email_service import resolve_email_config_async
@@ -678,7 +690,7 @@ async def forgot_password(
 
         raw_token, expires_at = await create_password_reset_token(identity.id)
 
-        reset_url = await build_password_reset_url(raw_token)
+        reset_url = await build_password_reset_url(raw_token, request)
         expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
         background_tasks.add_task(
             send_password_reset_email,
@@ -1291,6 +1303,7 @@ async def verify_email(data: VerifyEmailRequest):
 async def resend_verification(
     data: ResendVerificationRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
 ) -> dict[str, Any]:
     """Resend email verification link."""
     from app.config import get_settings
@@ -1320,6 +1333,6 @@ async def resend_verification(
 
     if user:
         # Queue email task outside transaction
-        await _send_verification_email_task(user, background_tasks, settings)
+        await _send_verification_email_task(user, background_tasks, settings, request)
 
     return generic_response

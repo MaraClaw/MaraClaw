@@ -7,11 +7,30 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api import auth as auth_api
 from app.core.security import hash_password
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
+
+
+def _dummy_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "server": ("127.0.0.1", 8000),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +138,7 @@ async def test_login_invalid_credentials_no_identity(monkeypatch):
     bg = AsyncMock()
 
     with pytest.raises(HTTPException) as exc:
-        await auth_api.login(data, bg)
+        await auth_api.login(data, bg, _dummy_request())
     assert exc.value.status_code == 401
 
 
@@ -138,7 +157,7 @@ async def test_login_invalid_credentials_wrong_password(monkeypatch):
     bg = AsyncMock()
 
     with pytest.raises(HTTPException) as exc:
-        await auth_api.login(data, bg)
+        await auth_api.login(data, bg, _dummy_request())
     assert exc.value.status_code == 401
 
 
@@ -157,7 +176,7 @@ async def test_login_disabled_account(monkeypatch):
     bg = AsyncMock()
 
     with pytest.raises(HTTPException) as exc:
-        await auth_api.login(data, bg)
+        await auth_api.login(data, bg, _dummy_request())
     assert exc.value.status_code == 403
     assert "disabled" in str(exc.value.detail).lower()
 
@@ -190,7 +209,7 @@ async def test_login_unverified_email(monkeypatch):
         patch.object(auth_api, "_send_verification_email_task", new_callable=AsyncMock),
         pytest.raises(HTTPException) as exc,
     ):
-        await auth_api.login(data, bg)
+        await auth_api.login(data, bg, _dummy_request())
     assert exc.value.status_code == 403
     detail = exc.value.detail
     assert isinstance(detail, dict)

@@ -181,6 +181,58 @@ async def test_build_password_reset_url_uses_env_public_base_url(monkeypatch):
     assert url == "https://app.example.com/reset-password?token=abc123"
 
 
+def _http_request(*, origin: str | None = None, referer: str | None = None):
+    from starlette.requests import Request
+
+    headers: list[tuple[bytes, bytes]] = []
+    if origin:
+        headers.append((b"origin", origin.encode()))
+    if referer:
+        headers.append((b"referer", referer.encode()))
+    return Request({"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/api/auth/forgot-password", "raw_path": b"/api/auth/forgot-password", "query_string": b"", "headers": headers, "client": ("127.0.0.1", 123), "server": ("127.0.0.1", 8000)})
+
+
+@pytest.mark.asyncio
+async def test_build_password_reset_url_prefers_allowlisted_origin(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    request = _http_request(origin="http://localhost:5173")
+
+    url = await password_reset_service.build_password_reset_url("abc123", request)
+
+    assert url == "http://localhost:5173/reset-password?token=abc123"
+
+
+@pytest.mark.asyncio
+async def test_build_password_reset_url_ignores_unknown_origin(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    request = _http_request(origin="https://evil.example")
+
+    url = await password_reset_service.build_password_reset_url("abc123", request)
+
+    assert url == "https://app.example.com/reset-password?token=abc123"
+
+
+@pytest.mark.asyncio
+async def test_build_password_reset_url_uses_allowlisted_referer(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    request = _http_request(referer="http://127.0.0.1:5174/forgot-password")
+
+    url = await password_reset_service.build_password_reset_url("abc123", request)
+
+    assert url == "http://127.0.0.1:5174/reset-password?token=abc123"
+
+
+@pytest.mark.asyncio
+async def test_verification_url_uses_allowlisted_origin(monkeypatch):
+    from app.services.email_verification_service import email_verification_service
+    from app.services.frontend_origin import resolve_frontend_base_url
+
+    request = _http_request(origin="http://localhost:5173")
+    base = await resolve_frontend_base_url(request)
+    url = await email_verification_service.build_email_verification_url(base, "123456")
+    assert url == "http://localhost:5173/verify-email?code=123456"
+
+
 @pytest.mark.asyncio
 async def test_consume_password_reset_token_works_correctly(monkeypatch):
     user_id = uuid.uuid4()
@@ -254,6 +306,7 @@ async def test_forgot_password_returns_generic_response_for_unknown_email(monkey
     response = await auth_api.forgot_password(
         ForgotPasswordRequest(email="missing@example.com"),
         background_tasks,
+        _http_request(),
     )
 
     assert response == {
@@ -293,7 +346,11 @@ async def test_forgot_password_queues_background_email(monkeypatch):
 
     monkeypatch.setattr(identity_dao, "get_by_email", fake_get_by_email)
 
-    response = await auth_api.forgot_password(ForgotPasswordRequest(email=user.email), background_tasks)
+    response = await auth_api.forgot_password(
+        ForgotPasswordRequest(email=user.email),
+        background_tasks,
+        _http_request(),
+    )
 
     assert response["ok"] is True
     assert len(background_tasks.tasks) == 1
