@@ -75,5 +75,21 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             )
             return len(rows)
 
+    async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> int:
+        agent_filter = "creator_id = %(creator_id)s"
+        params: dict[str, object] = {"creator_id": creator_id}
+        if tenant_id is not None:
+            agent_filter += " AND tenant_id = %(tenant_id)s"
+            params["tenant_id"] = tenant_id
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL "
+                + "WHERE is_enabled IS TRUE AND agent_id IN ("
+                + f"SELECT id FROM agents WHERE {agent_filter}"
+                + ") RETURNING id",
+                params,
+            )
+            return len(rows)
+
 
 agent_schedule_dao = AgentScheduleDAO()

@@ -106,7 +106,9 @@ async def list_users(
             raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
         tid = str(current_user.tenant_id)
     else:
-        tid = tenant_id or str(current_user.tenant_id)
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        tid = tenant_id
     try:
         tenant_uuid = uuid.UUID(tid)
     except (TypeError, ValueError) as exc:
@@ -397,8 +399,8 @@ async def get_user_detail(
         raise HTTPException(status_code=404, detail="User not found")
     _require_admin_user_scope(current_user, target)
 
-    agents = await agent_dao.list_for_creator(target.id)
-    agents_count = await agent_dao.count_active_for_creator(target.id)
+    agents = await agent_dao.list_for_creator(target.id, tenant_id=target.tenant_id)
+    agents_count = len(agents)
     base = _user_out(target, agents_count=agents_count)
     return UserDetailOut(
         **base.model_dump(),

@@ -277,6 +277,10 @@ async def test_users_list_quota_and_org_admin_surface(monkeypatch):
     with pytest.raises(HTTPException):
         await users_api.list_users(current_user=_user(role="member"))
 
+    with pytest.raises(HTTPException) as missing_tenant:
+        await users_api.list_users(current_user=_user(role="platform_admin", tenant_id=None))
+    assert missing_tenant.value.status_code == 400
+
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
     monkeypatch.setattr(users_api.user_dao, "update", AsyncMock(return_value=member))
     out = await users_api.update_user_quota(member.id, users_api.UserQuotaUpdate(quota_message_limit=9), org)
@@ -326,12 +330,14 @@ async def test_get_user_detail_includes_agents(monkeypatch):
         last_active_at=_NOW,
     )
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
-    monkeypatch.setattr(users_api.agent_dao, "list_for_creator", AsyncMock(return_value=[agent]))
-    monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=1))
+    list_agents = AsyncMock(return_value=[agent])
+    monkeypatch.setattr(users_api.agent_dao, "list_for_creator", list_agents)
     detail = await users_api.get_user_detail(member.id, org)
     assert detail.id == member.id
+    assert detail.agents_count == 1
     assert detail.agents[0].name == "Daisy"
     assert detail.agents[0].status == "running"
+    list_agents.assert_awaited_once_with(member.id, tenant_id=tenant_id)
 
 
 @pytest.mark.asyncio
@@ -355,6 +361,32 @@ async def test_set_user_active_org_admin_cannot_change_other_company(monkeypatch
         await users_api.set_user_active(outsider.id, users_api.UserActiveUpdate(is_active=False), org)
     assert exc.value.status_code == 403
     activate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_user_active_platform_admin_cross_tenant(monkeypatch):
+    pa = _user(role="platform_admin")
+    member = _user(role="member", tenant_id=uuid.uuid4(), is_active=True)
+    deactivated = _user(role="member", tenant_id=member.tenant_id, user_id=member.id, is_active=False)
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(side_effect=[member, deactivated]))
+    toggle = AsyncMock(return_value=deactivated)
+    monkeypatch.setattr(users_api, "set_end_user_active", toggle)
+    monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    out = await users_api.set_user_active(member.id, users_api.UserActiveUpdate(is_active=False), pa)
+    assert out.is_active is False
+    toggle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_set_user_active_maps_self_activation_error(monkeypatch):
+    tenant_id = uuid.uuid4()
+    org = _user(role="org_admin", tenant_id=tenant_id)
+    member = _user(role="member", tenant_id=tenant_id, user_id=org.id, is_active=True)
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
+    with pytest.raises(HTTPException) as exc:
+        await users_api.set_user_active(org.id, users_api.UserActiveUpdate(is_active=False), org)
+    assert exc.value.status_code == 400
+    assert "own" in str(exc.value.detail).lower()
 
 
 @pytest.mark.asyncio

@@ -256,12 +256,20 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return uuid_list_from_rows(rows)
 
-    async def list_for_creator(self, creator_id: UUID) -> Sequence[AgentRecord]:
+    async def list_for_creator(
+        self, creator_id: UUID, *, tenant_id: UUID | None = None
+    ) -> Sequence[AgentRecord]:
+        clauses = ["creator_id = %(creator_id)s"]
+        params: dict[str, Any] = {"creator_id": creator_id}
+        if tenant_id is not None:
+            clauses.append("tenant_id = %(tenant_id)s")
+            params["tenant_id"] = tenant_id
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM agents "
-                + "WHERE creator_id = %(creator_id)s ORDER BY created_at DESC NULLS LAST",
-                {"creator_id": creator_id},
+                f"SELECT {self._select_list()} FROM agents WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at DESC NULLS LAST",
+                params,
             )
             return [AgentRecord.from_row(row) for row in rows]
 
@@ -595,6 +603,28 @@ class AgentDAO(BaseDAO[AgentRecord]):
         for row in rows:
             memo_drop("agent", uuid_from_row(row["id"]))
         return len(rows)
+
+    async def disable_for_creator(
+        self, creator_id: UUID, *, tenant_id: UUID | None = None
+    ) -> Sequence[AgentRecord]:
+        """Stop agents created by this user (optionally limited to one tenant)."""
+        clauses = ["creator_id = %(creator_id)s", "status <> 'stopped'"]
+        params: dict[str, Any] = {"creator_id": creator_id}
+        if tenant_id is not None:
+            clauses.append("tenant_id = %(tenant_id)s")
+            params["tenant_id"] = tenant_id
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
+                + "WHERE "
+                + " AND ".join(clauses)
+                + f" RETURNING {self._select_list()}",
+                params,
+            )
+        agents = [AgentRecord.from_row(row) for row in rows]
+        for agent in agents:
+            memo_drop("agent", agent.id)
+        return agents
 
     async def token_usage_for_tenant(self, tenant_id: UUID) -> dict[str, int]:
         async with self.session() as db:
