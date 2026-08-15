@@ -29,7 +29,7 @@ export function SettingsPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Theme, organization, and session.</p>
+        <p className="text-sm text-muted-foreground">Organization and session.</p>
       </div>
 
       <Card>

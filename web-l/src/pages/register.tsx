@@ -25,6 +25,8 @@ const registerSchema = z.object({
 
 type RegisterFormValues = z.infer<typeof registerSchema>
 
+const duplicateEmailMessage = 'That email is already registered.'
+
 const highlights = [
   {
     icon: Building2,
@@ -129,10 +131,18 @@ export function RegisterPage() {
               {...register('email', {
                 onBlur: (event) => {
                   const email = event.target.value.trim()
-                  if (!email) return
-                  void checkDuplicate({ email }).then((result) => {
-                    if (result.email_exists) setFormError('That email is already registered.')
-                  })
+                  if (!email) {
+                    setFormError((current) => (current === duplicateEmailMessage ? null : current))
+                    return
+                  }
+                  void checkDuplicate({ email })
+                    .then((result) => {
+                      setFormError((current) => {
+                        if (result.email_exists) return duplicateEmailMessage
+                        return current === duplicateEmailMessage ? null : current
+                      })
+                    })
+                    .catch(() => undefined)
                 },
               })}
             />
