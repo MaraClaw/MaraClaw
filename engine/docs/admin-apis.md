@@ -141,6 +141,7 @@ is_system, is_default_end_user_org, can_disable
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/users/` | platform / org | Query: `tenant_id?` (platform only) | `UserOut[]` with quotas + `agents_count` |
+| `GET` | `/api/users/{user_id}` | platform / org | - | `UserDetailOut`: user fields plus `agents[]` (`id`, `name`, `status`, `is_expired`, `role_description`, `last_active_at`). Org admin: own company only. |
 | `PATCH` | `/api/users/{user_id}/active` | platform / org | `{ is_active }` | Activate or deactivate an **end user** (`member` or `agent_admin`). Org admin: own company only. Cannot target self or admins (use org-admin / platform-admin active routes). `UserOut` |
 | `PATCH` | `/api/users/{user_id}/quota` | platform / org | `UserQuotaUpdate`: `quota_message_limit?`, `quota_message_period?` (`permanent`\|`daily`\|`weekly`\|`monthly`), `quota_max_agents?`, `quota_agent_ttl_hours?` | Same-tenant only. `UserOut` |
 | `POST` | `/api/users/org-admins` | genesis org_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, tenant_id, admin_email, must_change_password: true }`. Own tenant only. |

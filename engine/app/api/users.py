@@ -163,6 +163,26 @@ async def update_user_quota(
     return _user_out(user, agents_count=agents_count)
 
 
+class UserAgentOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    status: str
+    is_expired: bool = False
+    role_description: str | None = None
+    last_active_at: datetime | None = None
+
+
+class UserDetailOut(UserOut):
+    agents: list[UserAgentOut] = Field(default_factory=list)
+
+
+def _require_admin_user_scope(actor: UserRecord, target: UserRecord) -> None:
+    if actor.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    if actor.role == "org_admin" and (actor.tenant_id is None or target.tenant_id != actor.tenant_id):
+        raise HTTPException(status_code=403, detail="Can only view users in your own company")
+
+
 @router.patch("/{user_id}/active", response_model=UserOut)
 async def set_user_active(
     user_id: uuid.UUID,
@@ -361,6 +381,39 @@ async def list_org_admin_audit_logs(
         limit=min(max(limit, 1), 500),
     )
     return [AdminAuditLogOut.model_validate(log) for log in logs]
+
+
+@router.get("/{user_id}", response_model=UserDetailOut)
+async def get_user_detail(
+    user_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+) -> UserDetailOut:
+    """Return one company user plus the agents they created."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    _require_admin_user_scope(current_user, target)
+
+    agents = await agent_dao.list_for_creator(target.id)
+    agents_count = await agent_dao.count_active_for_creator(target.id)
+    base = _user_out(target, agents_count=agents_count)
+    return UserDetailOut(
+        **base.model_dump(),
+        agents=[
+            UserAgentOut(
+                id=agent.id,
+                name=agent.name,
+                status=agent.status,
+                is_expired=bool(agent.is_expired),
+                role_description=agent.role_description or None,
+                last_active_at=agent.last_active_at,
+            )
+            for agent in agents
+        ],
+    )
 
 
 @router.patch("/{user_id}/role")

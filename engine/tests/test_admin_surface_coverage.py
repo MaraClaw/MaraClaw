@@ -313,6 +313,38 @@ async def test_set_user_active_org_admin(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_user_detail_includes_agents(monkeypatch):
+    tenant_id = uuid.uuid4()
+    org = _user(role="org_admin", tenant_id=tenant_id)
+    member = _user(role="member", tenant_id=tenant_id)
+    agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Daisy",
+        status="running",
+        is_expired=False,
+        role_description="Researcher",
+        last_active_at=_NOW,
+    )
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
+    monkeypatch.setattr(users_api.agent_dao, "list_for_creator", AsyncMock(return_value=[agent]))
+    monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=1))
+    detail = await users_api.get_user_detail(member.id, org)
+    assert detail.id == member.id
+    assert detail.agents[0].name == "Daisy"
+    assert detail.agents[0].status == "running"
+
+
+@pytest.mark.asyncio
+async def test_get_user_detail_org_admin_cannot_view_other_company(monkeypatch):
+    org = _user(role="org_admin", tenant_id=uuid.uuid4())
+    outsider = _user(role="member", tenant_id=uuid.uuid4())
+    monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=outsider))
+    with pytest.raises(HTTPException) as exc:
+        await users_api.get_user_detail(outsider.id, org)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_set_user_active_org_admin_cannot_change_other_company(monkeypatch):
     org = _user(role="org_admin", tenant_id=uuid.uuid4())
     outsider = _user(role="member", tenant_id=uuid.uuid4(), is_active=True)

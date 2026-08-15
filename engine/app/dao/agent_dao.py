@@ -256,6 +256,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return uuid_list_from_rows(rows)
 
+    async def list_for_creator(self, creator_id: UUID) -> Sequence[AgentRecord]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents "
+                + "WHERE creator_id = %(creator_id)s ORDER BY created_at DESC NULLS LAST",
+                {"creator_id": creator_id},
+            )
+            return [AgentRecord.from_row(row) for row in rows]
+
     async def apply_token_counter_resets(self, agent: AgentRecord) -> AgentRecord | None:
         """Persist lazy daily/monthly token counter resets when needed."""
         from datetime import UTC, datetime
