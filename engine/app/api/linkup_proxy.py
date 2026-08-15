@@ -29,7 +29,8 @@ async def proxy_v1(
     if not allowed_upstream_path(path):
         raise HTTPException(status_code=404, detail="Unknown Linkup path")
     token = _bearer_token(authorization)
-    if parse_proxy_token(token) is None:
+    agent_id = parse_proxy_token(token)
+    if agent_id is None:
         raise HTTPException(status_code=401, detail="Invalid Linkup proxy token")
 
     body = await request.body()
@@ -40,6 +41,7 @@ async def proxy_v1(
             path=path,
             headers=headers,
             content=body or None,
+            agent_id=agent_id,
         )
     except LinkupProxyError as exc:
         return Response(content=exc.body, status_code=exc.status_code, media_type="application/json")

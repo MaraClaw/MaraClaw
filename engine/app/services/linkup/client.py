@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from uuid import UUID
 
 from app.config import get_settings
@@ -86,16 +87,44 @@ async def _env_fallback_key() -> str | None:
         return env_key
 
 
+async def _record_result(
+    result: tuple[int, str, dict[str, str]],
+    *,
+    agent_id: UUID | None,
+    method: str,
+    path: str,
+    content: bytes | None,
+    key_id: UUID | None,
+    started: float,
+) -> tuple[int, str, dict[str, str]]:
+    from app.services.linkup.analytics import record_linkup_call
+
+    status, body, _headers = result
+    await record_linkup_call(
+        agent_id=agent_id,
+        method=method,
+        path=path,
+        content=content,
+        status=status,
+        body=body,
+        latency_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        key_id=key_id,
+    )
+    return result
+
+
 async def proxy_linkup(
     *,
     method: str,
     path: str,
     headers: dict[str, str],
     content: bytes | None,
+    agent_id: UUID | None = None,
 ) -> tuple[int, str, dict[str, str]]:
     if not allowed_upstream_path(path):
         raise LinkupProxyError(404, "Unknown Linkup path")
 
+    started = time.perf_counter()
     await ensure_env_key_seeded()
     cleaned = path.lstrip("/")
     kind = cleaned.split("/", 1)[0]
@@ -120,6 +149,15 @@ async def proxy_linkup(
     if start is None:
         env_key = await _env_fallback_key()
         if env_key is None:
+            await _record_result(
+                (503, "no Linkup API keys configured", {}),
+                agent_id=agent_id,
+                method=method,
+                path=path,
+                content=content,
+                key_id=None,
+                started=started,
+            )
             raise LinkupProxyError(503, "no Linkup API keys configured")
         status, body, out_headers = await _send(
             method=method,
@@ -128,15 +166,25 @@ async def proxy_linkup(
             content=content,
             api_key=env_key,
         )
-        return status, body, out_headers
+        return await _record_result(
+            (status, body, out_headers),
+            agent_id=agent_id,
+            method=method,
+            path=path,
+            content=content,
+            key_id=None,
+            started=started,
+        )
 
     seen: set[UUID] = set()
     record = start
     last: tuple[int, str, dict[str, str]] | None = None
+    last_key_id: UUID | None = None
     transient_retries = 0
 
     while record is not None and record.id not in seen:
         seen.add(record.id)
+        last_key_id = record.id
         await touch_used(record.id)
         status, body, out_headers = await _send(
             method=method,
@@ -162,8 +210,33 @@ async def proxy_linkup(
             job_id = _extract_job_id(body)
             if job_id:
                 await bind_job(upstream_job_id=job_id, key_id=record.id, kind=kind)
-        return status, body, out_headers
+        return await _record_result(
+            (status, body, out_headers),
+            agent_id=agent_id,
+            method=method,
+            path=path,
+            content=content,
+            key_id=record.id,
+            started=started,
+        )
 
     if last is None:
+        await _record_result(
+            (503, "no Linkup API keys configured", {}),
+            agent_id=agent_id,
+            method=method,
+            path=path,
+            content=content,
+            key_id=None,
+            started=started,
+        )
         raise LinkupProxyError(503, "no Linkup API keys configured")
-    return last
+    return await _record_result(
+        last,
+        agent_id=agent_id,
+        method=method,
+        path=path,
+        content=content,
+        key_id=last_key_id,
+        started=started,
+    )

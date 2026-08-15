@@ -67,6 +67,11 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
 | `POST` | `/api/admin/linkup-keys` | `{ label, api_key }` | **201** add a key. Missing/blank `label` or `api_key` → **422**. Duplicate secret → **409**. Appends to the rotation cycle. |
 | `DELETE` | `/api/admin/linkup-keys/{key_id}` | - | Remove a key and retarget the cursor. **404** if missing. |
+| `GET` | `/api/admin/search-analytics/summary` | Query: `start?`, `end?`, `tenant_id?` | Platform-only. Omit `tenant_id` for **entire system**; pass it to scope one org. Adds `scope: system\|org`. Counts, kind mix, unique orgs/agents, unattributed. Default last 7 days, max 90. No raw queries. **Router:** `app/api/admin_search_analytics.py`. |
+| `GET` | `/api/admin/search-analytics/timeseries` | Query: `start?`, `end?`, `tenant_id?` | Daily volume + errors. Same system vs org rule. |
+| `GET` | `/api/admin/search-analytics/orgs` | Query: `start?`, `end?`, `limit=20` | Top tenants by search volume (system-wide upsell list). |
+| `GET` | `/api/admin/search-analytics/trending` | Query: `start?`, `end?`, `tenant_id?`, `scope?`, `limit=50` | Omit `tenant_id` for system-wide trends (ranked by companies then hits). Pass `tenant_id` for one org. Never returns raw text. |
+| `GET` | `/api/admin/search-analytics/export-status` | - | Outbox lag, last export, capture/export flags. |
 
 ### A2. Tenants - platform-only pieces
 

@@ -200,6 +200,53 @@ PATCHES = [
         PRIMARY KEY (upstream_job_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS web_search_events (
+        id UUID NOT NULL,
+        occurred_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        agent_id UUID,
+        tenant_id UUID,
+        kind VARCHAR(20) NOT NULL,
+        billed BOOLEAN NOT NULL DEFAULT true,
+        method VARCHAR(10) NOT NULL,
+        http_status INTEGER NOT NULL,
+        status_class VARCHAR(20) NOT NULL,
+        latency_ms INTEGER NOT NULL,
+        key_id UUID,
+        query_hash VARCHAR(64) NOT NULL,
+        query_normalized VARCHAR(500) NOT NULL DEFAULT '',
+        query_char_len INTEGER NOT NULL DEFAULT 0,
+        depth VARCHAR(20),
+        output_type VARCHAR(40),
+        primary_domain VARCHAR(255),
+        result_count INTEGER,
+        error_class VARCHAR(40),
+        upstream_job_id VARCHAR(200),
+        request_bytes INTEGER,
+        response_bytes INTEGER,
+        export_state VARCHAR(20) NOT NULL DEFAULT 'skipped',
+        export_claimed_at TIMESTAMP WITH TIME ZONE,
+        exported_at TIMESTAMP WITH TIME ZONE,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_occurred_tenant ON web_search_events (occurred_at DESC, tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_tenant_occurred ON web_search_events (tenant_id, occurred_at DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_hash_occurred ON web_search_events (query_hash, occurred_at DESC)",
+    """
+    CREATE INDEX IF NOT EXISTS ix_web_search_events_export_pending
+    ON web_search_events (export_state, occurred_at)
+    WHERE export_state IN ('pending', 'exporting')
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS web_search_export_payloads (
+        event_id UUID NOT NULL,
+        raw_query TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (event_id)
+    )
+    """,
 ]
 
 

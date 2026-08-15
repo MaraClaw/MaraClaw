@@ -243,6 +243,7 @@ async def lifespan(app: FastAPI):
     from app.services.template_seeder import seed_agent_templates
     from app.services.tool_seeder import seed_builtin_tools
     from app.services.trigger_daemon import start_trigger_daemon
+    from app.services.linkup.export import start_web_search_export_daemon
     from app.services.wechat_channel import wechat_poll_manager
     from app.services.wecom_stream import wecom_stream_manager
 
@@ -381,6 +382,7 @@ async def lifespan(app: FastAPI):
         task_specs: list[tuple[str, Coroutine[Any, Any, Any]]] = []
         if _role_enabled("all", "worker"):
             task_specs.append(("trigger_daemon", start_trigger_daemon()))
+            task_specs.append(("web_search_export", start_web_search_export_daemon()))
         if _role_enabled("all", "connector"):
             task_specs.extend(
                 [
@@ -448,6 +450,7 @@ app.add_middleware(
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
 from app.api.admin_linkup import router as admin_linkup_router
+from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
@@ -536,7 +539,8 @@ app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_linkup_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(linkup_proxy_router, dependencies=_CRUD_DB)
+app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(linkup_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)  # Public endpoint for /p/{short_id}, no API prefix
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

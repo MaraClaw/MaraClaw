@@ -131,6 +131,13 @@ def ring(monkeypatch: pytest.MonkeyPatch) -> MemoryKeyDao:
     monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", store)
     monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", jobs)
     monkeypatch.setattr(client_mod, "get_settings", lambda: settings)
+
+    async def _passthrough_record(
+        result: tuple[int, str, dict[str, str]], **_kwargs: object
+    ) -> tuple[int, str, dict[str, str]]:
+        return result
+
+    monkeypatch.setattr(client_mod, "_record_result", _passthrough_record)
     return store
 
 
