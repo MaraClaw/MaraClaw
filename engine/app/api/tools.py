@@ -635,10 +635,7 @@ async def get_agent_tools_with_config(
     )
 
     system_keys_cache: dict[str, str] = {}
-    system_settings_tool_map = {
-        "jina_search": ("jina_api_key", "api_key"),
-        "jina_read": ("jina_api_key", "api_key"),
-    }
+    system_settings_tool_map: dict[str, tuple[str, str]] = {}
 
     result: list[dict[str, object]] = []
     for t in all_tools:

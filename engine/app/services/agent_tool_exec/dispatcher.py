@@ -24,7 +24,6 @@ _TOOL_AUTONOMY_MAP: Final = {
     "send_feishu_message": "send_feishu_message",
     "send_message_to_agent": "send_message_to_agent",
     "send_file_to_agent": "send_file_to_agent",
-    "web_search": "web_search",
     "execute_code": "execute_code",
     "execute_code_e2b": "execute_code",
 }
@@ -213,22 +212,8 @@ async def _execute_tool_direct(
                 lambda temp_ws: agent_tools._execute_code(agent_id, temp_ws, arguments, tool_name=tool_name),
                 sync_back=True,
             )
-        if tool_name == "web_search":
-            return await agent_tools._web_search(arguments, agent_id)
-        if tool_name == "jina_search":
-            return await agent_tools._jina_search(arguments)
         if tool_name == "read_webpage":
             return await agent_tools._read_webpage(arguments)
-        if tool_name == "exa_search":
-            return await agent_tools._exa_search(arguments, agent_id)
-        if tool_name == "duckduckgo_search":
-            return await agent_tools._duckduckgo_search_tool(arguments)
-        if tool_name == "tavily_search":
-            return await agent_tools._tavily_search_tool(arguments, agent_id)
-        if tool_name == "google_search":
-            return await agent_tools._google_search_tool(arguments, agent_id)
-        if tool_name == "bing_search":
-            return await agent_tools._bing_search_tool(arguments, agent_id)
         if tool_name == "send_feishu_message":
             return await agent_tools._send_feishu_message(agent_id, arguments)
         if tool_name == "send_message_to_agent":

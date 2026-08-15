@@ -520,48 +520,6 @@ AGENT_TOOLS: list[object] = [
     {
         "type": "function",
         "function": {
-            "name": "jina_search",
-            "description": "Search the internet using Jina AI Search (s.jina.ai). Returns high-quality search results with full page content, not just snippets. Ideal for research, news, technical docs, and any real-time information lookup.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query, e.g. 'Python asyncio best practices' or '苏州通道人工智能科技有限公司'",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Number of results to return, default 5, max 10",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "jina_read",
-            "description": "Read and extract the full content from a web page URL using Jina AI Reader (r.jina.ai). Returns clean, well-structured markdown including article text, tables, and key information. Better than jina_search when you already have a specific URL to read.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The full URL of the web page to read, e.g. 'https://example.com/article'",
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "description": "Max characters to return (default 8000, max 20000)",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "read_webpage",
             "description": "Fetch a public HTTP/HTTPS URL directly and extract readable webpage text. Use this when you already have a specific link and need the page content without relying on an external reader service. Private, local, and internal network URLs are blocked.",
             "parameters": {

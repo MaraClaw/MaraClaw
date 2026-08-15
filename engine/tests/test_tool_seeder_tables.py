@@ -4,7 +4,7 @@ from inspect import iscoroutinefunction
 from app.services import tool_seeder
 
 TABLE_COUNTS = {
-    "BUILTIN_TOOLS": 132,
+    "BUILTIN_TOOLS": 124,
     "AGENTBAY_TOOLS": 33,
     "OKR_BUILTIN_TOOLS": 3,
     "DEPLOY_BUILTIN_TOOLS": 6,
@@ -38,9 +38,7 @@ SEEDED_ONLY_SAMPLE_NAMES = {
     "agentbay_browser_extract",
     "agentbay_command_exec",
     "convert_html_to_pdf",
-    "duckduckgo_search",
     "get_okr",
-    "google_search",
     "plaza_create_post",
     "vercel_deploy",
 }

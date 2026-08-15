@@ -22,8 +22,8 @@ async def test_execute_approved_action_rejects_serialized_non_object_arguments(
 
     result = await AutonomyService()._execute_approved_action(
         uuid.uuid4(),
-        "web_search",
-        {"tool": "web_search", "args": "[]"},
+        "read_webpage",
+        {"tool": "read_webpage", "args": "[]"},
     )
 
     assert result == "Execution failed: approved action arguments must be a JSON object"
@@ -44,8 +44,8 @@ async def test_execute_approved_action_rejects_malformed_serialized_arguments(
 
     result = await AutonomyService()._execute_approved_action(
         uuid.uuid4(),
-        "web_search",
-        {"tool": "web_search", "args": "{"},
+        "read_webpage",
+        {"tool": "read_webpage", "args": "{"},
     )
 
     assert result == "Execution failed: approved action arguments must be a JSON object"
@@ -68,7 +68,7 @@ async def test_execute_approved_action_dispatches_serialized_mapping_arguments(
         observed_arguments: ToolParameters,
         observed_agent_id: uuid.UUID,
     ) -> str:
-        assert observed_tool_name == "web_search"
+        assert observed_tool_name == "read_webpage"
         assert observed_agent_id == agent_id
         received_arguments.append(observed_arguments)
         return "executor sentinel"
@@ -78,8 +78,8 @@ async def test_execute_approved_action_dispatches_serialized_mapping_arguments(
 
     result = await AutonomyService()._execute_approved_action(
         agent_id,
-        "web_search",
-        {"tool": "web_search", "args": "{'query': 'release notes'}"},
+        "read_webpage",
+        {"tool": "read_webpage", "args": "{'query': 'release notes'}"},
     )
 
     assert result == "executor sentinel"

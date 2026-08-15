@@ -21,15 +21,6 @@ def _web_read_module():
         raise
 
 
-def _search_providers_module():
-    try:
-        return importlib.import_module("app.services.agent_tool_exec.search_providers")
-    except ModuleNotFoundError as exc:
-        if exc.name == "app.services.agent_tool_exec.search_providers":
-            return agent_tools
-        raise
-
-
 class _HttpResponse:
     def __init__(
         self,
@@ -219,42 +210,8 @@ async def test_read_webpage_extracts_metadata_text_and_links_without_network(mon
     ]
 
 
-async def test_jina_read_adds_scheme_auth_and_truncates_without_network(monkeypatch) -> None:
-    target = _web_read_module()
-    providers = _search_providers_module()
-    body = "A" * 130
-    httpx = _FakeHttpxModule(_HttpResponse(text=body))
-
-    async def get_jina_api_key() -> str:
-        return "jina-key"
-
-    monkeypatch.setitem(sys.modules, "httpx", httpx)
-    monkeypatch.setattr(providers, "_get_jina_api_key", get_jina_api_key, raising=False)
-    monkeypatch.setattr(target, "_get_jina_api_key", get_jina_api_key, raising=False)
-
-    result = await target._jina_read({"url": "example.test/page", "max_chars": 120})
-
-    assert result == f"📄 **Content from: https://example.test/page**\n\n{'A' * 120}\n\n[... truncated at 120 chars]"
-    assert httpx.calls == [
-        (
-            "GET",
-            "https://r.jina.ai/https://example.test/page",
-            {
-                "client_kwargs": {"follow_redirects": True, "timeout": 30},
-                "headers": {
-                    "Accept": "text/plain, text/markdown, */*",
-                    "X-Return-Format": "markdown",
-                    "X-Remove-Selector": "header, footer, nav, aside, .ads, .advertisement",
-                    "Authorization": "Bearer jina-key",
-                },
-            },
-        )
-    ]
-
-
 async def test_read_tools_empty_argument_messages() -> None:
     target = _web_read_module()
 
     assert await target._validate_public_http_url("") == (None, "❌ Please provide a URL")
     assert await target._read_webpage({}) == "❌ Please provide a URL"
-    assert await target._jina_read({}) == "❌ Please provide a URL"
