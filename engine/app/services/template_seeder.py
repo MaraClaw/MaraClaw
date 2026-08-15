@@ -240,7 +240,6 @@ DEFAULT_TEMPLATES: list[TemplateSeed] = [
             "write_workspace_files": "L1",
             "send_feishu_message": "L2",
             "delete_files": "L2",
-            "web_search": "L1",
             "manage_tasks": "L1",
         },
     },
@@ -283,7 +282,6 @@ DEFAULT_TEMPLATES: list[TemplateSeed] = [
             "write_workspace_files": "L1",
             "send_feishu_message": "L2",
             "delete_files": "L2",
-            "web_search": "L1",
         },
     },
     {
@@ -325,7 +323,6 @@ DEFAULT_TEMPLATES: list[TemplateSeed] = [
             "write_workspace_files": "L1",
             "send_feishu_message": "L2",
             "delete_files": "L2",
-            "web_search": "L1",
         },
     },
     {
@@ -368,7 +365,6 @@ DEFAULT_TEMPLATES: list[TemplateSeed] = [
             "write_workspace_files": "L1",
             "send_feishu_message": "L2",
             "delete_files": "L2",
-            "web_search": "L1",
         },
     },
 ]

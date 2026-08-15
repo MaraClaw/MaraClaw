@@ -14,8 +14,6 @@ from httpx import Response, TimeoutException
 
 from app.services.agent_tool_exec.registry import ToolArguments
 
-from . import search_providers
-
 type TrafilaturaExtract = Callable[..., object]
 
 
@@ -35,10 +33,6 @@ def _httpx_module():
 
 def _httpx_client(*args: object, **kwargs: object):
     return _httpx_module().AsyncClient(*args, **kwargs)
-
-
-def _search_providers_module():
-    return search_providers
 
 
 def _beautiful_soup() -> type[BeautifulSoup]:
@@ -265,44 +259,3 @@ async def _read_webpage(arguments: ToolArguments) -> str:
         return f"❌ Webpage fetch timed out: {url}"
     except Exception as e:
         return f"❌ Webpage read error: {str(e)[:300]}"
-
-
-async def _jina_read(arguments: ToolArguments) -> str:
-    url = _string_argument(arguments, "url").strip()
-    if not url:
-        return "❌ Please provide a URL"
-    if not url.startswith("http"):
-        url = "https://" + url
-
-    max_chars = min(_integer_argument(arguments, "max_chars", 8000), 20000)
-    api_key = await _search_providers_module()._get_jina_api_key()
-
-    headers: dict[str, str] = {
-        "Accept": "text/plain, text/markdown, */*",
-        "X-Return-Format": "markdown",
-        "X-Remove-Selector": "header, footer, nav, aside, .ads, .advertisement",
-    }
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    try:
-        async with _httpx_client(follow_redirects=True, timeout=30) as client:
-            resp = await client.get(
-                f"https://r.jina.ai/{url}",
-                headers=headers,
-            )
-
-        if resp.status_code != 200:
-            return f"❌ Jina Reader error HTTP {resp.status_code}: {resp.text[:200]}"
-
-        text = resp.text.strip()
-        if not text or len(text) < 100:
-            return f"❌ Jina Reader returned empty content for {url}"
-
-        if len(text) > max_chars:
-            text = text[:max_chars] + f"\n\n[... truncated at {max_chars} chars]"
-
-        return f"📄 **Content from: {url}**\n\n{text}"
-
-    except Exception as e:
-        return f"❌ Jina Reader error: {str(e)[:300]}"

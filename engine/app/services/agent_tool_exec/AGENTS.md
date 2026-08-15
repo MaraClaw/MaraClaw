@@ -22,13 +22,12 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - Keep tool catalog metadata in `app/services/tool_definitions/`, not in this package.
 - Avoid importing route modules or FastAPI dependencies here; handlers should stay service-layer code.
 
-## Web search / page read
+## Page read (no built-in search-engine tools)
 
-- `web_search.py` — `web_search`, jina, exa, duckduckgo, tavily, google, bing. Engine from per-agent `web_search` tool config (`search_engine`, `api_key`); DuckDuckGo if no key.
-- `search_providers.py` — HTTP/HTML providers. Lazy-import `httpx`.
-- `web_read.py` — `read_webpage` / jina read.
-- Register names in `_agent_tool_exec_search.py`. `agent_tools.py` must only `importlib` these modules (do not grow search branches there).
-- Tests: `tests/test_search_provider_tools.py`, `tests/test_search_web_tools.py`. Update dispatch-name freeze if tool names change.
+- `web_read.py` - `read_webpage` only.
+- Register page-read names in `_agent_tool_exec_search.py`. Do not re-add search-engine tools.
+- Web search/fetch/research/extract for OpenClaw agents are the vendored Linkup skills (`app/services/linkup_runtime.py`).
+- Tests: `tests/test_search_web_tools.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.
 
 ## Code Execution
 

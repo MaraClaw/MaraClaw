@@ -1,0 +1,19 @@
+{
+  "upstream": "https://github.com/LinkupPlatform/skills",
+  "commit": "dfc1d043546537fdd63ec7c39b5828979a5f69b0",
+  "license": "upstream-as-vendored",
+  "skills": [
+    "linkup-search",
+    "linkup-fetch",
+    "linkup-research",
+    "linkup-extract"
+  ],
+  "default_skills": [
+    "linkup-search",
+    "linkup-fetch",
+    "linkup-research",
+    "linkup-extract"
+  ],
+  "catalog_only_skills": [],
+  "notes": "Official Linkup-for-agents search, fetch, research, and extract skills. Workflow recipes are not vendored."
+}

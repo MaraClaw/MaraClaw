@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Final
 
 DOCKERFILE: Final = Path(__file__).resolve().parents[1] / "Dockerfile"
-PRODUCTION_STAGE: Final = "FROM python:3.14.6-slim-trixie AS production"
+PRODUCTION_STAGE: Final = "FROM python:3.14.7-slim-trixie AS production"
 APT_INSTALL: Final = "apt-get install -y --no-install-recommends"
 APPROVED_DIRECT_PINS: Final = (
     "curl=8.14.1-2+deb13u4",

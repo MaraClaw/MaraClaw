@@ -15,6 +15,7 @@ from app.dao.gogcli_credential_dao import gogcli_credential_state_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.invitation_code_dao import invitation_code_dao
+from app.dao.linkup_api_key_dao import linkup_api_key_dao, linkup_async_job_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.okr_dao import (
@@ -43,6 +44,7 @@ from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.dao.user_dao import user_dao
+from app.dao.web_search_event_dao import web_search_event_dao
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
 
 __all__ = [
@@ -70,6 +72,8 @@ __all__ = [
     "identity_dao",
     "identity_provider_dao",
     "invitation_code_dao",
+    "linkup_api_key_dao",
+    "linkup_async_job_dao",
     "llm_model_dao",
     "member_daily_report_dao",
     "notification_dao",
@@ -96,6 +100,7 @@ __all__ = [
     "trigger_execution_dao",
     "user_dao",
     "user_tenant_onboarding_dao",
+    "web_search_event_dao",
     "work_report_dao",
     "workspace_edit_lock_dao",
     "workspace_file_revision_dao",

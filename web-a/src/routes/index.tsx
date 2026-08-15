@@ -9,6 +9,7 @@ import { CompanyDetailPage } from '@/pages/company-detail'
 import { OverviewPage } from '@/pages/overview'
 import { PlaceholderPage } from '@/pages/placeholder'
 import { ResetPasswordPage } from '@/pages/reset-password'
+import { SearchEnginePage } from '@/pages/search-engine'
 import { SettingsPage } from '@/pages/settings'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
@@ -28,6 +29,7 @@ export function AppRouter() {
             <Route element={<PlatformAdminRoute />}>
               <Route path="companies" element={<CompaniesPage />} />
               <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+              <Route path="search-engine" element={<SearchEnginePage />} />
             </Route>
             <Route
               path="users"

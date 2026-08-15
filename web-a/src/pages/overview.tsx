@@ -5,11 +5,12 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
+import { SearchAnalyticsSnapshot } from '@/pages/search-engine-analytics'
 
 const placeholders = [
   {
     title: 'Companies',
-    description: 'Platform company list, create, enable/disable — /api/admin/companies',
+    description: 'Platform company list, create, enable/disable - /api/admin/companies',
     icon: Building2,
     platformAdminOnly: true,
   },
@@ -20,7 +21,7 @@ const placeholders = [
   },
   {
     title: 'Metrics',
-    description: 'Timeseries, leaderboards, retention — /api/admin/metrics/*',
+    description: 'Timeseries, leaderboards, retention - /api/admin/metrics/*',
     icon: LineChart,
   },
   {
@@ -45,19 +46,20 @@ export function OverviewPage() {
         className="flex flex-col gap-3"
       >
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">Scaffold</Badge>
+          {isPlatformAdminUser(user) ? <Badge variant="secondary">Platform</Badge> : <Badge variant="secondary">Admin</Badge>}
           <Badge variant="outline">React 19 · Vite · Tailwind v4</Badge>
         </div>
         <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
           MaraClaw Admin
         </h1>
         <p className="max-w-2xl text-muted-foreground">
-          You are signed in to the operator console. Feature screens are placeholders; wire them to
-          engine admin APIs next (see{' '}
-          <code className="rounded-md bg-muted px-1.5 py-0.5 text-xs">engine/docs/admin-apis.md</code>
-          ).
+          {isPlatformAdminUser(user)
+            ? 'System search activity is below. Open Search engine for the full dashboard or a single company.'
+            : 'You are signed in to the operator console.'}
         </p>
       </motion.div>
+
+      {isPlatformAdminUser(user) ? <SearchAnalyticsSnapshot /> : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {cards.map((item, i) => (

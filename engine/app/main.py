@@ -240,6 +240,7 @@ async def lifespan(app: FastAPI):
     from app.services.dingtalk_stream import dingtalk_stream_manager
     from app.services.discord_gateway import discord_gateway_manager
     from app.services.feishu_ws import feishu_ws_manager
+    from app.services.linkup.export import start_web_search_export_daemon
     from app.services.template_seeder import seed_agent_templates
     from app.services.tool_seeder import seed_builtin_tools
     from app.services.trigger_daemon import start_trigger_daemon
@@ -329,12 +330,14 @@ async def lifespan(app: FastAPI):
         try:
             from app.services.clawsec_runtime import seed_clawsec_skills
             from app.services.gogcli_runtime import seed_gogcli_skill
+            from app.services.linkup_runtime import seed_linkup_skills
             from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
 
-            await seed_skills()
-            await seed_gogcli_skill(None)
+            _ = await seed_skills()
+            _ = await seed_gogcli_skill(None)
             _ = await seed_clawsec_skills(None)
-            await push_default_skills_to_existing_agents()
+            _ = await seed_linkup_skills(None)
+            _ = await push_default_skills_to_existing_agents()
         except Exception as e:
             logger.warning(f"[startup] Skills seed failed: {e}")
 
@@ -379,6 +382,7 @@ async def lifespan(app: FastAPI):
         task_specs: list[tuple[str, Coroutine[Any, Any, Any]]] = []
         if _role_enabled("all", "worker"):
             task_specs.append(("trigger_daemon", start_trigger_daemon()))
+            task_specs.append(("web_search_export", start_web_search_export_daemon()))
         if _role_enabled("all", "connector"):
             task_specs.extend(
                 [
@@ -445,6 +449,8 @@ app.add_middleware(
 # Register API routes
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
+from app.api.admin_linkup import router as admin_linkup_router
+from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agentbay_control import router as agentbay_control_router
@@ -462,6 +468,7 @@ from app.api.gateway import router as gateway_router
 from app.api.gogcli import router as gogcli_router
 from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
+from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
 from app.api.okr import router as okr_router
@@ -531,6 +538,9 @@ app.include_router(webhooks_router)  # Public endpoint, no API prefix
 app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_linkup_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(linkup_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)  # Public endpoint for /p/{short_id}, no API prefix
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

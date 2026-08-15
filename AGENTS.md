@@ -6,7 +6,7 @@
 **Mode:** update (init-deep --max-depth=7)
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
-**Product:** MaraClaw — OpenClaw digital employees for teams and companies.
+**Product:** MaraClaw - OpenClaw digital employees for teams and companies.
 
 This file is the **repo-level router**. Package contracts live in nested `AGENTS.md`. Prefer the deepest relevant guide once the package is known.
 
@@ -29,12 +29,12 @@ Loose sibling checkout (no root workspace / turbo / compose / CI). Four packages
 
 ```
 One/
-├── AGENTS.md           # THIS FILE — cross-package routing
+├── AGENTS.md           # THIS FILE - cross-package routing
 ├── .env.example        # Shared/backend env (mirrors engine)
-├── engine/             # Backend — read engine/AGENTS.md before edits
-├── web-l/              # Landing — web-l/AGENTS.md
-├── web-a/              # Admin — web-a/AGENTS.md
-└── web-e/              # Members — web-e/AGENTS.md
+├── engine/             # Backend - read engine/AGENTS.md before edits
+├── web-l/              # Landing - web-l/AGENTS.md
+├── web-a/              # Admin - web-a/AGENTS.md
+└── web-e/              # Members - web-e/AGENTS.md
 ```
 
 ---
@@ -58,25 +58,25 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS |
 | Landing copy / channels list | `web-l` | `web-l/AGENTS.md` |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
-| Chat / member workspace | `web-e` | `web-e/AGENTS.md` — chat is not built yet |
+| Chat / member workspace | `web-e` | `web-e/AGENTS.md` - chat is not built yet |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
 ---
 
 ## Package briefs
 
-**`engine/`** — multi-tenant digital-employee platform. Entry: `app/main.py`, `app/config.py`, `app/api/`, `app/services/`, `app/db/` + `dao/` + `records/`, `scripts/schema_baseline.sql`. Role catalog `agent_templates/` ≠ workspace scaffold `agent_template/`. IM: `app/services/channels/` + `docs/channels.md`. Hard rules: psycopg3 only (no SQLAlchemy/Alembic/`app/models/`); `from app.core.logging import logger`; thin routes. Deep map: **`engine/AGENTS.md`**.
+**`engine/`** - multi-tenant digital-employee platform. Entry: `app/main.py`, `app/config.py`, `app/api/`, `app/services/`, `app/db/` + `dao/` + `records/`, `scripts/schema_baseline.sql`. Role catalog `agent_templates/` ≠ workspace scaffold `agent_template/`. IM: `app/services/channels/` + `docs/channels.md`. Hard rules: psycopg3 only (no SQLAlchemy/Alembic/`app/models/`); `from app.core.logging import logger`; thin routes. Deep map: **`engine/AGENTS.md`**.
 
 ```bash
 cd engine && ./start-from-sourcecode.sh   # or ./start-from-docker.sh
 cd engine && uv run --extra dev pytest
 ```
 
-**`web-l/`** — public marketing SPA only (hash nav, no API, no `VITE_*`). Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173).
+**`web-l/`** - public marketing SPA only (hash nav, no API, no `VITE_*`). Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173).
 
-**`web-a/`** — operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains. `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains. `/users` and `/tools` still placeholders. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
-**`web-e/`** — member product. JWT `maraclaw-enduser-token`. Live: register / login / org join / transfer. Home is a chat placeholder. Admin company controls stay in `web-a`. Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5175).
+**`web-e/`** - member product. JWT `maraclaw-enduser-token`. Live: register / login / org join / transfer. Home is a chat placeholder. Admin company controls stay in `web-a`. Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5175).
 
 ---
 
@@ -95,7 +95,7 @@ Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fai
 
 **Env:** backend secrets in engine (+ root `.env.example`). Frontends: public `VITE_*` only. CORS origins live in **engine**. Fresh installs need `PLATFORM_ADMIN_*`.
 
-**Brand:** **MaraClaw** = product, **OpenClaw** = runtime/guest heritage. Visual source is `web-l` (`MaraClawLogo`, `public/maraclaw-mark.svg`) — do not fork three marks.
+**Brand:** **MaraClaw** = product, **OpenClaw** = runtime/guest heritage. Visual source is `web-l` (`MaraClawLogo`, `public/maraclaw-mark.svg`) - do not fork three marks.
 
 ### Docs for agents
 

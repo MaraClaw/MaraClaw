@@ -4,7 +4,7 @@ End-user product UI. Talks to `engine` with member auth.
 
 ## OVERVIEW
 
-Register, login, org join, and tenant transfer. `/` is a chat placeholder. Do **not** put admin company controls here (`web-a`) or marketing here (`web-l`). Chat/agent workspace belongs here when built — not in `web-l` or `web-a`.
+Register, login, org join, and tenant transfer. `/` is a chat placeholder. Do **not** put admin company controls here (`web-a`) or marketing here (`web-l`). Chat/agent workspace belongs here when built - not in `web-l` or `web-a`.
 
 ## Stack
 
@@ -49,4 +49,4 @@ npm run build                             # tsc -b && vite build
 
 - Admin company / platform-admin surfaces belong in `web-a`.
 - Do not invent a second JWT key or share `maraclaw-admin-token`.
-- No lint/Docker yet — do not assume `npm run lint` exists.
+- No lint/Docker yet - do not assume `npm run lint` exists.

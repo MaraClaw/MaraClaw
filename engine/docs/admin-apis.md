@@ -1,4 +1,4 @@
-# Admin APIs — Platform admin & Tenant admin
+# Admin APIs - Platform admin & Tenant admin
 
 **Audience:** Agents and humans building `web-a` (admin console), reviewing RBAC, or wiring clients against the engine.  
 **Source of truth:** FastAPI routers under `engine/app/api/`, mounted with `API_PREFIX=/api` (`engine/app/config.py`, `engine/app/main.py`).  
@@ -45,7 +45,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 
 ## A. Platform-admin only
 
-### A1. Platform company console — `/api/admin/*`
+### A1. Platform company console - `/api/admin/*`
 
 **Router:** `app/api/admin.py`  
 **Auth:** `require_role("platform_admin")` on every route.
@@ -53,26 +53,34 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
 | `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
-| `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
-| `PUT` | `/api/admin/companies/{company_id}/toggle` | — | `{ ok, is_active }` — **400** for MaraClaw/OpenClaw (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
+| `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
+| `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/OpenClaw (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
-| `GET` | `/api/admin/metrics/leaderboards` | — | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |
-| `GET` | `/api/admin/metrics/enhanced` | — | avg tokens/session 30d, 7d retention, channel distribution, tool category top10, churn warnings |
-| `POST` | `/api/admin/platform-admins` | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, admin_email, must_change_password: true }` — **genesis platform admin only**. Duplicate email → **409**. |
-| `GET` | `/api/admin/platform-admins` | — | Platform admin list with `is_genesis` / `is_active` |
+| `GET` | `/api/admin/metrics/leaderboards` | - | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |
+| `GET` | `/api/admin/metrics/enhanced` | - | avg tokens/session 30d, 7d retention, channel distribution, tool category top10, churn warnings |
+| `POST` | `/api/admin/platform-admins` | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, admin_email, must_change_password: true }` - **genesis platform admin only**. Duplicate email → **409**. |
+| `GET` | `/api/admin/platform-admins` | - | Platform admin list with `is_genesis` / `is_active` |
 | `PATCH` | `/api/admin/platform-admins/{user_id}/active` | `{ is_active }` | Genesis PA only. Cannot target self or genesis. Deactivating the last active PA is blocked. |
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
-| `GET` | `/api/admin/platform-settings` | — | `{ allow_self_create_company, invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
+| `GET` | `/api/admin/platform-settings` | - | `{ allow_self_create_company, invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
+| `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
+| `POST` | `/api/admin/linkup-keys` | `{ label, api_key }` | **201** add a key. Missing/blank `label` or `api_key` → **422**. Duplicate secret → **409**. Appends to the rotation cycle. |
+| `DELETE` | `/api/admin/linkup-keys/{key_id}` | - | Remove a key and retarget the cursor. **404** if missing. |
+| `GET` | `/api/admin/search-analytics/summary` | Query: `start?`, `end?`, `tenant_id?` | Platform-only. Omit `tenant_id` for **entire system**; pass it to scope one org. Adds `scope: system\|org`. Counts, kind mix, unique orgs/agents, unattributed. Default last 7 days, max 90. No raw queries. **Router:** `app/api/admin_search_analytics.py`. |
+| `GET` | `/api/admin/search-analytics/timeseries` | Query: `start?`, `end?`, `tenant_id?` | Daily volume + errors. Same system vs org rule. |
+| `GET` | `/api/admin/search-analytics/orgs` | Query: `start?`, `end?`, `limit=20` | Top tenants by search volume (system-wide upsell list). |
+| `GET` | `/api/admin/search-analytics/trending` | Query: `start?`, `end?`, `tenant_id?`, `scope?`, `limit=50` | Omit `tenant_id` for system-wide trends (ranked by companies then hits). Pass `tenant_id` for one org. Never returns raw text. |
+| `GET` | `/api/admin/search-analytics/export-status` | - | Outbox lag, last export, capture/export flags. |
 
-### A2. Tenants — platform-only pieces
+### A2. Tenants - platform-only pieces
 
 **Router:** `app/api/tenants.py`
 
 | Method | Path | Auth | Request | Response / notes |
 |--------|------|------|---------|------------------|
-| `GET` | `/api/tenants/` | platform_admin | — | `TenantOut[]` all tenants |
-| `POST` | `/api/tenants/` | platform_admin | `{ name, admin_email, admin_password, admin_display_name? }` | **201** `{ tenant: TenantOut, org_admin_email, must_change_password: true }` — creates tenant + genesis org admin. Duplicate admin email → **409**. Replaces `POST /api/tenants/self-create`. |
+| `GET` | `/api/tenants/` | platform_admin | - | `TenantOut[]` all tenants |
+| `POST` | `/api/tenants/` | platform_admin | `{ name, admin_email, admin_password, admin_display_name? }` | **201** `{ tenant: TenantOut, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin. Duplicate admin email → **409**. Replaces `POST /api/tenants/self-create`. |
 | `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }`. Cannot assign `org_admin`. Cannot reassign genesis or the last *active* admin. Clears `identity.is_platform_admin` when moving a PA. |
 | `POST` | `/api/tenants/{tenant_id}/genesis-org-admin` | genesis platform_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** attach a genesis OA when the tenant has none. **409** if one already exists or the email is taken. |
 
@@ -84,21 +92,21 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 
 Unless noted: both `org_admin` and `platform_admin` work. Platform may cross tenants (often via `tenant_id` query/body); org admin is limited to own `tenant_id`.
 
-### B1. Tenants / company settings — `/api/tenants/*`
+### B1. Tenants / company settings - `/api/tenants/*`
 
 **Router:** `app/api/tenants.py`
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/tenants/{tenant_id}` | platform / org | — | Org: own tenant only. **Res:** `TenantOut` |
+| `GET` | `/api/tenants/{tenant_id}` | platform / org | - | Org: own tenant only. **Res:** `TenantOut` |
 | `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. **`is_active` is platform_admin only** (403 otherwise). Cannot disable system or default end-user orgs (MaraClaw / OpenClaw). Setting `is_active=false` uses the same member/agent/automation cascade as company toggle. |
-| `GET` | `/api/tenants/{tenant_id}/email-domains` | platform / org | — | Claimed email domains for the company |
+| `GET` | `/api/tenants/{tenant_id}/email-domains` | platform / org | - | Claimed email domains for the company |
 | `POST` | `/api/tenants/{tenant_id}/email-domains` | platform / org | `{ domain, is_default? }` | **201**. **409** if another company already claims the domain |
 | `PATCH` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | `{ is_default: true }` | Make this the default invite domain |
-| `DELETE` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | — | **204**. Promotes another default when needed |
+| `DELETE` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | - | **204**. Promotes another default when needed |
 | `POST` | `/api/tenants/{tenant_id}/logo` | platform / org | Multipart image PNG/JPEG/WebP, ≤1 MB, 1:1 square | `TenantOut` |
-| `DELETE` | `/api/tenants/{tenant_id}/logo` | platform / org | — | `TenantOut` |
-| `DELETE` | `/api/tenants/{tenant_id}` | own org_admin **or** platform | — | Cascade delete. `{ status: "deleted", fallback_tenant_id }` |
+| `DELETE` | `/api/tenants/{tenant_id}/logo` | platform / org | - | `TenantOut` |
+| `DELETE` | `/api/tenants/{tenant_id}` | own org_admin **or** platform | - | Cascade delete. `{ status: "deleted", fallback_tenant_id }` |
 
 #### `TenantOut` shape
 
@@ -124,7 +132,7 @@ is_system, is_default_end_user_org, can_disable
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |
 | `GET` | `/api/tenants/{tenant_id}/logo` | Public asset by UUID |
 
-### B2. Users — `/api/users/*`
+### B2. Users - `/api/users/*`
 
 **Router:** `app/api/users.py`
 
@@ -133,7 +141,7 @@ is_system, is_default_end_user_org, can_disable
 | `GET` | `/api/users/` | platform / org | Query: `tenant_id?` (platform only) | `UserOut[]` with quotas + `agents_count` |
 | `PATCH` | `/api/users/{user_id}/quota` | platform / org | `UserQuotaUpdate`: `quota_message_limit?`, `quota_message_period?` (`permanent`\|`daily`\|`weekly`\|`monthly`), `quota_max_agents?`, `quota_agent_ttl_hours?` | Same-tenant only. `UserOut` |
 | `POST` | `/api/users/org-admins` | genesis org_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, tenant_id, admin_email, must_change_password: true }`. Own tenant only. |
-| `GET` | `/api/users/org-admins` | org_admin | — | Org admins in the caller's company (`is_genesis`, `is_active`) |
+| `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
 | `GET` | `/api/users/admin-audit-logs` | org_admin | Query: `action?`, `limit=100` | Company-scoped admin action trail |
 | `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Genesis rows cannot change role. Blocks demoting the last *active* admin. |
@@ -146,7 +154,7 @@ quota_message_limit, quota_message_period, quota_messages_used,
 quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 ```
 
-### B3. Org user profile — `/api/org/*`
+### B3. Org user profile - `/api/org/*`
 
 **Router:** `app/api/organization.py`
 
@@ -155,7 +163,7 @@ quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 | `GET` | `/api/org/users` | any auth; admins may pass `tenant_id` | Query: `tenant_id?` | Active users, display-name ordered |
 | `PATCH` | `/api/org/users/{user_id}` | admin (`get_current_admin`) | `UserUpdate`: `username?`, `email?`, `display_name?`, `avatar_url?`, `title?`, `primary_mobile?` | Uniqueness checks; syncs org-member contact |
 
-### B4. Enterprise suite — `/api/enterprise/*`
+### B4. Enterprise suite - `/api/enterprise/*`
 
 **Router:** `app/api/enterprise.py`  
 Default admin gate: `get_current_admin` unless noted.
@@ -164,11 +172,11 @@ Default admin gate: `get_current_admin` unless noted.
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/enterprise/llm-providers` | any auth | — | Provider registry manifest |
+| `GET` | `/api/enterprise/llm-providers` | any auth | - | Provider registry manifest |
 | `POST` | `/api/enterprise/llm-test` | admin | `provider`, `model`, `api_key?`, `base_url?`, `model_id?` | `{ success, latency_ms, reply? \| error? }` |
 | `GET` | `/api/enterprise/llm-models` | auth | Query: `tenant_id?` | Non-platform cannot other tenants. Keys masked |
 | `POST` | `/api/enterprise/llm-models` | admin | `LLMModelCreate` + Query `tenant_id?` | **201** `LLMModelOut` |
-| `POST` | `/api/enterprise/llm-models/{model_id}/set-default` | admin | — | Sets tenant default; may migrate agents. **204** |
+| `POST` | `/api/enterprise/llm-models/{model_id}/set-default` | admin | - | Sets tenant default; may migrate agents. **204** |
 | `PUT` | `/api/enterprise/llm-models/{model_id}` | admin | `LLMModelUpdate` (partial) | `LLMModelOut` |
 | `DELETE` | `/api/enterprise/llm-models/{model_id}` | admin | Query: `force?` | **409** if agents use model unless forced. **204** |
 
@@ -178,7 +186,7 @@ Default admin gate: `get_current_admin` unless noted.
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/enterprise/info` | auth | — | `EnterpriseInfoOut[]` |
+| `GET` | `/api/enterprise/info` | auth | - | `EnterpriseInfoOut[]` |
 | `PUT` | `/api/enterprise/info/{info_type}` | admin | `{ content: object, visible_roles: string[] }` | Upsert + sync to agents |
 | `GET` | `/api/enterprise/approvals` | auth | Query: `tenant_id?`, `status_filter?` | Platform broader; others creator-scoped |
 | `POST` | `/api/enterprise/approvals/{approval_id}/resolve` | auth | `{ action: "approve" \| "reject" }` | `ApprovalRequestOut` |
@@ -189,7 +197,7 @@ Default admin gate: `get_current_admin` unless noted.
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/enterprise/tenant-quotas` | auth + tenant | — | Default limits: messages, agents, TTL, LLM calls/day, heartbeat floor, triggers, poll/webhook ceilings |
+| `GET` | `/api/enterprise/tenant-quotas` | auth + tenant | - | Default limits: messages, agents, TTL, LLM calls/day, heartbeat floor, triggers, poll/webhook ceilings |
 | `PATCH` | `/api/enterprise/tenant-quotas` | admin | Same fields optional | May adjust existing agent heartbeats. `{ message, heartbeat_agents_adjusted }` |
 
 #### System email & settings
@@ -197,11 +205,11 @@ Default admin gate: `get_current_admin` unless noted.
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `POST` | `/api/enterprise/system-email/test` | admin | `{ email }` | SMTP probe |
-| `GET` | `/api/enterprise/email-templates` | admin | — | templates + variables + defaults |
+| `GET` | `/api/enterprise/email-templates` | admin | - | templates + variables + defaults |
 | `PUT` | `/api/enterprise/email-templates` | admin | `{ templates: object }` | Persist templates |
-| `GET` | `/api/enterprise/system-settings/{key}` | auth | — | `{ key, value, updated_at? }` |
+| `GET` | `/api/enterprise/system-settings/{key}` | auth | - | `{ key, value, updated_at? }` |
 | `PUT` | `/api/enterprise/system-settings/{key}` | admin | `{ value: object }` | Key **`platform`**: **platform admin only**; may regenerate all SSO domains |
-| `GET` | `/api/enterprise/system-settings/notification_bar/public` | public | — | Notification bar config |
+| `GET` | `/api/enterprise/system-settings/notification_bar/public` | public | - | Notification bar config |
 
 #### Identity providers / SSO
 
@@ -212,7 +220,7 @@ Default admin gate: `get_current_admin` unless noted.
 | `POST` | `/api/enterprise/identity-providers/oauth2` | admin | OAuth2 fields: `app_id`, `app_secret`, URLs, `scope?` | Tenant required |
 | `PATCH` | `/api/enterprise/identity-providers/{provider_id}/oauth2` | admin | Partial OAuth2 fields | Tenant ownership for non-platform |
 | `PUT` | `/api/enterprise/identity-providers/{provider_id}` | admin | `name?`, `is_active?`, `sso_login_enabled?`, `config?` | Syncs tenant SSO state |
-| `DELETE` | `/api/enterprise/identity-providers/{provider_id}` | admin | — | **204** |
+| `DELETE` | `/api/enterprise/identity-providers/{provider_id}` | admin | - | **204** |
 
 #### Org directory
 
@@ -233,8 +241,8 @@ Public WeCom verification (no admin JWT):
 | `POST` | `/api/enterprise/invitation-codes` | `{ count=1, max_uses=1 }` (count ≤ 100) | `{ created, codes[] }` |
 | `POST` | `/api/enterprise/invite-users` | `{ emails: EmailStr[] }` | Needs system SMTP. `{ invited, message }` |
 | `GET` | `/api/enterprise/invitation-codes` | Query: `page`, `page_size`, `search` | Paginated list |
-| `GET` | `/api/enterprise/invitation-codes/export` | — | CSV download |
-| `DELETE` | `/api/enterprise/invitation-codes/{code_id}` | — | Soft-deactivate |
+| `GET` | `/api/enterprise/invitation-codes/export` | - | CSV download |
+| `DELETE` | `/api/enterprise/invitation-codes/{code_id}` | - | Soft-deactivate |
 
 ### B5. Google Workspace admin helper
 
@@ -244,7 +252,7 @@ Public WeCom verification (no admin JWT):
 |--------|------|-------|------------------|
 | `GET` | `/api/enterprise/identity-providers/{provider_id}/google-workspace-sync/authorize-url` | admin | Tenant ownership for non-platform. `{ authorization_url }` |
 
-### B6. Enterprise knowledge base — `/api/enterprise/knowledge-base/*`
+### B6. Enterprise knowledge base - `/api/enterprise/knowledge-base/*`
 
 **Router:** `enterprise_kb_router` in `app/api/files.py`
 
@@ -256,7 +264,7 @@ Public WeCom verification (no admin JWT):
 | `PUT` | `/api/enterprise/knowledge-base/content` | **admin** | Query: `path` + body content | Write file |
 | `DELETE` | `/api/enterprise/knowledge-base/content` | **admin** | Query: `path` | File or tree delete |
 
-### B7. Tools catalog — `/api/tools/*`
+### B7. Tools catalog - `/api/tools/*`
 
 **Router:** `app/api/tools.py`  
 Catalog mutations: `_require_catalog_manager` → `platform_admin` \| `org_admin`.  
@@ -268,11 +276,11 @@ Platform may target another company via `tenant_id`.
 | `POST` | `/api/tools` | admin | `ToolCreate`: name, display_name, description, type, category, icon, schemas, MCP fields, `is_default`, `tenant_id?` | `{ id, name }` |
 | `PUT` | `/api/tools/bulk` | admin | `[{ tool_id, enabled }]` | `{ ok: true }` |
 | `PUT` | `/api/tools/{tool_id}` | admin | `ToolUpdate` (partial; company config for builtins) | `{ ok: true }` |
-| `DELETE` | `/api/tools/{tool_id}` | admin | — | Non-builtin only; tenant ownership for non-platform |
+| `DELETE` | `/api/tools/{tool_id}` | admin | - | Non-builtin only; tenant ownership for non-platform |
 
 Agent-level tool assignment/config routes exist under `/api/tools/agents/...` but use agent access checks (not pure admin gates). **Only** platform/org may set `allow_network` / proxy fields on agent tool config.
 
-### B8. Skills — `/api/skills/*`
+### B8. Skills - `/api/skills/*`
 
 **Router:** `app/api/skills.py`
 
@@ -280,8 +288,8 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 |--------|------|-------|---------|------------------|
 | `POST` | `/api/skills/` | admin | `name`, `description`, `category`, `icon`, `folder_name`, `files[{path,content}]` | Create skill |
 | `PUT` | `/api/skills/{skill_id}` | admin | partial skill update | Platform: all. Org: own-tenant + builtins |
-| `DELETE` | `/api/skills/{skill_id}` | admin | — | Same write rules |
-| `GET` | `/api/skills/settings/token` | org_admin / platform_admin | — | GitHub/ClawHub status (masked) |
+| `DELETE` | `/api/skills/{skill_id}` | admin | - | Same write rules |
+| `GET` | `/api/skills/settings/token` | org_admin / platform_admin | - | GitHub/ClawHub status (masked) |
 | `PUT` | `/api/skills/settings/token` | org_admin / platform_admin | `{ github_token?, clawhub_key? }` | Requires tenant |
 | `PUT` | `/api/skills/browse/write` | admin | `{ path, content }` | Path-based skill file write |
 | `DELETE` | `/api/skills/browse/delete` | admin | Query: `path` | Delete file or whole skill folder |
@@ -294,7 +302,7 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 |--------|------|-------|---------|------------------|
 | `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email needs system SMTP. Fan-out to tenant users/agents |
 
-### B10. Templates (market) — advanced router
+### B10. Templates (market) - advanced router
 
 **Router:** `app/api/advanced.py`
 
@@ -304,16 +312,16 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 
 (`POST /api/templates` is any authenticated user for “share to market”, not admin-only.)
 
-### B11. OKR admin controls — `/api/okr/*`
+### B11. OKR admin controls - `/api/okr/*`
 
 **Router:** `app/api/okr.py` (self-prefixed)
 
 | Method | Path | Roles | Request | Notes |
 |--------|------|-------|---------|-------|
 | `PUT` | `/api/okr/settings` | org_admin / platform_admin | `OKRSettingsUpdate`: enable flags, daily report time/skip non-workdays, period frequency/length | Period fields lock after first enable. May auto-seed OKR agent |
-| `POST` | `/api/okr/sync-relationships` | org_admin / platform_admin | — | Rebuild OKR agent relationship graph |
+| `POST` | `/api/okr/sync-relationships` | org_admin / platform_admin | - | Rebuild OKR agent relationship graph |
 | `POST` | `/api/okr/company-reports/regenerate` | org_admin / platform_admin | report type + period | Company report regen |
-| `POST` | `/api/okr/trigger-daily-collection` | org_admin / platform_admin | — | Trigger daily collection |
+| `POST` | `/api/okr/trigger-daily-collection` | org_admin / platform_admin | - | Trigger daily collection |
 
 Other OKR CRUD is broader than pure admin; some writes give admins extra scope.
 

@@ -11,6 +11,7 @@
     "**/skill_creator_files/**",
     "**/clawsec_skill_files/**",
     "**/gogcli_skill_files/**",
+    "**/linkup_skill_files/**",
     "**/__pycache__/**",
     ".venv/**",
     "agent_template/**",

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 **Package:** `web-a` (MaraClaw admin console)  
-**Status:** Live auth + companies (2026-08-14). `/users` and `/tools` still placeholders.
+**Status:** Live auth + companies + Linkup search keys (2026-08-15). `/users` and `/tools` still placeholders.
 
 > Monorepo routing: `../AGENTS.md`.  
 > Admin HTTP contracts: `../engine/docs/admin-apis.md`.
@@ -21,9 +21,11 @@ Auth: JWT in `localStorage` (`maraclaw-admin-token`), session via `AuthProvider`
 
 Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SMTP + `public_base_url` must point reset emails at this app) and signed-in `/account` → `PUT /api/auth/me/password` (new password must differ from current).
 
+**Search engine:** Platform-admin only (`/search-engine`). Add, list, and remove stored Linkup API keys (`/api/admin/linkup-keys`). Analytics tab (`?tab=analytics`) is a dashboard for **entire system** or one company (`?company=`). Overview shows a 7-day system snapshot for platform admins. Org admins do not see the nav item.
+
 **Companies:** Platform-admin only (`/companies`, `/companies/:id`). Org admins do not see the nav item and are redirected to Overview. Platform admin can create a company (`POST /api/admin/companies`) with a genesis org admin. `/companies/:id` manages claimed email domains. System orgs and the default end-user org (OpenClaw) are badged. Disable/Enable is hidden when `can_disable` is false (MaraClaw + OpenClaw).
 
-Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs — clients call `engine`.
+Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs - clients call `engine`.
 
 ## STRUCTURE
 
@@ -38,7 +40,7 @@ web-a/
 └── src/
     ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
     ├── routes/          # route table + ProtectedRoute
-    ├── pages/           # login, account, companies live; users/tools placeholders
+    ├── pages/           # login, account, companies, search-engine live; users/tools placeholders
     ├── components/
     │   ├── layout/admin-shell.tsx
     │   ├── ui/          # primitives
@@ -52,6 +54,7 @@ web-a/
         ├── auth-api.ts
         ├── auth-storage.ts
         ├── companies-api.ts
+        ├── linkup-keys-api.ts
         └── types/auth.ts
 ```
 
@@ -64,8 +67,10 @@ web-a/
 | Change password | `src/pages/account.tsx` |
 | Sign out / theme | `src/pages/settings.tsx` |
 | Companies / email domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
-| Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` — prefix FTS on name/slug |
-| Create company | `src/components/companies/create-company-form.tsx` — platform admin only |
+| Search engine / Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
+| Search analytics | `src/pages/search-engine-analytics.tsx`, `src/lib/search-analytics-api.ts` |
+| Company search | `GET /api/admin/companies?q=` via `listCompanies(q)` - prefix FTS on name/slug |
+| Create company | `src/components/companies/create-company-form.tsx` - platform admin only |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
 | Nav / shell | `src/components/layout/admin-shell.tsx` |
@@ -102,9 +107,9 @@ Production image: multi-stage Node **26.7.0** + `nginxinc/nginx-unprivileged` on
 ## ANTI-PATTERNS
 
 - Do not put marketing pages or end-user chat here.
-- Do not invent REST handlers in Vite — extend `engine`.
+- Do not invent REST handlers in Vite - extend `engine`.
 - Do not hardcode absolute API hosts in components; use `apiUrl()`.
 - Do not dump admin UI into `web-l` or `web-e`.
-- Do not ignore `must_change_password` after login — gated admin APIs will 403 and the operator will look "stuck".
-- Do not treat `VITE_AUTH_BYPASS` as implemented — README mentions it; code does not.
+- Do not ignore `must_change_password` after login - gated admin APIs will 403 and the operator will look "stuck".
+- Do not treat `VITE_AUTH_BYPASS` as implemented - README mentions it; code does not.
 - Do not use `0.0.0.0` as a browser API host (`getApiBaseUrl` maps it to same-origin).

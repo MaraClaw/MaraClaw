@@ -162,6 +162,91 @@ PATCHES = [
     ) STORED
     """,
     "CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv)",
+    """
+    CREATE TABLE IF NOT EXISTS linkup_api_keys (
+        id UUID NOT NULL,
+        tenant_id UUID,
+        label VARCHAR(200) NOT NULL,
+        key_ciphertext TEXT NOT NULL,
+        key_fingerprint VARCHAR(64) NOT NULL,
+        position INTEGER NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        exhausted_until TIMESTAMP WITH TIME ZONE,
+        last_error TEXT,
+        last_used_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (id),
+        CONSTRAINT uq_linkup_api_keys_fingerprint UNIQUE (key_fingerprint)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_linkup_api_keys_position ON linkup_api_keys (position)",
+    """
+    CREATE TABLE IF NOT EXISTS linkup_key_ring_state (
+        id SMALLINT NOT NULL DEFAULT 1,
+        current_key_id UUID,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (id),
+        CONSTRAINT ck_linkup_key_ring_state_singleton CHECK (id = 1)
+    )
+    """,
+    "INSERT INTO linkup_key_ring_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+    """
+    CREATE TABLE IF NOT EXISTS linkup_async_jobs (
+        upstream_job_id VARCHAR(200) NOT NULL,
+        key_id UUID NOT NULL,
+        kind VARCHAR(20) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (upstream_job_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS web_search_events (
+        id UUID NOT NULL,
+        occurred_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        agent_id UUID,
+        tenant_id UUID,
+        kind VARCHAR(20) NOT NULL,
+        billed BOOLEAN NOT NULL DEFAULT true,
+        method VARCHAR(10) NOT NULL,
+        http_status INTEGER NOT NULL,
+        status_class VARCHAR(20) NOT NULL,
+        latency_ms INTEGER NOT NULL,
+        key_id UUID,
+        query_hash VARCHAR(64) NOT NULL,
+        query_normalized VARCHAR(500) NOT NULL DEFAULT '',
+        query_char_len INTEGER NOT NULL DEFAULT 0,
+        depth VARCHAR(20),
+        output_type VARCHAR(40),
+        primary_domain VARCHAR(255),
+        result_count INTEGER,
+        error_class VARCHAR(40),
+        upstream_job_id VARCHAR(200),
+        request_bytes INTEGER,
+        response_bytes INTEGER,
+        export_state VARCHAR(20) NOT NULL DEFAULT 'skipped',
+        export_claimed_at TIMESTAMP WITH TIME ZONE,
+        exported_at TIMESTAMP WITH TIME ZONE,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_occurred_tenant ON web_search_events (occurred_at DESC, tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_tenant_occurred ON web_search_events (tenant_id, occurred_at DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_web_search_events_hash_occurred ON web_search_events (query_hash, occurred_at DESC)",
+    """
+    CREATE INDEX IF NOT EXISTS ix_web_search_events_export_pending
+    ON web_search_events (export_state, occurred_at)
+    WHERE export_state IN ('pending', 'exporting')
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS web_search_export_payloads (
+        event_id UUID NOT NULL,
+        raw_query TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        PRIMARY KEY (event_id)
+    )
+    """,
 ]
 
 

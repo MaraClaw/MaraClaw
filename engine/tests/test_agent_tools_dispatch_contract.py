@@ -45,14 +45,6 @@ EXPECTED_DISPATCH_NAMES: Final = (
     "send_message_to_agent",
     "send_file_to_agent",
     "send_channel_file",
-    "web_search",
-    "jina_search",
-    "exa_search",
-    "duckduckgo_search",
-    "tavily_search",
-    "google_search",
-    "bing_search",
-    "jina_read",
     "read_webpage",
     "plaza_get_new_posts",
     "plaza_create_post",
@@ -172,8 +164,6 @@ EXPECTED_CATALOG_NAMES: Final = (
     "send_platform_message",
     "send_message_to_agent",
     "send_file_to_agent",
-    "jina_search",
-    "jina_read",
     "read_webpage",
     "read_document",
     "execute_code",
@@ -249,14 +239,6 @@ MIGRATED_DISPATCH_NAMES: Final = (
     "list_triggers",
     "send_message_to_agent",
     "send_file_to_agent",
-    "web_search",
-    "jina_search",
-    "exa_search",
-    "duckduckgo_search",
-    "tavily_search",
-    "google_search",
-    "bing_search",
-    "jina_read",
     "read_webpage",
     "send_feishu_message",
     "bitable_create_app",
@@ -405,7 +387,7 @@ def test_execute_tool_dispatch_names_match_pinned_ast_contract():
 
     assert actual_names == EXPECTED_DISPATCH_NAMES
     assert "finish" not in actual_names
-    assert len(actual_names) == 130
+    assert len(actual_names) == 122
 
 
 async def test_execute_tool_autonomy_denial_preserves_l2_message(monkeypatch):
@@ -1117,14 +1099,6 @@ def test_existing_agent_tools_monkeypatch_seams_still_exist():
 async def test_extracted_direct_routing_search_tools_use_modules_not_legacy_facade(monkeypatch):
     search_module = importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_search")
     module_specs = {
-        "web_search": ("_web_search_module", "_web_search", "_web_search"),
-        "jina_search": ("_web_search_module", "_jina_search", "_jina_search"),
-        "exa_search": ("_web_search_module", "_exa_search", "_exa_search"),
-        "duckduckgo_search": ("_web_search_module", "_duckduckgo_search_tool", "_duckduckgo_search_tool"),
-        "tavily_search": ("_web_search_module", "_tavily_search_tool", "_tavily_search_tool"),
-        "google_search": ("_web_search_module", "_google_search_tool", "_google_search_tool"),
-        "bing_search": ("_web_search_module", "_bing_search_tool", "_bing_search_tool"),
-        "jina_read": ("_web_read_module", "_jina_read", "_jina_read"),
         "read_webpage": ("_web_read_module", "_read_webpage", "_read_webpage"),
     }
     calls = []

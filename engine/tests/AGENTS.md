@@ -27,6 +27,6 @@ uv run pytest --cov=app --cov-fail-under=0   # full-app report (currently ~39%)
 - **Gate:** `fail_under=90` on the admin/tenant/auth surface (`app.api.admin`, `app.api.users`, `admin_provisioning`, `admin_audit`, `tenant_provisioning`, `platform_admin_seeder`, `admin_audit_dao`, `app.core.security`). Default `uv run pytest` enforces this.
 - Full `app/` package is ~39% today (42k statements). Raising that to 90% is a longer program; do not lower the admin gate.
 - Strong: auth, A2A/tools dispatch (`test_agent_tools_dispatch_contract.py` is the name freeze), storage/sandbox helpers, logging service, freeze scripts, schema **text** contracts.
-- Genesis admin: `test_admin_genesis.py` — platform seeder (create / elevate-with-password / refuse / fail-closed), `must_change_password` gate, same-password reject, company create response mapping, register non-elevation. Tenant+admin write kwargs live in `test_tenant_create.py`. Additional-admin minting (genesis-only) lives in `test_admin_provisioning.py`.
+- Genesis admin: `test_admin_genesis.py` - platform seeder (create / elevate-with-password / refuse / fail-closed), `must_change_password` gate, same-password reject, company create response mapping, register non-elevation. Tenant+admin write kwargs live in `test_tenant_create.py`. Additional-admin minting (genesis-only) lives in `test_admin_provisioning.py`.
 - Thin: live Postgres, `bootstrap_db` execution, full lifespan, Redis, connector daemons, AgentBay/browser, PPTX.
 - CI has no database service. Prefer focused tests next to the contract you change.

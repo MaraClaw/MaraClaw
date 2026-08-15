@@ -189,11 +189,19 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5175",
     ]
 
-    # Jina AI (Reader + Search APIs)
-    JINA_API_KEY: str = ""
-
-    # Exa AI (Search API)
-    EXA_API_KEY: str = ""
+    # Linkup API key: seeds the DB ring when empty; proxy uses the ring after that.
+    LINKUP_API_KEY: str = ""
+    # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
+    LINKUP_PROXY_ENABLED: bool = True
+    LINKUP_PROXY_BASE_URL: str = "http://maraclaw-engine:8000/api/linkup"
+    # Search analytics: capture billed Linkup POSTs; export is off until a bucket is set.
+    WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED: bool = True
+    WEB_SEARCH_ANALYTICS_EXPORT_ENABLED: bool = False
+    WEB_SEARCH_ANALYTICS_INCLUDE_RAW: bool = False
+    WEB_SEARCH_ANALYTICS_RETENTION_DAYS: int = 90
+    WEB_SEARCH_ANALYTICS_HASH_KEY: str = ""
+    ANALYTICS_S3_BUCKET: str = ""
+    ANALYTICS_S3_PREFIX: str = "web-search/"
 
     # Sandbox configuration
     SANDBOX_TYPE: SandboxType = SandboxType.SUBPROCESS

@@ -18,6 +18,7 @@ from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
+from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
@@ -213,9 +214,14 @@ class AgentManager:
 
         logger.info(f"Initialized agent files at {agent_dir}")
 
-    def _generate_openclaw_config(self, agent: AgentRecord, model: LLMModelRecord | None) -> JsonObject:
+    def _generate_openclaw_config(
+        self,
+        agent: AgentRecord,
+        model: LLMModelRecord | None,
+        *,
+        linkup_proxy: bool = False,
+    ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
-        del agent  # reserved for future per-agent openclaw knobs
         config: JsonObject = {
             "agent": {
                 "model": f"{model.provider}/{model.model}" if model else "anthropic/claude-sonnet-4-5",
@@ -231,6 +237,33 @@ class AgentManager:
             config["env"] = {
                 f"{model.provider.upper()}_API_KEY": get_model_api_key(model),
             }
+
+        linkup_skill_env: JsonObject = {}
+        if linkup_proxy:
+            from app.services.linkup.tokens import make_proxy_token
+
+            linkup_skill_env["LINKUP_API_BASE"] = settings.LINKUP_PROXY_BASE_URL
+            linkup_skill_env["LINKUP_API_KEY"] = make_proxy_token(agent.id)
+        elif settings.LINKUP_API_KEY:
+            linkup_skill_env["LINKUP_API_KEY"] = settings.LINKUP_API_KEY
+        config["skills"] = {
+            "entries": {
+                folder_name: {
+                    "enabled": True,
+                    "env": linkup_skill_env,
+                }
+                for folder_name in linkup_default_skill_folder_names()
+            },
+        }
+        # OpenClaw enables native web_search unless it is explicitly denied.
+        config["tools"] = {
+            "deny": ["web_search"],
+            "web": {
+                "search": {
+                    "enabled": False,
+                },
+            },
+        }
 
         if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED:
             config["plugins"] = {
@@ -279,8 +312,13 @@ class AgentManager:
         if agent.primary_model_id:
             model = await llm_model_dao.get(agent.primary_model_id)
 
-        # Generate OpenClaw config
-        config = self._generate_openclaw_config(agent, model)
+        # Generate OpenClaw config. Proxy on/off is settings-only so container
+        # start does not need the key-ring tables to exist.
+        config = self._generate_openclaw_config(
+            agent,
+            model,
+            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
+        )
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         _ = (agent_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")

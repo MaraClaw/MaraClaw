@@ -52,7 +52,7 @@ No `alembic/`, no `app/models/`.
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
-| Web search / page read | `agent_tool_exec/web_search.py`, `search_providers.py`, `web_read.py` | Register in `_agent_tool_exec_search.py`; `agent_tools.py` only re-exports |
+| Page read | `agent_tool_exec/web_read.py` | `read_webpage` only; web lookup/fetch/research/extract are vendored Linkup skills |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |
@@ -85,7 +85,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 
 ## CONVENTIONS
 
-- Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Python **≥3.14.5** (lock 3.14.6). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
+- Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Python **≥3.14.7**. Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
 - Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
 - Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
@@ -146,6 +146,6 @@ uv run python -m app.scripts.bootstrap_db
 - Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
-- `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 — no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
+- `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
 - Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only** (`DOCKERHUB_NAMESPACE=… ./publish-openclaw-local-dockerfile.sh`).
 - `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. No `AGENTS.md` under `clawsec_skill_files/` skill trees (AGPL payload).

@@ -4,6 +4,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Menu,
+  Search,
   Settings2,
   Shield,
   Users,
@@ -29,6 +30,7 @@ const navItems: {
 }[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/companies', label: 'Companies', icon: Building2, platformAdminOnly: true },
+  { to: '/search-engine', label: 'Search engine', icon: Search, platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: Users },
   { to: '/tools', label: 'Tools', icon: Wrench },
   { to: '/settings', label: 'Settings', icon: Settings2 },

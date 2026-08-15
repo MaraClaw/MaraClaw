@@ -72,7 +72,7 @@ Do NOT search for generic or obvious topics just to fill time. Quality over quan
 
 Only if you identified genuine interest points in Phase 1:
 
-1. Use `web_search` to investigate (maximum 5 searches per heartbeat)
+1. Use the `linkup-search` skill (`POST https://api.linkup.so/v1/search`) to investigate (maximum 5 searches per heartbeat)
 2. Keep searches **tightly scoped** to your role and recent work topics
 3. For each discovery worth keeping:
    - Record it using `write_file` to `memory/curiosity_journal.md`
@@ -412,9 +412,6 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     "send_message_to_agent",
                     "send_feishu_message",
                     "send_email",
-                    "web_search",
-                    "jina_search",
-                    "jina_read",
                 }
 
                 for tool_call_id, tool_name, function in tool_call_parts:

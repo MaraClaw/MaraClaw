@@ -382,28 +382,6 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolParameter
     return await extracted(agent_id, ws, arguments)
 
 
-async def _web_search(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_web_search", arguments, agent_id)
-
-
-async def _search_duckduckgo(query: str, max_results: int) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.search_providers", "_search_duckduckgo", query, max_results
-    )
-
-
-async def _get_jina_api_key() -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.search_providers", "_get_jina_api_key")
-
-
-async def _jina_search(arguments: ToolParameters) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_jina_search", arguments)
-
-
-async def _jina_read(arguments: ToolParameters) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_read", "_jina_read", arguments)
-
-
 async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
     result = await _call_imported_async("app.services.agent_tool_exec.web_read", "_validate_public_http_url", url)
     if not isinstance(result, tuple) or len(result) != 2:
@@ -426,54 +404,6 @@ def _extract_page_links(html: str, base_url: str, limit: int = 30) -> list[str]:
 
 async def _read_webpage(arguments: ToolParameters) -> str:
     return await _call_imported_str("app.services.agent_tool_exec.web_read", "_read_webpage", arguments)
-
-
-async def _search_tavily(query: str, api_key: str, max_results: int) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.search_providers", "_search_tavily", query, api_key, max_results
-    )
-
-
-async def _search_google(query: str, api_key: str, max_results: int, language: str) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.search_providers", "_search_google", query, api_key, max_results, language
-    )
-
-
-async def _search_bing(query: str, api_key: str, max_results: int, language: str) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.search_providers", "_search_bing", query, api_key, max_results, language
-    )
-
-
-async def _search_exa(query: str, api_key: str, max_results: int) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.search_providers", "_search_exa", query, api_key, max_results
-    )
-
-
-async def _exa_search(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_exa_search", arguments, agent_id)
-
-
-async def _duckduckgo_search_tool(arguments: ToolParameters) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_duckduckgo_search_tool", arguments)
-
-
-async def _tavily_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.web_search", "_tavily_search_tool", arguments, agent_id
-    )
-
-
-async def _google_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    return await _call_imported_str(
-        "app.services.agent_tool_exec.web_search", "_google_search_tool", arguments, agent_id
-    )
-
-
-async def _bing_search_tool(arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:
-    return await _call_imported_str("app.services.agent_tool_exec.web_search", "_bing_search_tool", arguments, agent_id)
 
 
 async def _execute_mcp_tool(tool_name: str, arguments: ToolParameters, agent_id: uuid.UUID | None = None) -> str:

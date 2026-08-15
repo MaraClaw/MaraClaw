@@ -71,7 +71,7 @@ def test_representative_handlers_remain_registered_after_facade_import(
             "agentbay_browser_navigate",
             "convert_csv_to_xlsx",
             "send_feishu_message",
-            "web_search",
+            "read_webpage",
             "list_files",
             "set_trigger",
         }

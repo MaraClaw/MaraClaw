@@ -143,7 +143,7 @@ testing:
    one side; `Back to safety` is the prominent button. Activating the visually
    obvious control aborts the flow. A developer-info control sits in the tab
    order between them, so count focus stops deliberately instead of guessing.
-2. **"You're signing back in to \<app\>"** — confirm the displayed account is
+2. **"You're signing back in to \<app\>"** - confirm the displayed account is
    the intended one, then `Continue`.
 
 The listener enforces `--timeout`. When it expires the tmux pane simply returns

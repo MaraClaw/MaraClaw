@@ -35,7 +35,7 @@ tool_names = _catalog_fakes.tool_names
 
 def test_catalog_shape_when_imported_from_public_module():
     # Given: the public agent_tools module import surface.
-    expected_tool_count = 73
+    expected_tool_count = 71
 
     # When: callers inspect the static OpenAI function-calling catalog.
     tool_names = [tool["function"]["name"] for tool in AGENT_TOOLS]

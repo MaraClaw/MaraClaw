@@ -107,15 +107,15 @@ export function AccountPage() {
         <CardContent className="grid gap-3 text-sm">
           <div className="flex flex-wrap justify-between gap-2 border-b border-border/70 pb-3">
             <span className="text-muted-foreground">Name</span>
-            <span className="font-medium">{user?.display_name || '—'}</span>
+            <span className="font-medium">{user?.display_name || '-'}</span>
           </div>
           <div className="flex flex-wrap justify-between gap-2 border-b border-border/70 pb-3">
             <span className="text-muted-foreground">Email</span>
-            <span className="font-medium">{user?.email || '—'}</span>
+            <span className="font-medium">{user?.email || '-'}</span>
           </div>
           <div className="flex flex-wrap justify-between gap-2">
             <span className="text-muted-foreground">Role</span>
-            <span className="font-medium">{user?.role || '—'}</span>
+            <span className="font-medium">{user?.role || '-'}</span>
           </div>
         </CardContent>
       </Card>

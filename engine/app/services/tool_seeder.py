@@ -20,9 +20,6 @@ OKR_BUILTIN_TOOLS: Sequence[object] = tool_definitions.OKR_BUILTIN_TOOLS
 SYNC_IS_DEFAULT_TOOL_NAMES = {
     "finish",
     "read_webpage",
-    "duckduckgo_search",
-    "jina_search",
-    "jina_read",
     "update_objective",
     # AgentBay tools should NOT be is_default=True. Older seeder versions may
     # have set them to True; include them here so the seeder corrects the DB.
@@ -300,12 +297,6 @@ async def seed_builtin_tools():
             helper_names=["agentbay_code_write_file", "agentbay_code_read_file", "agentbay_code_edit_file"],
             label="code",
         )
-
-        for obsolete_name in ("bing_search", "manage_tasks"):
-            obsolete = await tool_dao.get_by_name(obsolete_name)
-            if obsolete:
-                _ = await tool_dao.delete(id=obsolete.id)
-                logger.info(f"[ToolSeeder] Removed obsolete tool: {obsolete_name}")
 
         first_tenant = await tenant_dao.get_first_by_created_at()
         if first_tenant:
