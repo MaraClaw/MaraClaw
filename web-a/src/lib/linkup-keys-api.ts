@@ -12,7 +12,7 @@ export type LinkupKey = {
 }
 
 export type CreateLinkupKeyInput = {
-  label?: string
+  label: string
   api_key: string
 }
 

@@ -16,7 +16,7 @@ import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from
 import { ApiError, formatApiDetail } from '@/lib/http'
 
 const schema = z.object({
-  label: z.string().trim().max(200, 'Label is too long'),
+  label: z.string().trim().min(1, 'Enter a label').max(200, 'Label is too long'),
   api_key: z.string().trim().min(1, 'Enter a Linkup API key').max(512, 'Key is too long'),
 })
 
@@ -77,7 +77,7 @@ export function SearchEnginePage() {
     setFormError(null)
     try {
       const created = await createLinkupKey({
-        label: values.label.trim() || undefined,
+        label: values.label.trim(),
         api_key: values.api_key.trim(),
       })
       reset()
@@ -121,7 +121,7 @@ export function SearchEnginePage() {
         <CardContent>
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit(onSubmit)} noValidate>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-label`}>Label (optional)</Label>
+              <Label htmlFor={`${formId}-label`}>Label</Label>
               <Input
                 id={`${formId}-label`}
                 autoComplete="off"

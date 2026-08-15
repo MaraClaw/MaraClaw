@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.api.admin_linkup import create_linkup_key, delete_linkup_key, list_linkup_keys
 from app.api.admin_linkup import LinkupKeyCreateRequest
@@ -134,6 +135,13 @@ async def test_admin_remove_missing_returns_404(key_store: MemoryKeyDao, admin_u
     with pytest.raises(Exception) as exc:
         await delete_linkup_key(uuid4(), current_user=admin_user, client_ip=None)
     assert getattr(exc.value, "status_code", None) == 404
+
+
+def test_create_request_requires_label() -> None:
+    with pytest.raises(ValidationError):
+        LinkupKeyCreateRequest(api_key="lk-secret")
+    with pytest.raises(ValidationError):
+        LinkupKeyCreateRequest(label="", api_key="lk-secret")
 
 
 def test_duplicate_error_type_is_public() -> None:

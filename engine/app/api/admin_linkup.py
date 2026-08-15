@@ -24,7 +24,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class LinkupKeyCreateRequest(BaseModel):
-    label: str = Field(default="", max_length=200)
+    label: str = Field(min_length=1, max_length=200)
     api_key: str = Field(min_length=1, max_length=512)
 
 

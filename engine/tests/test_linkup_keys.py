@@ -118,6 +118,13 @@ async def test_remove_last_key_clears_cursor(key_dao: MemoryKeyDao) -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_rejects_blank_label(key_dao: MemoryKeyDao) -> None:
+    _ = key_dao
+    with pytest.raises(ValueError, match="label is required"):
+        await add_key(label="   ", api_key="lk-secret")
+
+
+@pytest.mark.asyncio
 async def test_add_duplicate_fingerprint_raises(key_dao: MemoryKeyDao) -> None:
     _ = await add_key(label="a", api_key="same-secret")
     with pytest.raises(DuplicateLinkupKeyError):

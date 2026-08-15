@@ -59,7 +59,9 @@ async def add_key(*, label: str, api_key: str) -> LinkupApiKeyRecord:
     secret = api_key.strip()
     if not secret:
         raise ValueError("api_key is required")
-    clean_label = label.strip() or "Linkup key"
+    clean_label = label.strip()
+    if not clean_label:
+        raise ValueError("label is required")
     fingerprint = fingerprint_api_key(secret)
     existing = await linkup_api_key_dao.get_by_fingerprint(fingerprint)
     if existing is not None:
