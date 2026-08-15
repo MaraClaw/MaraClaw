@@ -4,10 +4,11 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Registration
 
+- Shared channel LLM helpers live in `app/services/channels/llm_bridge.py`. `feishu.py` re-exports `_load_agent_and_model` / `_call_llm_with_config` for existing IM importers.
 - Default: `prefix=settings.API_PREFIX` so `/agents` → `/api/agents`.
-- Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`.
+- Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
-- `whatsapp.py` is **not** mounted.
+- `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. `background_tasks.py` is a helper, not a router.
 
 ## Dependencies
 
@@ -36,5 +37,5 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Hotspots
 
-- Large: `feishu.py`, `okr.py`, `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`.
+- Large: `feishu.py` (event/file still in-router; LLM is `channels/llm_bridge.py`), `okr.py` (schemas + period math extracted; gap/outreach still here), `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`, `slack.py`.
 - Split new domain logic out of those files. Do not expose secrets in response models.

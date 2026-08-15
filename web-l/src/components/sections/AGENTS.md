@@ -1,6 +1,6 @@
 # sections/ - landing blocks
 
-**Generated:** 2026-08-13 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-15 · Parent: `web-l/AGENTS.md`
 
 ## OVERVIEW
 
@@ -12,7 +12,7 @@ Marketing page sections composed by `App.tsx`. Copy and demo data are **hardcode
 |------|--------|--------|------|
 | `hero.tsx` | `Hero` | (main top) | Value prop, CTAs, trust bullets |
 | `features.tsx` | `Features` | `#features` | Platform pillars |
-| `agents.tsx` | `Agents` | `#agents` | Role catalog (12 cards) |
+| `agents.tsx` | `Agents` | `#agents` | Marketing subset: **12 cards** of **22** `engine/agent_templates/` roles |
 | `how-it-works.tsx` | `HowItWorks` | `#how-it-works` | 3-step narrative |
 | `integrations.tsx` | `Integrations` | `#integrations` | Channels / ecosystem badges |
 | `enterprise.tsx` | `Enterprise` | `#enterprise` | B2B controls |
@@ -26,7 +26,7 @@ App order: Hero → Features → Agents → HowItWorks → Integrations → Ente
 | Task | File |
 |------|------|
 | Change hero copy / primary CTA | `hero.tsx` |
-| Add/edit agent roles | `agents.tsx` (`agents[]`) - keep aligned with `engine/agent_templates/` |
+| Add/edit agent roles | `agents.tsx` (`agents[]`) — 12 featured cards; catalog has 22. Keep copy aligned with `engine/agent_templates/` |
 | Channel / integration badges | `integrations.tsx` - don’t invent unsupported connectors |
 | FAQ answers | `faq.tsx` |
 | Section animation pattern | Most use `@/components/motion` (`Reveal`/`Stagger`) |

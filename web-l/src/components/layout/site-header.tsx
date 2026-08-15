@@ -1,9 +1,11 @@
 import { Menu } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/use-auth'
 import {
   Sheet,
   SheetClose,
@@ -24,6 +26,8 @@ const navItems = [
 ]
 
 export function SiteHeader() {
+  const { status, logout } = useAuth()
+  const signedIn = status === 'authenticated'
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
@@ -43,12 +47,12 @@ export function SiteHeader() {
       )}
     >
       <div className="container-page flex h-16 items-center justify-between gap-4">
-        <a href="#top" className="group flex items-center gap-2.5">
+        <Link to="/" className="group flex items-center gap-2.5">
           <MaraClawLogo className="size-9 shadow-[0_8px_20px_-10px_oklch(0.5_0.14_38/0.7)]" />
           <span className="font-display text-base font-semibold tracking-tight text-foreground">
             MaraClaw
           </span>
-        </a>
+        </Link>
 
         <nav aria-label="Primary" className="hidden items-center gap-0.5 md:flex">
           {navItems.map((item) => (
@@ -64,12 +68,25 @@ export function SiteHeader() {
 
         <div className="hidden items-center gap-2 md:flex">
           <ThemeToggle />
-          <Button variant="ghost" size="sm" asChild>
-            <a href="#contact">Sign in</a>
-          </Button>
-          <Button size="sm" asChild>
-            <a href="#cta">Request a demo</a>
-          </Button>
+          {signedIn ? (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/app">Workspace</Link>
+              </Button>
+              <Button size="sm" variant="outline" onClick={logout}>
+                Sign out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/login">Sign in</Link>
+              </Button>
+              <Button size="sm" asChild>
+                <Link to="/register">Create account</Link>
+              </Button>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2 md:hidden">
@@ -99,16 +116,31 @@ export function SiteHeader() {
                   </SheetClose>
                 ))}
                 <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
-                  <SheetClose asChild>
-                    <Button variant="outline" asChild>
-                      <a href="#contact">Sign in</a>
-                    </Button>
-                  </SheetClose>
-                  <SheetClose asChild>
-                    <Button asChild>
-                      <a href="#cta">Request a demo</a>
-                    </Button>
-                  </SheetClose>
+                  {signedIn ? (
+                    <>
+                      <SheetClose asChild>
+                        <Button variant="outline" asChild>
+                          <Link to="/app">Workspace</Link>
+                        </Button>
+                      </SheetClose>
+                      <SheetClose asChild>
+                        <Button onClick={logout}>Sign out</Button>
+                      </SheetClose>
+                    </>
+                  ) : (
+                    <>
+                      <SheetClose asChild>
+                        <Button variant="outline" asChild>
+                          <Link to="/login">Sign in</Link>
+                        </Button>
+                      </SheetClose>
+                      <SheetClose asChild>
+                        <Button asChild>
+                          <Link to="/register">Create account</Link>
+                        </Button>
+                      </SheetClose>
+                    </>
+                  )}
                 </div>
               </nav>
             </SheetContent>

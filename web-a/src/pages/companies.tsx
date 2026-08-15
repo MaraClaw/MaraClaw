@@ -59,7 +59,7 @@ export function CompaniesPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div>
-        <h1 className="font-display text-3xl font-semibold tracking-tight">Companies</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Companies</h1>
         <p className="mt-2 text-muted-foreground">
           System organizations and customer companies. Email domains are managed on each company.
         </p>

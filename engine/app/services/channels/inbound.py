@@ -147,8 +147,7 @@ async def generate_channel_reply(
     ``history`` must be prior turns only; ``user_text`` is the new user turn
     (``_call_llm_with_config`` appends it).
     """
-    # Lazy import: implementation still lives under api.feishu for historical reasons.
-    from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+    from app.services.channels.llm_bridge import _call_llm_with_config, _load_agent_and_model
 
     if agent_model is None and llm_model is None:
         agent_model, llm_model, fallback_model = await _load_agent_and_model(None, agent_id)

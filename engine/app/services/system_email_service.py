@@ -214,6 +214,7 @@ DEFAULT_EMAIL_TEMPLATES: EmailTemplates = {
             "Hello {{display_name}},\n\n"
             + "Welcome to MaraClaw! Please use the following 6-digit code to verify your email address:\n\n"
             + "Verification code: {{verification_code}}\n\n"
+            + "Or open this link: {{verification_url}}\n\n"
             + "This code expires in {{expiry_minutes}} minutes. "
             + "If you did not create an account, you can ignore this email."
         ),
@@ -242,7 +243,7 @@ DEFAULT_EMAIL_TEMPLATES: EmailTemplates = {
 
 # Fixed available variables per scenario (for frontend display)
 EMAIL_TEMPLATE_VARIABLES: dict[str, list[str]] = {
-    "email_verification": ["display_name", "verification_code", "expiry_minutes"],
+    "email_verification": ["display_name", "verification_code", "verification_url", "expiry_minutes"],
     "password_reset": ["display_name", "reset_url", "expiry_minutes"],
     "company_invitation": ["inviter_name", "company_name", "invite_url"],
 }

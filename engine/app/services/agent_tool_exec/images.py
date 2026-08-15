@@ -132,6 +132,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     - siliconflow: OpenAI-compatible API (FLUX models, China-friendly)
     - openai: Native OpenAI API (GPT Image)
     - google: Google Gemini Native Image API (Nano Banana)
+    - grok: xAI Grok Imagine (OpenAI-compatible images.generate)
     - custom: Configurable HTTP API for gateways such as TokenRouter/OpenRouter
 
     The tool config is resolved via the standard _get_tool_config() hierarchy:
@@ -154,6 +155,21 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     model = json_as_str_or(config.get("model"))
     api_key = json_as_str_or(config.get("api_key"))
     base_url = json_as_str_or(config.get("base_url"))
+    if provider == "grok":
+        from app.services.agent_tool_exec.xai_credentials import (
+            missing_xai_key_message,
+            resolve_xai_api_key,
+            resolve_xai_base_url,
+        )
+
+        api_key = resolve_xai_api_key(api_key)
+        base_url, base_error = resolve_xai_base_url(base_url)
+        if base_error:
+            return f"❌ {base_error}"
+        if not api_key:
+            return missing_xai_key_message("Grok Imagine")
+        prompt = prompt[:4000]
+        model = model or "grok-imagine-image-2.0"
 
     if not api_key:
         return (
@@ -198,6 +214,14 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
                 prompt,
                 size,
             )
+        elif provider == "grok":
+            image_bytes = await agent_tools._generate_image_grok(
+                api_key,
+                model,
+                base_url,
+                prompt,
+                size,
+            )
         elif provider == "custom":
             image_bytes = await agent_tools._generate_image_custom_api(
                 api_key=api_key,
@@ -214,7 +238,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
                 size=size,
             )
         else:
-            return f"❌ Unknown image generation provider: {provider}. Supported: siliconflow, openai, google, custom"
+            return f"❌ Unknown image generation provider: {provider}. Supported: siliconflow, openai, google, grok, custom"
 
         if not image_bytes:
             return "❌ Image generation returned empty result. Please try a different prompt."

@@ -46,7 +46,7 @@ def test_normalize_email_domain_rejects_junk(raw):
 
 
 @pytest.mark.asyncio
-async def test_place_new_registration_confirms_claimed_domain(monkeypatch):
+async def test_place_new_registration_claimed_domain_still_joins_openclaw(monkeypatch):
     acme = _tenant()
     openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
     claim = SimpleNamespace(tenant_id=acme.id)
@@ -55,9 +55,9 @@ async def test_place_new_registration_confirms_claimed_domain(monkeypatch):
     monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
 
     placed = await membership.place_new_registration(email="ada@acme.com")
-    assert placed.needs_org_confirm is True
-    assert placed.tenant_id is None
-    assert placed.suggested.id == acme.id
+    assert placed.needs_org_confirm is False
+    assert placed.tenant_id == openclaw.id
+    assert placed.suggested is None
 
 
 @pytest.mark.asyncio

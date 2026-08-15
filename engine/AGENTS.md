@@ -1,18 +1,18 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-14
-**Commit:** 08ac4f7
-**Branch:** enhance-web-search
+**Generated:** 2026-08-15
+**Commit:** 04d89c0
+**Branch:** implement-web-l-login
 **Mode:** update (init-deep --max-depth=7)
 
 ## OVERVIEW
 
-MaraClaw-r2 is a FastAPI backend for an enterprise digital-employee platform: multi-tenant Postgres via **pure psycopg3**, Redis Pub/Sub, agent workspaces, tool execution, LLM orchestration, and optional IM/identity connectors. Backend-only checkout.
+FastAPI backend for a multi-tenant digital-employee platform: Postgres via **pure psycopg3**, Redis Pub/Sub, agent workspaces, tool execution, LLM orchestration, optional IM/identity connectors. Package name `maraclaw` 2.1.1.
 
 ## STRUCTURE
 
 ```
-MaraClaw-r2/
+engine/
 ├── app/                         # FastAPI package
 │   ├── api/                     # Flat routers mounted from main.py
 │   ├── core/                    # auth, permissions, events, logging/
@@ -51,31 +51,32 @@ No `alembic/`, no `app/models/`.
 | DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
-| Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
+| Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs are separate. Do not grow `agent_tools.py` |
 | Page read | `agent_tool_exec/web_read.py` | `read_webpage` only; web lookup/fetch/research/extract are vendored Linkup skills |
+| X search | `agent_tool_exec/x_search.py` | `search_x` via xAI Responses API; not a web search engine. Key: tool `api_key` then `XAI_API_KEY` |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |
-| Channel registry / shared helpers | `app/services/channels/` | Types, config CRUD, inbound pipeline; see `docs/channels.md` |
+| Channel registry / shared helpers | `app/services/channels/` | Types, config CRUD, inbound, `llm_bridge`; see `docs/channels.md` |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
 | OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.7 / gogcli 0.36 / OpenClaw 2026.7.1-2; Hub publish is `publish-openclaw-local-dockerfile.sh` |
 
 ## CODE MAP
 
-No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-08-14).
+No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-08-15).
 
 | Symbol | Type | Location | Refs | Role |
 |---|---|---|---:|---|
-| `app` | FastAPI | `app/main.py:418` | broad | App, middleware, mounts, health/version |
-| `lifespan` | function | `app/main.py:196` | startup | Pool → seed → realtime/worker/connector |
-| `_role_enabled` | function | `app/main.py:32` | startup | Gates `bootstrap`/`api`/`worker`/`connector` |
-| `Settings` / `get_settings` | class/fn | `app/config.py:81` / `:195` | env | Env contract (`PLATFORM_ADMIN_*`, JWT, …) |
+| `app` | FastAPI | `app/main.py:429` | broad | App, middleware, mounts, health/version |
+| `lifespan` | function | `app/main.py:204` | startup | Pool → seed → realtime/worker/connector |
+| `_role_enabled` | function | `app/main.py:35` | startup | Gates `bootstrap`/`api`/`worker`/`connector` |
+| `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:228` | 156 | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
 | `ensure_platform_admin` | function | `app/services/platform_admin_seeder.py` | bootstrap | Genesis platform admin from env |
 | `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:80` | tenants/admin | Tenant + genesis `org_admin` |
-| `load_user_from_access_token` | function | `app/core/security.py:165` | 8+ | JWT → user + identity; force-change gate |
+| `load_user_from_access_token` | function | `app/core/security.py:183` | WS/files | JWT → user + identity; force-change gate |
 | `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
-| `connection_ctx` | cm | `app/db/session.py:29` | 116 | Commit on success; join if nested |
+| `connection_ctx` | cm | `app/db/session.py:26` | DAO/services | Commit on success; join if nested |
 | `BaseDAO` | class | `app/dao/base.py` | dao | CRUD + record dataclass defaults |
 | `check_agent_access` | function | `app/core/permissions.py:326` | API | `(user, agent_id)` - leftover `db` ignored |
 | `LoggingService` | class | `app/core/logging/service.py` | broad | Queued process logger |
@@ -85,7 +86,7 @@ No `codegraph_*` in this harness. LSP `findReferences` + document symbols (2026-
 
 ## CONVENTIONS
 
-- Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Python **≥3.14.7**. Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
+- Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Requires **≥3.14.5** (`pyproject`); pin/runtime **3.14.7** (`.python-version`, Docker `python:3.14.7-slim-trixie`). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
 - Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
 - Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
@@ -147,5 +148,4 @@ uv run python -m app.scripts.bootstrap_db
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
-- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only** (`DOCKERHUB_NAMESPACE=… ./publish-openclaw-local-dockerfile.sh`).
-- `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. No `AGENTS.md` under `clawsec_skill_files/` skill trees (AGPL payload).
+- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. No `AGENTS.md` under `clawsec_skill_files/` skill trees (AGPL).

@@ -18,16 +18,19 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 ## Placement
 
 - Put new execution handlers here when they can be isolated from legacy `agent_tools.py` branching.
-- Register in `_agent_tool_exec_<family>.py` (side-effect imported). Put implementation in the unprefixed family module (`workspace_*.py`, `feishu_*.py`, …).
-- Keep tool catalog metadata in `app/services/tool_definitions/`, not in this package.
+- Register in `_agent_tool_exec_<family>.py` (side-effect imported from `agent_tools.py`). Put implementation in the unprefixed family module (`workspace_*.py`, `feishu_*.py`, …).
+- `_agent_tool_exec_leftover.py` registers plaza / publish / clawhub / email / tasks / images / code / channel send / MCP discover-import / OKR / deploy. Those names are also still in `dispatcher.py` `elif`s because several tests force `resolve_tool_handler = None`. New work: add `@register` here; do not grow the leftover file or the facade.
+- Keep tool catalog metadata in `app/services/tool_definitions/` (seed) and `app/services/agent_tools_definitions/` (OpenAI shapes).
 - Avoid importing route modules or FastAPI dependencies here; handlers should stay service-layer code.
 
-## Page read (no built-in search-engine tools)
+## Page read and X search (no web search-engine tools)
 
 - `web_read.py` - `read_webpage` only.
-- Register page-read names in `_agent_tool_exec_search.py`. Do not re-add search-engine tools.
+- `x_search.py` - `search_x` via xAI Responses API `x_search` (posts/users/threads). Not a web search engine.
+- `xai_credentials.py` - shared `XAI_API_KEY` fallback and `api.x.ai` base-url allowlist for Search X and Grok Imagine.
+- Register those names in `_agent_tool_exec_search.py`. Do not re-add Google/Bing/Tavily-style search-engine tools.
 - Web search/fetch/research/extract for OpenClaw agents are the vendored Linkup skills (`app/services/linkup_runtime.py`).
-- Tests: `tests/test_search_web_tools.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.
+- Tests: `tests/test_search_web_tools.py`, `tests/test_x_search.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.
 
 ## Code Execution
 

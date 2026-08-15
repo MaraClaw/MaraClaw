@@ -1,5 +1,7 @@
 # Top 10 Module Refactoring Packet
 
+**Superseded for execution order:** `.omgb/plans/engine-top5-modularize-20260815.md` (2026-08-15). Metrics below are a 2026-07-05 snapshot (`agent_tools.py` was ~10k LOC then; it is now a facade). Keep these briefs as seam notes, not current line counts.
+
 Analyzed at commit `262e123` on branch `tencent-memory-feature` on 2026-07-05.
 
 This packet turns the largest maintainability hotspots into module-by-module refactoring briefs. Each numbered file is intended to stand alone as a future refactoring task: it names the current responsibilities, concrete split seams, a target layout, migration order, characterization tests to write first, risks, and acceptance criteria.

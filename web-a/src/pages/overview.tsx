@@ -46,11 +46,10 @@ export function OverviewPage() {
         className="flex flex-col gap-3"
       >
         <div className="flex flex-wrap items-center gap-2">
-          {isPlatformAdminUser(user) ? <Badge variant="secondary">Platform</Badge> : <Badge variant="secondary">Admin</Badge>}
-          <Badge variant="outline">React 19 · Vite · Tailwind v4</Badge>
+          {isPlatformAdminUser(user) ? <Badge variant="soft">Platform</Badge> : <Badge variant="soft">Admin</Badge>}
         </div>
-        <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
-          MaraClaw Admin
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          Overview
         </h1>
         <p className="max-w-2xl text-muted-foreground">
           {isPlatformAdminUser(user)

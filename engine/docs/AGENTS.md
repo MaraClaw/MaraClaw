@@ -13,12 +13,14 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
 | OpenClaw image helpers | `../docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
 | ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
-| Refactoring packets | `refactoring/` | Top-module cleanup briefs. `psycopg-migration.md` is **historical dual-stack** - live policy is the freeze scripts + root `AGENTS.md`. |
+| Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
+| Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Live split plan: repo `.omgb/plans/engine-top5-modularize-20260815.md`. `psycopg-migration.md` is **historical dual-stack**. |
 
 ## Update Triggers
 
 - Admin API docs should track `app/api/admin.py`, `tenants.py`, `enterprise.py`, `users.py`, `organization.py`, `tools.py`, `skills.py`, `auth.py` (login/password force-change), `app/services/platform_admin_seeder.py`, `app/services/tenant_provisioning.py`, and admin gates in `app/core/security.py` when roles, genesis bootstrap, or routes change.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
+- Search-analytics docs should track `app/services/linkup/`, `app/api/admin_search_analytics.py`, `app/api/linkup_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
 - gogcli credential docs should track `app/services/gogcli_runtime.py`, `Dockerfile.openclaw`, and `docker/openclaw/` scripts.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.
 

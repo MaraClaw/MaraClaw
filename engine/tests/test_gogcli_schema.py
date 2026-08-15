@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.schemas.schemas import AgentCreate, AgentOut
+from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 
 
 def test_agent_create_accepts_gogcli_enabled_true() -> None:
@@ -44,3 +44,10 @@ def test_agent_out_includes_and_serializes_gogcli_enabled() -> None:
     # Then: gogcli_enabled is part of the schema contract and serialized output.
     assert "gogcli_enabled" in AgentOut.model_fields
     assert agent.model_dump()["gogcli_enabled"] is True
+
+
+def test_agent_update_accepts_gogcli_enabled() -> None:
+    update = AgentUpdate(gogcli_enabled=True)
+
+    assert update.gogcli_enabled is True
+    assert AgentUpdate().gogcli_enabled is None

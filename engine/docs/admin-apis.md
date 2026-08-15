@@ -37,6 +37,8 @@ Open registration never elevates to `platform_admin`. Bootstrap never elevates a
 
 While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). The `allow_self_create_company` flag is retained on platform settings but does not create tenants.
 
+Password-reset and verify links prefer the requesting frontend `Origin` (or Referer origin) when it is listed in `CORS_ORIGINS` — so `web-a` (`:5174`) and `web-l` (`:5173`) each receive their own links. Unknown origins are ignored; fallback is `PUBLIC_BASE_URL` (the member/marketing site).
+
 Base path for most routes: **`/api`**.
 
 Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few public/websocket routers (see `app/api/AGENTS.md`).
@@ -279,6 +281,8 @@ Platform may target another company via `tenant_id`.
 | `DELETE` | `/api/tools/{tool_id}` | admin | - | Non-builtin only; tenant ownership for non-platform |
 
 Agent-level tool assignment/config routes exist under `/api/tools/agents/...` but use agent access checks (not pure admin gates). **Only** platform/org may set `allow_network` / proxy fields on agent tool config.
+
+`search_x` and `generate_image_grok` read `config.api_key` from this catalog, then fall back to `XAI_API_KEY`. Custom `base_url` is only accepted for `https://api.x.ai`. web-a `/tools` is still a placeholder — configure via `PUT /api/tools/{id}` or env.
 
 ### B8. Skills - `/api/skills/*`
 

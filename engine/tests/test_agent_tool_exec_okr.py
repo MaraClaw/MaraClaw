@@ -133,7 +133,7 @@ async def test_get_okr_preserves_empty_and_disabled_messages(monkeypatch) -> Non
         {"period_start": "2026-01-01", "period_end": "2026-03-31"},
     )
 
-    assert empty_result == "No OKRs found for the current period (2026-01-01 – 2026-03-31)."  # noqa: RUF001
+    assert empty_result == "No OKRs found for the current period (2026-01-01 - 2026-03-31)."
 
     monkeypatch.setattr(
         okr_settings_dao_mod.okr_settings_dao,

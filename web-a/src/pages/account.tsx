@@ -79,10 +79,10 @@ export function AccountPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">Account</Badge>
+          <Badge variant="soft">Account</Badge>
           {mustChangePassword ? <Badge variant="warning">Password change required</Badge> : null}
         </div>
-        <h1 className="font-display text-3xl font-semibold tracking-tight">Account</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Account</h1>
         <p className="text-sm text-muted-foreground">
           Manage your admin credentials. Password changes apply to your global identity across
           organizations.

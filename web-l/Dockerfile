@@ -7,6 +7,7 @@
 #   3) runtime - unprivileged nginx serves static dist
 #
 # Build:  docker build -t maraclaw-web-l .
+#         docker build -t maraclaw-web-l --build-arg VITE_API_BASE_URL=https://api.example.com .
 # Run:    docker run --rm -p 8080:8080 maraclaw-web-l
 
 ARG NODE_VERSION=26.7.0
@@ -31,6 +32,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+ARG VITE_API_BASE_URL=
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY index.html ./
@@ -48,7 +52,7 @@ RUN npm run build \
 FROM nginxinc/nginx-unprivileged:1.30.4-alpine AS runtime
 
 LABEL org.opencontainers.image.title="MaraClaw web-l" \
-      org.opencontainers.image.description="MaraClaw marketing landing page" \
+      org.opencontainers.image.description="MaraClaw landing and member auth" \
       org.opencontainers.image.vendor="MaraClaw"
 
 # Replace the default site with our SPA config (port 8080, security headers).

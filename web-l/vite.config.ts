@@ -12,10 +12,31 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(rootDir, './src'),
+      react: path.resolve(rootDir, 'node_modules/react'),
+      'react-dom': path.resolve(rootDir, 'node_modules/react-dom'),
     },
+    dedupe: ['react', 'react-dom'],
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', '@tanstack/react-query'],
   },
   server: {
     port: 5173,
     host: true,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        ws: true,
+      },
+      '/p': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
   },
 })

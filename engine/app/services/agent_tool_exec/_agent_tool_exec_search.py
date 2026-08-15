@@ -24,10 +24,23 @@ def _load_search_module(name: str) -> object:
     return importlib.import_module(name)
 
 
+class _XSearchModule(Protocol):
+    async def _search_x(self, agent_id: uuid.UUID, arguments: ToolArguments) -> str: ...
+
+
+def _is_x_search_module(value: object) -> TypeIs[_XSearchModule]:
+    return _has_callables(value, "_search_x")
+
+
 _loaded_web_read = _load_search_module("app.services.agent_tool_exec.web_read")
 if not _is_web_read_module(_loaded_web_read):
     raise TypeError("web_read module is missing required handlers")
 _web_read_module = _loaded_web_read
+
+_loaded_x_search = _load_search_module("app.services.agent_tool_exec.x_search")
+if not _is_x_search_module(_loaded_x_search):
+    raise TypeError("x_search module is missing required handlers")
+_x_search_module = _loaded_x_search
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str) -> str:
@@ -107,3 +120,16 @@ async def read_webpage(
 ) -> str:
     del agent_id, user_id, session_id, on_output
     return await _web_read_module._read_webpage(arguments)
+
+
+@register("search_x")
+async def search_x(
+    *,
+    arguments: ToolArguments,
+    agent_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session_id: str,
+    on_output: ToolOutputCallback | None,
+) -> str:
+    del user_id, session_id, on_output
+    return await _x_search_module._search_x(agent_id, arguments)

@@ -257,9 +257,9 @@ async def _freebusy_section(sender_open_id: str, token: str, start_iso: str, end
             try:
                 start = datetime.fromisoformat(start_raw).astimezone(tz_cn).strftime("%H:%M")
                 end = datetime.fromisoformat(end_raw).astimezone(tz_cn).strftime("%H:%M")
-                busy_lines.append(f"  🔴 {start}–{end}")  # noqa: RUF001
+                busy_lines.append(f"  🔴 {start}-{end}")
             except Exception:
-                busy_lines.append(f"  🔴 {start_raw}–{end_raw}")  # noqa: RUF001
+                busy_lines.append(f"  🔴 {start_raw}-{end_raw}")
         return "\n📌 **用户真实日历（忙碌时段）**：\n" + "\n".join(busy_lines)
     except Exception as error:
         return f"\n⚠️ Freebusy 查询异常: {error}"
@@ -352,7 +352,7 @@ async def _feishu_calendar_update(agent_id: uuid.UUID, arguments: ToolArguments)
     if end_time:
         patch["end_time"] = {"timestamp": str(int(agent_tools._iso_to_ts(end_time))), "timezone": timezone}
     if not patch:
-        return "ℹ️ No fields to update."  # noqa: RUF001
+        return "No fields to update."
     async with _httpx_client(timeout=20) as client:
         response = await client.patch(
             f"https://open.feishu.cn/open-apis/calendar/v4/calendars/{agent_cal_id}/events/{event_id}",

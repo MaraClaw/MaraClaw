@@ -492,6 +492,7 @@ from app.api.webhooks import router as webhooks_router
 from app.api.websocket import router as ws_router
 from app.api.wechat import router as wechat_router
 from app.api.wecom import router as wecom_router
+from app.api.whatsapp import router as whatsapp_router
 
 # One connection per short CRUD request. Never attach this to websocket,
 # connector inbound, gateway, or AgentBay control - those call the LLM or
@@ -525,6 +526,7 @@ app.include_router(google_workspace_router, prefix=settings.API_PREFIX, dependen
 app.include_router(google_chat_router, prefix=settings.API_PREFIX)
 app.include_router(wecom_router, prefix=settings.API_PREFIX)
 app.include_router(wechat_router, prefix=settings.API_PREFIX)
+app.include_router(whatsapp_router, prefix=settings.API_PREFIX)
 app.include_router(teams_router, prefix=settings.API_PREFIX)
 
 app.include_router(atlassian_router, prefix=settings.API_PREFIX)

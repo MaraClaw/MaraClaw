@@ -1,7 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
+**Generated:** 2026-08-15  
+**Commit:** 04d89c0  
+**Branch:** implement-web-l-login  
 **Package:** `web-a` (MaraClaw admin console)  
-**Status:** Live auth + companies + Linkup search keys (2026-08-15). `/users` and `/tools` still placeholders.
+**Status:** Live auth + companies + Linkup keys + search analytics. `/users` and `/tools` still placeholders.
 
 > Monorepo routing: `../AGENTS.md`.  
 > Admin HTTP contracts: `../engine/docs/admin-apis.md`.
@@ -25,7 +28,7 @@ Password flows: `/forgot-password` + `/reset-password?token=` (public; engine SM
 
 **Companies:** Platform-admin only (`/companies`, `/companies/:id`). Org admins do not see the nav item and are redirected to Overview. Platform admin can create a company (`POST /api/admin/companies`) with a genesis org admin. `/companies/:id` manages claimed email domains. System orgs and the default end-user org (OpenClaw) are badged. Disable/Enable is hidden when `can_disable` is false (MaraClaw + OpenClaw).
 
-Does **not** own marketing (`web-l`) or end-user chat (`web-e`). Does **not** implement APIs - clients call `engine`.
+Does **not** own marketing or member auth (`web-l`). Does **not** implement APIs - clients call `engine`.
 
 ## STRUCTURE
 
@@ -73,7 +76,7 @@ web-a/
 | Create company | `src/components/companies/create-company-form.tsx` - platform admin only |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
 | Route guards | `src/routes/protected.tsx` |
-| Nav / shell | `src/components/layout/admin-shell.tsx` |
+| Nav / shell | `src/components/layout/admin-shell.tsx` | Matches `web-l` workspace chrome: logo, larger nav, email + theme + sign out |
 | Routes | `src/routes/index.tsx` |
 | HTTP client | `src/lib/` (see nested `AGENTS.md`) |
 | Design tokens | `src/index.css` |
@@ -87,7 +90,8 @@ web-a/
 - Prefer TanStack Query for server state; forms via RHF + Zod.
 - Tenant scoping: platform admin may pass `tenant_id`; org admin is own-tenant only (enforce in API client + UI).
 - Treat 403 `{ must_change_password: true }` from engine as force-password-change, not a generic logout.
-- Keep brand assets consistent with `web-l` (`public/maraclaw-mark.svg`, warm OKLCH tokens).
+- Keep brand assets consistent with `web-l` (`MaraClawLogo`, `public/maraclaw-mark.svg`, warm OKLCH tokens).
+- Workspace chrome follows `web-l` `app-shell`: `bg-card/70` sidebar, `text-base` nav, footer email + theme toggle + Sign out.
 - New screens: add under `pages/`, wire in `routes/`, link in shell nav when ready.
 
 ## COMMANDS
@@ -109,7 +113,7 @@ Production image: multi-stage Node **26.7.0** + `nginxinc/nginx-unprivileged` on
 - Do not put marketing pages or end-user chat here.
 - Do not invent REST handlers in Vite - extend `engine`.
 - Do not hardcode absolute API hosts in components; use `apiUrl()`.
-- Do not dump admin UI into `web-l` or `web-e`.
+- Do not dump admin UI into `web-l`.
 - Do not ignore `must_change_password` after login - gated admin APIs will 403 and the operator will look "stuck".
 - Do not treat `VITE_AUTH_BYPASS` as implemented - README mentions it; code does not.
 - Do not use `0.0.0.0` as a browser API host (`getApiBaseUrl` maps it to same-origin).

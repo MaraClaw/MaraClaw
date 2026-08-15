@@ -1,35 +1,43 @@
-import { SiteFooter } from '@/components/layout/site-footer'
-import { SiteHeader } from '@/components/layout/site-header'
-import { Agents } from '@/components/sections/agents'
-import { Cta } from '@/components/sections/cta'
-import { Enterprise } from '@/components/sections/enterprise'
-import { Faq } from '@/components/sections/faq'
-import { Features } from '@/components/sections/features'
-import { Hero } from '@/components/sections/hero'
-import { HowItWorks } from '@/components/sections/how-it-works'
-import { Integrations } from '@/components/sections/integrations'
+import { Component, type ReactNode } from 'react'
+import { Toaster } from 'sonner'
+
+import { AuthProvider } from '@/hooks/use-auth'
+import { AppRouter } from '@/routes'
+
+class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-background px-6 text-center">
+          <p className="font-display text-lg font-semibold">Something went wrong</p>
+          <p className="max-w-md text-sm text-muted-foreground">{this.state.error.message}</p>
+          <button
+            type="button"
+            className="rounded-xl bg-primary px-4 py-2 text-sm text-primary-foreground"
+            onClick={() => this.setState({ error: null })}
+          >
+            Try again
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 export default function App() {
   return (
-    <div id="top" className="min-h-svh bg-background text-foreground">
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground"
-      >
-        Skip to content
-      </a>
-      <SiteHeader />
-      <main id="main">
-        <Hero />
-        <Features />
-        <Agents />
-        <HowItWorks />
-        <Integrations />
-        <Enterprise />
-        <Faq />
-        <Cta />
-      </main>
-      <SiteFooter />
-    </div>
+    <RootErrorBoundary>
+      <AuthProvider>
+        <AppRouter />
+        <Toaster richColors closeButton position="top-right" />
+      </AuthProvider>
+    </RootErrorBoundary>
   )
 }

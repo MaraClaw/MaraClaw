@@ -56,14 +56,23 @@ async def create_password_reset_token(identity_id: uuid.UUID) -> tuple[str, date
 
 async def get_public_base_url() -> str:
     """Resolve the public base URL used for user-facing links."""
-    from app.services.platform_service import platform_service
+    from app.services.frontend_origin import resolve_frontend_base_url
 
-    return await platform_service.get_public_base_url()
+    return await resolve_frontend_base_url()
 
 
-async def build_password_reset_url(raw_token: str) -> str:
-    """Build the user-facing reset URL."""
-    base_url = await get_public_base_url()
+async def build_password_reset_url(raw_token: str, request: object | None = None) -> str:
+    """Build the user-facing reset URL.
+
+    When ``request`` carries an Origin/Referer listed in CORS_ORIGINS, that
+    frontend wins so member reset links land on web-l and admin links on web-a.
+    """
+    from fastapi import Request
+
+    from app.services.frontend_origin import resolve_frontend_base_url
+
+    req = request if isinstance(request, Request) else None
+    base_url = await resolve_frontend_base_url(req)
     return f"{base_url}/reset-password?token={raw_token}"
 
 

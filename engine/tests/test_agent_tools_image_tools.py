@@ -204,6 +204,124 @@ async def test_openai_and_google_preserve_provider_payloads(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_grok_preserves_imagine_payload_and_maps_size_to_aspect_ratio(monkeypatch):
+    image_bytes = b"grok-image"
+    encoded = base64.b64encode(image_bytes).decode()
+    fake_httpx = install_fake_httpx(monkeypatch, [FakeResponse(200, {"data": [{"b64_json": encoded}]})])
+
+    result = await agent_tools._generate_image_grok(
+        "xai-key", "grok-imagine-image-2.0", "https://api.x.ai/v1/", "draw a fox", "1366x768"
+    )
+
+    assert result == image_bytes
+    assert fake_httpx.calls == [
+        (
+            "POST",
+            "https://api.x.ai/v1/images/generations",
+            {"timeout": 120},
+            {
+                "json": {
+                    "model": "grok-imagine-image-2.0",
+                    "prompt": "draw a fox",
+                    "n": 1,
+                    "response_format": "b64_json",
+                    "aspect_ratio": "16:9",
+                    "resolution": "1k",
+                },
+                "headers": {"Authorization": "Bearer xai-key", "Content-Type": "application/json"},
+            },
+        )
+    ]
+
+
+def test_grok_size_maps_to_imagine_aspect_ratio_and_resolution():
+    from app.services.agent_tool_exec import images_providers as providers
+
+    assert providers._size_to_aspect_ratio("1024x1536") == "2:3"
+    assert providers._size_to_aspect_ratio("1536x1024") == "3:2"
+    assert providers._size_to_aspect_ratio("1920x1080") == "16:9"
+    assert providers._size_to_aspect_ratio("2048x1024") == "2:1"
+    assert providers._size_to_aspect_ratio("3:2") == "3:2"
+    assert providers._size_to_aspect_ratio("auto") == "auto"
+    assert providers._size_to_resolution("1366x768") == "1k"
+    assert providers._size_to_resolution("1024x1536") == "2k"
+    assert providers._size_to_resolution("16:9") is None
+
+
+@pytest.mark.asyncio
+async def test_generate_image_grok_uses_default_model_and_rejects_untrusted_base(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    from app.services.agent_tool_exec import images
+
+    calls = []
+
+    async def grok(*args, **kwargs):
+        calls.append((args, kwargs))
+        return b"grok-bytes"
+
+    monkeypatch.setattr(agent_tools, "_generate_image_grok", grok)
+    monkeypatch.setattr(
+        agent_tools,
+        "_get_tool_config",
+        AsyncMock(return_value={"api_key": "key"}),
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(XAI_API_KEY=""))
+
+    result = await images._generate_image(
+        uuid.uuid4(),
+        tmp_path,
+        {"prompt": "paint a tree", "save_path": "workspace/images/tree.png"},
+        "grok",
+    )
+
+    assert calls == [(("key", "grok-imagine-image-2.0", "https://api.x.ai/v1", "paint a tree", "1024x1024"), {})]
+    assert "Provider: grok | Model: grok-imagine-image-2.0" in result
+
+    monkeypatch.setattr(
+        agent_tools,
+        "_get_tool_config",
+        AsyncMock(return_value={"api_key": "key", "base_url": "https://evil.test/v1"}),
+    )
+    denied = await images._generate_image(
+        uuid.uuid4(),
+        tmp_path,
+        {"prompt": "paint a tree", "save_path": "workspace/images/tree.png"},
+        "grok",
+    )
+    assert denied == "❌ xAI base_url must be https://api.x.ai/v1"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_grok_falls_back_to_env_key(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from app.services.agent_tool_exec import images
+
+    calls = []
+
+    async def grok(*args, **kwargs):
+        calls.append(args)
+        return b"env-bytes"
+
+    monkeypatch.setattr(agent_tools, "_generate_image_grok", grok)
+    monkeypatch.setattr(agent_tools, "_get_tool_config", AsyncMock(return_value={}))
+    monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(XAI_API_KEY="env-key"))
+
+    result = await images._generate_image(
+        uuid.uuid4(),
+        tmp_path,
+        {"prompt": "paint a tree", "save_path": "workspace/images/tree.png"},
+        "grok",
+    )
+
+    assert calls[0][0] == "env-key"
+    assert "Provider: grok" in result
+
+
+@pytest.mark.asyncio
 async def test_provider_api_error_preserves_error_message(monkeypatch):
     install_fake_httpx(monkeypatch, [FakeResponse(429, {"message": "rate limited"}, text="fallback")])
 
@@ -256,6 +374,12 @@ async def test_generate_image_uses_facade_config_and_writes_provider_bytes(monke
             {},
         ),
         (
+            "grok",
+            "_generate_image_grok",
+            ("key", "configured", "https://api.x.ai/v1", "paint a tree", "1024x1024"),
+            {},
+        ),
+        (
             "custom",
             "_generate_image_custom_api",
             (),
@@ -278,10 +402,11 @@ async def test_generate_image_uses_post_import_facade_provider_alias(
     monkeypatch, tmp_path, provider, alias_name, expected_args, expected_kwargs
 ):
     install_fake_httpx(monkeypatch, [])
+    config_base = "https://api.x.ai/v1" if provider == "grok" else "https://provider.test"
     monkeypatch.setattr(
         agent_tools,
         "_get_tool_config",
-        AsyncMock(return_value={"api_key": "key", "model": "configured", "base_url": "https://provider.test"}),
+        AsyncMock(return_value={"api_key": "key", "model": "configured", "base_url": config_base}),
     )
     calls = []
 
@@ -455,6 +580,10 @@ async def test_image_facades_defer_to_extracted_modules(monkeypatch, tmp_path):
         calls.append(("google", args, kwargs))
         return b"google"
 
+    async def grok(*args, **kwargs):
+        calls.append(("grok", args, kwargs))
+        return b"grok"
+
     async def custom_image_reference_to_bytes(*args, **kwargs):
         calls.append(("custom_image_reference_to_bytes", args, kwargs))
         return b"reference"
@@ -471,6 +600,7 @@ async def test_image_facades_defer_to_extracted_modules(monkeypatch, tmp_path):
                 "_generate_image_siliconflow": siliconflow,
                 "_generate_image_openai": openai,
                 "_generate_image_google": google,
+                "_generate_image_grok": grok,
             },
         ),
         (
@@ -503,6 +633,7 @@ async def test_image_facades_defer_to_extracted_modules(monkeypatch, tmp_path):
     assert await agent_tools._generate_image_siliconflow("key", "model", "base", "prompt", "size") == b"siliconflow"
     assert await agent_tools._generate_image_openai("key", "model", "base", "prompt", "size") == b"openai"
     assert await agent_tools._generate_image_google("key", "model", "base", "prompt", "size") == b"google"
+    assert await agent_tools._generate_image_grok("key", "model", "base", "prompt", "size") == b"grok"
     assert await agent_tools._upload_image(uuid.uuid4(), tmp_path, {}) == "uploaded"
     assert await agent_tools._generate_image(uuid.uuid4(), tmp_path, {}, "openai") == "generated"
     assert [name for name, _args, _kwargs in calls] == [
@@ -515,6 +646,7 @@ async def test_image_facades_defer_to_extracted_modules(monkeypatch, tmp_path):
         "siliconflow",
         "openai",
         "google",
+        "grok",
         "upload_image",
         "generate_image",
     ]

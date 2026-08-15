@@ -1,6 +1,6 @@
 # ui/ - shadcn-style primitives
 
-**Generated:** 2026-08-13 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-15 · Parent: `web-l/AGENTS.md`
 
 ## OVERVIEW
 
@@ -16,6 +16,8 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Not a full 
 | `accordion.tsx` | `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent` | Faq |
 | `separator.tsx` | `Separator` | SiteFooter |
 | `sheet.tsx` | `Sheet`, `SheetTrigger`, `SheetClose`, `SheetContent`, `SheetHeader`, `SheetTitle`, `SheetDescription` | Mobile nav (Dialog-based) |
+| `input.tsx` | `Input` | Member login / register / transfer |
+| `label.tsx` | `Label` | Auth forms |
 
 Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, aliases, Lucide).
 

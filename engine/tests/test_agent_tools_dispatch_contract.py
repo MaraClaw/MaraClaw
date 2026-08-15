@@ -46,6 +46,7 @@ EXPECTED_DISPATCH_NAMES: Final = (
     "send_file_to_agent",
     "send_channel_file",
     "read_webpage",
+    "search_x",
     "plaza_get_new_posts",
     "plaza_create_post",
     "plaza_add_comment",
@@ -55,6 +56,7 @@ EXPECTED_DISPATCH_NAMES: Final = (
     "generate_image_siliconflow",
     "generate_image_openai",
     "generate_image_google",
+    "generate_image_grok",
     "generate_image_custom",
     "discover_resources",
     "import_mcp_server",
@@ -165,6 +167,7 @@ EXPECTED_CATALOG_NAMES: Final = (
     "send_message_to_agent",
     "send_file_to_agent",
     "read_webpage",
+    "search_x",
     "read_document",
     "execute_code",
     "execute_code_e2b",
@@ -172,6 +175,7 @@ EXPECTED_CATALOG_NAMES: Final = (
     "generate_image_siliconflow",
     "generate_image_openai",
     "generate_image_google",
+    "generate_image_grok",
     "generate_image_custom",
     "discover_resources",
     "bitable_list_tables",
@@ -240,6 +244,7 @@ MIGRATED_DISPATCH_NAMES: Final = (
     "send_message_to_agent",
     "send_file_to_agent",
     "read_webpage",
+    "search_x",
     "send_feishu_message",
     "bitable_create_app",
     "bitable_list_tables",
@@ -296,6 +301,49 @@ MIGRATED_DISPATCH_NAMES: Final = (
     "agentbay_computer_dismiss_dialog",
     "agentbay_computer_list_visible_apps",
     "agentbay_file_transfer",
+    "manage_tasks",
+    "send_platform_message",
+    "send_channel_message",
+    "send_channel_file",
+    "plaza_get_new_posts",
+    "plaza_create_post",
+    "plaza_add_comment",
+    "execute_code",
+    "execute_code_e2b",
+    "upload_image",
+    "generate_image_siliconflow",
+    "generate_image_openai",
+    "generate_image_google",
+    "generate_image_grok",
+    "generate_image_custom",
+    "discover_resources",
+    "import_mcp_server",
+    "send_email",
+    "read_emails",
+    "reply_email",
+    "publish_page",
+    "list_published_pages",
+    "search_clawhub",
+    "install_skill",
+    "get_okr",
+    "get_my_okr",
+    "update_kr_content",
+    "update_kr_progress",
+    "collect_okr_progress",
+    "generate_okr_report",
+    "get_okr_settings",
+    "create_objective",
+    "create_key_result",
+    "update_objective",
+    "update_any_kr_progress",
+    "generate_monthly_okr_report",
+    "upsert_member_daily_report",
+    "vercel_deploy",
+    "vercel_list_deployments",
+    "vercel_get_deploy_logs",
+    "vercel_set_env",
+    "vercel_manage_domain",
+    "neon_create_database",
 )
 
 EXPECTED_MONKEYPATCH_SEAMS: Final = (
@@ -387,7 +435,7 @@ def test_execute_tool_dispatch_names_match_pinned_ast_contract():
 
     assert actual_names == EXPECTED_DISPATCH_NAMES
     assert "finish" not in actual_names
-    assert len(actual_names) == 122
+    assert len(actual_names) == 124
 
 
 async def test_execute_tool_autonomy_denial_preserves_l2_message(monkeypatch):
@@ -791,6 +839,7 @@ async def test_execute_tool_direct_rejects_image_tools_without_invoking_facades(
         "generate_image_siliconflow",
         "generate_image_openai",
         "generate_image_google",
+        "generate_image_grok",
         "generate_image_custom",
     ):
         result = await agent_tools._execute_tool_direct(tool_name, {}, agent_id)
@@ -866,6 +915,7 @@ async def test_normal_image_dispatch_routes_unregistered_tools_through_workspace
         ("generate_image_siliconflow", "siliconflow"),
         ("generate_image_openai", "openai"),
         ("generate_image_google", "google"),
+        ("generate_image_grok", "grok"),
         ("generate_image_custom", "custom"),
     ):
         assert (
@@ -882,8 +932,32 @@ async def test_normal_image_dispatch_routes_unregistered_tools_through_workspace
         ("workspace", {"sync_back": True}),
         ("generate", agent_id, tmp_path, {"prompt": "draw"}, "google"),
         ("workspace", {"sync_back": True}),
+        ("generate", agent_id, tmp_path, {"prompt": "draw"}, "grok"),
+        ("workspace", {"sync_back": True}),
         ("generate", agent_id, tmp_path, {"prompt": "draw"}, "custom"),
     ]
+
+
+async def test_leftover_search_x_dispatch_when_registry_is_disabled(monkeypatch):
+    calls = []
+
+    async def tenant_lookup(_agent_id: uuid.UUID) -> str:
+        return "tenant-search-x"
+
+    async def search_x(agent_id: uuid.UUID, arguments: ToolParameters) -> str:
+        calls.append((agent_id, arguments.copy()))
+        return "searched"
+
+    x_search_mod = importlib.import_module("app.services.agent_tool_exec.x_search")
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
+    monkeypatch.setattr(x_search_mod, "_search_x", search_x)
+    monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
+
+    agent_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    assert await agent_tools.execute_tool("search_x", {"query": "xAI"}, agent_id, user_id) == "searched"
+    assert calls == [(agent_id, {"query": "xAI"})]
 
 
 async def test_direct_code_dispatch_uses_facade_without_output_callback(monkeypatch, tmp_path):

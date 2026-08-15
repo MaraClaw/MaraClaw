@@ -352,6 +352,7 @@ class AgentUpdate(BaseModel):
     heartbeat_active_hours: str | None = None
     timezone: str | None = None
     expires_at: datetime | None = None  # Admin only - extend agent expiry
+    gogcli_enabled: bool | None = None
 
 
 class AgentStatusOut(BaseModel):

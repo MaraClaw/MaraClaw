@@ -9,12 +9,31 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api import admin as admin_api, auth as auth_api
 from app.core import security as security_mod
 from app.core.security import hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+
+def _dummy_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "server": ("127.0.0.1", 8000),
+        }
+    )
+
 
 _NOW = datetime.now(UTC)
 _DEFAULT_TEST_PASSWORD = "initial-password"
@@ -129,7 +148,7 @@ async def test_login_returns_must_change_password(monkeypatch):
         password="initial-password",
         tenant_id=None,
     )
-    result = await auth_api.login(data, AsyncMock())
+    result = await auth_api.login(data, AsyncMock(), _dummy_request())
     assert result.must_change_password is True
     assert result.user.must_change_password is True
     assert result.access_token
@@ -681,7 +700,7 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
             display_name="New User",
             target_tenant_id=None,
         )
-        result = await auth_api.register_init(data, AsyncMock())
+        result = await auth_api.register_init(data, AsyncMock(), _dummy_request())
 
     assert captured["identity_kwargs"]["is_platform_admin"] is False
     assert captured["user_kwargs"]["role"] == "member"

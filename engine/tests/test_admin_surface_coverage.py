@@ -1095,6 +1095,21 @@ async def test_login_skips_inactive_memberships(monkeypatch):
         await auth_api.login(
             auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
             background_tasks=SimpleNamespace(),
+            request=Request(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "POST",
+                    "scheme": "http",
+                    "path": "/",
+                    "raw_path": b"/",
+                    "query_string": b"",
+                    "headers": [],
+                    "client": ("127.0.0.1", 1),
+                    "server": ("127.0.0.1", 8000),
+                }
+            ),
         )
     assert exc.value.status_code == 403
 
@@ -1103,6 +1118,21 @@ async def test_login_skips_inactive_memberships(monkeypatch):
     result = await auth_api.login(
         auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
         background_tasks=SimpleNamespace(),
+        request=Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 1),
+                "server": ("127.0.0.1", 8000),
+            }
+        ),
     )
     assert result.user.id == active.id
 
