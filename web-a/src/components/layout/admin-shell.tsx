@@ -137,7 +137,7 @@ export function AdminShell() {
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
             <p className="font-display text-sm font-semibold">MaraClaw</p>
-            <p className="truncate text-xs text-muted-foreground">Admin console</p>
+            <p className="truncate text-xs text-muted-foreground">Admin Console</p>
           </div>
         </Link>
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Admin">
