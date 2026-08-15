@@ -79,7 +79,7 @@ def _format_calendar_items(items: list[dict[str, ToolArgumentValue]]) -> list[st
         except Exception:
             start_text, end_text = start, end_time
         location_text = f" | 📍{location}" if location else ""
-        lines.append(f"- **{summary_text}** | 🕐{start_text}–{end_text}{location_text}  (ID: `{event_id_text}`)")  # noqa: RUF001
+        lines.append(f"- **{summary_text}** | 🕐{start_text}-{end_text}{location_text}  (ID: `{event_id_text}`)")
     return lines
 
 

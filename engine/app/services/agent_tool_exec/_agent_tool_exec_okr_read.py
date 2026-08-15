@@ -55,7 +55,7 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
         )
 
         if not objectives:
-            return f"No OKRs found for the current period ({ps} – {pe})."  # noqa: RUF001
+            return f"No OKRs found for the current period ({ps} - {pe})."
 
         obj_ids = [objective.id for objective in objectives]
         all_krs = list(await okr_key_result_dao.list_for_objectives(obj_ids))
@@ -169,7 +169,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
 
         if not objectives:
             return (
-                f"You have no OKRs set for the current period ({ps} – {pe}). "  # noqa: RUF001
+                f"You have no OKRs set for the current period ({ps} - {pe}). "
                 + "Contact the OKR Agent to set up your Objectives and Key Results."
             )
 

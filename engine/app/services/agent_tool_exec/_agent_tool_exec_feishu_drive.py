@@ -153,7 +153,7 @@ async def _list_drive_members(
         code = data.get("code")
         if code == 1063003 and is_wiki:
             return (
-                f"ℹ️ 文档 `{document_token}` 是知识库页面，其权限由知识库空间统一管理。\n"  # noqa: RUF001
+                f"文档 `{document_token}` 是知识库页面，其权限由知识库空间统一管理。\n"
                 + "知识库空间 ID：`"
                 + space_id
                 + "`\n"
@@ -200,9 +200,9 @@ async def _add_member(
         if code == 0:
             return f"✅ 已将「{display}」加入知识库空间（角色：{wiki_role}）"
         if code == 131008:
-            return f"ℹ️ 「{display}」已经是知识库成员，无需重复添加"  # noqa: RUF001
+            return f"「{display}」已经是知识库成员，无需重复添加"
         if code == 131101:
-            return f"ℹ️ 这是一个**公开知识库**，所有人已可访问。\n「{display}」无需单独添加权限。"  # noqa: RUF001
+            return f"这是一个**公开知识库**，所有人已可访问。\n「{display}」无需单独添加权限。"
         return f"❌ 添加「{display}」到知识库失败：{data.get('msg')} (code {code})"
 
     response = await client.post(
