@@ -72,6 +72,7 @@ def test_representative_handlers_remain_registered_after_facade_import(
             "convert_csv_to_xlsx",
             "send_feishu_message",
             "read_webpage",
+            "search_x",
             "list_files",
             "set_trigger",
         }

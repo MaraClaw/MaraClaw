@@ -280,6 +280,8 @@ Platform may target another company via `tenant_id`.
 
 Agent-level tool assignment/config routes exist under `/api/tools/agents/...` but use agent access checks (not pure admin gates). **Only** platform/org may set `allow_network` / proxy fields on agent tool config.
 
+`search_x` and `generate_image_grok` read `config.api_key` from this catalog, then fall back to `XAI_API_KEY`. Custom `base_url` is only accepted for `https://api.x.ai`. web-a `/tools` is still a placeholder — configure via `PUT /api/tools/{id}` or env.
+
 ### B8. Skills - `/api/skills/*`
 
 **Router:** `app/api/skills.py`

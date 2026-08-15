@@ -334,6 +334,10 @@ async def execute_tool(
             result = await agent_tools._plaza_create_post(agent_id, arguments)
         elif tool_name == "plaza_add_comment":
             result = await agent_tools._plaza_add_comment(agent_id, arguments)
+        elif tool_name == "search_x":
+            from app.services.agent_tool_exec.x_search import _search_x
+
+            result = await _search_x(agent_id, arguments)
         elif tool_name in ("execute_code", "execute_code_e2b"):
             logger.info(f"[DirectTool] Executing code ({tool_name}) with arguments: {arguments}")
             result = await agent_tools._run_with_temp_workspace(

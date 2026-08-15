@@ -51,12 +51,13 @@ No `alembic/`, no `app/models/`.
 | DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
-| Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
+| Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs are separate. Do not grow `agent_tools.py` |
 | Page read | `agent_tool_exec/web_read.py` | `read_webpage` only; web lookup/fetch/research/extract are vendored Linkup skills |
+| X search | `agent_tool_exec/x_search.py` | `search_x` via xAI Responses API; not a web search engine. Key: tool `api_key` then `XAI_API_KEY` |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |
-| Channel registry / shared helpers | `app/services/channels/` | Types, config CRUD, inbound pipeline; see `docs/channels.md` |
+| Channel registry / shared helpers | `app/services/channels/` | Types, config CRUD, inbound, `llm_bridge`; see `docs/channels.md` |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
 | OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.7 / gogcli 0.36 / OpenClaw 2026.7.1-2; Hub publish is `publish-openclaw-local-dockerfile.sh` |
