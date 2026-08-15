@@ -156,6 +156,8 @@ fi
 
 RUN_ARGS=(
     --name "$CONTAINER_NAME"
+    --network "$DOCKER_NETWORK"
+    --network-alias maraclaw-engine
     -p "${PORT}:8000"
     -v "${DATA_DIR}:/data"
     # Same-path mount: agent_manager passes host paths to `docker run -v`.
@@ -175,6 +177,7 @@ RUN_ARGS=(
     # Pin workspace roots to the host path so sibling containers can mount them.
     -e "AGENT_DATA_DIR=${AGENT_DATA_DIR}"
     -e "STORAGE_LOCAL_ROOT=${AGENT_DATA_DIR}"
+    -e "DOCKER_NETWORK=${DOCKER_NETWORK}"
     # Detached/non-TTY runs fully buffer CPython stdout; without this, uvicorn
     # and the app logger appear silent in `docker logs` until the buffer fills.
     -e "PYTHONUNBUFFERED=1"
@@ -217,6 +220,7 @@ if [ -n "$ENV_KEYS" ]; then
         # Skip paths pinned above so bind-mounts stay host-resolvable.
         [ "$key" = "AGENT_DATA_DIR" ] && continue
         [ "$key" = "STORAGE_LOCAL_ROOT" ] && continue
+        [ "$key" = "DOCKER_NETWORK" ] && continue
         RUN_ARGS+=(-e "$key")
         forwarded_count=$((forwarded_count + 1))
     done <<< "$ENV_KEYS"

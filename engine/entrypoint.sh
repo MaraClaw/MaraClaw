@@ -37,13 +37,14 @@ if [ "$(id -u)" = '0' ]; then
             usermod -aG "$SOCK_GID" maraclaw
         fi
         if ! gosu maraclaw sh -c "test -w /var/run/docker.sock"; then
-            echo "[entrypoint] docker.sock not writable by maraclaw; adjusting ownership"
+            echo "[entrypoint] docker.sock not writable by maraclaw; adjusting group"
             chgrp maraclaw /var/run/docker.sock 2>/dev/null || true
             chmod g+rw /var/run/docker.sock 2>/dev/null || true
         fi
         if ! gosu maraclaw sh -c "test -w /var/run/docker.sock"; then
-            echo "[entrypoint] docker.sock still not writable; setting 666"
-            chmod 666 /var/run/docker.sock
+            echo "[entrypoint] ERROR: docker.sock is not writable by maraclaw."
+            echo "[entrypoint] Grant the container the socket GID (start-from-docker.sh --group-add) and do not chmod the host socket."
+            exit 1
         fi
     fi
 
