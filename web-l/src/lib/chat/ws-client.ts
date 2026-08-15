@@ -10,6 +10,9 @@ export type ChatInbound = {
   role?: string
   arguments?: string
   agent_id?: string
+  env?: string
+  output?: string
+  live_preview?: { env?: string; screenshot_url?: string; output?: string }
 }
 
 export type ChatOutbound = {

@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { listNotifications, markAllNotificationsRead, markNotificationRead } from '@/lib/workspace-api'
+
+function memberLink(link?: string | null): string | null {
+  if (!link) return null
+  if (link.startsWith('/plaza')) return `/app${link}`
+  if (link.startsWith('/app/')) return link
+  return link
+}
 
 export function NotificationsPage() {
   const queryClient = useQueryClient()
@@ -29,6 +37,11 @@ export function NotificationsPage() {
               <div>
                 <p className="text-sm font-medium">{item.title}</p>
                 {item.body ? <p className="text-sm text-muted-foreground">{item.body}</p> : null}
+                {memberLink(item.link) ? (
+                  <Link to={memberLink(item.link)!} className="mt-1 inline-block text-xs text-primary">
+                    Open
+                  </Link>
+                ) : null}
               </div>
               {!item.is_read ? (
                 <Button

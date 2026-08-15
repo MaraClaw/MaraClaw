@@ -32,6 +32,7 @@ export type AgentOut = {
   heartbeat_interval_minutes?: number
   heartbeat_active_hours?: string
   timezone?: string | null
+  gogcli_enabled?: boolean
   min_poll_interval_min?: number
   webhook_rate_limit?: number
   max_triggers?: number
@@ -61,6 +62,7 @@ export type ChatMessage = {
   role: string
   content: string
   created_at?: string | null
+  file_name?: string
   toolName?: string
   toolStatus?: string
   toolResult?: string
@@ -127,6 +129,7 @@ export type NotificationRow = {
   id: string
   title: string
   body?: string
+  link?: string | null
   is_read?: boolean
   created_at?: string
 }
@@ -166,6 +169,7 @@ export async function createAgent(body: {
   permission_scope_type?: string
   permission_access_level?: string
   agent_type?: string
+  gogcli_enabled?: boolean
 }): Promise<AgentOut> {
   return apiRequest('/api/agents/', { method: 'POST', body })
 }
@@ -504,6 +508,13 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
     { key: 'api_key', label: 'API key', secret: true },
     { key: 'cloud_id', label: 'Cloud ID' },
   ],
+  whatsapp: [
+    { key: 'access_token', label: 'Access token', secret: true },
+    { key: 'phone_number_id', label: 'Phone number ID' },
+    { key: 'verify_token', label: 'Verify token', secret: true },
+    { key: 'app_secret', label: 'App secret', secret: true },
+    { key: 'api_version', label: 'API version' },
+  ],
 }
 
 export const CHANNELS = [
@@ -515,6 +526,7 @@ export const CHANNELS = [
   { key: 'wecom', path: 'wecom-channel', label: 'WeCom' },
   { key: 'dingtalk', path: 'dingtalk-channel', label: 'DingTalk' },
   { key: 'atlassian', path: 'atlassian-channel', label: 'Atlassian' },
+  { key: 'whatsapp', path: 'whatsapp-channel', label: 'WhatsApp' },
 ] as const
 
 export async function getChannel(agentId: string, path: string): Promise<ChannelConfig | null> {

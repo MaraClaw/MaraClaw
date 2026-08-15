@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { Bell, Bot, Loader2, LogOut, Settings, UserRound } from 'lucide-react'
+import { Bell, Bot, Building2, Loader2, LogOut, Settings, Sparkles, Target, UserRound } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 
@@ -13,6 +13,9 @@ import { cn } from '@/lib/utils'
 
 const nav = [
   { to: '/app/agents', label: 'Agents', icon: Bot },
+  { to: '/app/plaza', label: 'Plaza', icon: Sparkles },
+  { to: '/app/okr', label: 'OKR', icon: Target },
+  { to: '/app/directory', label: 'Directory', icon: Building2 },
   { to: '/app/notifications', label: 'Inbox', icon: Bell },
   { to: '/app/account', label: 'Account', icon: UserRound },
   { to: '/app/settings', label: 'Settings', icon: Settings },

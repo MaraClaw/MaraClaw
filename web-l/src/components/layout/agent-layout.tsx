@@ -18,6 +18,10 @@ const tabs = [
   { to: 'channels', label: 'Channels' },
   { to: 'relationships', label: 'People' },
   { to: 'permissions', label: 'Access' },
+  { to: 'control', label: 'Control' },
+  { to: 'credentials', label: 'Vault' },
+  { to: 'pages', label: 'Pages' },
+  { to: 'playwright', label: 'Browser' },
   { to: 'settings', label: 'Settings' },
 ]
 

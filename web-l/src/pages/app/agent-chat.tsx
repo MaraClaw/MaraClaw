@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, Send } from 'lucide-react'
+import { Loader2, MonitorPlay, Plus, Send } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { ChatMarkdown } from '@/components/chat/markdown'
@@ -37,6 +37,7 @@ export function AgentChatPage() {
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
   const [info, setInfo] = useState<string | null>(null)
+  const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const [modelId, setModelId] = useState(agent.primary_model_id ?? '')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
@@ -89,6 +90,9 @@ export function AgentChatPage() {
           return
         }
         if (event.type === 'tool_call') {
+          if (event.live_preview?.screenshot_url) {
+            setLivePreview({ env: event.live_preview.env, screenshot: event.live_preview.screenshot_url })
+          }
           setLines((prev) => [
             ...prev,
             {
@@ -96,6 +100,14 @@ export function AgentChatPage() {
               content: `${event.name ?? 'tool'} · ${event.status ?? ''}${event.result ? `\n${String(event.result).slice(0, 400)}` : ''}`,
             },
           ])
+          return
+        }
+        if (event.type === 'agentbay_live') {
+          if (event.live_preview?.screenshot_url) {
+            setLivePreview({ env: event.env ?? event.live_preview.env, screenshot: event.live_preview.screenshot_url })
+          } else if (event.output) {
+            setInfo(`AgentBay ${event.env ?? 'code'}: ${event.output.slice(0, 180)}`)
+          }
           return
         }
         if (event.type === 'workspace_draft') {
@@ -244,6 +256,19 @@ export function AgentChatPage() {
       </aside>
 
       <section className="flex min-h-0 flex-col">
+        {livePreview ? (
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+            <p className="text-xs text-muted-foreground">
+              Live {livePreview.env ?? 'browser'} session
+            </p>
+            <Button size="sm" variant="outline" asChild>
+              <Link to={`/app/agents/${agent.id}/control?session=${activeId ?? ''}&env=${livePreview.env ?? 'browser'}`}>
+                <MonitorPlay className="size-3.5" />
+                Take Control
+              </Link>
+            </Button>
+          </div>
+        ) : null}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
           {visible.map((line, index) => (
             <article

@@ -18,6 +18,7 @@ const schema = z.object({
   template_id: z.string().optional(),
   role_description: z.string().max(500).optional(),
   visibility: z.enum(['private', 'company']),
+  gogcli_enabled: z.boolean(),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -27,7 +28,7 @@ export function AgentNewPage() {
   const templates = useQuery({ queryKey: ['agent-templates'], queryFn: listTemplates })
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', template_id: '', role_description: '', visibility: 'private' },
+    defaultValues: { name: '', template_id: '', role_description: '', visibility: 'private', gogcli_enabled: false },
   })
 
   const mutation = useMutation({
@@ -39,6 +40,7 @@ export function AgentNewPage() {
         permission_scope_type: values.visibility === 'private' ? 'user' : 'company',
         permission_access_level: 'use',
         agent_type: 'native',
+        gogcli_enabled: values.gogcli_enabled,
       }),
     onSuccess(agent) {
       toast.success(`${agent.name} created`)
@@ -90,6 +92,10 @@ export function AgentNewPage() {
             <option value="company">Company-wide</option>
           </select>
         </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" {...form.register('gogcli_enabled')} />
+          Enable gogcli (Google CLI in the agent container)
+        </label>
         <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? <Loader2 className="size-4 animate-spin" /> : 'Create'}
         </Button>

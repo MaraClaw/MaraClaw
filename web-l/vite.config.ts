@@ -33,6 +33,10 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      '/p': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
 })

@@ -16,8 +16,15 @@ import { AgentSkillsPage } from '@/pages/app/agent-skills'
 import { AgentTasksPage } from '@/pages/app/agent-tasks'
 import { AgentToolsPage } from '@/pages/app/agent-tools'
 import { AgentsListPage } from '@/pages/app/agents-list'
+import { AgentControlPage } from '@/pages/app/agent-control'
+import { AgentCredentialsPage } from '@/pages/app/agent-credentials'
+import { AgentPagesPage } from '@/pages/app/agent-pages'
+import { AgentPlaywrightPage } from '@/pages/app/agent-playwright'
+import { DirectoryPage } from '@/pages/app/directory'
 import { NotificationsPage } from '@/pages/app/notifications'
+import { OkrPage } from '@/pages/app/okr'
 import { OnboardingPage } from '@/pages/app/onboarding'
+import { PlazaPage } from '@/pages/app/plaza'
 import { SettingsPage } from '@/pages/app/settings'
 import { ForgotPasswordPage } from '@/pages/forgot-password'
 import { JoinOrgPage } from '@/pages/join-org'
@@ -52,6 +59,9 @@ export function AppRouter() {
               <Route path="account" element={<AccountPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="plaza" element={<PlazaPage />} />
+              <Route path="okr" element={<OkrPage />} />
+              <Route path="directory" element={<DirectoryPage />} />
               <Route path="agents" element={<AgentsListPage />} />
               <Route path="agents/new" element={<AgentNewPage />} />
               <Route path="agents/:agentId" element={<AgentLayout />}>
@@ -66,6 +76,10 @@ export function AppRouter() {
                 <Route path="channels" element={<AgentChannelsPage />} />
                 <Route path="relationships" element={<AgentRelationshipsPage />} />
                 <Route path="permissions" element={<AgentPermissionsPage />} />
+                <Route path="control" element={<AgentControlPage />} />
+                <Route path="credentials" element={<AgentCredentialsPage />} />
+                <Route path="pages" element={<AgentPagesPage />} />
+                <Route path="playwright" element={<AgentPlaywrightPage />} />
                 <Route path="settings" element={<AgentSettingsPage />} />
               </Route>
             </Route>
