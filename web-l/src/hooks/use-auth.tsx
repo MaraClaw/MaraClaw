@@ -15,6 +15,8 @@ import {
   isMultiTenantResponse,
   isPlatformAdminUser,
   isTokenResponse,
+  sessionMustChangePassword,
+  userMustChangePassword,
   type LoginRequest,
   type MultiTenantResponse,
   type TokenResponse,
@@ -28,6 +30,7 @@ type AuthContextValue = {
   user: UserOut | null
   token: string | null
   needsOrgConfirm: boolean
+  mustChangePassword: boolean
   login: (input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
   applySession: (session: TokenResponse) => void
   logout: () => void
@@ -59,9 +62,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'Platform operators sign in on the admin console, not this member site.',
       )
     }
+    const nextUser: UserOut = {
+      ...session.user,
+      must_change_password: sessionMustChangePassword(session),
+    }
     setStoredToken(session.access_token)
     setToken(session.access_token)
-    setUser(session.user)
+    setUser(nextUser)
     setStatus('authenticated')
   }, [])
 
@@ -114,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       token,
       needsOrgConfirm: Boolean(user && user.tenant_id == null),
+      mustChangePassword: userMustChangePassword(user),
       login,
       applySession,
       logout,

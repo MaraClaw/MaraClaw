@@ -23,3 +23,22 @@ export function apiUrl(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`
   return `${base}${normalized}`
 }
+
+export function wsUrl(path: string): string {
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  const base = getApiBaseUrl()
+  if (!base) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${window.location.host}${normalized}`
+  }
+  try {
+    const url = new URL(base)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    url.pathname = normalized
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return normalized
+  }
+}

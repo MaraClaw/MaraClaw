@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { SsoButtons } from '@/components/auth/sso-buttons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +15,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   isMultiTenantResponse,
+  isNeedsVerificationDetail,
   isTokenResponse,
   type TenantChoice,
 } from '@/lib/types/auth'
@@ -117,6 +119,13 @@ export function LoginPage() {
         setPendingIdentifier(result.login_identifier)
       }
     } catch (error) {
+      if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
+        navigate('/verify-email', {
+          replace: true,
+          state: { email: error.detail.email ?? values.login_identifier.trim() },
+        })
+        return
+      }
       if (error instanceof ApiError && error.status === 401) {
         setFormError('Email or password is incorrect.')
       } else {
@@ -279,6 +288,11 @@ export function LoginPage() {
             {errors.password ? (
               <p className="text-xs text-destructive">{errors.password.message}</p>
             ) : null}
+            <p className="text-right text-xs">
+              <Link to="/forgot-password" className="font-medium text-primary underline-offset-4 hover:underline">
+                Forgot password?
+              </Link>
+            </p>
           </div>
 
           <Button type="submit" className="h-11 w-full" disabled={isBusy}>
@@ -291,6 +305,9 @@ export function LoginPage() {
               'Sign in'
             )}
           </Button>
+          <div className="pt-2">
+            <SsoButtons />
+          </div>
         </form>
       )}
 

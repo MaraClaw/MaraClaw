@@ -1,18 +1,20 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, UserRound } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { SsoButtons } from '@/components/auth/sso-buttons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
-import { registerRequest } from '@/lib/auth-api'
+import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { isNeedsVerificationDetail } from '@/lib/types/auth'
 
 const registerSchema = z.object({
   email: z.string().trim().email('Enter a valid email').max(254),
@@ -47,6 +49,13 @@ export function RegisterPage() {
   const formId = useId()
   const [showPassword, setShowPassword] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [inviteRequired, setInviteRequired] = useState(false)
+
+  useEffect(() => {
+    void fetchRegistrationConfig()
+      .then((config) => setInviteRequired(Boolean(config.invitation_code_required)))
+      .catch(() => setInviteRequired(false))
+  }, [])
 
   const {
     register,
@@ -72,11 +81,19 @@ export function RegisterPage() {
       })
       applySession(result)
       toast.success('Account created')
+      if (!result.user.email_verified) {
+        navigate('/verify-email', { replace: true, state: { email: values.email } })
+        return
+      }
       navigate(result.needs_org_confirm ? '/join' : '/app', {
         replace: true,
         state: { suggested: result.suggested_org },
       })
     } catch (error) {
+      if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
+        navigate('/verify-email', { replace: true, state: { email: values.email } })
+        return
+      }
       setFormError(
         error instanceof ApiError
           ? (formatApiDetail(error.detail) ?? error.message)
@@ -108,7 +125,21 @@ export function RegisterPage() {
           <Label htmlFor={`${formId}-email`}>Email</Label>
           <div className="relative">
             <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input id={`${formId}-email`} type="email" autoComplete="email" className="pl-10" {...register('email')} />
+            <Input
+              id={`${formId}-email`}
+              type="email"
+              autoComplete="email"
+              className="pl-10"
+              {...register('email', {
+                onBlur: (event) => {
+                  const email = event.target.value.trim()
+                  if (!email) return
+                  void checkDuplicate({ email }).then((result) => {
+                    if (result.email_exists) setFormError('That email is already registered.')
+                  })
+                },
+              })}
+            />
           </div>
           {errors.email ? <p className="text-xs text-destructive">{errors.email.message}</p> : null}
         </div>
@@ -151,13 +182,18 @@ export function RegisterPage() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor={`${formId}-invite`}>Invitation code</Label>
+          <Label htmlFor={`${formId}-invite`}>Invitation code{inviteRequired ? '' : ' (optional)'}</Label>
           <Input
             id={`${formId}-invite`}
-            placeholder="Optional"
+            placeholder={inviteRequired ? 'Required' : 'Optional'}
             autoComplete="off"
-            {...register('invitation_code')}
+            {...register('invitation_code', {
+              required: inviteRequired ? 'An invitation code is required' : false,
+            })}
           />
+          {errors.invitation_code ? (
+            <p className="text-xs text-destructive">{errors.invitation_code.message}</p>
+          ) : null}
         </div>
 
         <Button type="submit" className="h-11 w-full" disabled={isSubmitting}>
@@ -170,6 +206,9 @@ export function RegisterPage() {
             'Create account'
           )}
         </Button>
+        <div className="pt-2">
+          <SsoButtons />
+        </div>
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">

@@ -95,3 +95,47 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   return data as T
 }
+
+export async function apiFormRequest<T>(
+  path: string,
+  form: FormData,
+  options: Omit<RequestOptions, 'body'> = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  }
+  const token = options.token === undefined ? getStoredToken() : options.token
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(apiUrl(path), {
+    method: options.method ?? 'POST',
+    headers,
+    body: form,
+    signal: options.signal,
+  })
+
+  const text = await response.text()
+  let data: unknown = null
+  if (text) {
+    try {
+      data = JSON.parse(text) as unknown
+    } catch {
+      data = text
+    }
+  }
+
+  if (!response.ok) {
+    const detail =
+      data && typeof data === 'object' && data !== null && 'detail' in data
+        ? (data as { detail: unknown }).detail
+        : data
+    if (response.status === 401 && token) {
+      clearStoredToken()
+    }
+    throw new ApiError(response.status, detail)
+  }
+
+  return data as T
+}
