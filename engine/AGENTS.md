@@ -52,7 +52,7 @@ No `alembic/`, no `app/models/`.
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `tool_runtime/` | Do not grow `agent_tools.py` |
-| Web search / page read | `agent_tool_exec/web_search.py`, `search_providers.py`, `web_read.py` | Register in `_agent_tool_exec_search.py`; `agent_tools.py` only re-exports |
+| Page read | `agent_tool_exec/web_read.py` | `read_webpage` only; web lookup/fetch/research/extract are vendored Linkup skills |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors | `*_stream.py`, `*_gateway.py`, `wechat_channel.py`, `api/google_chat.py` | Lifespan `start_all` after `init_pool` |

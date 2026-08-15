@@ -18,6 +18,7 @@ from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
+from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
@@ -231,6 +232,28 @@ class AgentManager:
             config["env"] = {
                 f"{model.provider.upper()}_API_KEY": get_model_api_key(model),
             }
+
+        linkup_skill_env: JsonObject = {}
+        if settings.LINKUP_API_KEY:
+            linkup_skill_env["LINKUP_API_KEY"] = settings.LINKUP_API_KEY
+        config["skills"] = {
+            "entries": {
+                folder_name: {
+                    "enabled": True,
+                    "env": linkup_skill_env,
+                }
+                for folder_name in linkup_default_skill_folder_names()
+            },
+        }
+        # OpenClaw enables native web_search unless it is explicitly denied.
+        config["tools"] = {
+            "deny": ["web_search"],
+            "web": {
+                "search": {
+                    "enabled": False,
+                },
+            },
+        }
 
         if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED:
             config["plugins"] = {

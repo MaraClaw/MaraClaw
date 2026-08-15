@@ -12,7 +12,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - New document conversion belongs in `document_conversion/`, not in `agent_tools.py`.
 - New OKR behavior should use focused `okr_*.py` modules.
 - New org-sync adapter/coordinator behavior belongs in `org_sync/`; keep `org_sync_adapter.py` as compatibility/facade glue when possible.
-- New tool execution handlers belong in `agent_tool_exec/`; seed catalog rows in `tool_definitions/`; runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Web search / page-read live in `agent_tool_exec/{web_search,search_providers,web_read}.py` — do not add provider branches back to `agent_tools.py`.
+- New tool execution handlers belong in `agent_tool_exec/`; seed catalog rows in `tool_definitions/`; runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Page-read lives in `agent_tool_exec/web_read.py` (`read_webpage`). Web search/fetch/research/extract are official Linkup skills (`linkup_runtime.py`), not engine function-calling tools.
 
 ## God Files
 

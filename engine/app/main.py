@@ -329,12 +329,14 @@ async def lifespan(app: FastAPI):
         try:
             from app.services.clawsec_runtime import seed_clawsec_skills
             from app.services.gogcli_runtime import seed_gogcli_skill
+            from app.services.linkup_runtime import seed_linkup_skills
             from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
 
-            await seed_skills()
-            await seed_gogcli_skill(None)
+            _ = await seed_skills()
+            _ = await seed_gogcli_skill(None)
             _ = await seed_clawsec_skills(None)
-            await push_default_skills_to_existing_agents()
+            _ = await seed_linkup_skills(None)
+            _ = await push_default_skills_to_existing_agents()
         except Exception as e:
             logger.warning(f"[startup] Skills seed failed: {e}")
 

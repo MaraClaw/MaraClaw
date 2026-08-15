@@ -189,11 +189,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5175",
     ]
 
-    # Jina AI (Reader + Search APIs)
-    JINA_API_KEY: str = ""
-
-    # Exa AI (Search API)
-    EXA_API_KEY: str = ""
+    # Linkup API key injected into official OpenClaw Linkup skill env.
+    LINKUP_API_KEY: str = ""
 
     # Sandbox configuration
     SANDBOX_TYPE: SandboxType = SandboxType.SUBPROCESS
