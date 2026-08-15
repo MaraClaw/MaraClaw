@@ -8,7 +8,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Default: `prefix=settings.API_PREFIX` so `/agents` → `/api/agents`.
 - Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
-- `whatsapp.py` is **not** mounted. `background_tasks.py` is a helper, not a router.
+- `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. `background_tasks.py` is a helper, not a router.
 
 ## Dependencies
 
