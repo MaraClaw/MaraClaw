@@ -100,6 +100,14 @@ def test_member_serialization_strips_secrets():
     )
     assert fallback.is_fallback is True
     assert fallback.is_default is False
+    assert fallback.is_secondary is False
+
+    secondary = pool.serialize_llm_model(
+        model, is_admin=False, default_model_id=None, secondary_model_id=model.id
+    )
+    assert secondary.is_secondary is True
+    assert secondary.is_default is False
+    assert secondary.is_fallback is False
 
     with patch.object(pool, "get_model_api_key", return_value="sk-live-9999"):
         admin = pool.serialize_llm_model(model, is_admin=True, default_model_id=None)
@@ -220,6 +228,8 @@ async def test_update_and_delete_reject_other_tenant(monkeypatch):
         await enterprise_api.set_default_llm_model(foreign.id, current_user=_user(role="org_admin"))
     with pytest.raises(HTTPException):
         await enterprise_api.set_fallback_llm_model(foreign.id, current_user=_user(role="org_admin"))
+    with pytest.raises(HTTPException):
+        await enterprise_api.set_secondary_llm_model(foreign.id, current_user=_user(role="org_admin"))
 
 
 @pytest.mark.asyncio
@@ -243,6 +253,45 @@ async def test_set_fallback_rejects_primary_and_sets_own(monkeypatch):
     await enterprise_api.set_fallback_llm_model(fallback.id, current_user=_user(role="org_admin"))
     update_kwargs = enterprise_api.tenant_dao.update.await_args.kwargs["obj_in"]
     assert update_kwargs["default_fallback_model_id"] == fallback.id
+
+
+@pytest.mark.asyncio
+async def test_set_secondary_rejects_primary_and_fallback(monkeypatch):
+    primary = _model()
+    fallback = _model(label="Haiku")
+    secondary = _model(label="Flash")
+    tenant = SimpleNamespace(
+        id=_TENANT,
+        default_model_id=primary.id,
+        default_fallback_model_id=fallback.id,
+        default_secondary_model_id=None,
+    )
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=primary))
+    monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    with pytest.raises(HTTPException) as same:
+        await enterprise_api.set_secondary_llm_model(primary.id, current_user=_user(role="org_admin"))
+    assert same.value.status_code == 400
+
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=fallback))
+    with pytest.raises(HTTPException) as vs_fallback:
+        await enterprise_api.set_secondary_llm_model(fallback.id, current_user=_user(role="org_admin"))
+    assert vs_fallback.value.status_code == 400
+
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=secondary))
+    monkeypatch.setattr(enterprise_api.tenant_dao, "update", AsyncMock())
+    monkeypatch.setattr(enterprise_api.agent_dao, "migrate_secondary_model", AsyncMock(return_value=3))
+    await enterprise_api.set_secondary_llm_model(secondary.id, current_user=_user(role="org_admin"))
+    update_kwargs = enterprise_api.tenant_dao.update.await_args.kwargs["obj_in"]
+    assert update_kwargs["default_secondary_model_id"] == secondary.id
+
+
+def test_assert_distinct_model_slots():
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    pool.assert_distinct_model_slots(a, b, c)
+    pool.assert_distinct_model_slots(a, None, None)
+    with pytest.raises(HTTPException) as exc:
+        pool.assert_distinct_model_slots(a, a, None)
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,8 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - `providers/` contains provider/protocol clients. Read `providers/AGENTS.md` before changing protocol parsing or streaming normalization.
 - `client.py` is now a compatibility/public-contract surface around the split modules; do not move large new provider logic back into it.
 - `caller.py` is the agent orchestration layer. Agent/chat/trigger/websocket flows should enter through `call_agent_llm`, `call_agent_llm_with_tools`, `call_llm`, or `call_llm_with_failover`.
-- `turn.py` is the preloaded `TurnContext` (agent/models/user) so callers skip redundant DAO loads. Do not hold a DB connection across `call_llm*`.
+- `router.py` is the complexity preflight. Conversational turns call `select_turn_model` once, then pass the **selected** model into `call_llm_with_failover`. Fallback is a failure lane, never a cheap-model substitute. Do not grow this logic inside `caller.py`.
+- `turn.py` is the preloaded `TurnContext` / `ModelBundle` (agent/models/user) so callers skip redundant DAO loads. Do not hold a DB connection across `call_llm*`.
 - `utils.py` handles encrypted API-key compatibility, chat-history conversion, and truncation that preserves assistant/tool-result pairs.
 - `reasoning.py` maps canonical `none|low|medium|high|xhigh` onto provider-native request fields. Do not encode those translations in individual provider clients.
 - `vision_content.py` builds vision/screenshot parts when the selected model supports vision.

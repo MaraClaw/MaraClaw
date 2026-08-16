@@ -178,10 +178,11 @@ Default admin gate: `get_current_admin` unless noted.
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/enterprise/llm-providers` | admin | - | Provider registry manifest. Members **403**. |
 | `POST` | `/api/enterprise/llm-test` | admin | `provider`, `model`, `api_key?`, `base_url?`, `model_id?` | `{ success, latency_ms, reply? \| error? }`. `model_id` must be in the caller’s company. |
-| `GET` | `/api/enterprise/llm-models` | auth | Query: `tenant_id?` | Members: enabled catalog only; **no** key / base URL. Admin: full pool + masked key. `is_default` = company primary, `is_fallback` = company fallback. Non-platform cannot other tenants. Untenanted members get `[]`. |
+| `GET` | `/api/enterprise/llm-models` | auth | Query: `tenant_id?` | Members: enabled catalog only; **no** key / base URL. Admin: full pool + masked key. `is_default` = company primary, `is_secondary` = cheap/routine lane, `is_fallback` = failover. Non-platform cannot other tenants. Untenanted members get `[]`. |
 | `POST` | `/api/enterprise/llm-models` | admin | `LLMModelCreate` + Query `tenant_id?` | **201** `LLMModelOut`. Org admin locked to own tenant. Platform admin must pick a company. |
-| `POST` | `/api/enterprise/llm-models/{model_id}/set-default` | admin | - | Sets company **primary**; may migrate agents. Clears fallback if it was this model. **204**. Org admin cannot touch another company. |
-| `POST` | `/api/enterprise/llm-models/{model_id}/set-fallback` | admin | - | Sets company **fallback**; must differ from primary. Applies to agents with the previous fallback or none. **204**. |
+| `POST` | `/api/enterprise/llm-models/{model_id}/set-default` | admin | - | Sets company **primary**; may migrate agents. Clears secondary/fallback if it was this model. **204**. Org admin cannot touch another company. |
+| `POST` | `/api/enterprise/llm-models/{model_id}/set-secondary` | admin | - | Sets company **secondary** (manageable tasks). Must differ from primary and fallback. Applies to agents with the previous secondary or none. **204**. |
+| `POST` | `/api/enterprise/llm-models/{model_id}/set-fallback` | admin | - | Sets company **fallback**; must differ from primary and secondary. Applies to agents with the previous fallback or none. **204**. |
 | `PUT` | `/api/enterprise/llm-models/{model_id}` | admin | `LLMModelUpdate` (partial) | `LLMModelOut`. Same tenant isolation. |
 | `DELETE` | `/api/enterprise/llm-models/{model_id}` | admin | Query: `force?` | **409** if agents use model unless forced. **204**. Same tenant isolation. |
 

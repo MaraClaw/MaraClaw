@@ -175,11 +175,13 @@ async def list_llm_models(
     admin = is_llm_pool_admin(current_user)
     default_model_id = None
     fallback_model_id = None
+    secondary_model_id = None
     if tid:
         tenant = await tenant_dao.get(tid)
         if tenant:
             default_model_id = tenant.default_model_id
             fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
+            secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
 
     models_out = []
     for m in await llm_model_dao.list_for_tenant(tid):
@@ -191,6 +193,7 @@ async def list_llm_models(
                 is_admin=admin,
                 default_model_id=default_model_id,
                 fallback_model_id=fallback_model_id,
+                secondary_model_id=secondary_model_id,
             )
         )
     return models_out
@@ -260,6 +263,8 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
     updates: dict[str, Any] = {"default_model_id": model.id}
     if getattr(tenant, "default_fallback_model_id", None) == model.id:
         updates["default_fallback_model_id"] = None
+    if getattr(tenant, "default_secondary_model_id", None) == model.id:
+        updates["default_secondary_model_id"] = None
     _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
 
     if previous_default and previous_default != model.id:
@@ -293,6 +298,11 @@ async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord =
             status_code=400,
             detail="Fallback must be different from the primary model",
         )
+    if getattr(tenant, "default_secondary_model_id", None) == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Fallback must be different from the secondary model",
+        )
 
     previous_fallback = getattr(tenant, "default_fallback_model_id", None)
     _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
@@ -302,6 +312,42 @@ async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord =
         new_model_id=model.id,
     )
     logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
+
+
+@router.post("/llm-models/{model_id}/set-secondary", status_code=status.HTTP_204_NO_CONTENT)
+async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    """Mark this model as the tenant's secondary (manageable-task) model."""
+    model = await llm_model_dao.get(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
+    if not model.tenant_id:
+        raise HTTPException(status_code=400, detail="Model is not tenant-scoped")
+    if not model.enabled:
+        raise HTTPException(status_code=400, detail="Model is disabled")
+
+    tenant = await tenant_dao.get(model.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.default_model_id == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Secondary must be different from the primary model",
+        )
+    if getattr(tenant, "default_fallback_model_id", None) == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Secondary must be different from the fallback model",
+        )
+
+    previous_secondary = getattr(tenant, "default_secondary_model_id", None)
+    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_secondary_model_id": model.id})
+    _ = await agent_dao.migrate_secondary_model(
+        tenant_id=tenant.id,
+        old_model_id=previous_secondary,
+        new_model_id=model.id,
+    )
+    logger.info(f"[set_secondary_llm_model] Set secondary for tenant {tenant.id} to {model.id}")
 
 
 @router.delete("/llm-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -369,16 +415,19 @@ async def update_llm_model(
         model = await llm_model_dao.update(db_obj=model, obj_in=updates)
         default_model_id = None
         fallback_model_id = None
+        secondary_model_id = None
         if model.tenant_id:
             tenant = await tenant_dao.get(model.tenant_id)
             if tenant:
                 default_model_id = tenant.default_model_id
                 fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
+                secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
         return serialize_llm_model(
             model,
             is_admin=True,
             default_model_id=default_model_id,
             fallback_model_id=fallback_model_id,
+            secondary_model_id=secondary_model_id,
         )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update model") from None

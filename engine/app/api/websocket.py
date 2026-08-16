@@ -305,7 +305,9 @@ class WebSocketChatHandler:
         self.ctx_size: int = 100
         self.user_display_name: str = ""
         self.llm_model: LLMModelRecord | None = None
+        self.secondary_llm_model: LLMModelRecord | None = None
         self.fallback_llm_model: LLMModelRecord | None = None
+        self._honor_override = False
         self.history_messages: list[ChatMessageRecord] = []
         self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
@@ -411,29 +413,20 @@ class WebSocketChatHandler:
         return True
 
     async def _load_models(self, db: object | None):
-        """Loads primary and fallback models for the agent."""
+        """Loads primary, secondary, and fallback models for the agent."""
         del db
-        if self.agent.primary_model_id:
-            self.llm_model = await llm_model_dao.get(self.agent.primary_model_id)
-            if self.llm_model and not self.llm_model.enabled:
-                logger.info(f"[WS] Primary model {self.llm_model.model} is disabled, skipping")
-                self.llm_model = None
-            else:
-                logger.info(f"[WS] Primary model loaded: {self.llm_model.model if self.llm_model else 'None'}")
+        from app.services.llm.router import load_agent_model_bundle
 
-        if self.agent.fallback_model_id:
-            self.fallback_llm_model = await llm_model_dao.get(self.agent.fallback_model_id)
-            if self.fallback_llm_model and not self.fallback_llm_model.enabled:
-                logger.info(f"[WS] Fallback model {self.fallback_llm_model.model} is disabled, skipping")
-                self.fallback_llm_model = None
-            elif self.fallback_llm_model:
-                logger.info(f"[WS] Fallback model loaded: {self.fallback_llm_model.model}")
-
-        fallback = self.fallback_llm_model
-        if not self.llm_model and fallback is not None:
-            self.llm_model = fallback
-            self.fallback_llm_model = None
-            logger.info(f"[WS] Primary model unavailable, using fallback: {fallback.model}")
+        bundle = await load_agent_model_bundle(self.agent)
+        self.llm_model = bundle.primary if bundle.primary and bundle.primary.enabled else None
+        self.secondary_llm_model = bundle.secondary if bundle.secondary and bundle.secondary.enabled else None
+        self.fallback_llm_model = bundle.fallback if bundle.fallback and bundle.fallback.enabled else None
+        if self.llm_model:
+            logger.info(f"[WS] Primary model loaded: {self.llm_model.model}")
+        if self.secondary_llm_model:
+            logger.info(f"[WS] Secondary model loaded: {self.secondary_llm_model.model}")
+        if self.fallback_llm_model:
+            logger.info(f"[WS] Fallback model loaded: {self.fallback_llm_model.model}")
 
     async def _resolve_chat_session(self, db: object | None, user_id: uuid.UUID) -> str | None:
         """Resolves existing session or creates a new one."""
@@ -583,18 +576,17 @@ class WebSocketChatHandler:
         """Reloads model config and resolves effective model (taking overrides into account)."""
         _agent_cur = await agent_dao.get(self.agent_id)
         if _agent_cur:
-            model_ids = [mid for mid in (_agent_cur.primary_model_id, _agent_cur.fallback_model_id) if mid]
-            loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)}
-            _m = loaded.get(_agent_cur.primary_model_id) if _agent_cur.primary_model_id else None
-            self.llm_model = _m if (_m and _m.enabled) else None
-            _fb = loaded.get(_agent_cur.fallback_model_id) if _agent_cur.fallback_model_id else None
-            self.fallback_llm_model = _fb if (_fb and _fb.enabled) else None
+            from app.services.llm.router import load_agent_model_bundle
 
-            if not self.llm_model and self.fallback_llm_model:
-                self.llm_model = self.fallback_llm_model
-                self.fallback_llm_model = None
+            bundle = await load_agent_model_bundle(_agent_cur)
+            self.llm_model = bundle.primary if bundle.primary and bundle.primary.enabled else None
+            self.secondary_llm_model = (
+                bundle.secondary if bundle.secondary and bundle.secondary.enabled else None
+            )
+            self.fallback_llm_model = bundle.fallback if bundle.fallback and bundle.fallback.enabled else None
 
-        effective_llm_model = self.llm_model
+        self._honor_override = False
+        effective_llm_model = self.llm_model or self.secondary_llm_model or self.fallback_llm_model
         if override_model_id:
             try:
                 _ovr_uuid = uuid.UUID(str(override_model_id))
@@ -609,6 +601,7 @@ class WebSocketChatHandler:
                     )
                 ):
                     effective_llm_model = _ovr
+                    self._honor_override = True
                 else:
                     logger.warning(
                         f"[WS] model override {override_model_id} rejected (missing/disabled/tenant mismatch)"
@@ -871,11 +864,30 @@ class WebSocketChatHandler:
                     except Exception as error:
                         logger.warning(f"[WS] Failed to stream code output: {error}")
 
-                from app.services.llm.turn import TurnContext
+                from app.services.llm.router import select_turn_model
+                from app.services.llm.turn import ModelBundle, TurnContext
+
+                selected_model = effective_llm_model
+                failover_model = self.fallback_llm_model
+                if not self._honor_override:
+                    choice = await select_turn_model(
+                        ModelBundle(
+                            primary=self.llm_model,
+                            secondary=self.secondary_llm_model,
+                            fallback=self.fallback_llm_model,
+                        ),
+                        user_text=getattr(self, "current_user_text", "") or "",
+                        history=_truncated,
+                        skip_tools=skip_tools_for_greeting,
+                        agent_id=self.agent_id,
+                    )
+                    if choice.model is not None:
+                        selected_model = choice.model
+                        failover_model = choice.failover_model
 
                 return await call_llm_with_failover(
-                    primary_model=effective_llm_model,
-                    fallback_model=self.fallback_llm_model,
+                    primary_model=selected_model,
+                    fallback_model=failover_model,
                     messages=_truncated,
                     agent_name=self.agent_name,
                     role_description=self.role_description,
@@ -884,15 +896,17 @@ class WebSocketChatHandler:
                     session_id=self.conv_id,
                     turn=TurnContext(
                         agent=self.agent,
-                        primary_model=effective_llm_model,
+                        primary_model=self.llm_model,
+                        secondary_model=self.secondary_llm_model,
                         fallback_model=self.fallback_llm_model,
+                        selected_model=selected_model,
                         user=self.user,
                     ),
                     on_chunk=stream_to_ws,
                     on_tool_call=tool_call_to_ws,
                     on_tool_delta=tool_delta_to_ws,
                     on_thinking=thinking_to_ws,
-                    supports_vision=getattr(effective_llm_model, "supports_vision", False),
+                    supports_vision=getattr(selected_model, "supports_vision", False),
                     on_failover=_on_failover,
                     skip_tools=skip_tools_for_greeting,
                     on_code_output=code_output_to_ws,

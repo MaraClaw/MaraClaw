@@ -160,11 +160,13 @@ CREATE TABLE IF NOT EXISTS tenants (
 	a2a_async_enabled BOOLEAN NOT NULL DEFAULT true, 
 	default_model_id UUID, 
 	default_fallback_model_id UUID, 
+	default_secondary_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
-	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
+	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
+	FOREIGN KEY(default_secondary_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
@@ -176,6 +178,8 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_fallback_model_id UUID;
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_secondary_model_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
 	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;
@@ -582,6 +586,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	container_id VARCHAR(100), 
 	container_port INTEGER, 
 	primary_model_id UUID, 
+	secondary_model_id UUID, 
 	fallback_model_id UUID, 
 	autonomy_policy JSON NOT NULL DEFAULT '{}', 
 	max_tokens_per_day INTEGER, 
@@ -623,9 +628,12 @@ CREATE TABLE IF NOT EXISTS agents (
 	FOREIGN KEY(creator_id) REFERENCES users (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id), 
 	FOREIGN KEY(primary_model_id) REFERENCES llm_models (id), 
+	FOREIGN KEY(secondary_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(fallback_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(template_id) REFERENCES agent_templates (id)
 );
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS secondary_model_id UUID;
 
 CREATE INDEX IF NOT EXISTS ix_agents_tenant_id ON agents (tenant_id);
 

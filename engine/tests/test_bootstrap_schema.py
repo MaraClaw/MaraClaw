@@ -64,10 +64,12 @@ def test_tenant_not_null_columns_have_defaults() -> None:
         "is_system BOOLEAN NOT NULL DEFAULT false",
         "is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
         "default_fallback_model_id UUID",
+        "default_secondary_model_id UUID",
     ):
         assert column in block, column
     assert "CREATE TABLE IF NOT EXISTS tenant_email_domains" in sql
     assert "ux_tenants_default_end_user_org" in sql
+    assert "secondary_model_id UUID" in sql
     assert "ux_tenant_email_domains_domain" in sql
     assert "ux_users_identity_single_tenant" in sql
     assert "WHEN unique_violation THEN" in sql

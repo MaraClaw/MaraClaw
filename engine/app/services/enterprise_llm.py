@@ -91,11 +91,13 @@ def serialize_llm_model(
     is_admin: bool,
     default_model_id: uuid.UUID | None,
     fallback_model_id: uuid.UUID | None = None,
+    secondary_model_id: uuid.UUID | None = None,
 ) -> LLMModelOut:
     """Build an API payload. Members never receive keys or endpoints."""
     out = LLMModelOut.model_validate(model)
     out.is_default = default_model_id is not None and model.id == default_model_id
     out.is_fallback = fallback_model_id is not None and model.id == fallback_model_id
+    out.is_secondary = secondary_model_id is not None and model.id == secondary_model_id
     if is_admin:
         key = get_model_api_key(model)
         out.api_key_masked = f"****{key[-4:]}" if len(key) > 4 else "****"
@@ -114,6 +116,20 @@ def model_usable_in_tenant(model: LLMModelRecord, tenant_id: uuid.UUID | None) -
     if model.tenant_id is None:
         return True
     return tenant_id is not None and model.tenant_id == tenant_id
+
+
+def assert_distinct_model_slots(
+    primary_id: uuid.UUID | None,
+    secondary_id: uuid.UUID | None,
+    fallback_id: uuid.UUID | None,
+) -> None:
+    """Reject overlapping primary / secondary / fallback assignments."""
+    filled = [mid for mid in (primary_id, secondary_id, fallback_id) if mid is not None]
+    if len(filled) != len(set(filled)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Primary, secondary, and fallback models must be different",
+        )
 
 
 async def assert_models_in_tenant_pool(

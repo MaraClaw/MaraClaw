@@ -80,6 +80,7 @@ class TenantOut(BaseModel):
     a2a_async_enabled: bool = True
     default_model_id: uuid.UUID | None = None
     default_fallback_model_id: uuid.UUID | None = None
+    default_secondary_model_id: uuid.UUID | None = None
     logo_url: str | None = None
     created_at: datetime | None = None
     is_system: bool = False

@@ -895,7 +895,6 @@ async def call_agent_llm(
     """Call the agent's LLM with automatic failover support."""
     from app.core.permissions import is_agent_expired
     from app.dao.agent_dao import agent_dao
-    from app.dao.llm_dao import llm_model_dao
 
     agent = turn.agent if turn and turn.agent is not None else await agent_dao.get(agent_id)
     if not agent:
@@ -904,31 +903,14 @@ async def call_agent_llm(
     if is_agent_expired(agent):
         return "This Agent has expired and is off duty. Please contact your admin to extend its service."
 
-    primary_model = turn.primary_model if turn else None
-    fallback_model = turn.fallback_model if turn else None
-    missing_ids = [
-        mid
-        for mid, loaded in (
-            (agent.primary_model_id, primary_model),
-            (agent.fallback_model_id, fallback_model),
-        )
-        if mid and loaded is None
-    ]
-    if missing_ids:
-        loaded = {row.id: row for row in await llm_model_dao.get_many(missing_ids)}
-        if primary_model is None and agent.primary_model_id:
-            primary_model = loaded.get(agent.primary_model_id)
-        if fallback_model is None and agent.fallback_model_id:
-            fallback_model = loaded.get(agent.fallback_model_id)
+    from app.services.llm.router import load_agent_model_bundle, select_turn_model
 
-    # Config-level fallback: primary missing -> use fallback
-    if not primary_model and fallback_model:
-        primary_model = fallback_model
-        fallback_model = None
-        logger.warning(f"[call_agent_llm] Primary model unavailable, using fallback: {primary_model.model}")
-
-    if not primary_model:
-        return f"⚠️ {agent.name} has no LLM model configured. Configure one in the admin console."
+    bundle = await load_agent_model_bundle(
+        agent,
+        primary=turn.primary_model if turn else None,
+        secondary=turn.secondary_model if turn else None,
+        fallback=turn.fallback_model if turn else None,
+    )
 
     # Build conversation messages
     messages: list[OpenAIMessage] = []
@@ -936,11 +918,44 @@ async def call_agent_llm(
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": user_text})
 
+    if turn and turn.selected_model is not None:
+        selected_model = turn.selected_model
+        failover_model = turn.fallback_model
+        selected_slot = turn.selected_slot
+        complexity = turn.complexity
+        routing_reason = turn.routing_reason
+    else:
+        choice = await select_turn_model(
+            bundle,
+            user_text=user_text,
+            history=history,
+            agent_id=agent_id,
+        )
+        selected_model = choice.model
+        failover_model = choice.failover_model
+        selected_slot = choice.slot
+        complexity = choice.complexity
+        routing_reason = choice.reason
+
+    if not selected_model:
+        return f"⚠️ {agent.name} has no LLM model configured. Configure one in the admin console."
+
+    routed_turn = turn or TurnContext(
+        agent=agent,
+        primary_model=bundle.primary,
+        secondary_model=bundle.secondary,
+        fallback_model=bundle.fallback,
+    )
+    routed_turn.selected_model = selected_model
+    routed_turn.selected_slot = selected_slot
+    routed_turn.complexity = complexity
+    routed_turn.routing_reason = routing_reason
+
     # Use unified call_llm_with_failover
     try:
         return await call_llm_with_failover(
-            primary_model=primary_model,
-            fallback_model=fallback_model,
+            primary_model=selected_model,
+            fallback_model=failover_model,
             messages=messages,
             agent_name=agent.name,
             role_description=agent.role_description or "",
@@ -949,8 +964,8 @@ async def call_agent_llm(
             session_id=session_id,
             on_chunk=on_chunk,
             on_thinking=on_thinking,
-            supports_vision=supports_vision or getattr(primary_model, "supports_vision", False),
-            turn=turn or TurnContext(agent=agent, primary_model=primary_model, fallback_model=fallback_model),
+            supports_vision=supports_vision or getattr(selected_model, "supports_vision", False),
+            turn=routed_turn,
         )
     except Exception as e:
         error_msg = str(e) or repr(e)

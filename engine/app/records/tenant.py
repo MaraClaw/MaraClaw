@@ -45,6 +45,7 @@ class TenantRecord:
     a2a_async_enabled: bool = True
     default_model_id: UUID | None = None
     default_fallback_model_id: UUID | None = None
+    default_secondary_model_id: UUID | None = None
     is_system: bool = False
     is_default_end_user_org: bool = False
 
@@ -75,6 +76,7 @@ class TenantRecord:
             a2a_async_enabled=bool(row.get("a2a_async_enabled", True)),
             default_model_id=uuid_from_row_opt(row.get("default_model_id")),
             default_fallback_model_id=uuid_from_row_opt(row.get("default_fallback_model_id")),
+            default_secondary_model_id=uuid_from_row_opt(row.get("default_secondary_model_id")),
             is_system=bool(row.get("is_system", False)),
             is_default_end_user_org=bool(row.get("is_default_end_user_org", False)),
         )

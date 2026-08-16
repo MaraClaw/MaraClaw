@@ -32,6 +32,7 @@ _AGENT_COLUMNS = (
     "container_id",
     "container_port",
     "primary_model_id",
+    "secondary_model_id",
     "fallback_model_id",
     "autonomy_policy",
     "max_tokens_per_day",
@@ -722,6 +723,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             rows = await db.fetchall(
                 "SELECT name FROM agents "
                 + "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
+                + "OR secondary_model_id = %(model_id)s "
                 + "ORDER BY name",
                 {"model_id": model_id},
             )
@@ -737,6 +739,38 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "UPDATE agents SET fallback_model_id = NULL WHERE fallback_model_id = %(model_id)s",
                 {"model_id": model_id},
             )
+            await db.execute(
+                "UPDATE agents SET secondary_model_id = NULL WHERE secondary_model_id = %(model_id)s",
+                {"model_id": model_id},
+            )
+
+    async def migrate_secondary_model(
+        self,
+        *,
+        tenant_id: UUID,
+        old_model_id: UUID | None,
+        new_model_id: UUID,
+    ) -> int:
+        async with self.session() as db:
+            if old_model_id is None:
+                rows = await db.fetchall(
+                    "UPDATE agents SET secondary_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id IS NULL "
+                    + "RETURNING id",
+                    {"tenant_id": tenant_id, "new_model_id": new_model_id},
+                )
+            else:
+                rows = await db.fetchall(
+                    "UPDATE agents SET secondary_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(old_model_id)s "
+                    + "RETURNING id",
+                    {
+                        "tenant_id": tenant_id,
+                        "old_model_id": old_model_id,
+                        "new_model_id": new_model_id,
+                    },
+                )
+            return len(rows)
 
     async def migrate_fallback_model(
         self,

@@ -171,10 +171,26 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
         conversation_messages.append({"role": "user", "content": f"[From {ctx.source_agent.name}] {ctx.message_text}"})
 
         from app.services.llm.caller import call_llm_with_failover
+        from app.services.llm.router import select_turn_model
+        from app.services.llm.turn import ModelBundle
+
+        choice = await select_turn_model(
+            ModelBundle(
+                primary=ctx.primary_model,
+                secondary=ctx.secondary_model,
+                fallback=ctx.fallback_model,
+            ),
+            user_text=ctx.message_text,
+            history=ctx.conversation_history,
+            agent_id=ctx.target_agent.id,
+        )
+        selected = choice.model or ctx.primary_model or ctx.fallback_model
+        if selected is None:
+            return f"⚠️ {ctx.target_agent.name} has no LLM model configured"
 
         target_reply = await call_llm_with_failover(
-            primary_model=ctx.primary_model,
-            fallback_model=ctx.fallback_model,
+            primary_model=selected,
+            fallback_model=choice.failover_model,
             messages=conversation_messages,
             agent_name=ctx.target_agent.name,
             role_description=ctx.target_agent.role_description or "",

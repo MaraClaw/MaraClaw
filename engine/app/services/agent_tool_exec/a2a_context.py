@@ -11,7 +11,6 @@ from app.core.permissions import evaluate_agent_relationship_status
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
 from app.records.agent import AgentRecord
@@ -34,6 +33,7 @@ class A2AContext:
     origin_source_channel: str
     origin_session_id: str | None
     primary_model: LLMModelRecord | None = None
+    secondary_model: LLMModelRecord | None = None
     fallback_model: LLMModelRecord | None = None
     conversation_history: list[OpenAIMessage] = field(default_factory=list[OpenAIMessage])
 
@@ -193,15 +193,18 @@ async def _build_a2a_context(
             msg_type = "consult"
 
         primary_model = None
+        secondary_model = None
         fallback_model = None
         conversation_history: list[OpenAIMessage] = []
 
         if msg_type == "consult":
-            if target.primary_model_id:
-                primary_model = await llm_model_dao.get(target.primary_model_id)
-            if target.fallback_model_id:
-                fallback_model = await llm_model_dao.get(target.fallback_model_id)
-            if not primary_model and not fallback_model:
+            from app.services.llm.router import load_agent_model_bundle
+
+            bundle = await load_agent_model_bundle(target)
+            primary_model = bundle.primary
+            secondary_model = bundle.secondary
+            fallback_model = bundle.fallback
+            if not primary_model and not secondary_model and not fallback_model:
                 return f"⚠️ {target.name} has no LLM model configured"
 
             hist = await chat_message_dao.list_recent(
@@ -229,6 +232,7 @@ async def _build_a2a_context(
             origin_source_channel=origin_source_channel,
             origin_session_id=origin_session_id,
             primary_model=primary_model,
+            secondary_model=secondary_model,
             fallback_model=fallback_model,
             conversation_history=conversation_history,
         )
