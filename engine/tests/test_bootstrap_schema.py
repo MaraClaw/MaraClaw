@@ -75,6 +75,16 @@ def test_tenant_not_null_columns_have_defaults() -> None:
     assert "WHEN unique_violation THEN" in sql
 
 
+def test_patches_add_secondary_model_columns() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "default_secondary_model_id UUID" in joined
+    assert "ALTER TABLE agents ADD COLUMN IF NOT EXISTS secondary_model_id UUID" in joined
+    assert "tenants_default_secondary_model_id_fkey" in joined
+    assert "agents_secondary_model_id_fkey" in joined
+
+
 def test_hot_path_indexes_are_declared() -> None:
     sql = BASELINE.read_text(encoding="utf-8")
     for name in (

@@ -744,6 +744,34 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"model_id": model_id},
             )
 
+    async def clear_other_slots_matching(
+        self,
+        *,
+        tenant_id: UUID,
+        model_id: UUID,
+        keep: str,
+    ) -> None:
+        """Null every slot except ``keep`` that still points at ``model_id``."""
+        async with self.session() as db:
+            if keep != "primary":
+                await db.execute(
+                    "UPDATE agents SET primary_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+            if keep != "secondary":
+                await db.execute(
+                    "UPDATE agents SET secondary_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+            if keep != "fallback":
+                await db.execute(
+                    "UPDATE agents SET fallback_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+
     async def migrate_secondary_model(
         self,
         *,
@@ -751,19 +779,25 @@ class AgentDAO(BaseDAO[AgentRecord]):
         old_model_id: UUID | None,
         new_model_id: UUID,
     ) -> int:
+        distinct = (
+            "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
+            + "AND fallback_model_id IS DISTINCT FROM %(new_model_id)s"
+        )
         async with self.session() as db:
             if old_model_id is None:
                 rows = await db.fetchall(
                     "UPDATE agents SET secondary_model_id = %(new_model_id)s "
                     + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id IS NULL "
-                    + "RETURNING id",
+                    + distinct
+                    + " RETURNING id",
                     {"tenant_id": tenant_id, "new_model_id": new_model_id},
                 )
             else:
                 rows = await db.fetchall(
                     "UPDATE agents SET secondary_model_id = %(new_model_id)s "
                     + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(old_model_id)s "
-                    + "RETURNING id",
+                    + distinct
+                    + " RETURNING id",
                     {
                         "tenant_id": tenant_id,
                         "old_model_id": old_model_id,
@@ -779,19 +813,25 @@ class AgentDAO(BaseDAO[AgentRecord]):
         old_model_id: UUID | None,
         new_model_id: UUID,
     ) -> int:
+        distinct = (
+            "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
+            + "AND secondary_model_id IS DISTINCT FROM %(new_model_id)s"
+        )
         async with self.session() as db:
             if old_model_id is None:
                 rows = await db.fetchall(
                     "UPDATE agents SET fallback_model_id = %(new_model_id)s "
                     + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id IS NULL "
-                    + "RETURNING id",
+                    + distinct
+                    + " RETURNING id",
                     {"tenant_id": tenant_id, "new_model_id": new_model_id},
                 )
             else:
                 rows = await db.fetchall(
                     "UPDATE agents SET fallback_model_id = %(new_model_id)s "
                     + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(old_model_id)s "
-                    + "RETURNING id",
+                    + distinct
+                    + " RETURNING id",
                     {
                         "tenant_id": tenant_id,
                         "old_model_id": old_model_id,

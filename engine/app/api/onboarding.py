@@ -17,6 +17,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
+from app.services.enterprise_llm import assert_distinct_model_slots, model_usable_in_tenant
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -91,6 +92,19 @@ async def _ensure_row(user: UserRecord, entry_mode: str) -> UserTenantOnboarding
     return row
 
 
+def _usable_slot_id(
+    tenant_id: uuid.UUID | None,
+    model_id: uuid.UUID | None,
+    loaded: dict[uuid.UUID, Any],
+) -> uuid.UUID | None:
+    if model_id is None:
+        return None
+    model = loaded.get(model_id)
+    if model is None or not model_usable_in_tenant(model, tenant_id):
+        return None
+    return model_id
+
+
 async def _tenant_model_ids(
     tenant_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID | None, uuid.UUID | None, uuid.UUID | None]:
@@ -98,14 +112,23 @@ async def _tenant_model_ids(
         return None, None, None
     tenant = await tenant_dao.get(tenant_id)
     if tenant and tenant.default_model_id:
-        return (
-            tenant.default_model_id,
-            getattr(tenant, "default_secondary_model_id", None),
-            getattr(tenant, "default_fallback_model_id", None),
-        )
-    primary = await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
-    secondary = getattr(tenant, "default_secondary_model_id", None) if tenant else None
-    fallback = getattr(tenant, "default_fallback_model_id", None) if tenant else None
+        primary = tenant.default_model_id
+        secondary = getattr(tenant, "default_secondary_model_id", None)
+        fallback = getattr(tenant, "default_fallback_model_id", None)
+    else:
+        primary = await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
+        secondary = getattr(tenant, "default_secondary_model_id", None) if tenant else None
+        fallback = getattr(tenant, "default_fallback_model_id", None) if tenant else None
+    wanted = [mid for mid in (primary, secondary, fallback) if mid]
+    loaded = {row.id: row for row in await llm_model_dao.get_many(wanted)} if wanted else {}
+    primary = _usable_slot_id(tenant_id, primary, loaded)
+    secondary = _usable_slot_id(tenant_id, secondary, loaded)
+    fallback = _usable_slot_id(tenant_id, fallback, loaded)
+    if secondary == primary:
+        secondary = None
+    if fallback in (primary, secondary):
+        fallback = None
+    assert_distinct_model_slots(primary, secondary, fallback)
     return primary, secondary, fallback
 
 

@@ -276,6 +276,7 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
         logger.info(
             f"[set_default_llm_model] Migrated agents in tenant {tenant.id} from {previous_default} -> {model.id}"
         )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="primary")
 
 
 @router.post("/llm-models/{model_id}/set-fallback", status_code=status.HTTP_204_NO_CONTENT)
@@ -311,6 +312,7 @@ async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord =
         old_model_id=previous_fallback,
         new_model_id=model.id,
     )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="fallback")
     logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
 
 
@@ -347,6 +349,7 @@ async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord 
         old_model_id=previous_secondary,
         new_model_id=model.id,
     )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="secondary")
     logger.info(f"[set_secondary_llm_model] Set secondary for tenant {tenant.id} to {model.id}")
 
 
@@ -418,6 +421,16 @@ async def update_llm_model(
         secondary_model_id = None
         if model.tenant_id:
             tenant = await tenant_dao.get(model.tenant_id)
+            if tenant and updates.get("enabled") is False:
+                slot_clears: dict[str, Any] = {}
+                if tenant.default_model_id == model.id:
+                    slot_clears["default_model_id"] = None
+                if getattr(tenant, "default_fallback_model_id", None) == model.id:
+                    slot_clears["default_fallback_model_id"] = None
+                if getattr(tenant, "default_secondary_model_id", None) == model.id:
+                    slot_clears["default_secondary_model_id"] = None
+                if slot_clears:
+                    tenant = await tenant_dao.update(db_obj=tenant, obj_in=slot_clears) or tenant
             if tenant:
                 default_model_id = tenant.default_model_id
                 fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
