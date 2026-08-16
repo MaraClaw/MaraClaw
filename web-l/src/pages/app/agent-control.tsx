@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import {
   controlClick,
   controlCurrentUrl,
@@ -117,8 +118,8 @@ export function AgentControlPage() {
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="text-xs">
           <span className="text-muted-foreground">Chat session</span>
-          <select
-            className="mt-1 h-10 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
+          <Select
+            className="mt-1"
             value={sessionId}
             onChange={(event) => setSessionId(event.target.value)}
             disabled={locked}
@@ -128,12 +129,12 @@ export function AgentControlPage() {
                 {session.title}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="text-xs">
           <span className="text-muted-foreground">Environment</span>
-          <select
-            className="mt-1 h-10 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
+          <Select
+            className="mt-1"
             value={envType}
             onChange={(event) => setEnvType(event.target.value)}
             disabled={locked}
@@ -141,7 +142,7 @@ export function AgentControlPage() {
             <option value="browser">Browser</option>
             <option value="computer">Computer</option>
             <option value="code">Code</option>
-          </select>
+          </Select>
         </label>
         <label className="text-xs">
           <span className="text-muted-foreground">Cookie domain on unlock</span>

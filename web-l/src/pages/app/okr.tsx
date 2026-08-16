@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
@@ -107,10 +108,11 @@ export function OkrPage() {
         </div>
       </section>
 
-      <label className="block max-w-xs text-sm">
+      <label className="block text-sm">
         <span className="text-muted-foreground">Period</span>
-        <select
-          className="mt-1 h-10 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
+        <Select
+          fit
+          className="mt-1"
           value={periodStart}
           onChange={(event) => setPeriodStart(event.target.value)}
         >
@@ -120,7 +122,7 @@ export function OkrPage() {
               {period.is_current ? ' (current)' : ''}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
 
       {objectives.isLoading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}

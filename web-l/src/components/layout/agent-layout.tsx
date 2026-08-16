@@ -1,30 +1,49 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
-import { NavLink, Outlet, useParams } from 'react-router-dom'
+import { ArrowLeft, Loader2 } from 'lucide-react'
+import { Outlet, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ApiError } from '@/lib/http'
 import { getAgent, getAgentMetrics, startAgent, stopAgent } from '@/lib/workspace-api'
-import { cn } from '@/lib/utils'
 
 const tabs = [
-  { to: 'chat', label: 'Chat' },
-  { to: 'files', label: 'Files' },
-  { to: 'skills', label: 'Skills' },
-  { to: 'tools', label: 'Tools' },
-  { to: 'tasks', label: 'Tasks' },
-  { to: 'schedules', label: 'Schedules' },
-  { to: 'channels', label: 'Channels' },
-  { to: 'relationships', label: 'People' },
-  { to: 'permissions', label: 'Access' },
-  { to: 'control', label: 'Control' },
-  { to: 'credentials', label: 'Vault' },
-  { to: 'pages', label: 'Pages' },
-  { to: 'playwright', label: 'Browser' },
-  { to: 'settings', label: 'Settings' },
-]
+  { id: 'chat', to: 'chat', label: 'Chat', icon: 'chat' },
+  { id: 'files', to: 'files', label: 'Files', icon: 'files' },
+  { id: 'skills', to: 'skills', label: 'Skills', icon: 'skills' },
+  { id: 'tools', to: 'tools', label: 'Tools', icon: 'tools' },
+  { id: 'tasks', to: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { id: 'schedules', to: 'schedules', label: 'Schedules', icon: 'schedules' },
+  { id: 'channels', to: 'channels', label: 'Channels', icon: 'channels' },
+  { id: 'people', to: 'relationships', label: 'People', icon: 'people' },
+  { id: 'access', to: 'permissions', label: 'Access', icon: 'access' },
+  { id: 'control', to: 'control', label: 'Control', icon: 'control' },
+  { id: 'vault', to: 'credentials', label: 'Vault', icon: 'vault' },
+  { id: 'pages', to: 'pages', label: 'Pages', icon: 'pages' },
+  { id: 'browser', to: 'playwright', label: 'Browser', icon: 'browser' },
+  { id: 'settings', to: 'settings', label: 'Settings', icon: 'settings' },
+] as const satisfies readonly SectionRailItem[]
+
+function AgentsListButton() {
+  const navigate = useNavigate()
+
+  function goBack() {
+    if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
+      navigate(-1)
+      return
+    }
+    navigate('/app/agents')
+  }
+
+  return (
+    <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={goBack}>
+      <ArrowLeft className="size-4" aria-hidden />
+      Back
+    </Button>
+  )
+}
 
 export function AgentLayout() {
   const { agentId = '' } = useParams()
@@ -60,23 +79,44 @@ export function AgentLayout() {
     },
   })
 
-  if (query.isLoading) {
+  if (!query.data) {
+    if (query.isLoading) {
+      return (
+        <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
+          <div className="space-y-3 p-6 md:col-start-2">
+            <AgentsListButton />
+            <div className="flex h-32 items-center justify-center text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+            </div>
+          </div>
+          <SectionRail
+            items={tabs}
+            label="Agent sections"
+            className="md:col-start-1 md:row-start-1 md:row-span-2"
+          />
+        </div>
+      )
+    }
     return (
-      <div className="flex h-48 items-center justify-center text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" />
+      <div className="space-y-3 p-6">
+        <AgentsListButton />
+        <p className="text-sm text-destructive">
+          {query.error instanceof ApiError && query.error.status !== 404
+            ? query.error.message
+            : 'This agent is not available.'}
+        </p>
       </div>
     )
-  }
-
-  if (query.isError || !query.data) {
-    return <p className="p-6 text-sm text-destructive">This agent is not available.</p>
   }
 
   const agent = query.data
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border px-5 py-4">
+    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
+      <div className="min-w-0 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
+        <div className="mb-3">
+          <AgentsListButton />
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
           <Badge variant="soft">{agent.status}</Badge>
@@ -107,24 +147,13 @@ export function AgentLayout() {
         {agent.role_description ? (
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
         ) : null}
-        <nav className="mt-3 flex flex-wrap gap-1" aria-label="Agent sections">
-          {tabs.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={tab.to}
-              className={({ isActive }) =>
-                cn(
-                  'rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                  isActive && 'bg-muted text-foreground',
-                )
-              }
-            >
-              {tab.label}
-            </NavLink>
-          ))}
-        </nav>
       </div>
-      <div className="min-h-0 flex-1">
+      <SectionRail
+        items={tabs}
+        label="Agent sections"
+        className="md:col-start-1 md:row-start-1 md:row-span-2"
+      />
+      <div className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-2">
         <Outlet context={{ agent }} />
       </div>
     </div>

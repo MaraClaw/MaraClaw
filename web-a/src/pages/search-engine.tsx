@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useId, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,8 +16,14 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
-import { cn } from '@/lib/utils'
 import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
+
+const sections = [
+  { id: 'keys', label: 'Keys', icon: 'keys' },
+  { id: 'analytics', label: 'Analytics', icon: 'analytics' },
+] as const satisfies readonly SectionRailItem[]
+
+type SearchEngineTab = (typeof sections)[number]['id']
 
 const schema = z.object({
   label: z.string().trim().min(1, 'Enter a label').max(200, 'Label is too long'),
@@ -43,15 +50,20 @@ function statusVariant(status: string): 'success' | 'secondary' | 'destructive' 
   return 'secondary'
 }
 
+function statusLabel(status: string): string {
+  if (!status) return status
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
 export function SearchEnginePage() {
   const queryClient = useQueryClient()
   const formId = useId()
   const [searchParams, setSearchParams] = useSearchParams()
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
-  const tab = searchParams.get('tab') === 'analytics' ? 'analytics' : 'keys'
+  const tab: SearchEngineTab = searchParams.get('tab') === 'analytics' ? 'analytics' : 'keys'
 
-  function setTab(next: 'keys' | 'analytics') {
+  function setTab(next: SearchEngineTab) {
     const copy = new URLSearchParams(searchParams)
     if (next === 'analytics') copy.set('tab', 'analytics')
     else {
@@ -116,9 +128,35 @@ export function SearchEnginePage() {
     }
   }
 
+  function selectTab(next: SearchEngineTab) {
+    setTab(next)
+    queueMicrotask(() => document.getElementById(`search-engine-tab-${next}`)?.focus())
+  }
+
+  function onRailKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const order: SearchEngineTab[] = ['keys', 'analytics']
+    const index = order.indexOf(tab)
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectTab(order[(index + 1) % order.length] ?? 'keys')
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectTab(order[(index - 1 + order.length) % order.length] ?? 'keys')
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      selectTab('keys')
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      selectTab('analytics')
+    }
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      <div>
+    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
+      <div className="min-w-0 bg-background px-6 py-4 md:col-start-2 md:row-start-1">
         <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
         <p className="mt-2 text-muted-foreground">
           {tab === 'analytics'
@@ -126,58 +164,24 @@ export function SearchEnginePage() {
             : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
         </p>
       </div>
-
-      <div
-        className="flex gap-2"
+      <SectionRail
+        items={sections}
+        active={tab}
+        onSelect={selectTab}
+        label="Search engine sections"
         role="tablist"
-        aria-label="Search engine sections"
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-            event.preventDefault()
-            setTab(tab === 'keys' ? 'analytics' : 'keys')
-          }
-          if (event.key === 'Home') {
-            event.preventDefault()
-            setTab('keys')
-          }
-          if (event.key === 'End') {
-            event.preventDefault()
-            setTab('analytics')
-          }
-        }}
-      >
-        <button
-          type="button"
-          id="search-engine-tab-keys"
-          role="tab"
-          aria-selected={tab === 'keys'}
-          aria-controls="search-engine-panel-keys"
-          tabIndex={tab === 'keys' ? 0 : -1}
-          className={cn(
-            'rounded-xl px-3 py-1.5 text-sm font-medium',
-            tab === 'keys' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
-          )}
-          onClick={() => setTab('keys')}
-        >
-          Keys
-        </button>
-        <button
-          type="button"
-          id="search-engine-tab-analytics"
-          role="tab"
-          aria-selected={tab === 'analytics'}
-          aria-controls="search-engine-panel-analytics"
-          tabIndex={tab === 'analytics' ? 0 : -1}
-          className={cn(
-            'rounded-xl px-3 py-1.5 text-sm font-medium',
-            tab === 'analytics' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
-          )}
-          onClick={() => setTab('analytics')}
-        >
-          Analytics
-        </button>
-      </div>
-
+        onKeyDown={onRailKeyDown}
+        className="md:col-start-1 md:row-start-1 md:row-span-2"
+        itemProps={(item, isActive) => ({
+          role: 'tab',
+          id: `search-engine-tab-${item.id}`,
+          'aria-selected': isActive,
+          'aria-controls': `search-engine-panel-${item.id}`,
+          tabIndex: isActive ? 0 : -1,
+        })}
+      />
+      <div className="min-h-0 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       {tab === 'analytics' ? (
         <div
           id="search-engine-panel-analytics"
@@ -272,6 +276,8 @@ export function SearchEnginePage() {
       </div>
       </div>
       ) : null}
+          </div>
+        </div>
     </div>
   )
 }
@@ -305,7 +311,7 @@ function KeyCard({
             Position {item.position + 1} · {shortFingerprint(item.fingerprint)}
           </CardDescription>
         </div>
-        <Badge variant={statusVariant(item.status)}>{item.status}</Badge>
+        <Badge variant={statusVariant(item.status)}>{statusLabel(item.status)}</Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">

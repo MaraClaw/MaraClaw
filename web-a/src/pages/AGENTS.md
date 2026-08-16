@@ -18,7 +18,7 @@ Each page owns Query/mutations + layout. Extract a component only when reused.
 | Company domains | `company-detail.tsx` | Loads full `listCompanies()` then `.find`. |
 | Users | `users.tsx`, `user-detail.tsx` | URL `?q=` `?company=`. Client-side filter. Scroll key `web-a:users-scroll`. |
 | Models | `llm-models.tsx` | Org + platform admin. PA uses `?company=`. Writes `/api/enterprise/llm-models`. Set primary (`/set-default`), secondary (`/set-secondary`), and fallback (`/set-fallback`). |
-| Search keys | `search-engine.tsx` | `?tab=analytics` mounts analytics. Leaving the tab drops `tab`/`company`/`range`. |
+| Search keys | `search-engine.tsx` | Keys/Analytics icon rail. `?tab=analytics` mounts analytics. Leaving the tab drops `tab`/`company`/`range`. |
 | Analytics | `search-engine-analytics.tsx` | Not a route. `?company=` `?range=`. Dual system+scoped summary is intentional. |
 | Tools | `placeholder.tsx` | Still a stub. |
 

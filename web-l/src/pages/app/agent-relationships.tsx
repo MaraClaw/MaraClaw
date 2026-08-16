@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Select } from '@/components/ui/select'
 import {
   deleteRelationship,
   listRelationshipCandidates,
@@ -59,8 +60,9 @@ export function AgentRelationshipsPage() {
             if (memberId) add.mutate()
           }}
         >
-          <select
-            className="h-11 min-w-48 flex-1 rounded-xl border border-input bg-transparent px-3 text-sm"
+          <Select
+            className="min-w-48 flex-1"
+            aria-label="Choose a person"
             value={memberId}
             onChange={(event) => setMemberId(event.target.value)}
           >
@@ -70,18 +72,14 @@ export function AgentRelationshipsPage() {
                 {row.name || row.email}
               </option>
             ))}
-          </select>
-          <select
-            className="h-11 rounded-xl border border-input bg-transparent px-3 text-sm"
-            value={relation}
-            onChange={(event) => setRelation(event.target.value)}
-          >
+          </Select>
+          <Select fit aria-label="Relationship" value={relation} onChange={(event) => setRelation(event.target.value)}>
             {RELATIONS.map((item) => (
               <option key={item} value={item}>
                 {item.replaceAll('_', ' ')}
               </option>
             ))}
-          </select>
+          </Select>
           <Button type="submit">Add</Button>
         </form>
       ) : null}

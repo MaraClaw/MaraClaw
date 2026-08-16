@@ -1,19 +1,46 @@
 import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
+import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
 import { ApiError } from '@/lib/http'
-import { cn } from '@/lib/utils'
 
-const tabs = ['People', 'Synced', 'Departments'] as const
+const tabs = [
+  { id: 'people', label: 'People', icon: 'people' },
+  { id: 'synced', label: 'Synced', icon: 'synced' },
+  { id: 'departments', label: 'Departments', icon: 'departments' },
+] as const satisfies readonly SectionRailItem[]
+
+type DirectoryTab = (typeof tabs)[number]['id']
+
+function isDirectoryTab(value: string | null): value is DirectoryTab {
+  return value === 'people' || value === 'synced' || value === 'departments'
+}
 
 export function DirectoryPage() {
-  const [tab, setTab] = useState<(typeof tabs)[number]>('People')
-  const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const tab: DirectoryTab = isDirectoryTab(requestedTab) ? requestedTab : 'people'
+  const search = searchParams.get('q') ?? ''
+
+  function setTab(next: DirectoryTab) {
+    const copy = new URLSearchParams(searchParams)
+    if (next === 'people') copy.delete('tab')
+    else copy.set('tab', next)
+    setSearchParams(copy, { replace: true })
+  }
+
+  function setSearch(value: string) {
+    const copy = new URLSearchParams(searchParams)
+    if (value) copy.set('q', value)
+    else copy.delete('q')
+    setSearchParams(copy, { replace: true })
+  }
   const users = useQuery({ queryKey: ['directory', 'users'], queryFn: listOrgUsers })
   const members = useQuery({ queryKey: ['directory', 'members', search], queryFn: () => listOrgMembers(search) })
   const departments = useQuery({ queryKey: ['directory', 'departments'], queryFn: listOrgDepartments })
@@ -31,36 +58,36 @@ export function DirectoryPage() {
   const query = search.trim()
 
   return (
-    <div className="space-y-5 p-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold">Directory</h1>
-        <p className="text-sm text-muted-foreground">People in this company and members synced from IM providers.</p>
+    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
+      <div className="min-w-0 bg-background px-5 py-4 md:col-start-2 md:row-start-1">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="font-display text-2xl font-semibold">Directory</h1>
+            <p className="text-sm text-muted-foreground">
+              People in this company and members synced from IM providers.
+            </p>
+          </div>
+          {tab !== 'departments' ? (
+            <Input
+              type="search"
+              className="h-9 max-w-xs"
+              placeholder="Search"
+              aria-label="Search directory"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          ) : null}
+        </div>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {tabs.map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={cn(
-              'rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted',
-              tab === item && 'bg-muted text-foreground',
-            )}
-            onClick={() => setTab(item)}
-          >
-            {item}
-          </button>
-        ))}
-        <Input
-          type="search"
-          className="ml-auto h-9 max-w-xs"
-          placeholder="Search"
-          aria-label="Search directory"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </div>
-
-      {tab === 'People' ? (
+      <SectionRail
+        items={tabs}
+        active={tab}
+        onSelect={setTab}
+        label="Directory sections"
+        className="md:col-start-1 md:row-start-1 md:row-span-2"
+      />
+      <div className="min-h-0 space-y-5 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
+      {tab === 'people' ? (
         <PersonCardList
           loading={users.isLoading}
           error={users.error}
@@ -84,7 +111,7 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'Synced' ? (
+      {tab === 'synced' ? (
         <PersonCardList
           loading={members.isLoading}
           error={members.error}
@@ -109,11 +136,17 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'Departments' ? (
+      {tab === 'departments' ? (
         <div className="space-y-2">
           {departments.isLoading ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           ) : null}
+          {departments.error ? (
+            <p className="text-sm text-destructive">
+              {departments.error instanceof ApiError ? departments.error.message : 'Unable to load departments'}
+            </p>
+          ) : (
+            <>
           <p className="text-xs text-muted-foreground">{departments.data?.total_member ?? 0} synced members</p>
           <ul className="space-y-2">
             {(departments.data?.items ?? []).map((dept) => (
@@ -126,8 +159,11 @@ export function DirectoryPage() {
               </li>
             ))}
           </ul>
+            </>
+          )}
         </div>
       ) : null}
+        </div>
     </div>
   )
 }

@@ -20,6 +20,7 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 | `label.tsx` | `Label` | Auth + workspace forms |
 | `textarea.tsx` | `Textarea` | Chat, plaza, OKR, files, settings |
 | `password-field.tsx` | `PasswordField` | reset-password, account |
+| `select.tsx` | `Select` | Native dropdowns; same radius as Input, custom chevron, blurs after pick |
 
 Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, aliases, Lucide).
 
@@ -35,6 +36,7 @@ Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, 
 ## CONVENTIONS
 
 - Named exports only; `data-slot="…"` on roots.
+- `Select` wraps a native `<select>`: `rounded-xl` like Input/Button, custom chevron, `fit` hugs content. It blurs after a pointer commit only so keyboard users can walk options.
 - Props: `React.ComponentProps<'…'> & VariantProps<…>` (and `asChild` via Slot where needed).
 - Function components (not legacy `forwardRef` wrappers unless required).
 - Project polish already baked in:

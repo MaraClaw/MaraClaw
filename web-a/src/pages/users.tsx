@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { useAuth } from '@/hooks/use-auth'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
@@ -143,25 +144,19 @@ export function UsersPage() {
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         {platformAdmin ? (
-          <label className="grid w-full gap-1.5 text-sm sm:w-64">
+          <label className="grid w-auto gap-1.5 text-sm">
             <span className="text-muted-foreground">Company</span>
-            <span className="relative">
-              <select
-                value={companyId}
-                onChange={(event) => updateListState({ company: event.target.value })}
-                className="h-11 w-full appearance-none rounded-xl border border-input bg-card px-3.5 pe-10 text-sm text-foreground shadow-sm outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35"
-              >
-                {(companies.data ?? []).map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-            </span>
+            <Select
+              fit
+              value={companyId}
+              onChange={(event) => updateListState({ company: event.target.value })}
+            >
+              {(companies.data ?? []).map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </Select>
           </label>
         ) : null}
         <label className="grid min-w-0 flex-1 gap-1.5 text-sm">

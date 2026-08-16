@@ -183,11 +183,11 @@ export function AgentChatPage() {
   }
 
   return (
-    <div className="grid h-full min-h-[32rem] grid-cols-1 md:grid-cols-[220px_1fr]">
-      <aside className="border-b border-border p-3 md:border-r md:border-b-0">
+    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[220px_1fr]">
+      <aside className="p-3 md:border-r md:border-border">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">Sessions</p>
-          <Button size="sm" variant="ghost" onClick={() => newSession.mutate()}>
+          <Button size="sm" variant="ghost" aria-label="New session" onClick={() => newSession.mutate()}>
             <Plus className="size-3.5" />
           </Button>
         </div>
@@ -318,6 +318,7 @@ export function AgentChatPage() {
             <input
               type="file"
               className="text-xs"
+              aria-label="Attach a file"
               onChange={(event) => {
                 const file = event.target.files?.[0]
                 if (file) void onFile(file)
