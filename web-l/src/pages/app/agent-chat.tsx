@@ -187,7 +187,7 @@ export function AgentChatPage() {
       <aside className="p-3 md:border-r md:border-border">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">Sessions</p>
-          <Button size="sm" variant="ghost" onClick={() => newSession.mutate()}>
+          <Button size="sm" variant="ghost" aria-label="New session" onClick={() => newSession.mutate()}>
             <Plus className="size-3.5" />
           </Button>
         </div>
@@ -318,6 +318,7 @@ export function AgentChatPage() {
             <input
               type="file"
               className="text-xs"
+              aria-label="Attach a file"
               onChange={(event) => {
                 const file = event.target.files?.[0]
                 if (file) void onFile(file)

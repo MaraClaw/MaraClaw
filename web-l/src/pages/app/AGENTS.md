@@ -17,7 +17,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
-| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail |
+| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail; `?tab=` `?q=` |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
 | `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user`; always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
@@ -31,7 +31,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 ## CONVENTIONS
 
 - New tenant screen: route in `routes/index.tsx` + nav in `app-shell.tsx` + `nav-icon` + `public/nav-icons/*.svg` + new `lib/*-api.ts` if not agent-scoped.
-- New agent tab: `agent-layout` `tabs[]` + nested route + `public/nav-icons/{name}.svg` and `{name}-inactive.svg` (same terracotta/cream tile as the workspace rail); `useOutletContext<{ agent: AgentOut }>()`.
+- New agent tab: `agent-layout` `tabs[]` (`to` on `SectionRail`) + nested route + `public/nav-icons/{name}.svg` and `{name}-inactive.svg`; `useOutletContext<{ agent: AgentOut }>()`.
 - New control RPC: `control-api.ts`, not workspace-api.
 - Chat events: `ChatInbound` + `onEvent` switch in `agent-chat.tsx`.
 - Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`.

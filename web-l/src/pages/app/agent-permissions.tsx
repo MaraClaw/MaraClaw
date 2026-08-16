@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { useAuth } from '@/hooks/use-auth'
 import {
@@ -61,11 +62,14 @@ export function AgentPermissionsPage() {
 
       {canManage ? (
         <div className="space-y-3">
-          <Select value={scope} onChange={(event) => setScope(event.target.value)}>
-            <option value="private">Private (creator only)</option>
-            <option value="company">Whole company</option>
-            <option value="custom">Custom list</option>
-          </Select>
+          <div className="space-y-2">
+            <Label htmlFor="agent-access-scope">Who can use this agent</Label>
+            <Select id="agent-access-scope" value={scope} onChange={(event) => setScope(event.target.value)}>
+              <option value="private">Private (creator only)</option>
+              <option value="company">Whole company</option>
+              <option value="custom">Custom list</option>
+            </Select>
+          </div>
           <Button onClick={() => save.mutate()} disabled={save.isPending}>
             Save access
           </Button>
@@ -85,8 +89,10 @@ export function AgentPermissionsPage() {
 
       {isCreator ? (
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold">Handover ownership</h3>
-          <Select value={handoverId} onChange={(event) => setHandoverId(event.target.value)}>
+          <Label htmlFor="agent-handover" className="text-sm font-semibold">
+            Handover ownership
+          </Label>
+          <Select id="agent-handover" value={handoverId} onChange={(event) => setHandoverId(event.target.value)}>
             <option value="">Choose a teammate</option>
             {(candidates.data ?? []).map((row) => (
               <option key={row.id} value={row.id}>

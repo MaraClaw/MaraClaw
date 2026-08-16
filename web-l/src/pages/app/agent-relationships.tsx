@@ -62,6 +62,7 @@ export function AgentRelationshipsPage() {
         >
           <Select
             className="min-w-48 flex-1"
+            aria-label="Choose a person"
             value={memberId}
             onChange={(event) => setMemberId(event.target.value)}
           >
@@ -72,7 +73,7 @@ export function AgentRelationshipsPage() {
               </option>
             ))}
           </Select>
-          <Select fit value={relation} onChange={(event) => setRelation(event.target.value)}>
+          <Select fit aria-label="Relationship" value={relation} onChange={(event) => setRelation(event.target.value)}>
             {RELATIONS.map((item) => (
               <option key={item} value={item}>
                 {item.replaceAll('_', ' ')}
