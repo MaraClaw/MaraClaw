@@ -20,6 +20,7 @@ const navItems: {
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
   { to: '/account', label: 'Account', icon: 'account' },
   { to: '/settings', label: 'Settings', icon: 'settings' },

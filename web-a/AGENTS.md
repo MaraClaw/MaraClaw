@@ -14,7 +14,7 @@ JWT in `localStorage` (`maraclaw-admin-token`). `AuthProvider` bootstraps `GET /
 
 **Force password change:** OR `must_change_password` from token / `user` / `identity`. `ProtectedRoute` allows only `/account` and `/settings` until cleared. After `PUT /api/auth/me/password`, call `refreshUser()`.
 
-**Role split:** Companies + Search sit behind `PlatformAdminRoute` and `platformAdminOnly` nav. Users are both roles. Org admin is own-tenant only.
+**Role split:** Companies + Search sit behind `PlatformAdminRoute` and `platformAdminOnly` nav. Users and Models are both roles. Org admin is own-tenant only. Only org/platform admins configure the company LLM pool; members never write keys.
 
 Does **not** own marketing or member auth (`web-l`). Does **not** implement APIs — clients call `engine`.
 
@@ -52,6 +52,7 @@ web-a/
 | Companies / claimed domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
 | Create company + genesis OA | `src/components/companies/create-company-form.tsx` |
 | Users / activate | `src/pages/users.tsx`, `user-detail.tsx`, `src/lib/users-api.ts` |
+| LLM models / providers | `src/pages/llm-models.tsx`, `src/lib/llm-models-api.ts` |
 | Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
 | Search analytics | `src/pages/search-engine-analytics.tsx` (`?tab=analytics`) |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |

@@ -11,6 +11,7 @@ import { PlaceholderPage } from '@/pages/placeholder'
 import { ResetPasswordPage } from '@/pages/reset-password'
 import { SearchEnginePage } from '@/pages/search-engine'
 import { SettingsPage } from '@/pages/settings'
+import { LlmModelsPage } from '@/pages/llm-models'
 import { UserDetailPage } from '@/pages/user-detail'
 import { UsersPage } from '@/pages/users'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
@@ -35,6 +36,7 @@ export function AppRouter() {
             </Route>
             <Route path="users" element={<UsersPage />} />
             <Route path="users/:userId" element={<UserDetailPage />} />
+            <Route path="models" element={<LlmModelsPage />} />
             <Route
               path="tools"
               element={
