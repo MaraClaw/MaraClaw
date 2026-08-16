@@ -40,7 +40,7 @@ export function SectionRailButton<Id extends string>({
         buttonProps?.className,
       )}
     >
-      <NavIcon name={item.icon} active={active} className={compact ? 'size-6' : 'size-8'} />
+      <NavIcon name={item.icon} active={active} className={compact ? 'size-[1.8rem]' : 'size-[2.4rem]'} />
       <span
         className={cn(
           'max-w-full text-center font-medium leading-tight text-pretty',

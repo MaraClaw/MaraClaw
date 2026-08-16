@@ -183,8 +183,8 @@ export function AgentChatPage() {
   }
 
   return (
-    <div className="grid h-full min-h-[32rem] grid-cols-1 md:grid-cols-[220px_1fr]">
-      <aside className="border-b border-border p-3 md:border-r md:border-b-0">
+    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[220px_1fr]">
+      <aside className="p-3 md:border-r md:border-border">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">Sessions</p>
           <Button size="sm" variant="ghost" onClick={() => newSession.mutate()}>

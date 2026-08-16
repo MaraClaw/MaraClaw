@@ -40,7 +40,7 @@ export function DirectoryPage() {
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
       <SectionRail items={tabs} active={tab} onSelect={setTab} label="Directory sections" />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-background px-5 py-4">
+        <div className="shrink-0 bg-background px-5 py-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h1 className="font-display text-2xl font-semibold">Directory</h1>

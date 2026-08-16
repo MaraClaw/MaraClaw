@@ -53,7 +53,7 @@ function AgentSectionLink({
     >
       {({ isActive }) => (
         <>
-          <NavIcon name={tab.icon} active={isActive} className={compact ? 'size-6' : 'size-8'} />
+          <NavIcon name={tab.icon} active={isActive} className={compact ? 'size-[1.8rem]' : 'size-[2.4rem]'} />
           <span
             className={cn(
               'max-w-full text-center font-medium leading-tight text-pretty',
@@ -149,7 +149,7 @@ export function AgentLayout() {
         ))}
       </nav>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-background px-5 py-4">
+        <div className="shrink-0 bg-background px-5 pt-4 pb-2">
           <div className="mb-3">
             <AgentsListButton />
           </div>
