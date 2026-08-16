@@ -216,7 +216,6 @@ export async function fetchMyTenant(): Promise<{
   id: string
   name: string
   slug: string
-  default_model_id?: string | null
 }> {
   return apiRequest('/api/tenants/me')
 }

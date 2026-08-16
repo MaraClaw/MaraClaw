@@ -34,7 +34,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 - New agent tab: `agent-layout` `tabs[]` + nested route; `useOutletContext<{ agent: AgentOut }>()`.
 - New control RPC: `control-api.ts`, not workspace-api.
 - Chat events: `ChatInbound` + `onEvent` switch in `agent-chat.tsx`.
-- Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals).
+- Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`.
 - Forms: most tabs are useState + sonner, not RHF. Motion wrappers are marketing-only.
 - Query keys invented in pages (`['agent', id]`, `['sessions', agent.id]`, `['plaza', …]`) — keep consistent when sharing.
 

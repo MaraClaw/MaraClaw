@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -8,14 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
-import {
-  deleteAgent,
-  listLlmModels,
-  startAgent,
-  stopAgent,
-  updateAgent,
-  type AgentOut,
-} from '@/lib/workspace-api'
+import { deleteAgent, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentSettingsPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
@@ -23,12 +16,11 @@ export function AgentSettingsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const isCreator = user?.id === agent.creator_id
+  const isOrgAdmin = user?.role === 'org_admin'
   const canManage = agent.access_level === 'manage' || isCreator
-  const models = useQuery({ queryKey: ['llm-models'], queryFn: listLlmModels })
   const [name, setName] = useState(agent.name)
   const [bio, setBio] = useState(agent.bio ?? '')
   const [welcome, setWelcome] = useState(agent.welcome_message ?? '')
-  const [modelId, setModelId] = useState(agent.primary_model_id ?? '')
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(agent.heartbeat_enabled ?? true)
   const [heartbeatMinutes, setHeartbeatMinutes] = useState(String(agent.heartbeat_interval_minutes ?? 240))
   const [activeHours, setActiveHours] = useState(agent.heartbeat_active_hours ?? '09:00-18:00')
@@ -41,7 +33,6 @@ export function AgentSettingsPage() {
         name,
         bio,
         welcome_message: welcome,
-        primary_model_id: modelId || null,
         heartbeat_enabled: heartbeatEnabled,
         heartbeat_interval_minutes: Number(heartbeatMinutes) || 240,
         heartbeat_active_hours: activeHours,
@@ -101,23 +92,6 @@ export function AgentSettingsPage() {
         <Textarea id="agent-welcome" value={welcome} onChange={(event) => setWelcome(event.target.value)} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="agent-model">Primary model</Label>
-        <select
-          id="agent-model"
-          className="h-11 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
-          value={modelId}
-          onChange={(event) => setModelId(event.target.value)}
-          disabled={!isCreator}
-        >
-          <option value="">Tenant default</option>
-          {(models.data ?? []).map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.provider} / {model.model}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="space-y-2">
         <Label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -150,7 +124,7 @@ export function AgentSettingsPage() {
           {clamped.map((item) => `${item.field} ${item.requested} → ${item.applied}`).join(', ')}
         </p>
       ) : null}
-      {isCreator ? (
+      {isCreator || isOrgAdmin ? (
         <Button onClick={() => save.mutate()} disabled={save.isPending}>
           Save
         </Button>

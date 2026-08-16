@@ -18,8 +18,6 @@ export type AgentOut = {
   welcome_message?: string | null
   status: string
   creator_id: string
-  primary_model_id?: string | null
-  fallback_model_id?: string | null
   is_expired?: boolean
   is_system?: boolean
   access_mode?: string
@@ -36,13 +34,6 @@ export type AgentOut = {
   min_poll_interval_min?: number
   webhook_rate_limit?: number
   max_triggers?: number
-}
-
-export type LlmModel = {
-  id: string
-  provider: string
-  model: string
-  is_default?: boolean
 }
 
 export type ChatSession = {
@@ -188,10 +179,6 @@ export async function startAgent(agentId: string): Promise<AgentOut> {
 
 export async function stopAgent(agentId: string): Promise<AgentOut> {
   return apiRequest(`/api/agents/${agentId}/stop`, { method: 'POST' })
-}
-
-export async function listLlmModels(): Promise<LlmModel[]> {
-  return apiRequest('/api/enterprise/llm-models')
 }
 
 export async function getOnboardingStatus(): Promise<OnboardingStatus> {
