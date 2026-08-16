@@ -637,6 +637,8 @@ class GatewayMessageOut(BaseModel):
     content: str
     created_at: datetime | None = None
     history: list[GatewayHistoryItem] = []
+    model: str | None = None
+    model_slot: str | None = None
 
 
 class GatewayPollResponse(BaseModel):

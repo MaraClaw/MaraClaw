@@ -275,6 +275,10 @@ PATCHES = [
         PRIMARY KEY (event_id)
     )
     """,
+    "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS selected_slot VARCHAR(20)",
+    "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS guest_model_ref VARCHAR(200)",
+    "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS complexity VARCHAR(20)",
+    "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS routing_reason VARCHAR(40)",
 ]
 
 

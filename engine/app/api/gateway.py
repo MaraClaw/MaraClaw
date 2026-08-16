@@ -33,6 +33,7 @@ from app.schemas.schemas import (
     GatewayReportRequest,
     GatewaySendMessageRequest,
 )
+from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -69,6 +70,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
 
     # Fetch pending messages
     messages = await gateway_message_dao.list_pending(agent.id)
+    guest_model, guest_slot = poll_model_hint(messages)
 
     # Mark as delivered
     now = datetime.now(UTC)
@@ -121,6 +123,8 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                 content=msg.content,
                 created_at=msg.created_at,
                 history=history,
+                model=guest_model,
+                model_slot=guest_slot,
             )
         )
 
@@ -225,15 +229,14 @@ async def report_result(
     # write the reply back as a gateway_message for the sender agent to poll
     if body.result and msg.sender_agent_id:
         conv_id = msg.conversation_id or f"gw_agent_{msg.sender_agent_id}_{agent.id}"
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": msg.sender_agent_id,
-                "sender_agent_id": agent.id,
-                "content": body.result,
-                "status": "pending",
-                "conversation_id": conv_id,
-            }
-        )
+        sender = await agent_dao.get(msg.sender_agent_id)
+        if sender:
+            _ = await enqueue_openclaw_message(
+                agent=sender,
+                content=body.result,
+                sender_agent_id=agent.id,
+                conversation_id=conv_id,
+            )
         logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
 
     return {"status": "ok"}
@@ -389,15 +392,24 @@ async def _send_to_agent_background(
         )
 
         # Write reply to gateway_messages for source (OpenClaw) to poll
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": uuid.UUID(source_agent_id),
-                "sender_agent_id": uuid.UUID(target_agent_id),
-                "content": final_reply,
-                "status": "pending",
-                "conversation_id": conv_id,
-            }
-        )
+        source = await agent_dao.get(uuid.UUID(source_agent_id))
+        if source:
+            _ = await enqueue_openclaw_message(
+                agent=source,
+                content=final_reply,
+                sender_agent_id=uuid.UUID(target_agent_id),
+                conversation_id=conv_id,
+            )
+        else:
+            _ = await gateway_message_dao.create(
+                obj_in={
+                    "agent_id": uuid.UUID(source_agent_id),
+                    "sender_agent_id": uuid.UUID(target_agent_id),
+                    "content": final_reply,
+                    "status": "pending",
+                    "conversation_id": conv_id,
+                }
+            )
 
         logger.info(f"[Gateway] Agent {target_agent_name} replied to {source_agent_name}")
 
@@ -446,15 +458,12 @@ async def send_message(
         conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
 
         if getattr(target_agent, "agent_type", None) == "openclaw":
-            # OpenClaw-to-OpenClaw: write to gateway_messages directly
-            _ = await gateway_message_dao.create(
-                obj_in={
-                    "agent_id": target_agent.id,
-                    "sender_agent_id": agent.id,
-                    "content": content,
-                    "status": "pending",
-                    "conversation_id": conv_id,
-                }
+            # OpenClaw-to-OpenClaw: classify and queue for the target guest
+            _ = await enqueue_openclaw_message(
+                agent=target_agent,
+                content=content,
+                sender_agent_id=agent.id,
+                conversation_id=conv_id,
             )
             return {
                 "status": "accepted",
@@ -619,6 +628,12 @@ The response contains a `messages` array. Each message includes:
 - `sender_user_id` - unique ID of the sender
 - `conversation_id` - the conversation this message belongs to
 - `history` - array of previous messages in this conversation for context
+- `model` - provider/model ref for this inbox batch (for example openai/gpt-5.4)
+- `model_slot` - "primary" (complex) or "secondary" (manageable)
+
+**IMPORTANT**: Process the entire inbox batch with `model`. If your current
+session is on a different model, switch first (`/model <model>`). Do not pick
+a cheaper model on your own. Mixed batches are already fail-closed to primary.
 
 The response also contains a `relationships` array describing your colleagues:
 - `name` - the person or agent name

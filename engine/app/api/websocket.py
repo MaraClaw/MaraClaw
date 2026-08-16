@@ -15,7 +15,6 @@ from app.core.permissions import check_agent_access, is_agent_expired
 from app.core.security import load_user_from_access_token
 from app.dao import agent_dao, llm_model_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.task_dao import task_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
@@ -660,14 +659,14 @@ class WebSocketChatHandler:
 
     async def _route_openclaw(self, content: str):
         """Enqueues message for OpenClaw edge node poll."""
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": self.agent_id,
-                "sender_user_id": self.user.id,
-                "conversation_id": self.conv_id,
-                "content": content,
-                "status": "pending",
-            }
+        from app.services.openclaw_routing import enqueue_openclaw_message
+
+        _ = await enqueue_openclaw_message(
+            agent=self.agent,
+            content=content,
+            sender_user_id=self.user.id,
+            conversation_id=self.conv_id,
+            history=self.conversation,
         )
         logger.info("[WS] OpenClaw: message queued for gateway poll")
         await self.websocket.send_json(

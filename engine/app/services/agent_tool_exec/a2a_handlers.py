@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 
 from app.core.logging import logger
 from app.dao.chat_dao import chat_message_dao
-from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.participant_dao import participant_dao
 from app.services import agent_tools
 
@@ -14,15 +13,15 @@ from .a2a_context import A2AContext
 
 async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
     try:
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": ctx.target_agent.id,
-                "sender_agent_id": ctx.source_agent.id,
-                "sender_user_id": ctx.owner_id,
-                "content": f"[From {ctx.source_agent.name}] {ctx.message_text}",
-                "status": "pending",
-                "conversation_id": ctx.chat_session_id,
-            }
+        from app.services.openclaw_routing import enqueue_openclaw_message
+
+        _ = await enqueue_openclaw_message(
+            agent=ctx.target_agent,
+            content=f"[From {ctx.source_agent.name}] {ctx.message_text}",
+            sender_agent_id=ctx.source_agent.id,
+            sender_user_id=ctx.owner_id,
+            conversation_id=ctx.chat_session_id,
+            history=ctx.conversation_history,
         )
 
         from app.services.activity_logger import log_activity

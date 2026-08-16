@@ -22,6 +22,10 @@ class GatewayMessageRecord:
     sender_user_id: UUID | None = None
     conversation_id: str | None = None
     result: str | None = None
+    selected_slot: str | None = None
+    guest_model_ref: str | None = None
+    complexity: str | None = None
+    routing_reason: str | None = None
     created_at: datetime | None = None
     delivered_at: datetime | None = None
     completed_at: datetime | None = None
@@ -37,6 +41,10 @@ class GatewayMessageRecord:
             sender_user_id=uuid_from_row_opt(row.get("sender_user_id")),
             conversation_id=str_from_row(row["conversation_id"]) or None,
             result=str_from_row(row["result"]) or None,
+            selected_slot=str_from_row(row.get("selected_slot")) or None,
+            guest_model_ref=str_from_row(row.get("guest_model_ref")) or None,
+            complexity=str_from_row(row.get("complexity")) or None,
+            routing_reason=str_from_row(row.get("routing_reason")) or None,
             created_at=datetime_from_row(row.get("created_at")),
             delivered_at=datetime_from_row(row.get("delivered_at")),
             completed_at=datetime_from_row(row.get("completed_at")),

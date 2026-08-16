@@ -26,6 +26,17 @@ from app.services.storage_runtime.base import StorageBackend
 settings = get_settings()
 
 
+def guest_model_ref(model: LLMModelRecord | None) -> str | None:
+    """OpenClaw ``provider/model`` ref, or ``None`` when either part is missing."""
+    if model is None:
+        return None
+    provider = (getattr(model, "provider", None) or "").strip()
+    name = (getattr(model, "model", None) or "").strip()
+    if not provider or not name:
+        return None
+    return f"{provider}/{name}"
+
+
 class ContainerStatus(TypedDict):
     running: bool | None
     status: str | None
@@ -214,29 +225,101 @@ class AgentManager:
 
         logger.info(f"Initialized agent files at {agent_dir}")
 
+    def _model_aliases(
+        self,
+        primary: LLMModelRecord | None,
+        secondary: LLMModelRecord | None,
+        fallback: LLMModelRecord | None,
+    ) -> JsonObject:
+        aliases: JsonObject = {}
+        for slot, row in (("primary", primary), ("secondary", secondary), ("fallback", fallback)):
+            ref = guest_model_ref(row)
+            if ref:
+                aliases[ref] = {"alias": slot}
+        return aliases
+
+    def _defaults_model_block(self, primary_ref: str, fallback: LLMModelRecord | None) -> JsonObject:
+        block: JsonObject = {"primary": primary_ref}
+        fallback_ref = guest_model_ref(fallback)
+        if fallback_ref and fallback_ref != primary_ref:
+            block["fallbacks"] = [fallback_ref]
+        return block
+
+    def _collect_provider_env(self, *models: LLMModelRecord | None) -> JsonObject:
+        env: JsonObject = {}
+        for row in models:
+            if row is None:
+                continue
+            provider = (getattr(row, "provider", None) or "").strip()
+            if not provider:
+                continue
+            key_name = f"{provider.upper()}_API_KEY"
+            if key_name in env or not getattr(row, "api_key_encrypted", None):
+                continue
+            secret = get_model_api_key(row)
+            if secret:
+                env[key_name] = secret
+        return env
+
+    def _atomic_write_json(self, path: Path, data: JsonObject) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.tmp")
+        _ = tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _ = tmp.replace(path)
+
+    def write_guest_config(
+        self,
+        agent: AgentRecord,
+        *,
+        primary: LLMModelRecord | None,
+        secondary: LLMModelRecord | None = None,
+        fallback: LLMModelRecord | None = None,
+        selected: LLMModelRecord | None = None,
+    ) -> Path | None:
+        """Rewrite the bind-mounted ``openclaw.json`` for a running (or staged) guest."""
+        agent_dir = self._agent_dir(agent.id)
+        if not agent_dir.exists():
+            logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
+            return None
+        config = self._generate_openclaw_config(
+            agent,
+            primary,
+            secondary=secondary,
+            fallback=fallback,
+            selected=selected,
+            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
+        )
+        path = agent_dir / "openclaw.json"
+        self._atomic_write_json(path, config)
+        return path
+
     def _generate_openclaw_config(
         self,
         agent: AgentRecord,
         model: LLMModelRecord | None,
         *,
+        secondary: LLMModelRecord | None = None,
+        fallback: LLMModelRecord | None = None,
+        selected: LLMModelRecord | None = None,
         linkup_proxy: bool = False,
     ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
+        chosen_ref = guest_model_ref(selected or model) or "openai/gpt-5.6-lunna"
+        defaults: JsonObject = {
+            "workspace": "/home/node/.openclaw/workspace",
+            "model": self._defaults_model_block(chosen_ref, fallback),
+        }
+        aliases = self._model_aliases(model, secondary, fallback)
+        if aliases:
+            defaults["models"] = aliases
         config: JsonObject = {
-            "agent": {
-                "model": f"{model.provider}/{model.model}" if model else "anthropic/claude-sonnet-4-5",
-            },
-            "agents": {
-                "defaults": {
-                    "workspace": "/home/node/.openclaw/workspace",
-                },
-            },
+            "agent": {"model": chosen_ref},
+            "agents": {"defaults": defaults},
         }
 
-        if model:
-            config["env"] = {
-                f"{model.provider.upper()}_API_KEY": get_model_api_key(model),
-            }
+        env = self._collect_provider_env(model, secondary, fallback)
+        if env:
+            config["env"] = env
 
         linkup_skill_env: JsonObject = {}
         if linkup_proxy:
@@ -307,21 +390,32 @@ class AgentManager:
 
         gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
 
-        # Get model config (pure-psycopg)
-        model = None
-        if agent.primary_model_id:
-            model = await llm_model_dao.get(agent.primary_model_id)
+        # Get model config (pure-psycopg). Guest starts on primary; secondary
+        # is registered so later enqueue rewrites can switch without new keys.
+        def _uuid_or_none(value: object) -> uuid.UUID | None:
+            return value if isinstance(value, uuid.UUID) else None
+
+        secondary_id = _uuid_or_none(getattr(agent, "secondary_model_id", None))
+        fallback_id = _uuid_or_none(getattr(agent, "fallback_model_id", None))
+        model_ids = [mid for mid in (agent.primary_model_id, secondary_id, fallback_id) if mid]
+        loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
+        primary = loaded.get(agent.primary_model_id) if agent.primary_model_id else None
+        secondary = loaded.get(secondary_id) if secondary_id else None
+        fallback = loaded.get(fallback_id) if fallback_id else None
 
         # Generate OpenClaw config. Proxy on/off is settings-only so container
         # start does not need the key-ring tables to exist.
         config = self._generate_openclaw_config(
             agent,
-            model,
+            primary,
+            secondary=secondary,
+            fallback=fallback,
+            selected=primary,
             linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
-        _ = (agent_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._atomic_write_json(agent_dir / "openclaw.json", config)
 
         # Create workspace symlink
         workspace_dir = config_dir / "workspace"

@@ -75,6 +75,22 @@ def test_tenant_not_null_columns_have_defaults() -> None:
     assert "WHEN unique_violation THEN" in sql
 
 
+def test_patches_add_openclaw_routing_columns() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS selected_slot VARCHAR(20)" in joined
+    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS guest_model_ref VARCHAR(200)" in joined
+    sql = BASELINE.read_text(encoding="utf-8")
+    start = sql.find("CREATE TABLE IF NOT EXISTS gateway_messages")
+    end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
+    block = sql[start:end]
+    assert "selected_slot VARCHAR(20)" in block
+    assert "guest_model_ref VARCHAR(200)" in block
+    assert "complexity VARCHAR(20)" in block
+    assert "routing_reason VARCHAR(40)" in block
+
+
 def test_patches_add_secondary_model_columns() -> None:
     from app.scripts.bootstrap_db import PATCHES
 
