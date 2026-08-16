@@ -7,7 +7,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | Topic | Location | Notes |
 |---|---|---|
 | Admin APIs (platform + tenant) | `admin-apis.md` | Full inventory of `platform_admin` / `org_admin` HTTP APIs, genesis bootstrap, `must_change_password`, role matrix for `web-a` |
-| Channels | `channels.md` | Transport/maturity per IM product; WhatsApp is types-only and **not mounted** |
+| Channels | `channels.md` | Transport/maturity per IM product; WhatsApp webhook **is mounted**; proactive send is not registered |
 | AgentBay | `agentbay.md` | Env vars, API-key lookup order, diagnostics endpoint and CLI |
 | gogcli keyring | `gogcli-keyring-password.md` | Password file path, permissions, rotation and security notes |
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |

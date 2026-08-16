@@ -1,95 +1,89 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-15  
-**Commit:** 04d89c0  
-**Branch:** implement-web-l-login  
-**Package:** `web-l` (MaraClaw marketing + member workspace)
+**Generated:** 2026-08-16  
+**Commit:** 9b09521  
+**Branch:** main
 
-> Monorepo routing (where admin vs product vs engine live): `../AGENTS.md`.  
-> This file is **package implementation** truth for the landing SPA only.
+> Monorepo router: `../AGENTS.md`. This file is package implementation truth.
 
 ## OVERVIEW
 
-Public marketing site plus member workspace for **MaraClaw**. Stack: React 19 + TypeScript + Vite 8 + Tailwind CSS v4 + Framer Motion + React Router + TanStack Query + RHF/Zod + shadcn-style UI (Radix + CVA + Lucide). JWT `localStorage` key **`maraclaw-enduser-token`**. Admin login stays in `web-a`. `/` is marketing; signed-in product lives under `/app/*`.
+Two surfaces, one SPA: public marketing (`/`) plus member workspace (`/app/*`). React 19 + Vite 8 + Tailwind v4 + RR + TanStack Query (workspace only) + RHF/Zod + shadcn-style UI. JWT **`maraclaw-enduser-token`**. Admin console is `web-a`.
 
 ## STRUCTURE
 
 ```
 web-l/
-├── index.html              # SPA shell + FOUC theme bootstrap + fonts/meta
-├── vite.config.ts          # @ alias, React + Tailwind plugins, :5173
-├── components.json         # shadcn new-york / zinc / CSS vars
-├── Dockerfile              # Node 26 build → nginx-unprivileged :8080
-├── docker/nginx.conf       # SPA fallback, asset cache, /healthz, CSP
-├── public/                 # favicon.svg, maraclaw-mark.svg (brand source)
+├── index.html              # SPA shell + FOUC theme (`maraclaw-theme`)
+├── vite.config.ts          # @ alias, :5173, proxy /api /ws /p → engine
+├── components.json         # shadcn new-york / zinc / CSS vars / rsc:false
+├── Dockerfile              # Node 26.7 → nginx-unprivileged :8080
+├── docker/nginx.conf       # SPA fallback, /healthz, engine proxy, CSP
+├── e2e/landing.spec.ts     # Playwright smoke (preview :4173)
+├── public/                 # brand marks + nav-icons/ (workspace rail)
 └── src/
     ├── main.tsx            # ThemeProvider → App
-    ├── App.tsx             # AuthProvider + router
-    ├── routes.tsx          # / landing, /login, /register, /join, /transfer, /app
-    ├── pages/              # landing, auth, /app workspace (agents, chat, files, …)
-    ├── routes/             # ProtectedRoute for /app
-    ├── index.css           # Tailwind v4 + OKLCH tokens + @utility
-    ├── hooks/use-theme.tsx # light|dark|system, localStorage key maraclaw-theme
-    ├── hooks/use-auth.tsx  # member session; rejects platform_admin
-    ├── lib/                # cn(), motion, api/http/auth
-    └── components/
-        ├── brand/          # MaraClawLogo (full | mark)
-        ├── layout/         # SiteHeader, SiteFooter
-        ├── sections/       # landing blocks
-        ├── ui/             # shadcn primitives
-        ├── motion.tsx      # Reveal / Stagger / StaggerItem
-        └── theme-toggle.tsx
+    ├── App.tsx             # error boundary + AuthProvider + AppRouter + Toaster
+    ├── routes/index.tsx    # all routes (there is no src/routes.tsx)
+    ├── routes/protected.tsx
+    ├── pages/              # landing + auth; workspace in pages/app/
+    ├── hooks/              # use-theme, use-auth (rejects platform_admin)
+    ├── lib/                # engine clients — see lib/AGENTS.md
+    └── components/         # ui / sections / layout / auth / brand / chat
 ```
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Page section order / skip-link | `src/pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
-| Member login / register | `src/pages/login.tsx`, `register.tsx` | web-a visual language via `components/auth/auth-shell.tsx` |
-| Org join / transfer | `src/pages/join-org.tsx`, `transfer.tsx` | Same engine contracts as the retired `web-e` app |
-| Signed-in workspace | `src/pages/app/*`, `components/layout/app-shell.tsx` | Agents, chat WS, files, tools, channels, Plaza, OKR, directory |
-| Auth completeness | `forgot-password`, `reset-password`, `verify-email`, `sso-callback` | Member token; Origin-based reset emails |
-| Plaza / OKR / directory | `pages/app/plaza.tsx`, `okr.tsx`, `directory.tsx` | Tenant-scoped engine APIs |
-| Take Control / vault / pages | `agent-control`, `agent-credentials`, `agent-pages`, `agent-playwright` | AgentBay, gogcli, `/p/{id}` |
-| Hero copy / CTAs | `sections/hero.tsx` | Account CTAs + role explore |
-| Role catalog copy | `sections/agents.tsx` | Align with `../engine/agent_templates/` when claiming truth |
-| Nav / mobile sheet | `layout/site-header.tsx` | Hash anchors on `/`; Sign in → `/login` |
-| Footer / `#contact` | `layout/site-footer.tsx` | Contact + legal hashes land here |
-| Design tokens / dark palette | `src/index.css` | OKLCH; warm paper light / warm dark |
-| Theme FOUC + React theme | `index.html` script + `hooks/use-theme.tsx` | Same storage key + meta colors |
-| Motion presets / wrappers | `lib/motion.ts`, `components/motion.tsx` | Prefer Reveal/Stagger; honor reduced motion |
-| Logo mark | `brand/maraclaw-logo.tsx`, `public/*.svg` | Brand source for monorepo |
-| UI primitives | `components/ui/*` | See nested `AGENTS.md` |
-| Marketing sections detail | `components/sections/*` | See nested `AGENTS.md` |
-| Production serve | `Dockerfile`, `docker/nginx.conf` | Port 8080, non-root nginx |
+| Route table | `src/routes/index.tsx` | Public auth + nested `/app` |
+| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/use-auth.tsx` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` → `/app/account` |
+| Landing composition | `pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
+| Login / register / SSO | `pages/login.tsx`, `register.tsx`, `sso-callback.tsx` | Chrome: `components/auth/auth-shell.tsx` |
+| Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |
+| Workspace screens | `pages/app/*` | Nested `pages/app/AGENTS.md` |
+| Workspace chrome + Query | `layout/app-shell.tsx` | **Only** `QueryClientProvider` (not App/main) |
+| Agent tabs + outlet `agent` | `layout/agent-layout.tsx` | Start/stop when `access_level === 'manage'` |
+| First-run redirect | `layout/onboarding-gate.tsx` | Skip key `maraclaw-onboarding-skipped` |
+| Engine HTTP / WS clients | `src/lib/*` | Nested `lib/AGENTS.md` |
+| Marketing copy | `components/sections/*` | Nested `sections/AGENTS.md` |
+| UI primitives | `components/ui/*` | Nested `ui/AGENTS.md` |
+| Theme tokens | `src/index.css` | OKLCH; `container-page` max 72rem |
+| Theme FOUC | `index.html` + `hooks/use-theme.tsx` | Key `maraclaw-theme`; meta `#faf8f5` / `#1c1612` |
+| Brand mark | `brand/maraclaw-logo.tsx`, `public/maraclaw-mark.svg` | Monorepo source — do not fork |
+| Production serve | `Dockerfile`, `docker/nginx.conf` | :8080, non-root, `/healthz` |
 
 ## CODE MAP
 
-LSP/codegraph unavailable in this workspace - map from exports + import graph.
+LSP/codegraph unavailable here — centrality from import graph.
 
-| Symbol | Type | Location | Refs (approx) | Role |
-|--------|------|----------|---------------|------|
-| `App` | default component | `src/App.tsx` | entry | Auth + router |
-| `ThemeProvider` / `useTheme` | context | `hooks/use-theme.tsx` | main, ThemeToggle | Theme root |
-| `cn` | util | `lib/utils.ts` | ~12 files | Class merge |
-| `Reveal` / `Stagger` / `StaggerItem` | components | `components/motion.tsx` | most sections | Scroll reveal |
-| `easeOut`, `fadeUp`, … | constants | `lib/motion.ts` | motion + Hero | Motion tokens |
-| `SiteHeader` / `SiteFooter` | layout | `layout/*` | App | Chrome |
-| `MaraClawLogo` | brand | `brand/maraclaw-logo.tsx` | header, footer | Mark |
-| `Hero` … `Cta` | sections | `sections/*` | App | Marketing blocks |
-| `Button`, `Card`, … | UI | `components/ui/*` | chrome + sections | Primitives |
+| Symbol | Type | Location | Refs | Role |
+|--------|------|----------|------|------|
+| `AppRouter` | fn | `routes/index.tsx` | App | Route table |
+| `ProtectedRoute` | fn | `routes/protected.tsx` | router | `/app` auth + org + password |
+| `AuthProvider` / `useAuth` | ctx | `hooks/use-auth.tsx` | ~17 | Member session |
+| `AppShell` | fn | `layout/app-shell.tsx` | router | Workspace chrome + Query |
+| `OnboardingGate` | fn | `layout/onboarding-gate.tsx` | router | First-run |
+| `AgentLayout` | fn | `layout/agent-layout.tsx` | router | Per-agent tabs + `agent` context |
+| `apiRequest` / `ApiError` | fn/class | `lib/http.ts` | ~24 | Only fetch wrapper |
+| `workspace-api` | module | `lib/workspace-api.ts` | ~21 | Agent/workspace HTTP (mega) |
+| `auth-api` | module | `lib/auth-api.ts` | auth+settings | Auth/tenant HTTP |
+| `connectAgentChat` | fn | `lib/chat/ws-client.ts` | chat page | `WS /ws/chat/{id}` |
+| `cn` | fn | `lib/utils.ts` | ~21 | Class merge |
+| `ThemeProvider` | ctx | `hooks/use-theme.tsx` | main | Theme root |
+| `MaraClawLogo` | fn | `brand/maraclaw-logo.tsx` | 4 chrome | Brand source |
 
 ## CONVENTIONS
 
 - **Alias:** `@/*` → `src/*` (Vite + tsconfig). Prefer `@/` imports in app code.
 - **Files:** kebab-case (`how-it-works.tsx`); components **named** PascalCase exports. Only `App` is default export.
 - **No barrels** - import concrete files (`@/components/sections/hero`).
-- **React Router** for `/login`, `/register`, `/join`, `/transfer`, `/forgot-password`, `/reset-password`, `/verify-email`, `/sso/callback`, `/app/*`. Landing hash anchors (`#features`, …) stay on `/`.
-- Vite proxies `/api`, `/ws`, and `/p` to the engine. Production nginx `client_max_body_size` is 25m; CSP `connect-src` includes `ws:`/`wss:`.
+- **React Router** (`BrowserRouter`, not data router). Public: `/login` `/register` `/forgot-password` `/reset-password` `/verify-email` `/sso/callback` `/join` `/transfer`. Product: `/app/*`. Landing hashes stay on `/`. No catch-all 404.
+- Vite proxies `/api`, `/ws` (`ws: true`), `/p` → `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Prod nginx same paths → `maraclaw-engine:8000`. `client_max_body_size` 25m.
+- **Query** lives in `AppShell` only (`staleTime: 30s`). Marketing/auth do not use it.
 - **Tailwind v4 CSS-first** - no `tailwind.config.*` / PostCSS. Tokens live in `index.css` (`@theme inline`, `:root`, `.dark`).
 - **Lint:** oxlint (`.oxlintrc.json`), not ESLint/Prettier. `npm run lint`.
-- **TS:** `verbatimModuleSyntax` → use `import type`. Build runs `tsc -b` then Vite.
+- **TS:** `verbatimModuleSyntax` → `import type`. `erasableSyntaxOnly` → no `enum`. Build is `tsc -b && vite build`.
 - **shadcn:** new-york, CSS variables, Lucide; hand-maintained under `ui/`.
 - **Copy data:** local `const` arrays inside section files - no CMS/API.
 - **Motion:** default path = `Reveal`/`Stagger` + `useReducedMotion`. Hero intro uses framer-motion + reduced-motion.
@@ -98,12 +92,13 @@ LSP/codegraph unavailable in this workspace - map from exports + import graph.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- Admin UI or privileged operator APIs in this package (those stay in `web-a`).
-- Inventing channel badges / role claims engine does not support (`../engine`).
-- Shipping server secrets or treating this as full-stack (backend is `../engine`).
-- Adding ESLint/Prettier/tailwind.config as if they already exist - they don’t.
-- Long-caching `index.html` in nginx; running production container as root; listening on 80 in-image (use 8080).
-- Divergent lobster/claw marks - reuse `MaraClawLogo` / `public/` SVGs.
+- Admin UI or privileged `/api/admin/*` (those stay in `web-a`).
+- Inventing IM connectors engine does not support (Google Workspace / Email are not channel types; WhatsApp/Discord/Atlassian are incomplete).
+- Growing `workspace-api.ts` for a new domain — add `lib/*-api.ts` (Plaza/OKR/control pattern).
+- `fetch` in pages — go through `lib/http.ts`. QueryClient on App/main — it belongs in `AppShell`.
+- Adding ESLint/Prettier/`tailwind.config` as if they exist — they don’t.
+- Long-caching `index.html`; root container; listen on 80 (use 8080).
+- Forking the claw mark — reuse `MaraClawLogo` / `public/maraclaw-mark.svg`.
 
 ## UNIQUE STYLES
 
@@ -131,11 +126,12 @@ docker run --rm -p 8080:8080 maraclaw-web-l
 
 ## NOTES
 
-- **No automated tests** - verification = `npm run build` (+ optional lint).
-- Public `VITE_API_BASE_URL` / `VITE_DEV_API_PROXY` only. JWT key is `maraclaw-enduser-token`, never `maraclaw-admin-token`.
-- Password reset / verify emails use the requesting frontend Origin when it is in engine `CORS_ORIGINS`; fallback `PUBLIC_BASE_URL` is the member site.
-- `src/assets/` empty; brand assets in `public/`. `public/icons.svg` is unused Vite leftover.
-- `@radix-ui/react-navigation-menu` is a dependency without a UI file.
-- CSP in `docker/nginx.conf` is strict (`connect-src 'self'`); external analytics/APIs need CSP edits.
-- Google Fonts load from `index.html` (googleapis/gstatic) - keep nginx CSP in mind if enforced as written.
-- Parent monorepo has no `.github` workflows for `web-l` in this checkout.
+- Verification = `npm run build` (+ optional `lint`). e2e is landing/login smoke only — no `/app` or API coverage. No Vitest/Jest.
+- Public `VITE_*` only. Empty `VITE_API_BASE_URL` = same-origin. Never set it to `http://0.0.0.0:8000`.
+- JWT is `maraclaw-enduser-token`, never `maraclaw-admin-token`. Logout is local (no logout API).
+- Password reset / verify emails use request Origin if it is in engine `CORS_ORIGINS`.
+- `src/assets/` empty. `public/icons.svg` unused. `@radix-ui/react-navigation-menu` unused — do not add `navigation-menu.tsx` for it.
+- Prod CSP `font-src 'self' data:` — Google Fonts in `index.html` fail in the Docker image. External APIs need `connect-src` edits.
+- `joinWithInvite` in `auth-api` is unused. `needs_company_setup` is typed, unused.
+- Header hash nav omits `#enterprise` (footer has it). Legal footer links all go to `#contact`.
+- No CI / Makefile in this checkout.

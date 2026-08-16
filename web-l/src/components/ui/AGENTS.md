@@ -1,23 +1,25 @@
 # ui/ - shadcn-style primitives
 
-**Generated:** 2026-08-15 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-16 · Parent: `web-l/AGENTS.md`
 
 ## OVERVIEW
 
-Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Not a full shadcn dump - only what the landing uses.
+Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by landing, auth, and `/app` — not a full shadcn dump.
 
 ## STRUCTURE
 
 | File | Exports | Used for |
 |------|---------|----------|
-| `button.tsx` | `Button`, `buttonVariants` | Header CTAs, Hero, Cta, ThemeToggle |
-| `badge.tsx` | `Badge`, `badgeVariants` | Hero, Agents, Integrations |
-| `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter` | Features, Agents |
+| `button.tsx` | `Button`, `buttonVariants` | Landing, auth, `/app` (highest fan-in) |
+| `badge.tsx` | `Badge`, `badgeVariants` | Landing + directory/tools/tasks |
+| `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter` | Landing + account/settings/agents-list |
 | `accordion.tsx` | `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent` | Faq |
 | `separator.tsx` | `Separator` | SiteFooter |
 | `sheet.tsx` | `Sheet`, `SheetTrigger`, `SheetClose`, `SheetContent`, `SheetHeader`, `SheetTitle`, `SheetDescription` | Mobile nav (Dialog-based) |
-| `input.tsx` | `Input` | Member login / register / transfer |
-| `label.tsx` | `Label` | Auth forms |
+| `input.tsx` | `Input` | Auth + workspace forms |
+| `label.tsx` | `Label` | Auth + workspace forms |
+| `textarea.tsx` | `Textarea` | Chat, plaza, OKR, files, settings |
+| `password-field.tsx` | `PasswordField` | reset-password, account |
 
 Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, aliases, Lucide).
 
@@ -36,7 +38,7 @@ Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, 
 - Props: `React.ComponentProps<'…'> & VariantProps<…>` (and `asChild` via Slot where needed).
 - Function components (not legacy `forwardRef` wrappers unless required).
 - Project polish already baked in:
-  - **Button:** `rounded-xl`, `active:scale-[0.96]`, primary OKLCH inset/shadow
+  - **Button:** `rounded-xl`, `active:scale-[0.96]`; primary inset/shadow is raw OKLCH (existing exception — do not add more raw color)
   - **Badge:** extra variant **`soft`** (`border-primary/25 bg-primary/10 text-primary`)
   - **Card:** `rounded-2xl`, `shadow-card`, titles `font-display`
   - **Sheet:** `@radix-ui/react-dialog`; blur overlay; titles `font-display`
@@ -45,12 +47,11 @@ Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, 
 ## ANTI-PATTERNS
 
 - Importing full shadcn CLI dumps that fight existing token/radius choices without adapting.
-- Using raw hex/OKLCH in primitives when a semantic token exists (`bg-primary`, `text-muted-foreground`, …).
+- Using raw hex/OKLCH in primitives when a semantic token exists (`bg-primary`, `text-muted-foreground`, …). Button primary inset/shadow is the existing exception.
 - Adding `navigation-menu.tsx` only because `@radix-ui/react-navigation-menu` is in package.json - dep is currently unused; header uses simple links + Sheet.
 - Default-export UI components (break local style).
 - RSC/`"use client"` patterns - this is a Vite SPA (`components.json` `rsc: false`).
 
 ## NOTES
 
-- Keep surface area small: landing only needs the six primitives above until a real UI need appears.
-- After adding UI used in production paths, verify with `npm run build` (and visual check of light/dark).
+- Keep the surface small; add a primitive when a real UI need appears.

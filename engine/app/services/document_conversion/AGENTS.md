@@ -11,6 +11,8 @@ These are re-exported through both `__init__.py` and `html.py`; keep those impor
 
 Call chain: `agent_tools` shim → `agent_tool_exec/document_convert.py` → `convert_html_to_pdf` / `convert_html_to_pptx`. Keep those two names stable.
 
+`markdown.py` and `csv.py` are **internal** tool helpers (`document_convert` imports them). Do not treat them as a second public API.
+
 ## PDF Flow
 
 - `html_to_pdf.py` tries local Chrome/Chromium through CDP `Page.printToPDF` first.
