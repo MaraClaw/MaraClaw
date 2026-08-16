@@ -23,6 +23,7 @@ import {
   listLlmProviders,
   setDefaultLlmModel,
   setFallbackLlmModel,
+  setSecondaryLlmModel,
   testLlmModel,
   updateLlmModel,
   reasoningEffortLabel,
@@ -52,6 +53,27 @@ const selectClass =
 
 function modelPlaceholder(provider: { default_model?: string | null } | undefined): string {
   return provider?.default_model || 'model-id'
+}
+
+function humanizeModelId(modelId: string): string {
+  const leaf = modelId.split('/').pop() || modelId
+  return leaf
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase()
+      if (lower === 'gpt') return 'GPT'
+      if (lower === 'glm') return 'GLM'
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+function defaultLabelFor(
+  provider: { display_name?: string; default_model?: string | null } | undefined,
+): string {
+  if (provider?.default_model) return humanizeModelId(provider.default_model)
+  return provider?.display_name ?? ''
 }
 
 function parseOptionalNumber(value: string | undefined): number | null {
@@ -147,6 +169,10 @@ export function LlmModelsPage() {
     if (providerMeta?.default_model) {
       setValue('model', providerMeta.default_model)
     }
+    const nextLabel = defaultLabelFor(providerMeta)
+    if (nextLabel) {
+      setValue('label', nextLabel)
+    }
     const currentEffort = watch('reasoning_effort')
     if (addEfforts.length > 0 && currentEffort && !addEfforts.includes(currentEffort)) {
       const next = addEfforts.includes('none') ? 'none' : addEfforts[0]
@@ -179,8 +205,8 @@ export function LlmModelsPage() {
       )
       reset({
         provider: values.provider,
-        model: '',
-        label: '',
+        model: providerMeta?.default_model ?? '',
+        label: defaultLabelFor(providerMeta),
         api_key: '',
         base_url: providerMeta?.default_base_url ?? '',
         temperature: '',
@@ -208,8 +234,9 @@ export function LlmModelsPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">Models</h1>
         <p className="mt-2 text-muted-foreground">
-          Add providers and choose the company primary and fallback models. New agents inherit both.
-          Members cannot change these assignments.
+          Add providers and choose the company primary, secondary, and fallback models. New agents inherit all three.
+          Primary handles complex work. Secondary handles short, routine turns. Fallback is only used when the chosen
+          model fails. Members cannot change these assignments.
         </p>
       </div>
 
@@ -296,7 +323,7 @@ export function LlmModelsPage() {
               <Input
                 id={`${formId}-label`}
                 autoComplete="off"
-                placeholder="Claude Sonnet"
+                placeholder={defaultLabelFor(providerMeta) || 'Display name'}
                 aria-invalid={errors.label ? true : undefined}
                 {...register('label')}
               />
@@ -458,6 +485,17 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
     },
   })
 
+  const makeSecondary = useMutation({
+    mutationFn: () => setSecondaryLlmModel(item.id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
+      toast.success(`${item.label} is now the secondary model`)
+    },
+    onError: (error) => {
+      toast.error(error instanceof ApiError ? error.message : 'Could not set secondary model')
+    },
+  })
+
   const probe = useMutation({
     mutationFn: () =>
       testLlmModel({
@@ -504,12 +542,13 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
           <CardTitle className="flex flex-wrap items-center gap-2">
             {item.label}
             {item.is_default ? <Badge variant="soft">Primary</Badge> : null}
+            {item.is_secondary ? <Badge variant="outline">Secondary</Badge> : null}
             {item.is_fallback ? <Badge variant="outline">Fallback</Badge> : null}
+            <Badge variant="outline">{reasoningEffortLabel(item.reasoning_effort || 'none')}</Badge>
             {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
           </CardTitle>
           <CardDescription>
             {item.provider} / {item.model}
-            {item.reasoning_effort ? ` · ${item.reasoning_effort} effort` : ''}
             {item.api_key_masked ? ` · key ${item.api_key_masked}` : ''}
           </CardDescription>
         </div>
@@ -583,8 +622,9 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {item.supports_vision ? 'Vision enabled. ' : ''}
-            {item.base_url ? `Endpoint ${item.base_url}` : 'Provider default endpoint'}
+            Reasoning effort: {reasoningEffortLabel(item.reasoning_effort || 'none')}.
+            {item.supports_vision ? ' Vision enabled.' : ''}
+            {item.base_url ? ` Endpoint ${item.base_url}` : ' Provider default endpoint'}
           </p>
         )}
 
@@ -666,7 +706,18 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 Set as primary
               </Button>
             ) : null}
-            {item.enabled && !item.is_fallback && !item.is_default ? (
+            {item.enabled && !item.is_secondary && !item.is_default && !item.is_fallback ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={makeSecondary.isPending}
+                onClick={() => makeSecondary.mutate()}
+              >
+                Set as secondary
+              </Button>
+            ) : null}
+            {item.enabled && !item.is_fallback && !item.is_default && !item.is_secondary ? (
               <Button
                 type="button"
                 variant="outline"
