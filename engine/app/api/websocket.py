@@ -468,8 +468,7 @@ class WebSocketChatHandler:
         logger.info("[WS] OpenClaw: message queued for gateway poll")
         await self.websocket.send_json(
             {
-                "type": "done",
-                "role": "assistant",
+                "type": "info",
                 "content": "Message forwarded to OpenClaw agent. Waiting for response...",
             }
         )

@@ -22,8 +22,9 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 |------|------|
 | `types.py` | Canonical `channel_type` registry, aliases, outbound keys |
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
-| `inbound.py` | Shared session / history / persist / LLM reply helpers (imports `llm_bridge`) |
-| `llm_bridge.py` | `_load_agent_and_model` / `_call_llm_with_config` / `_call_agent_llm`. `api/feishu.py` re-exports the underscore names so Slack/WeCom/… keep working |
+| `inbound.py` | Shared session / history / persist / enqueue helpers |
+| `outbound.py` | Deliver a guest `/gateway/report` back to the originating IM thread |
+| `llm_bridge.py` | `_load_agent_and_model` plus engine LLM helpers for trigger/heartbeat only |
 | `dedup.py` | Process-local + Redis (`already_processed_shared` / `mark_processed_shared`) webhook event dedupe |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
 | `google_chat.py` | Verify JWT (iss+aud), parse events, chunked Chat API send |
@@ -41,4 +42,4 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 - Invent a second channel type string for the same product (use aliases in `types.py`).
 - Put Chat-specific OAuth for Workspace admin sync here - that lives in `google_workspace_*` / org_sync.
 - Grow `agent_tools.py` with channel branches; use `agent_tool_exec` + this package.
-- Move LLM orchestration back into `api/feishu.py`. New IM callers should import `llm_bridge`, not the router.
+- Move LLM orchestration back into `api/feishu.py`. New IM callers should enqueue via `inbound.generate_channel_reply` / `run_text_turn`; replies arrive on `/gateway/report`.

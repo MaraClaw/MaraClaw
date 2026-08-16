@@ -19,6 +19,12 @@ from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
+CHANNEL_REPLY_QUEUED = "Message forwarded to the agent. Waiting for response..."
+
+
+def is_queued_channel_reply(text: str) -> bool:
+    """True when inbound enqueue returned the waiting stub, not a real answer."""
+    return text.strip() == CHANNEL_REPLY_QUEUED
 
 
 async def load_agent(agent_id: uuid.UUID) -> AgentRecord | None:
@@ -163,7 +169,7 @@ async def generate_channel_reply(
         conversation_id=session_id,
         history=prior,
     )
-    return "Message forwarded to the agent. Waiting for response..."
+    return CHANNEL_REPLY_QUEUED
 
 
 async def run_text_turn(

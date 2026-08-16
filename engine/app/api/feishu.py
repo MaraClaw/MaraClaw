@@ -1126,6 +1126,10 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                 _cfs.reset(_cfs_token)
                 _cfso.reset(_cfso_token)
             logger.info(f"[Feishu] LLM reply: {reply_text[:100]}")
+            if channel_inbound.is_queued_channel_reply(reply_text):
+                if event_id:
+                    await channel_dedup.mark_processed_shared("feishu", event_id, cap=2000)
+                return {"code": 0, "msg": "ok"}
 
             # If task creation detected, create a real Task record
             if task_match:
@@ -1563,6 +1567,8 @@ async def _handle_feishu_file(
                     logger.debug(f"[Feishu] Image heartbeat shutdown failed: {error}")
 
         logger.info(f"[Feishu] Image LLM reply: {reply_text[:100]}")
+        if channel_inbound.is_queued_channel_reply(reply_text):
+            return
 
         # Send final card or fallback text
         if _patch_msg_id:

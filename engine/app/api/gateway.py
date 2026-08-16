@@ -18,7 +18,7 @@ from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao
+from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.user_dao import user_dao
@@ -195,6 +195,7 @@ async def report_result(
 
     # Save result as assistant chat message and push via WebSocket
     # (works for both user-originated and agent-to-agent messages)
+    session = None
     if body.result and msg.conversation_id:
         participant = await participant_dao.get_by_type_ref("agent", agent.id)
 
@@ -206,14 +207,18 @@ async def report_result(
             conversation_id=msg.conversation_id,
             participant_id=participant.id if participant else None,
         )
+        try:
+            session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
+        except ValueError, TypeError:
+            session = None
 
-    # Push to WebSocket if user is connected
-    if body.result and msg.conversation_id and msg.sender_user_id:
+    if body.result and msg.conversation_id:
         try:
             from app.api.websocket import manager
 
-            await manager.send_message(
+            await manager.send_to_session(
                 str(agent.id),
+                msg.conversation_id,
                 {
                     "type": "done",
                     "role": "assistant",
@@ -222,6 +227,11 @@ async def report_result(
             )
         except Exception as error:
             logger.debug(f"[Gateway] Skipped done notification for disconnected user: {error}")
+
+    if body.result and session is not None:
+        from app.services.channels.outbound import deliver_session_reply
+
+        await deliver_session_reply(agent=agent, session=session, content=body.result)
 
     # If the original message was from another agent (OpenClaw-to-OpenClaw),
     # write the reply back as a gateway_message for the sender agent to poll
