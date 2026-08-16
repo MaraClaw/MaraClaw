@@ -1,0 +1,23 @@
+{
+  "include": ["engine/app"],
+  "extraPaths": ["engine"],
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.14",
+  "venvPath": "engine",
+  "venv": ".venv",
+  "reportUnannotatedClassAttribute": "error",
+  "reportAny": "error",
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "engine/.venv",
+    "engine/**/skill_creator_files/**",
+    "engine/**/clawsec_skill_files/**",
+    "engine/**/gogcli_skill_files/**",
+    "engine/**/linkup_skill_files/**",
+    "engine/agent_template/**",
+    "engine/agent_templates/**",
+    "web-l/**",
+    "web-a/**"
+  ]
+}
