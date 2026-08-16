@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
@@ -13,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
+import { Select } from '@/components/ui/select'
 import { useAuth } from '@/hooks/use-auth'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
@@ -47,9 +48,6 @@ const schema = z.object({
 })
 
 type FormValues = z.infer<typeof schema>
-
-const selectClass =
-  'h-11 w-full appearance-none rounded-xl border border-input bg-card px-3.5 pe-10 text-sm text-foreground shadow-sm outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35'
 
 function modelPlaceholder(provider: { default_model?: string | null } | undefined): string {
   return provider?.default_model || 'model-id'
@@ -241,30 +239,24 @@ export function LlmModelsPage() {
       </div>
 
       {platformAdmin ? (
-        <label className="grid w-full gap-1.5 text-sm sm:w-64">
+        <label className="grid w-auto gap-1.5 text-sm">
           <span className="text-muted-foreground">Company</span>
-          <span className="relative">
-            <select
-              value={companyId}
-              onChange={(event) => {
-                const next = new URLSearchParams(searchParams)
-                if (event.target.value) next.set('company', event.target.value)
-                else next.delete('company')
-                setSearchParams(next, { replace: true })
-              }}
-              className={selectClass}
-            >
-              {(companies.data ?? []).map((company) => (
-                <option key={company.id} value={company.id}>
-                  {company.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-          </span>
+          <Select
+            fit
+            value={companyId}
+            onChange={(event) => {
+              const next = new URLSearchParams(searchParams)
+              if (event.target.value) next.set('company', event.target.value)
+              else next.delete('company')
+              setSearchParams(next, { replace: true })
+            }}
+          >
+            {(companies.data ?? []).map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </Select>
         </label>
       ) : null}
 
@@ -279,24 +271,17 @@ export function LlmModelsPage() {
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit(onSubmit)} noValidate>
             <div className="space-y-2">
               <Label htmlFor={`${formId}-provider`}>Provider</Label>
-              <span className="relative block">
-                <select
-                  id={`${formId}-provider`}
-                  className={selectClass}
-                  aria-invalid={errors.provider ? true : undefined}
-                  {...register('provider')}
-                >
-                  {providerOptions.map((provider) => (
-                    <option key={provider.provider} value={provider.provider}>
-                      {provider.display_name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground"
-                  aria-hidden
-                />
-              </span>
+              <Select
+                id={`${formId}-provider`}
+                aria-invalid={errors.provider ? true : undefined}
+                {...register('provider')}
+              >
+                {providerOptions.map((provider) => (
+                  <option key={provider.provider} value={provider.provider}>
+                    {provider.display_name}
+                  </option>
+                ))}
+              </Select>
               {errors.provider ? (
                 <p className="text-xs text-destructive" role="alert">
                   {errors.provider.message}
@@ -358,19 +343,13 @@ export function LlmModelsPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
-              <span className="relative block">
-                <select id={`${formId}-effort`} className={selectClass} {...register('reasoning_effort')}>
-                  {addEfforts.map((effort) => (
-                    <option key={effort} value={effort}>
-                      {reasoningEffortLabel(effort)}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground"
-                  aria-hidden
-                />
-              </span>
+              <Select id={`${formId}-effort`} {...register('reasoning_effort')}>
+                {addEfforts.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {reasoningEffortLabel(effort)}
+                  </option>
+                ))}
+              </Select>
               <p className="text-xs text-muted-foreground">
                 How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
               </p>
@@ -574,9 +553,8 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             </div>
             <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
-              <select
+              <Select
                 id={`${formId}-effort`}
-                className={selectClass}
                 value={effort || (efforts.includes('none') ? 'none' : (efforts[0] ?? 'none'))}
                 onChange={(event) => setEffort(event.target.value)}
               >
@@ -585,7 +563,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                     {reasoningEffortLabel(value)}
                   </option>
                 ))}
-              </select>
+              </Select>
               <p className="text-xs text-muted-foreground">
                 How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
               </p>

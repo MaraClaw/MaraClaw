@@ -15,6 +15,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select } from '@/components/ui/select'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import {
@@ -178,20 +179,20 @@ export function SearchEngineAnalytics() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">Range</span>
-            <select
-              className="h-10 rounded-xl border border-border bg-card px-3 text-sm"
+            <Select
+              fit
               value={range}
               onChange={(event) => update({ range: event.target.value as RangeKey })}
             >
               <option value="7">Last 7 days</option>
               <option value="30">Last 30 days</option>
               <option value="90">Last 90 days</option>
-            </select>
+            </Select>
           </label>
-          <label className="grid min-w-56 gap-1 text-sm">
+          <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">Scope</span>
-            <select
-              className="h-10 rounded-xl border border-border bg-card px-3 text-sm"
+            <Select
+              fit
               value={tenantId}
               onChange={(event) => update({ company: event.target.value })}
               aria-label="Analytics scope"
@@ -203,7 +204,7 @@ export function SearchEngineAnalytics() {
                   {company.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
       </div>

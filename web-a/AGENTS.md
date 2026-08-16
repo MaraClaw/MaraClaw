@@ -35,7 +35,7 @@ web-a/
     │   ├── layout/      # AdminShell, AuthShell, NavIcon
     │   ├── companies/   # create form + status icon
     │   ├── brand/       # match web-l mark
-    │   └── ui/          # 7 primitives + password-field
+    │   └── ui/          # 8 primitives + password-field
     ├── hooks/           # use-auth; use-theme (maraclaw-admin-theme)
     └── lib/             # see lib/AGENTS.md
 ```
