@@ -3,7 +3,8 @@ set -eu
 
 OFFICECLI_TAG="v1.0.144"
 OFFICECLI_ARM64_SHA256="56ec2c3114b66f6490888b6778cbb8413a65911a26cacc7207f29e13424966da"
-readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256
+OFFICECLI_SKILL_SHA256="c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
+readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_SKILL_SHA256
 
 fail() {
     printf '%s\n' "[officecli-bootstrap] $1" >&2
@@ -171,6 +172,7 @@ stage_release() {
     chmod 0700 "$STAGE_DIR/officecli" || return 1
     chmod 0600 "$STAGE_DIR/skill/SKILL.md" || return 1
     SKILL_DIGEST="$(hash_file "$STAGE_DIR/skill/SKILL.md")" || return 1
+    [ "$SKILL_DIGEST" = "$OFFICECLI_SKILL_SHA256" ] || return 1
     {
         printf 'tag=%s\n' "$TAG"
         printf 'binary_sha256=%s\n' "$OFFICECLI_ARM64_SHA256"

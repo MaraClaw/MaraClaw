@@ -18,6 +18,7 @@ WRAPPER_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-officecli
 TENCENT_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-memory-tencentdb.sh"
 OFFICECLI_TAG: Final = "v1.0.144"
 OFFICECLI_ARM64_SHA256: Final = "56ec2c3114b66f6490888b6778cbb8413a65911a26cacc7207f29e13424966da"
+OFFICECLI_SKILL_SHA256: Final = "c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
 RELEASE_ROOT: Final = "https://github.com/iOfficeAI/OfficeCLI/releases/download"
 SKILL_ROOT: Final = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI"
 FAKE_GNU_MV: Final = """#!/usr/bin/env python3
@@ -52,12 +53,15 @@ class BootstrapFixture:
         binary = f"#!/usr/bin/env sh\nprintf '%s\\n' 'officecli {label}'\n".encode()
         skill = f"---\nname: officecli\ndescription: {label}\n---\n".encode()
         digest = hashlib.sha256(binary).hexdigest()
+        skill_digest = hashlib.sha256(skill).hexdigest()
         (self.fixture_dir / "officecli-linux-arm64").write_bytes(binary)
         (self.fixture_dir / "SHA256SUMS").write_text(f"{digest}  officecli-linux-arm64\n", encoding="utf-8")
         (self.fixture_dir / "SKILL.md").write_bytes(skill)
         wrapper_source = WRAPPER_SOURCE.read_text(encoding="utf-8")
-        fixture_wrapper = wrapper_source.replace(f'OFFICECLI_TAG="{OFFICECLI_TAG}"', f'OFFICECLI_TAG="{tag}"').replace(
-            f'OFFICECLI_ARM64_SHA256="{OFFICECLI_ARM64_SHA256}"', f'OFFICECLI_ARM64_SHA256="{digest}"'
+        fixture_wrapper = (
+            wrapper_source.replace(f'OFFICECLI_TAG="{OFFICECLI_TAG}"', f'OFFICECLI_TAG="{tag}"')
+            .replace(f'OFFICECLI_ARM64_SHA256="{OFFICECLI_ARM64_SHA256}"', f'OFFICECLI_ARM64_SHA256="{digest}"')
+            .replace(f'OFFICECLI_SKILL_SHA256="{OFFICECLI_SKILL_SHA256}"', f'OFFICECLI_SKILL_SHA256="{skill_digest}"')
         )
         assert fixture_wrapper != wrapper_source
         self.wrapper.write_text(fixture_wrapper, encoding="utf-8")
@@ -207,11 +211,13 @@ def test_runtime_bootstrap_pins_officecli_to_committed_tag_and_digest() -> None:
     # When
     has_committed_tag = f'OFFICECLI_TAG="{OFFICECLI_TAG}"' in source
     has_committed_digest = f'OFFICECLI_ARM64_SHA256="{OFFICECLI_ARM64_SHA256}"' in source
+    has_committed_skill = f'OFFICECLI_SKILL_SHA256="{OFFICECLI_SKILL_SHA256}"' in source
 
     # Then
     assert has_committed_tag
     assert has_committed_digest
-    assert "readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256" in source
+    assert has_committed_skill
+    assert "readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_SKILL_SHA256" in source
     assert "releases/latest" not in source
     assert f"{RELEASE_ROOT}/$OFFICECLI_TAG" in source
     assert f"{SKILL_ROOT}/$OFFICECLI_TAG/SKILL.md" in source
