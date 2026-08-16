@@ -107,6 +107,10 @@ _MANAGEABLE_PREFIXES = (
 )
 _WORD_RE = re.compile(r"[a-z0-9']+")
 _JSON_OBJECT_RE = re.compile(r"\{[^{}]*\}")
+_IMAGE_PAYLOAD_RE = re.compile(
+    r"\[image_data:[^\]]*\]|data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -181,18 +185,41 @@ def message_text(content: object) -> str:
     return str(content)
 
 
-def turn_has_images(user_text: str, history: list[OpenAIMessage] | None) -> bool:
-    if "[image_data:" in (user_text or "") or "data:image/" in (user_text or ""):
-        return True
-    for msg in history or []:
-        content = msg.get("content")
-        if isinstance(content, str) and ("[image_data:" in content or "data:image/" in content):
-            return True
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") in {"image_url", "image"}:
-                    return True
+def content_has_images(content: object) -> bool:
+    if isinstance(content, str):
+        return "[image_data:" in content or "data:image/" in content
+    if isinstance(content, list):
+        return any(isinstance(part, dict) and part.get("type") in {"image_url", "image"} for part in content)
     return False
+
+
+def turn_has_images(user_text: str, history: list[OpenAIMessage] | None = None) -> bool:
+    """True only when the *current* user text carries an image. History is ignored."""
+    del history
+    return content_has_images(user_text)
+
+
+def history_without_current_user(
+    history: list[OpenAIMessage] | None,
+    user_text: str,
+) -> list[OpenAIMessage]:
+    """Drop a trailing user turn that duplicates ``user_text`` (WS appends first)."""
+    if not history:
+        return []
+    out = list(history)
+    current = (user_text or "").strip()
+    while out:
+        last = out[-1]
+        if last.get("role") != "user":
+            break
+        if message_text(last.get("content")).strip() != current:
+            break
+        out.pop()
+    return out
+
+
+def strip_image_payloads(text: str) -> str:
+    return _IMAGE_PAYLOAD_RE.sub("[image attached]", text)
 
 
 def recent_has_tools(history: list[OpenAIMessage] | None, last_n: int = RECENT_HISTORY_TURNS) -> bool:
@@ -320,15 +347,14 @@ def _default_worker(bundle: ModelBundle) -> tuple[LLMModelRecord | None, ModelSl
 
 
 def classifier_user_payload(user_text: str, history: list[OpenAIMessage] | None) -> str:
+    prior = history_without_current_user(history, user_text)
     previous = ""
-    for msg in reversed(history or []):
+    for msg in reversed(prior):
         if msg.get("role") == "user":
             previous = message_text(msg.get("content"))
             break
-    current = (user_text or "")[:CLASSIFIER_INPUT_CHARS]
-    previous = previous[:CLASSIFIER_INPUT_CHARS]
-    current = current.replace("[image_data:", "[image attached]").replace("data:image/", "[image attached]")
-    previous = previous.replace("[image_data:", "[image attached]").replace("data:image/", "[image attached]")
+    current = strip_image_payloads((user_text or "")[:CLASSIFIER_INPUT_CHARS])
+    previous = strip_image_payloads(previous[:CLASSIFIER_INPUT_CHARS])
     if previous:
         return f"Previous user turn:\n{previous}\n\nCurrent user turn:\n{current}"
     return current
@@ -402,10 +428,13 @@ async def select_turn_model(
     agent_id: uuid.UUID | None = None,
 ) -> TurnSelection:
     """Pick the model for one inbound user turn."""
-    images = turn_has_images(user_text, history) if has_images is None else has_images
+    prior_history = history_without_current_user(history, user_text)
+    images = turn_has_images(user_text) if has_images is None else has_images
     primary = _usable(bundle.primary)
     secondary = _usable(bundle.secondary)
     default_model, default_slot = _default_worker(bundle)
+    primary_vision = bool(primary and getattr(primary, "supports_vision", False))
+    secondary_vision = bool(secondary and getattr(secondary, "supports_vision", False))
 
     if force_primary:
         selected = _selection(default_model, default_slot, "complex", "force_primary", bundle)
@@ -416,17 +445,19 @@ async def select_turn_model(
             selected = _selection(default_model, default_slot, "manageable", "greeting", bundle)
     elif secondary is None:
         selected = _selection(default_model, default_slot, None, "no_secondary", bundle)
-    elif images and not getattr(secondary, "supports_vision", False) and getattr(primary, "supports_vision", False):
+    elif images and primary_vision and not secondary_vision:
         selected = _selection(primary or default_model, "primary", "complex", "vision", bundle)
+    elif images and secondary_vision and not primary_vision:
+        selected = _selection(secondary, "secondary", "complex", "vision", bundle)
     else:
-        guessed = heuristic_complexity(user_text, history=history, has_images=images)
+        guessed = heuristic_complexity(user_text, history=prior_history, has_images=images)
         if guessed == "complex":
             selected = _selection(primary or default_model, "primary" if primary else default_slot, "complex", "heuristic_complex", bundle)
         elif guessed == "manageable":
             selected = _selection(secondary, "secondary", "manageable", "heuristic_manageable", bundle)
         else:
             label, classifier_ms, classifier_tokens = await _classify_with_llm(
-                secondary, user_text, history, agent_id
+                secondary, user_text, prior_history, agent_id
             )
             if label == "manageable":
                 selected = _selection(

@@ -51,8 +51,32 @@ def test_heuristic_ambiguous_returns_none() -> None:
 
 def test_turn_has_images() -> None:
     assert router.turn_has_images("hello [image_data:data:image/png;base64,abc]", None) is True
-    assert router.turn_has_images("hello", [{"role": "user", "content": [{"type": "image_url"}]}]) is True
+    assert router.turn_has_images("hello", [{"role": "user", "content": [{"type": "image_url"}]}]) is False
     assert router.turn_has_images("hello", None) is False
+
+
+def test_history_without_current_user_drops_duplicate() -> None:
+    current = "do the second one"
+    history = [
+        {"role": "user", "content": "compare A and B"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": current},
+    ]
+    prior = router.history_without_current_user(history, current)
+    assert [msg["content"] for msg in prior] == ["compare A and B", "ok"]
+
+
+def test_classifier_payload_skips_appended_current_and_strips_images() -> None:
+    current = "what is this"
+    history = [
+        {"role": "user", "content": "earlier [image_data:data:image/png;base64,AAA]"},
+        {"role": "user", "content": current},
+    ]
+    payload = router.classifier_user_payload(current, history)
+    assert "earlier" in payload
+    assert payload.count("what is this") == 1
+    assert "AAA" not in payload
+    assert "[image attached]" in payload
 
 
 @pytest.mark.asyncio
@@ -80,6 +104,18 @@ async def test_select_greeting_prefers_secondary() -> None:
     )
     assert choice.reason == "greeting"
     assert choice.slot == "secondary"
+    assert choice.model is secondary
+
+
+@pytest.mark.asyncio
+async def test_select_vision_uses_secondary_when_only_it_has_vision() -> None:
+    primary = _model(name="primary", vision=False)
+    secondary = _model(name="secondary", vision=True)
+    choice = await router.select_turn_model(
+        ModelBundle(primary=primary, secondary=secondary),
+        user_text="what is this [image_data:data:image/png;base64,xx]",
+    )
+    assert choice.reason == "vision"
     assert choice.model is secondary
 
 
@@ -117,6 +153,43 @@ async def test_select_heuristic_complex_uses_primary() -> None:
         user_text="Please design a Q3 OKR plan for sales",
     )
     assert choice.reason == "heuristic_complex"
+    assert choice.model is primary
+
+
+@pytest.mark.asyncio
+async def test_prior_image_does_not_lock_later_greeting() -> None:
+    primary = _model(name="primary", vision=True)
+    secondary = _model(name="secondary", vision=False)
+    choice = await router.select_turn_model(
+        ModelBundle(primary=primary, secondary=secondary),
+        user_text="thanks",
+        history=[{"role": "user", "content": "[image_data:data:image/png;base64,xx]"}],
+    )
+    assert choice.reason == "heuristic_manageable"
+    assert choice.model is secondary
+
+
+@pytest.mark.asyncio
+async def test_classify_timeout_fail_closes_to_primary(monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = _model(name="primary")
+    secondary = _model(name="secondary")
+
+    class _FakeClient:
+        async def complete(self, **_kwargs: object) -> object:
+            raise TimeoutError
+
+        async def close(self) -> None:
+            return None
+
+    from app.services.llm import utils as llm_utils
+
+    monkeypatch.setattr(llm_utils, "create_llm_client", lambda **_kwargs: _FakeClient())
+    monkeypatch.setattr(llm_utils, "get_model_api_key", lambda _model: "sk-test")
+    choice = await router.select_turn_model(
+        ModelBundle(primary=primary, secondary=secondary),
+        user_text="Can you help me with this tomorrow morning please",
+    )
+    assert choice.reason == "fail_closed"
     assert choice.model is primary
 
 
