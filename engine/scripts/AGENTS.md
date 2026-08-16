@@ -10,4 +10,4 @@ Repo-root operators. Not the same as `app/scripts/` (Python modules).
 | `lint.sh` / `format.sh` / `test.sh` | Ruff/ty/pytest wrappers - **do not** run the freeze scripts |
 | `sqlalchemy_import_allowlist.txt` | Must stay empty. Header comment mentioning `orm_models/` is stale - that tree is gone. |
 
-CI runs both freeze scripts and `ty check .`. Local `lint.sh` uses `ty check --force-exclude` and skips freezes - run the two `check_no_*.py` scripts before merge if you touch imports or logging.
+This checkout has no CI. Local `lint.sh` uses `ty check --force-exclude` and skips freezes — run the two `check_no_*.py` scripts before merge if you touch imports or logging. `test.sh` is the 90% coverage gate.

@@ -13,7 +13,7 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 | Discord | `api/discord_bot.py`, `discord_gateway.py` | limited | types only |
 | MS Teams | `api/teams.py` | yes | types + full inbound pipeline + dedup |
 | WeChat | `api/wechat.py`, `wechat_channel.py` | yes | types only |
-| WhatsApp | `api/whatsapp.py` | ? | types only |
+| WhatsApp | `api/whatsapp.py` (mounted) | no | types only |
 | **Google Chat** | **`api/google_chat.py`** | **yes** | **full helper** |
 
 ## Layout

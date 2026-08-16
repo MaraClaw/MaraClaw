@@ -16,6 +16,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - Schema is **not** applied in lifespan. Use `python -m app.scripts.bootstrap_db`.
 - Bootstrap role order matters: **`ensure_system_orgs()`** (MaraClaw + OpenClaw) → **`ensure_platform_admin()`** → tools/templates/skills → agent seeders. OpenClaw is the default end-user org. Platform admin seed is not optional on greenfield.
 - New companies + genesis org admin: `services/tenant_provisioning.py` (called from `POST /api/tenants/` and `POST /api/admin/companies`). Not self-serve.
+- Reset/verify email links: `services/frontend_origin.py` (CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`).
 - `_log_bwrap_startup_status()` is warn-only.
 - Guest sandbox proxy: `SANDBOX_*_PROXY` only. See `services/sandbox/AGENTS.md`.
 - Background work: `app.core.logging.new_trace_id()` before related logs.

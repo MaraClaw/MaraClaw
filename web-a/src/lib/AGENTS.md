@@ -1,33 +1,32 @@
 # web-a/src/lib
 
-Admin HTTP + auth storage. Parent: `web-a/AGENTS.md`.
+Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 
 ## OVERVIEW
 
-Thin fetch clients. No React Query here except callers. Engine owns behavior.
+`apiRequest` wrappers + DTOs. Engine owns behavior. Request bodies **snake_case**.
 
 ## WHERE TO LOOK
 
 | File | Role |
 |------|------|
-| `api.ts` | `getApiBaseUrl` / `apiUrl`. Empty `VITE_API_BASE_URL` = same-origin (Vite `/api` proxy). Hostname `0.0.0.0` → same-origin (listen address is not a browser dest). |
-| `http.ts` | `apiRequest`, `ApiError`, `formatApiDetail`. Bearer from storage unless `token: null`. 401 + stored token → `clearStoredToken()` (does not reset AuthContext). |
+| `api.ts` | `getApiBaseUrl` / `apiUrl`. Empty `VITE_API_BASE_URL` = same-origin. Hostname `0.0.0.0` → `''`. |
+| `http.ts` | `apiRequest`, `ApiError`, `formatApiDetail`. Bearer unless `token: null`. 401 + stored token → `clearStoredToken()` only (AuthContext stays). 204 → `undefined`. |
 | `auth-storage.ts` | `maraclaw-admin-token` only. |
-| `auth-api.ts` | login, `/me`, forgot/reset/change password. |
-| `companies-api.ts` | list/create/toggle companies + email-domain CRUD. |
-| `linkup-keys-api.ts` | platform-admin list/add/remove of Linkup API keys. |
-| `search-analytics-api.ts` | platform-admin search volume, trending, export status. |
-| `types/auth.ts` | `UserOut` / `must_change_password` helpers (OR token + user + identity). |
+| `auth-api.ts` | login, `/me`, forgot/reset/change. Public calls pass `token: null`. `signal` only exists here. |
+| `companies-api.ts` | list/create/toggle + email-domain CRUD. `listCompanies(q)` prefix FTS. `getTenant` **pads** a `CompanyStats` (SSO/counts empty). |
+| `users-api.ts` | list/detail/activate members + OA + PA. `asAdminUser` / `setOrgAdminActive` flatten into `AdminUser` + `source`. |
+| `linkup-keys-api.ts` | PA list/add/remove Linkup keys. Response is fingerprint, never plaintext. |
+| `search-analytics-api.ts` | PA summary / timeseries / orgs / trending / export. |
+| `types/auth.ts` | `UserOut` + guards (`isAdminUser`, `isPlatformAdminUser`, `userMustChangePassword`). |
 
 ## CONVENTIONS
 
-- Public `VITE_*` only. Never ship `PLATFORM_ADMIN_*`.
-- Platform admin may pass `tenant_id`; org admin is own-tenant (enforce in the client + UI).
-- Treat `403 { must_change_password: true }` as force-change, not logout.
-- New engine surfaces: add a domain `*-api.ts` here; do not fetch from components.
+- New engine surface → new `*-api.ts` here. Do not `fetch` from pages.
+- Query string: `encodeURIComponent` or `URLSearchParams`. Omit `method` = GET; body without method = POST.
+- Adapters stay here when engine shape ≠ UI: `getTenant` pads `CompanyStats`; `asAdminUser` / `setOrgAdminActive` flatten PA/OA.
 
 ## ANTI-PATTERNS
 
-- Hardcoded absolute API hosts.
-- Sharing `maraclaw-enduser-token` or `maraclaw-theme`.
-- Inventing REST handlers in Vite.
+- React Query in this folder (callers own it).
+- Expecting Linkup create/list to return the raw key.

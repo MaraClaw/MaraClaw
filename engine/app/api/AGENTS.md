@@ -8,7 +8,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Default: `prefix=settings.API_PREFIX` so `/agents` → `/api/agents`.
 - Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
-- `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. `background_tasks.py` is a helper, not a router.
+- `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. No proactive outbound sender yet. `background_tasks.py` is a helper, not a router.
 
 ## Dependencies
 
@@ -23,11 +23,11 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Auth / admin genesis
 
-- `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation).
+- `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation). Reset/verify emails resolve the frontend via `frontend_origin` (allowlisted Origin/Referer).
 - `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
 - `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True` via `tenant_provisioning`. Unique email race → 409. `POST /platform-admins` is **genesis platform admin only**. Genesis PA may `PATCH /platform-admins/{id}/active`. Admin trail: `GET /audit-logs`.
 - `tenants.py`: `POST /` is platform-admin only and creates a tenant with its genesis org admin (same service as `POST /admin/companies`). Join always assigns `member`. Assign-user cannot set `org_admin`.
-- `users.py`: `POST /org-admins` and promoting to `org_admin` are **genesis org admin only**. Promoting to `platform_admin` is **genesis platform admin only**. Genesis OA may `PATCH /org-admins/{id}/active`. Company trail: `GET /admin-audit-logs`.
+- `users.py`: `POST /org-admins` and promoting to `org_admin` are **genesis org admin only**. Promoting to `platform_admin` is **genesis platform admin only**. Genesis OA may `PATCH /org-admins/{id}/active`. PA/OA may `PATCH /{id}/active` for end users (also stops that user's agents/triggers/schedules). User detail includes `agents_count`. Company trail: `GET /admin-audit-logs`.
 - Inventory for clients: `docs/admin-apis.md`.
 
 ## Catalog / secrets

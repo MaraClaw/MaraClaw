@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
+import { ApiError } from '@/lib/http'
 import { cn } from '@/lib/utils'
 
 const tabs = ['People', 'Synced', 'Departments'] as const
@@ -25,6 +27,8 @@ export function DirectoryPage() {
         .some((value) => String(value).toLowerCase().includes(q))
     })
   }, [users.data, search])
+
+  const query = search.trim()
 
   return (
     <div className="space-y-5 p-6">
@@ -47,37 +51,62 @@ export function DirectoryPage() {
           </button>
         ))}
         <Input
+          type="search"
           className="ml-auto h-9 max-w-xs"
           placeholder="Search"
+          aria-label="Search directory"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
       </div>
 
       {tab === 'People' ? (
-        <DirectoryTable
+        <PersonCardList
           loading={users.isLoading}
-          empty="No people in this company yet."
-          rows={filteredUsers.map((user) => [
-            user.display_name,
-            user.email ?? user.username ?? '—',
-            user.title ?? '—',
-            user.role,
-          ])}
-        />
+          error={users.error}
+          count={filteredUsers.length}
+          empty={query ? `No people match “${query}”.` : 'No people in this company yet.'}
+          errorFallback="Unable to load people"
+        >
+          {filteredUsers.map((user) => {
+            const name = user.display_name || user.email || user.username || 'Member'
+            return (
+              <PersonCard
+                key={user.id}
+                name={name}
+                avatarUrl={user.avatar_url}
+                description={contactLine(user.email, user.username)}
+                badge={roleLabel(user.role)}
+                detail={user.title}
+              />
+            )
+          })}
+        </PersonCardList>
       ) : null}
 
       {tab === 'Synced' ? (
-        <DirectoryTable
+        <PersonCardList
           loading={members.isLoading}
-          empty="No synced org members. Connect Feishu, WeCom, or DingTalk first."
-          rows={(members.data ?? []).map((member) => [
-            member.name,
-            member.email ?? '—',
-            member.title ?? member.department_path ?? '—',
-            member.provider_name ?? member.provider_type ?? 'synced',
-          ])}
-        />
+          error={members.error}
+          count={(members.data ?? []).length}
+          empty={
+            query
+              ? `No synced members match “${query}”.`
+              : 'No synced org members. Connect Feishu, WeCom, or DingTalk first.'
+          }
+          errorFallback="Unable to load synced members"
+        >
+          {(members.data ?? []).map((member) => (
+            <PersonCard
+              key={member.id}
+              name={member.name}
+              avatarUrl={member.avatar_url}
+              description={member.email}
+              badge={member.provider_name ?? member.provider_type ?? 'Synced'}
+              detail={joinDetail(member.title, member.department_path)}
+            />
+          ))}
+        </PersonCardList>
       ) : null}
 
       {tab === 'Departments' ? (
@@ -103,14 +132,20 @@ export function DirectoryPage() {
   )
 }
 
-function DirectoryTable({
+function PersonCardList({
   loading,
+  error,
+  count,
   empty,
-  rows,
+  errorFallback,
+  children,
 }: {
   loading: boolean
+  error: unknown
+  count: number
   empty: string
-  rows: string[][]
+  errorFallback: string
+  children: ReactNode
 }) {
   if (loading) {
     return (
@@ -119,32 +154,112 @@ function DirectoryTable({
       </div>
     )
   }
-  if (rows.length === 0) {
+  if (error) {
+    return (
+      <p className="text-sm text-destructive">
+        {error instanceof ApiError ? error.message : errorFallback}
+      </p>
+    )
+  }
+  if (count === 0) {
     return <p className="text-sm text-muted-foreground">{empty}</p>
   }
+  return <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
+}
+
+function PersonCard({
+  name,
+  avatarUrl,
+  description,
+  badge,
+  detail,
+}: {
+  name: string
+  avatarUrl?: string | null
+  description?: string | null
+  badge: string
+  detail?: string | null
+}) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-border">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-muted/50 text-xs text-muted-foreground">
-          <tr>
-            <th className="px-3 py-2 font-medium">Name</th>
-            <th className="px-3 py-2 font-medium">Contact</th>
-            <th className="px-3 py-2 font-medium">Title</th>
-            <th className="px-3 py-2 font-medium">Role</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={`${row[0]}-${index}`} className="border-t border-border">
-              {row.map((cell, cellIndex) => (
-                <td key={`${index}-${cellIndex}`} className="px-3 py-2">
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Card className="h-full min-w-0 transition-colors hover:bg-muted/40">
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="min-w-0">
+          <CardTitle className="flex min-w-0 items-center gap-2.5">
+            <PersonAvatar name={name} src={avatarUrl} />
+            <span className="min-w-0 wrap-break-word">{name}</span>
+          </CardTitle>
+          {description ? (
+            <CardDescription className="wrap-break-word">{description}</CardDescription>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Badge variant="secondary">{badge}</Badge>
+        </div>
+      </CardHeader>
+      {detail ? (
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">{detail}</span>
+        </CardContent>
+      ) : null}
+    </Card>
   )
+}
+
+function PersonAvatar({ name, src }: { name: string; src?: string | null }) {
+  const [failed, setFailed] = useState(false)
+  if (src && !failed) {
+    return (
+      <img
+        src={src}
+        alt=""
+        width={28}
+        height={28}
+        aria-hidden
+        draggable={false}
+        onError={() => setFailed(true)}
+        className="size-7 shrink-0 rounded-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+      />
+    )
+  }
+  return (
+    <span
+      aria-hidden
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[0.65rem] font-medium text-muted-foreground"
+    >
+      {initialsFromName(name)}
+    </span>
+  )
+}
+
+function roleLabel(role: string): string {
+  if (role === 'org_admin') return 'Org admin'
+  if (role === 'platform_admin') return 'Platform admin'
+  if (role === 'agent_admin') return 'Agent admin'
+  if (role === 'member') return 'Member'
+  return role
+}
+
+function contactLine(email?: string | null, username?: string | null): string | undefined {
+  const parts = [email, username].filter((value, index, all): value is string => {
+    if (!value) return false
+    return all.indexOf(value) === index
+  })
+  return parts.length ? parts.join(' · ') : undefined
+}
+
+function joinDetail(...values: Array<string | null | undefined>): string | undefined {
+  const parts = values.filter((value): value is string => Boolean(value))
+  const unique = parts.filter((value, index) => parts.indexOf(value) === index)
+  return unique.length ? unique.join(' · ') : undefined
+}
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) {
+    const [first] = parts
+    return first.slice(0, 2).toUpperCase()
+  }
+  const [first, last] = [parts[0], parts[parts.length - 1]]
+  return `${first[0] ?? ''}${last[0] ?? ''}`.toUpperCase()
 }
