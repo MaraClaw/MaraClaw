@@ -76,7 +76,6 @@ export function AgentLayout() {
       <div className="border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
-          <Badge variant="outline">{agent.agent_type === 'openclaw' ? 'OpenClaw' : 'Native'}</Badge>
           <Badge variant="soft">{agent.status}</Badge>
           {agent.is_expired ? <Badge>Expired</Badge> : null}
           {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}

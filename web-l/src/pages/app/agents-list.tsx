@@ -50,10 +50,7 @@ export function AgentsListPage() {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between gap-2 text-base">
                   <span className="truncate">{agent.name}</span>
-                  <span className="flex shrink-0 items-center gap-1.5">
-                    <Badge variant="outline">{agent.agent_type === 'openclaw' ? 'OpenClaw' : 'Native'}</Badge>
-                    <Badge variant="soft">{agent.status}</Badge>
-                  </span>
+                  <Badge variant="soft">{agent.status}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
