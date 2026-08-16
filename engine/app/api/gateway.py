@@ -6,7 +6,6 @@ to poll for messages, report results, send messages, and send heartbeat pings.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -21,7 +20,6 @@ from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
-from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
@@ -33,6 +31,7 @@ from app.schemas.schemas import (
     GatewayReportRequest,
     GatewaySendMessageRequest,
 )
+from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -69,6 +68,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
 
     # Fetch pending messages
     messages = await gateway_message_dao.list_pending(agent.id)
+    guest_model, guest_slot = poll_model_hint(messages)
 
     # Mark as delivered
     now = datetime.now(UTC)
@@ -121,6 +121,8 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                 content=msg.content,
                 created_at=msg.created_at,
                 history=history,
+                model=guest_model,
+                model_slot=guest_slot,
             )
         )
 
@@ -193,6 +195,7 @@ async def report_result(
 
     # Save result as assistant chat message and push via WebSocket
     # (works for both user-originated and agent-to-agent messages)
+    session = None
     if body.result and msg.conversation_id:
         participant = await participant_dao.get_by_type_ref("agent", agent.id)
 
@@ -204,14 +207,18 @@ async def report_result(
             conversation_id=msg.conversation_id,
             participant_id=participant.id if participant else None,
         )
+        try:
+            session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
+        except ValueError, TypeError:
+            session = None
 
-    # Push to WebSocket if user is connected
-    if body.result and msg.conversation_id and msg.sender_user_id:
+    if body.result and msg.conversation_id:
         try:
             from app.api.websocket import manager
 
-            await manager.send_message(
+            await manager.send_to_session(
                 str(agent.id),
+                msg.conversation_id,
                 {
                     "type": "done",
                     "role": "assistant",
@@ -221,19 +228,23 @@ async def report_result(
         except Exception as error:
             logger.debug(f"[Gateway] Skipped done notification for disconnected user: {error}")
 
+    if body.result and session is not None:
+        from app.services.channels.outbound import deliver_session_reply
+
+        await deliver_session_reply(agent=agent, session=session, content=body.result)
+
     # If the original message was from another agent (OpenClaw-to-OpenClaw),
     # write the reply back as a gateway_message for the sender agent to poll
     if body.result and msg.sender_agent_id:
         conv_id = msg.conversation_id or f"gw_agent_{msg.sender_agent_id}_{agent.id}"
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": msg.sender_agent_id,
-                "sender_agent_id": agent.id,
-                "content": body.result,
-                "status": "pending",
-                "conversation_id": conv_id,
-            }
-        )
+        sender = await agent_dao.get(msg.sender_agent_id)
+        if sender:
+            _ = await enqueue_openclaw_message(
+                agent=sender,
+                content=body.result,
+                sender_agent_id=agent.id,
+                conversation_id=conv_id,
+            )
         logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
 
     return {"status": "ok"}
@@ -255,158 +266,6 @@ async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db: object 
 
 # ─── Send message ───────────────────────────────────────
 
-# Track background tasks to prevent garbage collection
-_background_tasks: set[asyncio.Task[None]] = set()
-
-
-async def _send_to_agent_background(
-    source_agent_id: str,
-    source_agent_name: str,
-    target_agent_id: str,
-    target_agent_name: str,
-    target_primary_model_id: str,
-    target_role_description: str,
-    target_creator_id: str,
-    content: str,
-):
-    """Background task: invoke target agent LLM and write reply to gateway_messages.
-
-    Accepts plain values (not ORM objects) to avoid stale session references
-    since this runs after the request's DB session has closed.
-    """
-    logger.info(f"[Gateway] _send_to_agent_background started: {source_agent_name} -> {target_agent_name}")
-    try:
-        from app.services.llm import call_llm
-
-        # Load target agent's LLM model
-        if not target_primary_model_id:
-            logger.warning(f"Target agent {target_agent_name} has no LLM model")
-            return
-        model = await llm_model_dao.get(uuid.UUID(target_primary_model_id))
-        if not model:
-            return
-        # Skip if model is disabled by admin
-        if not model.enabled:
-            logger.warning(f"Target agent {target_agent_name}'s model {model.model} is disabled, skipping")
-            return
-
-        # Create or find a ChatSession for this agent pair
-        # Use deterministic UUID so the same pair always gets the same session
-        _ns = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
-        # Sort IDs so session is the same regardless of who initiates
-        session_agent_id = min(source_agent_id, target_agent_id, key=str)
-        session_peer_id = max(source_agent_id, target_agent_id, key=str)
-        session_uuid = uuid.uuid5(_ns, f"{session_agent_id}_{session_peer_id}")
-        conv_id = str(session_uuid)
-        session_agent_uuid = uuid.UUID(session_agent_id)
-        session_peer_uuid = uuid.UUID(session_peer_id)
-        target_creator_uuid = uuid.UUID(target_creator_id) if target_creator_id else session_agent_uuid
-
-        # Find or create the ChatSession
-        session = await chat_session_dao.get(session_uuid)
-        if not session:
-            session = await chat_session_dao.create(
-                obj_in={
-                    "id": session_uuid,
-                    "agent_id": session_agent_uuid,
-                    "user_id": target_creator_uuid,
-                    "title": f"{source_agent_name} ↔ {target_agent_name}",
-                    "source_channel": "agent",
-                    "peer_agent_id": session_peer_uuid,
-                    "created_at": datetime.now(UTC),
-                }
-            )
-
-            # Migrate any existing messages from old gw_agent_ format
-            old_conv_id = f"gw_agent_{source_agent_id}_{target_agent_id}"
-            _ = await chat_message_dao.reassign_conversation_id(
-                old_conversation_id=old_conv_id,
-                new_conversation_id=conv_id,
-            )
-
-        _ = await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
-
-        # Agent-to-agent communication context (injected as prefix to user message
-        # since call_llm builds the full system prompt internally)
-        agent_comm_alert = (
-            "--- Agent-to-Agent Communication Alert ---\n"
-            + f"You are receiving a direct message from another digital employee ({source_agent_name}). "
-            + "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
-            + "DO NOT use the `send_message_to_agent` tool to reply to this conversation. Just reply naturally in text.\n"
-            + "If they are asking you to create or analyze a file, deliver the file using `send_file_to_agent` after writing it."
-        )
-
-        hist_msgs = await chat_message_dao.list_for_session(conversation_id=conv_id, limit=10)
-
-        from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-        messages = _conv(hist_msgs)
-
-        # Add the new message with agent communication context
-        user_msg = f"{agent_comm_alert}\n\n[Message from agent: {source_agent_name}]\n{content}"
-        messages.append({"role": "user", "content": user_msg})
-
-        src_participant = await participant_dao.get_by_type_ref("agent", uuid.UUID(source_agent_id))
-        tgt_participant = await participant_dao.get_by_type_ref("agent", uuid.UUID(target_agent_id))
-
-        # Save user message to conversation
-        _ = await chat_message_dao.insert_message(
-            agent_id=uuid.UUID(target_agent_id),
-            user_id=target_creator_uuid,
-            role="user",
-            content=user_msg,
-            conversation_id=conv_id,
-            participant_id=src_participant.id if src_participant else None,
-        )
-
-        # Call LLM
-        collected = []
-
-        async def on_chunk(text: str) -> None:
-            collected.append(text)
-
-        target_agent_uuid = uuid.UUID(target_agent_id)
-        reply = await call_llm(
-            model=model,
-            messages=messages,
-            agent_name=target_agent_name,
-            role_description=target_role_description,
-            agent_id=target_agent_uuid,
-            user_id=target_creator_uuid,
-            session_id=conv_id,
-            on_chunk=on_chunk,
-        )
-        final_reply = reply or "".join(collected)
-
-        # Save assistant reply to conversation
-        _ = await chat_message_dao.insert_message(
-            agent_id=uuid.UUID(target_agent_id),
-            user_id=target_creator_uuid,
-            role="assistant",
-            content=final_reply,
-            conversation_id=conv_id,
-            participant_id=tgt_participant.id if tgt_participant else None,
-        )
-
-        # Write reply to gateway_messages for source (OpenClaw) to poll
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": uuid.UUID(source_agent_id),
-                "sender_agent_id": uuid.UUID(target_agent_id),
-                "content": final_reply,
-                "status": "pending",
-                "conversation_id": conv_id,
-            }
-        )
-
-        logger.info(f"[Gateway] Agent {target_agent_name} replied to {source_agent_name}")
-
-    except Exception as e:
-        logger.error(f"[Gateway] send_to_agent_background failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-
 
 @router.post("/send-message")
 async def send_message(
@@ -415,8 +274,8 @@ async def send_message(
     """OpenClaw agent sends a message to a person or another agent.
 
     Routes automatically based on target type:
-    - Agent target: triggers LLM processing, reply returned via next poll
-    - Human target: sends via available channel (feishu, etc.)
+    - Agent target: enqueue for the peer guest; reply arrives on the next poll
+    - Human target: send via available channel (feishu, etc.)
     """
     agent = await _get_agent_by_key(x_api_key, db)
     _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
@@ -445,50 +304,16 @@ async def send_message(
     if target_agent and (not channel_hint or channel_hint == "agent"):
         conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
 
-        if getattr(target_agent, "agent_type", None) == "openclaw":
-            # OpenClaw-to-OpenClaw: write to gateway_messages directly
-            _ = await gateway_message_dao.create(
-                obj_in={
-                    "agent_id": target_agent.id,
-                    "sender_agent_id": agent.id,
-                    "content": content,
-                    "status": "pending",
-                    "conversation_id": conv_id,
-                }
-            )
-            return {
-                "status": "accepted",
-                "target": target_agent.name,
-                "type": "openclaw_agent",
-                "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
-            }
-        # Native agent: async LLM processing
-        # Extract plain values before background task to avoid stale references
-        _src_id = str(agent.id)
-        _src_name = agent.name
-        _tgt_id = str(target_agent.id)
-        _tgt_name = target_agent.name
-        _tgt_model = str(target_agent.primary_model_id) if target_agent.primary_model_id else ""
-        _tgt_role = target_agent.role_description or ""
-        _tgt_creator = str(target_agent.creator_id) if target_agent.creator_id else ""
-        task = asyncio.create_task(
-            _send_to_agent_background(
-                _src_id,
-                _src_name,
-                _tgt_id,
-                _tgt_name,
-                _tgt_model,
-                _tgt_role,
-                _tgt_creator,
-                content,
-            )
+        _ = await enqueue_openclaw_message(
+            agent=target_agent,
+            content=content,
+            sender_agent_id=agent.id,
+            conversation_id=conv_id,
         )
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
         return {
             "status": "accepted",
             "target": target_agent.name,
-            "type": "agent",
+            "type": "openclaw_agent",
             "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
         }
 
@@ -619,6 +444,12 @@ The response contains a `messages` array. Each message includes:
 - `sender_user_id` - unique ID of the sender
 - `conversation_id` - the conversation this message belongs to
 - `history` - array of previous messages in this conversation for context
+- `model` - provider/model ref for this inbox batch (for example openai/gpt-5.4)
+- `model_slot` - "primary" (complex) or "secondary" (manageable)
+
+**IMPORTANT**: Process the entire inbox batch with `model`. If your current
+session is on a different model, switch first (`/model <model>`). Do not pick
+a cheaper model on your own. Mixed batches are already fail-closed to primary.
 
 The response also contains a `relationships` array describing your colleagues:
 - `name` - the person or agent name

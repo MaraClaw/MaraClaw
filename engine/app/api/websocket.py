@@ -1,11 +1,7 @@
 """WebSocket chat endpoint for real-time agent conversations."""
 
-import asyncio
-import re
 import uuid
 from datetime import UTC, datetime
-from time import perf_counter
-from typing import TypedDict
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -13,38 +9,24 @@ from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.core.permissions import check_agent_access, is_agent_expired
 from app.core.security import load_user_from_access_token
-from app.dao import agent_dao, llm_model_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.gateway_message_dao import gateway_message_dao
-from app.dao.task_dao import task_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
-from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
-from app.services.activity_logger import log_activity
-from app.services.agentbay_live import detect_agentbay_env, get_browser_snapshot, get_desktop_screenshot
 from app.services.chat_persist import persist_chat_message
 from app.services.chat_session_service import ensure_primary_platform_session
-from app.services.llm import call_llm_with_failover
-from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format, truncate_messages_with_pair_integrity
-from app.services.onboarding import is_onboarded, mark_onboarding_phase, resolve_onboarding_prompt
+from app.services.llm.utils import convert_chat_messages_to_llm_format
+from app.services.onboarding import is_onboarded
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
     check_agent_expired,
     check_conversation_quota,
-    increment_agent_llm_usage,
-    increment_conversation_usage,
 )
 from app.services.realtime import realtime_router
-from app.services.task_executor import execute_task
 
 router = APIRouter(tags=["websocket"])
-
-MAX_LIVE_CODE_STREAM_CHARS = 120_000
-LIVE_CODE_TRUNCATED_NOTICE = "\n\n[... live output truncated; execution continues ...]\n"
 
 
 type WebSocketConnection = tuple[WebSocket, str | None, str | None]
@@ -59,93 +41,6 @@ def _json_object_payload(value: object) -> dict[str, object]:
 
 def _payload_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else default
-
-
-class ToolLivePreview(TypedDict, total=False):
-    env: str
-    screenshot_url: str
-    output: str
-
-
-class WorkspaceActivity(TypedDict):
-    action: str
-    path: str
-    tool: str
-    ok: bool
-    pendingApproval: bool
-
-
-class WebSocketToolCall(ToolCallbackData, total=False):
-    live_preview: ToolLivePreview
-    workspace_activity: WorkspaceActivity
-
-
-def extract_partial_content(args_str: str) -> str:
-    """Extract the string value of the 'content' field from a partial JSON tool-arguments string.
-
-    When the LLM streams the finish tool call, arguments arrive as an
-    incrementally-growing JSON fragment like '{"content": "hello \\\\n wor'.
-    This function parses what is available so far, correctly handling JSON
-    escape sequences (\\n, \\", \\\\, \\\\uXXXX, etc.) even when the string is
-    truncated mid-escape.
-    """
-    import re as _re
-
-    s = args_str.strip()
-    match = _re.search(r'"content"\s*:\s*"', s)
-    if not match:
-        return ""
-
-    start_idx = match.end()
-    val_chars: list[str] = []
-    escaped = False
-    i = start_idx
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if escaped:
-            if c == "n":
-                val_chars.append("\n")
-            elif c == "t":
-                val_chars.append("\t")
-            elif c == "r":
-                val_chars.append("\r")
-            elif c == "b":
-                val_chars.append("\b")
-            elif c == "f":
-                val_chars.append("\f")
-            elif c == '"':
-                val_chars.append('"')
-            elif c == "\\":
-                val_chars.append("\\")
-            elif c == "/":
-                val_chars.append("/")
-            elif c == "u":
-                if i + 4 < n:
-                    try:
-                        hex_val = int(s[i + 1 : i + 5], 16)
-                        val_chars.append(chr(hex_val))
-                        i += 4
-                    except ValueError:
-                        val_chars.append("\\")
-                        val_chars.append("u")
-                else:
-                    # Incomplete \uXXXX - wait for more data
-                    val_chars.append("\\")
-                    val_chars.append("u")
-            else:
-                val_chars.append(c)
-            escaped = False
-        else:
-            if c == "\\":
-                escaped = True
-            elif c == '"':
-                # End of the JSON string value
-                break
-            else:
-                val_chars.append(c)
-        i += 1
-    return "".join(val_chars)
 
 
 class ConnectionManager:
@@ -277,7 +172,7 @@ async def websocket_chat(
 
 
 class WebSocketChatHandler:
-    """Manages connection lifecycle, message polling, LLM orchestration, and persistence for a single user-agent session."""
+    """Manages connection lifecycle, inbound persistence, and OpenClaw enqueue for a user-agent session."""
 
     user: UserRecord
     agent: AgentRecord
@@ -304,8 +199,6 @@ class WebSocketChatHandler:
         self.welcome_message: str = ""
         self.ctx_size: int = 100
         self.user_display_name: str = ""
-        self.llm_model: LLMModelRecord | None = None
-        self.fallback_llm_model: LLMModelRecord | None = None
         self.history_messages: list[ChatMessageRecord] = []
         self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
@@ -379,9 +272,6 @@ class WebSocketChatHandler:
                 f"[WS] Agent: {self.agent_name}, type: {self.agent_type}, model_id: {self.agent.primary_model_id}, ctx: {self.ctx_size}"
             )
 
-            # Load models
-            await self._load_models(None)
-
             # Resolve or create chat session
             conv_id = await self._resolve_chat_session(None, self.user.id)
             if not conv_id:
@@ -409,31 +299,6 @@ class WebSocketChatHandler:
         self.conversation = self._build_conversation_context()
 
         return True
-
-    async def _load_models(self, db: object | None):
-        """Loads primary and fallback models for the agent."""
-        del db
-        if self.agent.primary_model_id:
-            self.llm_model = await llm_model_dao.get(self.agent.primary_model_id)
-            if self.llm_model and not self.llm_model.enabled:
-                logger.info(f"[WS] Primary model {self.llm_model.model} is disabled, skipping")
-                self.llm_model = None
-            else:
-                logger.info(f"[WS] Primary model loaded: {self.llm_model.model if self.llm_model else 'None'}")
-
-        if self.agent.fallback_model_id:
-            self.fallback_llm_model = await llm_model_dao.get(self.agent.fallback_model_id)
-            if self.fallback_llm_model and not self.fallback_llm_model.enabled:
-                logger.info(f"[WS] Fallback model {self.fallback_llm_model.model} is disabled, skipping")
-                self.fallback_llm_model = None
-            elif self.fallback_llm_model:
-                logger.info(f"[WS] Fallback model loaded: {self.fallback_llm_model.model}")
-
-        fallback = self.fallback_llm_model
-        if not self.llm_model and fallback is not None:
-            self.llm_model = fallback
-            self.fallback_llm_model = None
-            logger.info(f"[WS] Primary model unavailable, using fallback: {fallback.model}")
 
     async def _resolve_chat_session(self, db: object | None, user_id: uuid.UUID) -> str | None:
         """Resolves existing session or creates a new one."""
@@ -498,8 +363,6 @@ class WebSocketChatHandler:
             content = _payload_str(data.get("content", ""))
             display_content = _payload_str(data.get("display_content", ""))
             file_name = _payload_str(data.get("file_name", ""))
-            override_raw = data.get("model_id")
-            override_model_id = override_raw if isinstance(override_raw, str) else None
             is_onboarding_trigger = data.get("kind") == "onboarding_trigger"
             logger.info(f"[WS] Received: {content[:50]}" + (" [onboarding]" if is_onboarding_trigger else ""))
 
@@ -512,7 +375,6 @@ class WebSocketChatHandler:
                 content = "Please begin the onboarding."
 
             self.current_user_text = content
-            effective_llm_model = await self._resolve_effective_model(override_model_id)
 
             # Quota Checks
             if not await self._check_quotas():
@@ -524,47 +386,8 @@ class WebSocketChatHandler:
             # Save user message to DB
             await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
 
-            # OpenClaw routing check
-            if self.agent_type == "openclaw":
-                await self._route_openclaw(content)
-                continue
-
-            # Detect task creation intent
-            task_match = re.search(
-                r"(?:创建|新建|添加|建一个|帮我建|create|add)(?:一个|a )?(?:任务|待办|todo|task)[，,：：:\\s]*(.+)",
-                content,
-                re.IGNORECASE,
-            )
-
-            # Invoke LLM and stream response
-            if effective_llm_model:
-                assistant_response, thinking_content, queued_messages = await self._run_llm_and_stream(
-                    effective_llm_model, is_onboarding_trigger
-                )
-            else:
-                assistant_response = (
-                    f"⚠️ {self.agent_name} has no LLM model configured. "
-                    + "Please select a model in the agent's Settings tab."
-                )
-                thinking_content = []
-                queued_messages = []
-
-            # If task creation detected, create a real Task record
-            if task_match:
-                assistant_response = await self._create_task_record(task_match.group(1).strip(), assistant_response)
-
-            # Add assistant response to in-memory conversation
-            self.conversation.append({"role": "assistant", "content": assistant_response})
-
-            # Save assistant reply
-            await self._save_assistant_reply(assistant_response, thinking_content)
-
-            # Final 'done' packet
-            await self.websocket.send_json({"type": "done", "role": "assistant", "content": assistant_response})
-
-            # Re-process any queued messages (if user sent something during generation)
-            for _ in queued_messages:
-                pass
+            await self._route_openclaw(content)
+            continue
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already onboarded)."""
@@ -578,42 +401,6 @@ class WebSocketChatHandler:
             )
             return True
         return False
-
-    async def _resolve_effective_model(self, override_model_id: str | None) -> LLMModelRecord | None:
-        """Reloads model config and resolves effective model (taking overrides into account)."""
-        _agent_cur = await agent_dao.get(self.agent_id)
-        if _agent_cur:
-            model_ids = [mid for mid in (_agent_cur.primary_model_id, _agent_cur.fallback_model_id) if mid]
-            loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)}
-            _m = loaded.get(_agent_cur.primary_model_id) if _agent_cur.primary_model_id else None
-            self.llm_model = _m if (_m and _m.enabled) else None
-            _fb = loaded.get(_agent_cur.fallback_model_id) if _agent_cur.fallback_model_id else None
-            self.fallback_llm_model = _fb if (_fb and _fb.enabled) else None
-
-            if not self.llm_model and self.fallback_llm_model:
-                self.llm_model = self.fallback_llm_model
-                self.fallback_llm_model = None
-
-        effective_llm_model = self.llm_model
-        if override_model_id:
-            try:
-                _ovr_uuid = uuid.UUID(str(override_model_id))
-                _ovr = await llm_model_dao.get(_ovr_uuid)
-                if (
-                    _ovr
-                    and _ovr.enabled
-                    and _ovr.tenant_id
-                    and (not self.llm_model or _ovr.tenant_id == self.llm_model.tenant_id)
-                ):
-                    effective_llm_model = _ovr
-                else:
-                    logger.warning(
-                        f"[WS] model override {override_model_id} rejected (missing/disabled/tenant mismatch)"
-                    )
-            except ValueError, TypeError:
-                logger.warning(f"[WS] model override {override_model_id!r} is not a valid UUID")
-
-        return effective_llm_model
 
     async def _check_quotas(self) -> bool:
         """Checks conversation and agent LLM quotas. Sends message and returns False if exceeded."""
@@ -669,432 +456,20 @@ class WebSocketChatHandler:
 
     async def _route_openclaw(self, content: str):
         """Enqueues message for OpenClaw edge node poll."""
-        _ = await gateway_message_dao.create(
-            obj_in={
-                "agent_id": self.agent_id,
-                "sender_user_id": self.user.id,
-                "conversation_id": self.conv_id,
-                "content": content,
-                "status": "pending",
-            }
+        from app.services.openclaw_routing import enqueue_openclaw_message
+
+        _ = await enqueue_openclaw_message(
+            agent=self.agent,
+            content=content,
+            sender_user_id=self.user.id,
+            conversation_id=self.conv_id,
+            history=self.conversation,
         )
         logger.info("[WS] OpenClaw: message queued for gateway poll")
         await self.websocket.send_json(
             {
-                "type": "done",
-                "role": "assistant",
+                "type": "info",
                 "content": "Message forwarded to OpenClaw agent. Waiting for response...",
             }
         )
 
-    async def _run_llm_and_stream(
-        self, effective_llm_model: LLMModelRecord, is_onboarding_trigger: bool
-    ) -> tuple[str, list[str], list[RealtimeMessage]]:
-        """Calls the LLM and streams response chunks to WebSocket."""
-        start_gen = perf_counter()
-        try:
-            logger.info(f"[WS] Calling LLM {effective_llm_model.model} (streaming)...")
-
-            # Accumulate partial content for abort handling
-            partial_chunks: list[str] = []
-            # Track how many characters of finish-tool content have been streamed
-            finish_content_sent_len = 0
-
-            # Set inside _call_with_failover when an onboarding prompt was injected
-            needs_onboarding_mark = False
-            onboarding_target_phase = "completed"
-            onboarding_mark_done = False
-
-            async def maybe_mark_onboarding_progress():
-                nonlocal onboarding_mark_done
-                if needs_onboarding_mark and not onboarding_mark_done:
-                    onboarding_mark_done = True
-                    try:
-                        await mark_onboarding_phase(
-                            None,
-                            self.agent_id,
-                            self.user.id,
-                            onboarding_target_phase,
-                        )
-                        # Tell the frontend to refresh its cached agent record
-                        await self.websocket.send_json(
-                            {
-                                "type": "onboarded",
-                                "agent_id": str(self.agent_id),
-                            }
-                        )
-                    except Exception as _ob_err:
-                        logger.warning(f"[WS] mark_onboarded failed (non-fatal): {_ob_err}")
-
-            async def stream_to_ws(text: str):
-                """Send each chunk to client in real-time."""
-                partial_chunks.append(text)
-                await self.websocket.send_json({"type": "chunk", "content": text})
-                await maybe_mark_onboarding_progress()
-
-            async def tool_call_to_ws(data: ToolCallbackData):
-                """Send tool call info to client and persist completed ones."""
-                tool_call = WebSocketToolCall(**data)
-                if tool_call.get("status") in {"running", "done"}:
-                    await maybe_mark_onboarding_progress()
-                if tool_call.get("status") == "done":
-                    # Inject Live Preview & Workspace Activities
-                    await self._inject_live_preview_and_workspace_metadata(tool_call)
-
-                await self.websocket.send_json({"type": "tool_call", **tool_call})
-
-                # Save completed tool calls to DB so they persist in chat history
-                if tool_call.get("status") == "done":
-                    await self._save_completed_tool_call_to_db(tool_call)
-
-            # Track thinking content for storage
-            thinking_content: list[str] = []
-
-            async def thinking_to_ws(text: str):
-                """Send thinking chunks to client for collapsible display."""
-                thinking_content.append(text)
-                await self.websocket.send_json({"type": "thinking", "content": text})
-
-            _workspace_draft_cache: dict[str, str] = {}
-
-            async def tool_delta_to_ws(data: ToolCallbackData):
-                """Stream workspace file-operation drafts while tool args are still arriving."""
-                nonlocal finish_content_sent_len
-                tool_name = data.get("name", "")
-
-                # Stream finish tool content as real-time chunks
-                if tool_name == "finish":
-                    raw_args = data.get("arguments", "")
-                    if isinstance(raw_args, str) and raw_args:
-                        current_content = extract_partial_content(raw_args)
-                        if len(current_content) > finish_content_sent_len:
-                            delta = current_content[finish_content_sent_len:]
-                            finish_content_sent_len = len(current_content)
-                            await stream_to_ws(delta)
-                    return
-
-                _ws_tools = {
-                    "write_file",
-                    "edit_file",
-                    "move_file",
-                    "delete_file",
-                    "convert_markdown_to_docx",
-                    "convert_csv_to_xlsx",
-                    "convert_markdown_to_pdf",
-                    "convert_html_to_pdf",
-                    "convert_html_to_pptx",
-                }
-                if tool_name not in _ws_tools:
-                    return
-
-                raw_args = data.get("arguments", "")
-
-                draft_id = str(data.get("id") or f"draft-{data.get('index', 0)}")
-                if _workspace_draft_cache.get(draft_id) == raw_args:
-                    return
-                _workspace_draft_cache[draft_id] = raw_args
-
-                await self.websocket.send_json(
-                    {
-                        "type": "workspace_draft",
-                        "id": draft_id,
-                        "index": data.get("index", 0),
-                        "name": tool_name,
-                        "arguments": raw_args,
-                    }
-                )
-
-            # Run call_llm_with_failover as a cancellable task
-            async def _call_with_failover():
-                nonlocal needs_onboarding_mark, onboarding_target_phase
-
-                async def _on_failover(reason: str):
-                    await self.websocket.send_json({"type": "info", "content": f"Primary model error, {reason}"})
-
-                _truncated = truncate_messages_with_pair_integrity(self.conversation, self.ctx_size)
-
-                # Resolve onboarding prompt
-                skip_tools_for_greeting = False
-                try:
-                    _onb = await resolve_onboarding_prompt(
-                        None,
-                        self.agent,
-                        self.user.id,
-                        user_name=self.user_display_name,
-                        user_locale=self.lang,
-                    )
-                    if _onb:
-                        onboarding_message: OpenAIMessage = {"role": "system", "content": _onb.prompt}
-                        _truncated: list[OpenAIMessage] = [onboarding_message, *_truncated]
-                        if _onb.lock_on_first_chunk:
-                            needs_onboarding_mark = True
-                            onboarding_target_phase = _onb.target_phase
-                        if _onb.is_greeting_turn:
-                            skip_tools_for_greeting = True
-                except Exception as _onb_err:
-                    logger.warning(f"[WS] Onboarding prompt resolve failed (non-fatal): {_onb_err}")
-
-                live_code_chars_sent = 0
-                live_code_truncated_sent = False
-
-                async def code_output_to_ws(text: str, label: str = "stdout"):
-                    """Stream execute_code output chunks to the frontend live panel in real-time."""
-                    nonlocal live_code_chars_sent, live_code_truncated_sent
-                    try:
-                        remaining = MAX_LIVE_CODE_STREAM_CHARS - live_code_chars_sent
-                        if remaining <= 0:
-                            if not live_code_truncated_sent:
-                                live_code_truncated_sent = True
-                                await self.websocket.send_json(
-                                    {
-                                        "type": "agentbay_live",
-                                        "env": "code",
-                                        "output": LIVE_CODE_TRUNCATED_NOTICE,
-                                        "stream": label,
-                                    }
-                                )
-                            return
-
-                        output = text[:remaining]
-                        live_code_chars_sent += len(output)
-                        await self.websocket.send_json(
-                            {
-                                "type": "agentbay_live",
-                                "env": "code",
-                                "output": output,
-                                "stream": label,
-                            }
-                        )
-                    except Exception as error:
-                        logger.warning(f"[WS] Failed to stream code output: {error}")
-
-                from app.services.llm.turn import TurnContext
-
-                return await call_llm_with_failover(
-                    primary_model=effective_llm_model,
-                    fallback_model=self.fallback_llm_model,
-                    messages=_truncated,
-                    agent_name=self.agent_name,
-                    role_description=self.role_description,
-                    agent_id=self.agent_id,
-                    user_id=self.user.id,
-                    session_id=self.conv_id,
-                    turn=TurnContext(
-                        agent=self.agent,
-                        primary_model=effective_llm_model,
-                        fallback_model=self.fallback_llm_model,
-                        user=self.user,
-                    ),
-                    on_chunk=stream_to_ws,
-                    on_tool_call=tool_call_to_ws,
-                    on_tool_delta=tool_delta_to_ws,
-                    on_thinking=thinking_to_ws,
-                    supports_vision=getattr(effective_llm_model, "supports_vision", False),
-                    on_failover=_on_failover,
-                    skip_tools=skip_tools_for_greeting,
-                    on_code_output=code_output_to_ws,
-                )
-
-            llm_task = asyncio.create_task(_call_with_failover())
-
-            # Listen for abort while LLM is running
-            aborted = False
-            queued_messages: list[RealtimeMessage] = []
-            while not llm_task.done():
-                try:
-                    msg = _json_object_payload(
-                        json_loads_value(await asyncio.wait_for(self.websocket.receive_text(), timeout=0.5))
-                    )
-                    if msg.get("type") == "abort":
-                        logger.info("[WS] Abort received, cancelling LLM task")
-                        _ = llm_task.cancel()
-                        aborted = True
-                        break
-                    queued_messages.append(msg)
-                except TimeoutError:
-                    continue
-                except WebSocketDisconnect:
-                    _ = llm_task.cancel()
-                    raise
-
-            if aborted:
-                try:
-                    await llm_task
-                except asyncio.CancelledError:
-                    current_task = asyncio.current_task()
-                    if current_task and current_task.cancelling():
-                        raise
-                    logger.debug("[WS] LLM task cancelled after user abort")
-                except Exception as error:
-                    logger.warning(f"[WS] LLM task failed while aborting: {error}")
-                partial_text = "".join(partial_chunks).strip()
-                assistant_response = (
-                    (partial_text + "\n\n*[Generation stopped]*") if partial_text else "*[Generation stopped]*"
-                )
-                logger.info(f"[WS] LLM aborted, partial: {assistant_response[:80]}")
-            else:
-                assistant_response = await llm_task
-                logger.info(f"[WS] LLM response: {assistant_response[:80]}")
-
-            # Raise error on prefix for failover matching
-            _llm_error_prefixes = ("[LLM Error]", "[LLM call error]", "[Error]")
-            if (
-                not aborted
-                and assistant_response
-                and any(assistant_response.startswith(p) for p in _llm_error_prefixes)
-            ):
-                raise RuntimeError(assistant_response)
-
-            # Post-success actions (last_active_at, quota usage increments, activity logs)
-            await self._update_activity_and_quota(assistant_response)
-
-            return assistant_response, thinking_content, queued_messages
-
-        except WebSocketDisconnect:
-            raise
-        except Exception as e:
-            gen_duration = perf_counter() - start_gen
-            logger.exception(f"[WS] LLM error after {gen_duration:.3f}s: {e}")
-            return f"[LLM call error] {str(e)[:200]}", [], []
-
-    async def _inject_live_preview_and_workspace_metadata(self, data: WebSocketToolCall):
-        """Injects live previews and workspace panel activity tracking into tool results."""
-        try:
-            tool_name = data.get("name", "")
-            env = detect_agentbay_env(tool_name)
-            if env == "desktop":
-                b64_url = await get_desktop_screenshot(self.agent_id, session_id=self.conv_id)
-                if b64_url:
-                    data["live_preview"] = {"env": env, "screenshot_url": b64_url}
-                    logger.info(f"[WS][LivePreview] Embedded {env} base64 in tool_call")
-            elif env == "browser":
-                b64_url = await get_browser_snapshot(self.agent_id, session_id=self.conv_id)
-                if b64_url:
-                    data["live_preview"] = {"env": env, "screenshot_url": b64_url}
-                    logger.info(f"[WS][LivePreview] Embedded {env} base64 in tool_call")
-            elif env == "code":
-                tool_result = data.get("result", "") or ""
-                data["live_preview"] = {"env": "code", "output": tool_result[:5000]}
-        except Exception as _lp_err:
-            logger.warning(f"[WS][LivePreview] Embed failed: {_lp_err}")
-
-        _workspace_tool_actions = {
-            "write_file": "write",
-            "edit_file": "edit",
-            "move_file": "move",
-            "delete_file": "delete",
-            "convert_markdown_to_docx": "convert",
-            "convert_csv_to_xlsx": "convert",
-            "convert_markdown_to_pdf": "convert",
-            "convert_html_to_pdf": "convert",
-            "convert_html_to_pptx": "convert",
-        }
-        _done_tool_name = data.get("name", "")
-        if _done_tool_name in _workspace_tool_actions:
-            workspace_args = data.get("args", {})
-            workspace_path_value = (
-                workspace_args.get("output_path")
-                or workspace_args.get("destination_path")
-                or workspace_args.get("path")
-                or ""
-            )
-            workspace_path = workspace_path_value if isinstance(workspace_path_value, str) else ""
-            _ws_result = str(data.get("result") or "")
-            _pending_approval = "requires approval" in _ws_result.lower()
-            data["workspace_activity"] = {
-                "action": _workspace_tool_actions[_done_tool_name],
-                "path": workspace_path,
-                "tool": _done_tool_name,
-                "ok": not _pending_approval,
-                "pendingApproval": _pending_approval,
-            }
-            logger.info(f"[WS][Workspace] activity: {_done_tool_name} → {workspace_path}")
-
-    async def _save_completed_tool_call_to_db(self, data: ToolCallbackData):
-        """Persist completed tool calls in ChatMessage DB logs."""
-        try:
-            from app.services.chat_session_service import save_tool_call_log
-
-            await save_tool_call_log(
-                agent_id=self.agent_id,
-                user_id=self.user.id,
-                conversation_id=self.conv_id,
-                tool_name=data.get("name", ""),
-                arguments=data.get("args"),
-                result=(data.get("result") or "")[:500],
-                status="done",
-                tool_call_id=data.get("call_id"),
-                reasoning_content=data.get("reasoning_content"),
-            )
-            _ = await maybe_mark_session_read_for_active_viewer(
-                None,
-                agent_id=self.agent_id,
-                session_id=self.conv_id,
-                user_id=self.user.id,
-            )
-        except Exception as _tc_err:
-            logger.warning(f"[WS] Failed to save tool_call: {_tc_err}")
-
-    async def _update_activity_and_quota(self, assistant_response: str):
-        """Update conversation/agent LLM usage and log activity."""
-        try:
-            await increment_conversation_usage(self.user.id)
-            await increment_agent_llm_usage(self.agent_id)
-        except Exception as error:
-            logger.warning(f"[WS] Failed to update usage counters: {error}")
-
-        try:
-            user_text = getattr(self, "current_user_text", "")
-            await log_activity(
-                self.agent_id,
-                "chat_reply",
-                f"Replied to web chat: {assistant_response[:80]}",
-                detail={"channel": "web", "user_text": user_text[:200], "reply": assistant_response[:500]},
-            )
-        except Exception as e:
-            logger.warning(f"[WS] Failed to log activity: {e}")
-
-    async def _create_task_record(self, task_title: str, assistant_response: str) -> str:
-        """Creates a background execution task from task matching."""
-        if not task_title:
-            return assistant_response
-        try:
-            task = await task_dao.create(
-                obj_in={
-                    "agent_id": self.agent_id,
-                    "title": task_title,
-                    "created_by": self.user.id,
-                    "status": "pending",
-                    "priority": "medium",
-                    "type": "todo",
-                    "assignee": "self",
-                }
-            )
-            logger.info(f"[WS] Task created: {task.id}")
-            from app.api.background_tasks import schedule_background_task
-
-            _ = schedule_background_task(execute_task(task.id, self.agent_id), "execute web task")
-            assistant_response += f"\n\n📋 Task synced to task board: [{task_title}]"
-        except Exception as te:
-            logger.error(f"[WS] Task creation failed: {te}")
-        return assistant_response
-
-    async def _save_assistant_reply(self, assistant_response: str, thinking_content: list[str]):
-        """Saves assistant reply to DB."""
-        await persist_chat_message(
-            agent_id=self.agent_id,
-            user_id=self.user.id,
-            conversation_id=self.conv_id,
-            role="assistant",
-            content=assistant_response,
-            thinking="".join(thinking_content) if thinking_content else None,
-            touch_last_active=True,
-            agent=self.agent,
-        )
-        _ = await maybe_mark_session_read_for_active_viewer(
-            None,
-            agent_id=self.agent_id,
-            session_id=self.conv_id,
-            user_id=self.user.id,
-        )
-        logger.info("[WS] Assistant message saved")

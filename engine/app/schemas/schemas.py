@@ -244,7 +244,7 @@ class UserUpdate(BaseModel):
 
 class AgentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100, description="Agent name, 2-100 characters")
-    agent_type: str = "native"  # native | openclaw
+    agent_type: str = Field(default="openclaw", pattern="^openclaw$")
     gogcli_enabled: bool = False
     role_description: str = Field(default="", max_length=500, description="Role description, max 500 characters")
     bio: str | None = None
@@ -255,6 +255,7 @@ class AgentCreate(BaseModel):
     boundaries: str = ""
     # Model
     primary_model_id: uuid.UUID | None = None
+    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     # Permissions
     permission_scope_type: str = "company"  # company | user | custom
@@ -284,6 +285,7 @@ class AgentOut(BaseModel):
     creator_id: uuid.UUID
     creator_username: str | None = None  # Populated by API layer; not in ORM model directly
     primary_model_id: uuid.UUID | None = None
+    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     autonomy_policy: JsonObject
     tokens_used_today: int
@@ -314,7 +316,7 @@ class AgentOut(BaseModel):
     company_access_level: str = "use"
     llm_calls_today: int = 0
     max_llm_calls_per_day: int = 1000
-    agent_type: str = "native"
+    agent_type: str = "openclaw"
     gogcli_enabled: bool = False
     openclaw_last_seen: datetime | None = None
     unread_count: int = 0
@@ -340,6 +342,7 @@ class AgentUpdate(BaseModel):
     avatar_url: str | None = None
     autonomy_policy: JsonObject | None = None
     primary_model_id: uuid.UUID | None = None
+    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     context_window_size: int | None = Field(default=None, ge=1, le=500)
     max_tokens_per_day: int | None = None
@@ -443,6 +446,7 @@ class LLMModelCreate(BaseModel):
     supports_vision: bool = False
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
 
 
 class LLMModelUpdate(BaseModel):
@@ -457,6 +461,7 @@ class LLMModelUpdate(BaseModel):
     supports_vision: bool | None = None
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
 
 
 class LLMModelOut(BaseModel):
@@ -472,6 +477,11 @@ class LLMModelOut(BaseModel):
     supports_vision: bool = False
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    tenant_id: uuid.UUID | None = None
+    is_default: bool = False
+    is_fallback: bool = False
+    is_secondary: bool = False
+    reasoning_effort: str | None = None
     created_at: datetime
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -627,6 +637,8 @@ class GatewayMessageOut(BaseModel):
     content: str
     created_at: datetime | None = None
     history: list[GatewayHistoryItem] = []
+    model: str | None = None
+    model_slot: str | None = None
 
 
 class GatewayPollResponse(BaseModel):

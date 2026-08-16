@@ -94,8 +94,8 @@ function AppShellFrame() {
   const unread = unreadQuery.data?.unread_count ?? unreadQuery.data?.count ?? 0
 
   return (
-    <div className="flex min-h-svh bg-background">
-      <aside className="hidden w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
+    <div className="flex h-svh overflow-hidden bg-background">
+      <aside className="hidden h-full w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
         <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
@@ -122,8 +122,8 @@ function AppShellFrame() {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-border px-4 py-3 md:hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="shrink-0 border-b border-border px-4 py-3 md:hidden">
           <div className="flex items-center justify-between">
             <Link to="/app/agents" className="flex items-center gap-2">
               <MaraClawLogo className="size-8" />
@@ -140,7 +140,7 @@ function AppShellFrame() {
             ))}
           </nav>
         </header>
-        <main className="min-w-0 flex-1">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
           {tenantQuery.isLoading ? (
             <div className="flex h-40 items-center justify-center text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden />

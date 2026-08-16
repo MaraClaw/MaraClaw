@@ -14,9 +14,12 @@ from app.dao.onboarding_dao import user_tenant_onboarding_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.tenant_dao import tenant_dao
+from app.records.agent import AgentRecord
+from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
+from app.services.enterprise_llm import assert_distinct_model_slots, model_usable_in_tenant
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -91,25 +94,56 @@ async def _ensure_row(user: UserRecord, entry_mode: str) -> UserTenantOnboarding
     return row
 
 
-async def _tenant_default_model_id(tenant_id: uuid.UUID | None) -> uuid.UUID | None:
-    if not tenant_id:
+def _usable_slot_id(
+    tenant_id: uuid.UUID | None,
+    model_id: uuid.UUID | None,
+    loaded: dict[uuid.UUID, LLMModelRecord],
+) -> uuid.UUID | None:
+    if model_id is None:
         return None
+    model = loaded.get(model_id)
+    if model is None or not model_usable_in_tenant(model, tenant_id):
+        return None
+    return model_id
+
+
+async def _tenant_model_ids(
+    tenant_id: uuid.UUID | None,
+) -> tuple[uuid.UUID | None, uuid.UUID | None, uuid.UUID | None]:
+    if not tenant_id:
+        return None, None, None
     tenant = await tenant_dao.get(tenant_id)
     if tenant and tenant.default_model_id:
-        return tenant.default_model_id
-    return await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
+        primary = tenant.default_model_id
+        secondary = getattr(tenant, "default_secondary_model_id", None)
+        fallback = getattr(tenant, "default_fallback_model_id", None)
+    else:
+        primary = await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
+        secondary = getattr(tenant, "default_secondary_model_id", None) if tenant else None
+        fallback = getattr(tenant, "default_fallback_model_id", None) if tenant else None
+    wanted = [mid for mid in (primary, secondary, fallback) if mid]
+    loaded = {row.id: row for row in await llm_model_dao.get_many(wanted)} if wanted else {}
+    primary = _usable_slot_id(tenant_id, primary, loaded)
+    secondary = _usable_slot_id(tenant_id, secondary, loaded)
+    fallback = _usable_slot_id(tenant_id, fallback, loaded)
+    if secondary == primary:
+        secondary = None
+    if fallback in (primary, secondary):
+        fallback = None
+    assert_distinct_model_slots(primary, secondary, fallback)
+    return primary, secondary, fallback
 
 
 async def _create_personal_assistant(
     db: object | None,
     user: UserRecord,
     data: PersonalAssistantRequest,
-):
+) -> tuple[AgentRecord, str]:
     if not user.tenant_id:
         raise HTTPException(status_code=400, detail="Company is required before creating a personal assistant")
 
     template = await agent_template_dao.get_by_name("Private Assistant")
-    primary_model_id = await _tenant_default_model_id(user.tenant_id)
+    primary_model_id, secondary_model_id, fallback_model_id = await _tenant_model_ids(user.tenant_id)
     personality_note = f"Personality: {data.personality}. Work style: {data.work_style}."
     boundaries = data.boundaries.strip()
     bio = (
@@ -118,16 +152,22 @@ async def _create_personal_assistant(
         + (f" Boundaries: {boundaries}" if boundaries else "")
     )
 
+    from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
+
+    raw_key, key_hash = mint_openclaw_gateway_key()
     obj_in: dict[str, Any] = {
         "name": data.name.strip(),
         "role_description": "Private Assistant",
         "bio": bio,
         "creator_id": user.id,
         "tenant_id": user.tenant_id,
-        "agent_type": "native",
+        "agent_type": "openclaw",
+        "api_key_hash": key_hash,
         "primary_model_id": primary_model_id,
+        "secondary_model_id": secondary_model_id,
+        "fallback_model_id": fallback_model_id,
         "template_id": template.id if template else None,
-        "status": "creating",
+        "status": "idle",
         "access_mode": "private",
         "company_access_level": "use",
     }
@@ -154,8 +194,13 @@ async def _create_personal_assistant(
     )
     _ = await ensure_access_granted_platform_relationships(db, agent, created_by_user_id=user.id)
 
+    from app.api.agents import _persist_agent_runtime
     from app.services.agent_manager import agent_manager
 
+    write_gateway_api_key(agent, raw_key)
+    from app.db.session import flush_request_transaction
+
+    await flush_request_transaction()
     await agent_manager.initialize_agent_files(
         agent,
         personality=personality_note,
@@ -167,12 +212,12 @@ async def _create_personal_assistant(
 
     try:
         _ = await agent_manager.start_container(db, agent)
+        agent = await _persist_agent_runtime(agent)
     except Exception:
         _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
         raise
 
-    refreshed = await agent_dao.get(agent.id)
-    return refreshed or agent
+    return agent, raw_key
 
 
 @router.get("/status")
@@ -200,7 +245,7 @@ async def create_personal_assistant(
             row = await user_tenant_onboarding_dao.update(db_obj=row, obj_in={"current_step": "opening"}) or row
             return {"agent": {"id": str(existing.id), "name": existing.name}, "onboarding": _status_payload(row)}
 
-    agent = await _create_personal_assistant(db, current_user, data)
+    agent, raw_key = await _create_personal_assistant(db, current_user, data)
     row = (
         await user_tenant_onboarding_dao.update(
             db_obj=row,
@@ -212,7 +257,10 @@ async def create_personal_assistant(
         )
         or row
     )
-    return {"agent": {"id": str(agent.id), "name": agent.name}, "onboarding": _status_payload(row)}
+    return {
+        "agent": {"id": str(agent.id), "name": agent.name, "api_key": raw_key},
+        "onboarding": _status_payload(row),
+    }
 
 
 @router.post("/complete")

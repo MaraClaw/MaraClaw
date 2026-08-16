@@ -32,4 +32,5 @@ USER: node
 - Do not put `GOG_KEYRING_PASSWORD` in Docker env/args; file path only.
 - Do not run the TencentDB classifier/patch from runtime bootstrap.
 - Do not add `AGENTS.md` under `clawsec_skill_files/<skill>/` - those trees are AGPL payloads seeded into workspaces.
-- Tests: `tests/test_openclaw_*.py`. Docs: `docs/gogcli-*.md`.
+- Tests: `tests/test_openclaw_*.py`, `tests/test_openclaw_routing.py`. Docs: `docs/gogcli-*.md`.
+- Guest LLM is whatever `openclaw.json` names. Engine writes primary + registered secondary/fallback at container start, then `openclaw_routing` rewrites the selected primary per queued turn. The gateway watches that file (hot reload). Do not add a second classifier inside the image.

@@ -1,14 +1,7 @@
-"""Tests for async A2A msg_type differentiation (notify/consult/task_delegate).
-
-Validates the branching logic in _send_message_to_agent:
-- notify:    fire-and-forget, returns immediately
-- task_delegate: async with callback, creates focus + trigger
-- consult:   synchronous request-response (original behaviour)
-"""
+"""Tests for A2A send: every msg_type enqueues to the OpenClaw gateway."""
 
 from __future__ import annotations
 
-import json
 import uuid
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -20,7 +13,7 @@ import pytest
 
 
 def _make_agent(
-    agent_id=None, name="TestAgent", tenant_id=None, agent_type="native", expired=False, primary_model_id=None
+    agent_id=None, name="TestAgent", tenant_id=None, agent_type="openclaw", expired=False, primary_model_id=None
 ):
     agent = MagicMock()
     agent.id = agent_id or uuid.uuid4()
@@ -31,6 +24,7 @@ def _make_agent(
     agent.expires_at = None
     agent.creator_id = uuid.uuid4()
     agent.primary_model_id = primary_model_id
+    agent.secondary_model_id = None
     agent.fallback_model_id = None
     agent.role_description = ""
     agent.max_tool_rounds = 50
@@ -46,12 +40,6 @@ def _make_participant(part_id=None, ref_id=None):
     return p
 
 
-def _make_tenant(a2a_async_enabled=True):
-    t = MagicMock()
-    t.a2a_async_enabled = a2a_async_enabled
-    return t
-
-
 def _make_rel(agent_id, target_agent_id):
     return SimpleNamespace(
         id=uuid.uuid4(),
@@ -65,6 +53,12 @@ async def _active_status(*_args, **_kwargs):
     return {"access_status": "active", "access_status_reason": None, "access_allowed": True}
 
 
+def _assert_queued(result: str, target_name: str) -> None:
+    assert "OpenClaw agent" in result
+    assert "queued" in result
+    assert target_name in result
+
+
 def _patch_a2a_daos(
     *,
     source_agent,
@@ -72,15 +66,10 @@ def _patch_a2a_daos(
     session,
     src_participant,
     tgt_participant,
-    tenant=None,
     rel=None,
-    primary_model=None,
-    history=None,
 ):
-    """Return a list of patch context managers for pure-DAO a2a_context path."""
-    tenant = tenant or _make_tenant()
+    """Return a list of patch context managers for the OpenClaw A2A enqueue path."""
     rel = rel if rel is not None else _make_rel(source_agent.id, target_agent.id)
-    history = history if history is not None else []
 
     async def get_agent(agent_id):
         if agent_id == source_agent.id:
@@ -120,17 +109,6 @@ def _patch_a2a_daos(
             setattr(db_obj, key, value)
         return db_obj
 
-    async def get_tenant(_tenant_id):
-        return tenant
-
-    async def get_model(model_id):
-        if primary_model and model_id == primary_model.id:
-            return primary_model
-        return None
-
-    async def list_recent(**_kwargs):
-        return history
-
     return [
         patch("app.services.agent_tool_exec.a2a_context.agent_dao.get", side_effect=get_agent),
         patch(
@@ -165,22 +143,9 @@ def _patch_a2a_daos(
             "app.services.agent_tool_exec.a2a_context.chat_session_dao.update",
             side_effect=update_session,
         ),
-        patch("app.services.agent_tool_exec.a2a_context.tenant_dao.get", side_effect=get_tenant),
-        patch("app.services.agent_tool_exec.a2a_context.llm_model_dao.get", side_effect=get_model),
+        patch("app.services.activity_logger.log_activity", new_callable=AsyncMock),
         patch(
-            "app.services.agent_tool_exec.a2a_context.chat_message_dao.list_recent",
-            side_effect=list_recent,
-        ),
-        patch(
-            "app.services.agent_tool_exec.a2a_handlers.participant_dao.get_by_type_ref",
-            side_effect=get_by_type_ref,
-        ),
-        patch(
-            "app.services.agent_tool_exec.a2a_handlers.chat_message_dao.insert_message",
-            side_effect=insert_message,
-        ),
-        patch(
-            "app.services.agent_tool_exec.a2a_handlers.gateway_message_dao.create",
+            "app.services.agent_tool_exec.a2a_handlers.enqueue_openclaw_message",
             new_callable=AsyncMock,
         ),
     ]
@@ -190,8 +155,8 @@ def _patch_a2a_daos(
 
 
 @pytest.mark.asyncio
-async def test_notify_returns_immediately():
-    """notify msg_type should return immediately without calling LLM."""
+async def test_notify_queues_to_openclaw():
+    """notify msg_type should enqueue to the OpenClaw gateway."""
     from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 
     from_agent_id = uuid.uuid4()
@@ -214,9 +179,7 @@ async def test_notify_returns_immediately():
         tgt_participant=tgt_participant,
     )
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        mock_wake = stack.enter_context(patch("app.services.agent_tools._wake_agent_async", new_callable=AsyncMock))
+        mocks = [stack.enter_context(p) for p in patches]
         result = await _send_message_to_agent(
             from_agent_id,
             {
@@ -226,14 +189,13 @@ async def test_notify_returns_immediately():
             },
         )
 
-    assert "Notification sent to Bob" in result
-    assert "asynchronously" in result
-    mock_wake.assert_awaited_once()
+    _assert_queued(result, "Bob")
+    mocks[-1].assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_task_delegate_creates_focus_and_trigger():
-    """task_delegate should create a focus item and an on_message trigger."""
+async def test_task_delegate_queues_to_openclaw():
+    """task_delegate should enqueue rather than waking a native agent."""
     from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 
     from_agent_id = uuid.uuid4()
@@ -256,13 +218,7 @@ async def test_task_delegate_creates_focus_and_trigger():
         tgt_participant=tgt_participant,
     )
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        mock_focus = stack.enter_context(patch("app.services.agent_tools._append_focus_item", new_callable=AsyncMock))
-        mock_trigger = stack.enter_context(
-            patch("app.services.agent_tools._create_on_message_trigger", new_callable=AsyncMock)
-        )
-        mock_wake = stack.enter_context(patch("app.services.agent_tools._wake_agent_async", new_callable=AsyncMock))
+        mocks = [stack.enter_context(p) for p in patches]
         result = await _send_message_to_agent(
             from_agent_id,
             {
@@ -272,109 +228,13 @@ async def test_task_delegate_creates_focus_and_trigger():
             },
         )
 
-    assert "Task delegated to Bob" in result
-    assert "notified when they complete" in result
-    mock_focus.assert_awaited_once()
-    mock_trigger.assert_awaited_once()
-    mock_wake.assert_awaited_once()
-
-    focus_call = mock_focus.call_args
-    assert "wait_bob_task" in focus_call[0][1]
-    assert "Bob" in focus_call[0][2]
-
-    trigger_call = mock_trigger.call_args
-    assert trigger_call[1]["from_agent_name"] == "Bob"
-    assert trigger_call[1]["focus_ref"] == focus_call[0][1]
+    _assert_queued(result, "Bob")
+    mocks[-1].assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_consult_calls_llm_synchronously():
-    """consult msg_type should call LLM synchronously and return reply."""
-    from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
-
-    from_agent_id = uuid.uuid4()
-    target_id = uuid.uuid4()
-    session_id = uuid.uuid4()
-    model_id = uuid.uuid4()
-    src_participant = _make_participant(ref_id=from_agent_id)
-    tgt_participant = _make_participant(ref_id=target_id)
-    source_agent = _make_agent(from_agent_id, name="Alice")
-    target_agent = _make_agent(target_id, name="Bob", tenant_id=source_agent.tenant_id, primary_model_id=model_id)
-
-    session = MagicMock()
-    session.id = session_id
-    session.last_message_at = None
-
-    model = MagicMock()
-    model.id = model_id
-    model.provider = "openai"
-    model.model = "gpt-4"
-    model.api_key_encrypted = "sk-test"
-    model.base_url = None
-    model.temperature = 0.7
-    model.request_timeout = 60
-
-    response = MagicMock()
-    response.content = ""
-    response.tool_calls = [
-        {
-            "id": "call_finish",
-            "type": "function",
-            "function": {
-                "name": "finish",
-                "arguments": json.dumps({"content": "Here is the answer"}),
-            },
-        }
-    ]
-    response.usage = None
-
-    mock_llm_client = AsyncMock()
-    mock_llm_client.complete = AsyncMock(return_value=response)
-    mock_llm_client.stream = AsyncMock(return_value=response)
-    mock_llm_client.close = AsyncMock()
-
-    patches = _patch_a2a_daos(
-        source_agent=source_agent,
-        target_agent=target_agent,
-        session=session,
-        src_participant=src_participant,
-        tgt_participant=tgt_participant,
-        primary_model=model,
-    )
-    with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        stack.enter_context(
-            patch(
-                "app.services.agent_context.build_agent_context",
-                new_callable=AsyncMock,
-                return_value=("static", "dynamic"),
-            )
-        )
-        stack.enter_context(patch("app.services.llm.caller.create_llm_client", return_value=mock_llm_client))
-        stack.enter_context(
-            patch("app.services.agent_tools.get_agent_tools_for_llm", new_callable=AsyncMock, return_value=[])
-        )
-        stack.enter_context(patch("app.services.llm.get_provider_base_url", return_value="https://api.openai.com/v1"))
-        stack.enter_context(patch("app.services.token_tracker.record_token_usage", new_callable=AsyncMock))
-        stack.enter_context(patch("app.services.activity_logger.log_activity", new_callable=AsyncMock))
-        result = await _send_message_to_agent(
-            from_agent_id,
-            {
-                "agent_name": "Bob",
-                "message": "What is 2+2?",
-                "msg_type": "consult",
-            },
-        )
-
-    assert "Bob replied" in result
-    assert "Here is the answer" in result
-    mock_llm_client.stream.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_default_msg_type_is_notify():
-    """When msg_type is not specified, it should default to notify."""
+async def test_consult_queues_to_openclaw():
+    """consult msg_type should enqueue instead of calling the engine LLM."""
     from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 
     from_agent_id = uuid.uuid4()
@@ -397,9 +257,46 @@ async def test_default_msg_type_is_notify():
         tgt_participant=tgt_participant,
     )
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        mock_wake = stack.enter_context(patch("app.services.agent_tools._wake_agent_async", new_callable=AsyncMock))
+        mocks = [stack.enter_context(p) for p in patches]
+        result = await _send_message_to_agent(
+            from_agent_id,
+            {
+                "agent_name": "Bob",
+                "message": "What is 2+2?",
+                "msg_type": "consult",
+            },
+        )
+
+    _assert_queued(result, "Bob")
+    mocks[-1].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_default_msg_type_queues():
+    """When msg_type is omitted, the message still goes to the gateway queue."""
+    from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
+
+    from_agent_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    src_participant = _make_participant(ref_id=from_agent_id)
+    tgt_participant = _make_participant(ref_id=target_id)
+    source_agent = _make_agent(from_agent_id, name="Alice")
+    target_agent = _make_agent(target_id, name="Bob", tenant_id=source_agent.tenant_id)
+
+    session = MagicMock()
+    session.id = session_id
+    session.last_message_at = None
+
+    patches = _patch_a2a_daos(
+        source_agent=source_agent,
+        target_agent=target_agent,
+        session=session,
+        src_participant=src_participant,
+        tgt_participant=tgt_participant,
+    )
+    with ExitStack() as stack:
+        mocks = [stack.enter_context(p) for p in patches]
         result = await _send_message_to_agent(
             from_agent_id,
             {
@@ -408,8 +305,8 @@ async def test_default_msg_type_is_notify():
             },
         )
 
-    assert "Notification sent" in result
-    mock_wake.assert_awaited_once()
+    _assert_queued(result, "Bob")
+    mocks[-1].assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -624,9 +521,7 @@ async def test_openclaw_target_still_queues():
         tgt_participant=tgt_participant,
     )
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        stack.enter_context(patch("app.services.activity_logger.log_activity", new_callable=AsyncMock))
+        mocks = [stack.enter_context(p) for p in patches]
         result = await _send_message_to_agent(
             from_agent_id,
             {
@@ -636,97 +531,13 @@ async def test_openclaw_target_still_queues():
             },
         )
 
-    assert "OpenClaw agent" in result
-    assert "queued" in result
+    _assert_queued(result, "OpenClawBot")
+    mocks[-1].assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_feature_flag_off_falls_back_to_consult():
-    """When tenant a2a_async_enabled=False, notify and task_delegate fall back to consult."""
-    from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
-
-    from_agent_id = uuid.uuid4()
-    target_id = uuid.uuid4()
-    model_id = uuid.uuid4()
-    session_id = uuid.uuid4()
-    src_participant = _make_participant(ref_id=from_agent_id)
-    tgt_participant = _make_participant(ref_id=target_id)
-    source_agent = _make_agent(from_agent_id, name="Alice")
-    target_agent = _make_agent(target_id, name="Bob", primary_model_id=model_id, tenant_id=source_agent.tenant_id)
-
-    tenant = MagicMock()
-    tenant.a2a_async_enabled = False
-
-    session = MagicMock()
-    session.id = session_id
-    session.last_message_at = None
-
-    model = MagicMock()
-    model.id = model_id
-    model.provider = "openai"
-    model.model = "gpt-4"
-    model.api_key_encrypted = "sk-test"
-    model.base_url = None
-    model.temperature = 0.7
-    model.request_timeout = 60
-
-    response = MagicMock()
-    response.content = ""
-    response.tool_calls = [
-        {
-            "id": "call_finish",
-            "type": "function",
-            "function": {
-                "name": "finish",
-                "arguments": json.dumps({"content": "Got it"}),
-            },
-        }
-    ]
-    response.usage = None
-
-    mock_llm_client = AsyncMock()
-    mock_llm_client.complete = AsyncMock(return_value=response)
-    mock_llm_client.stream = AsyncMock(return_value=response)
-    mock_llm_client.close = AsyncMock()
-
-    patches = _patch_a2a_daos(
-        source_agent=source_agent,
-        target_agent=target_agent,
-        session=session,
-        src_participant=src_participant,
-        tgt_participant=tgt_participant,
-        tenant=tenant,
-        primary_model=model,
-    )
-    with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        stack.enter_context(
-            patch("app.services.agent_context.build_agent_context", new_callable=AsyncMock, return_value=("s", "d"))
-        )
-        stack.enter_context(patch("app.services.llm.caller.create_llm_client", return_value=mock_llm_client))
-        stack.enter_context(
-            patch("app.services.agent_tools.get_agent_tools_for_llm", new_callable=AsyncMock, return_value=[])
-        )
-        stack.enter_context(patch("app.services.llm.get_provider_base_url", return_value="https://api.openai.com/v1"))
-        stack.enter_context(patch("app.services.token_tracker.record_token_usage", new_callable=AsyncMock))
-        stack.enter_context(patch("app.services.activity_logger.log_activity", new_callable=AsyncMock))
-        result = await _send_message_to_agent(
-            from_agent_id,
-            {
-                "agent_name": "Bob",
-                "message": "Hello",
-                "msg_type": "notify",
-            },
-        )
-
-    assert "Bob replied" in result
-    assert "Got it" in result
-
-
-@pytest.mark.asyncio
-async def test_feature_flag_on_uses_notify():
-    """When tenant a2a_async_enabled=True, notify works normally."""
+async def test_tenant_async_flag_does_not_change_queue():
+    """A2A always enqueues; tenant a2a_async_enabled is not consulted."""
     from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 
     from_agent_id = uuid.uuid4()
@@ -737,9 +548,6 @@ async def test_feature_flag_on_uses_notify():
     source_agent = _make_agent(from_agent_id, name="Alice")
     target_agent = _make_agent(target_id, name="Bob", tenant_id=source_agent.tenant_id)
 
-    tenant = MagicMock()
-    tenant.a2a_async_enabled = True
-
     session = MagicMock()
     session.id = session_id
     session.last_message_at = None
@@ -750,12 +558,9 @@ async def test_feature_flag_on_uses_notify():
         session=session,
         src_participant=src_participant,
         tgt_participant=tgt_participant,
-        tenant=tenant,
     )
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        mock_wake = stack.enter_context(patch("app.services.agent_tools._wake_agent_async", new_callable=AsyncMock))
+        mocks = [stack.enter_context(p) for p in patches]
         result = await _send_message_to_agent(
             from_agent_id,
             {
@@ -765,8 +570,8 @@ async def test_feature_flag_on_uses_notify():
             },
         )
 
-    assert "Notification sent" in result
-    mock_wake.assert_awaited_once()
+    _assert_queued(result, "Bob")
+    mocks[-1].assert_awaited_once()
 
 
 @pytest.mark.asyncio

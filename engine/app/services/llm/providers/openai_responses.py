@@ -248,6 +248,13 @@ class OpenAIResponsesClient(LLMClient):
             if self.supports_tool_choice:
                 payload["tool_choice"] = "auto"
 
+        from app.services.llm.reasoning import apply_reasoning_effort
+
+        apply_reasoning_effort(
+            payload,
+            provider=str(kwargs.pop("llm_provider", "") or "openai-response"),
+            effort=kwargs.pop("reasoning_effort", None),
+        )
         payload.update(kwargs)
         return payload
 

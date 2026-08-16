@@ -227,7 +227,7 @@ class DiscordGatewayManager:
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
         try:
-            from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+            from app.api.feishu import _load_agent_and_model
             from app.services.channel_session import find_or_create_channel_session
             from app.services.channel_user_service import channel_user_service
             from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
@@ -293,17 +293,21 @@ class DiscordGatewayManager:
 
             _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
-            reply_text = await _call_llm_with_config(
-                _agent_model,
-                _llm_model,
-                _fallback_model,
-                agent_id,
-                user_text,
+            from app.services.channels import inbound as channel_inbound
+
+            reply_text = await channel_inbound.generate_channel_reply(
+                agent_id=agent_id,
+                user_text=user_text,
                 history=history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
+                agent_model=_agent_model,
+                llm_model=_llm_model,
+                fallback_model=_fallback_model,
             )
             logger.info(f"[Discord GW] LLM reply for {agent_id}: {reply_text[:80]}")
+            if channel_inbound.is_queued_channel_reply(reply_text):
+                return None
 
             _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,

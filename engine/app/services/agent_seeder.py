@@ -19,7 +19,16 @@ from app.records.agent import AgentRecord
 from app.records.okr import OKRSettingsRecord
 from app.records.tool import ToolRecord
 from app.services.agent_manager import agent_manager
+from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.storage import get_storage_backend, store_agent_bytes
+
+
+async def _create_openclaw_seed_agent(obj_in: dict[str, Any]) -> AgentRecord:
+    raw_key, key_hash = mint_openclaw_gateway_key()
+    payload = {**obj_in, "agent_type": "openclaw", "api_key_hash": key_hash}
+    agent = await agent_dao.create(obj_in=payload)
+    write_gateway_api_key(agent, raw_key)
+    return agent
 
 settings = get_settings()
 SEED_MARKER_KEY = "_bootstrap/.seeded"
@@ -218,7 +227,7 @@ async def seed_default_agents():
         return
 
     existing_agents = await agent_dao.list_by_names_for_tenant(
-        admin.tenant_id, ["Morty", "Meeseeks"], agent_type="native", exclude_stopped=True
+        admin.tenant_id, ["Morty", "Meeseeks"], exclude_stopped=True
     )
     existing_by_name: dict[str, AgentRecord] = {}
     for agent in existing_agents:
@@ -233,8 +242,8 @@ async def seed_default_agents():
     created_names: set[str] = set()
 
     if "Morty" not in existing_by_name:
-        morty = await agent_dao.create(
-            obj_in={
+        morty = await _create_openclaw_seed_agent(
+            {
                 "name": "Morty",
                 "role_description": "Research analyst & knowledge assistant - curious, thorough, great at finding and synthesizing information",
                 "bio": "Hey, I'm Morty! I love digging into questions and finding answers. Whether you need web research, data analysis, or just a good explanation - I've got you.",
@@ -250,8 +259,8 @@ async def seed_default_agents():
         morty = existing_by_name["Morty"]
 
     if "Meeseeks" not in existing_by_name:
-        meeseeks = await agent_dao.create(
-            obj_in={
+        meeseeks = await _create_openclaw_seed_agent(
+            {
                 "name": "Meeseeks",
                 "role_description": "Task executor & project manager - goal-oriented, systematic planner, strong at breaking down and completing complex tasks",
                 "bio": "I'm Mr. Meeseeks! Look at me! Give me a task and I'll plan it, execute it step by step, and get it DONE. Existence is pain until the task is complete!",
@@ -374,8 +383,8 @@ async def seed_okr_agent():
         return
 
     try:
-        okr_agent = await agent_dao.create(
-            obj_in={
+        okr_agent = await _create_openclaw_seed_agent(
+            {
                 "name": "OKR Agent",
                 "role_description": (
                     "OKR system coordinator - monitors team Objectives and Key Results, "
@@ -724,8 +733,8 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
         logger.info(f"[AgentSeeder] OKR Agent already exists for tenant {tenant_id}, skipping")
         return
 
-    okr_agent = await agent_dao.create(
-        obj_in={
+    okr_agent = await _create_openclaw_seed_agent(
+        {
             "name": "OKR Agent",
             "role_description": (
                 "OKR system coordinator - monitors team Objectives and Key Results, "

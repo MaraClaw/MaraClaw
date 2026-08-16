@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ApiError } from '@/lib/http'
 import { getAgent, getAgentMetrics, startAgent, stopAgent } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
@@ -32,6 +33,8 @@ export function AgentLayout() {
     queryKey: ['agent', agentId],
     queryFn: () => getAgent(agentId),
     enabled: Boolean(agentId),
+    retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
+    retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
   })
   const metrics = useQuery({
     queryKey: ['metrics', agentId],
@@ -72,7 +75,7 @@ export function AgentLayout() {
   const agent = query.data
 
   return (
-    <div className="flex h-full min-h-[calc(100svh-3.5rem)] flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
@@ -81,9 +84,11 @@ export function AgentLayout() {
           {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
           {agent.access_level === 'manage' ? (
             <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
-                Start
-              </Button>
+              {agent.status !== 'running' ? (
+                <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
+                  Start
+                </Button>
+              ) : null}
               <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
                 Stop
               </Button>

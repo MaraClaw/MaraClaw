@@ -63,13 +63,50 @@ def test_tenant_not_null_columns_have_defaults() -> None:
         "a2a_async_enabled BOOLEAN NOT NULL DEFAULT true",
         "is_system BOOLEAN NOT NULL DEFAULT false",
         "is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
+        "default_fallback_model_id UUID",
+        "default_secondary_model_id UUID",
     ):
         assert column in block, column
     assert "CREATE TABLE IF NOT EXISTS tenant_email_domains" in sql
     assert "ux_tenants_default_end_user_org" in sql
+    assert "secondary_model_id UUID" in sql
     assert "ux_tenant_email_domains_domain" in sql
     assert "ux_users_identity_single_tenant" in sql
     assert "WHEN unique_violation THEN" in sql
+
+
+def test_patches_add_openclaw_routing_columns() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS selected_slot VARCHAR(20)" in joined
+    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS guest_model_ref VARCHAR(200)" in joined
+    sql = BASELINE.read_text(encoding="utf-8")
+    start = sql.find("CREATE TABLE IF NOT EXISTS gateway_messages")
+    end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
+    block = sql[start:end]
+    assert "selected_slot VARCHAR(20)" in block
+    assert "guest_model_ref VARCHAR(200)" in block
+    assert "complexity VARCHAR(20)" in block
+    assert "routing_reason VARCHAR(40)" in block
+
+
+def test_patches_migrate_agents_to_openclaw() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "UPDATE agents SET agent_type = 'openclaw' WHERE agent_type IS DISTINCT FROM 'openclaw'" in joined
+    assert "ALTER TABLE agents ALTER COLUMN agent_type SET DEFAULT 'openclaw'" in joined
+
+
+def test_patches_add_secondary_model_columns() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "default_secondary_model_id UUID" in joined
+    assert "ALTER TABLE agents ADD COLUMN IF NOT EXISTS secondary_model_id UUID" in joined
+    assert "tenants_default_secondary_model_id_fkey" in joined
+    assert "agents_secondary_model_id_fkey" in joined
 
 
 def test_hot_path_indexes_are_declared() -> None:

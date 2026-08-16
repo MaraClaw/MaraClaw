@@ -116,21 +116,23 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         events.append("load-model")
         return _Agent(context_window_size=8), None, None
 
-    async def call_llm(
-        agent: _Agent,
-        model: None,
-        fallback_model: None,
-        requested_agent_id: uuid.UUID,
-        user_text: str,
+    async def generate_reply(
         *,
-        history: list[OpenAIMessage] | None = None,
-        user_id: uuid.UUID | None = None,
-        session_id: str = "",
+        agent_id: uuid.UUID,
+        user_text: str,
+        history: list[OpenAIMessage],
+        user_id: uuid.UUID,
+        session_id: str,
+        agent_model: object = None,
+        llm_model: object = None,
+        fallback_model: object = None,
     ) -> str:
-        assert history is not None
+        from app.services.channels.inbound import CHANNEL_REPLY_QUEUED
+
+        del agent_id, user_text, user_id, session_id, agent_model, llm_model, fallback_model
         captured_history.extend(history)
-        events.append("llm")
-        return "The status is available."
+        events.append("enqueue")
+        return CHANNEL_REPLY_QUEUED
 
     async def send_message(
         *,
@@ -162,7 +164,10 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
     monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember_context)
     monkeypatch.setattr(wechat_channel, "send_wechat_text_message", send_message)
     monkeypatch.setattr(feishu, "_load_agent_and_model", load_agent_and_model)
-    monkeypatch.setattr(feishu, "_call_llm_with_config", call_llm)
+    monkeypatch.setattr(
+        "app.services.channels.inbound.generate_channel_reply",
+        generate_reply,
+    )
     monkeypatch.setattr(activity_logger, "log_activity", log_activity)
     config = SimpleNamespace(
         agent_id=agent_id,
@@ -198,7 +203,7 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
     assert json.loads(arguments) == {"query": "status"}
     assert captured_history[2].get("tool_call_id") == "call_2"
     assert captured_history[2].get("content") == "found status"
-    assert inserted == ["user", "assistant"]
+    assert inserted == ["user"]
     assert events == [
         "agent-get",
         "remember-context",
@@ -206,9 +211,5 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         "insert:user",
         "session-update",
         "load-model",
-        "llm",
-        "send",
-        "insert:assistant",
-        "session-update",
-        "activity",
+        "enqueue",
     ]

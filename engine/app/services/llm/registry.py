@@ -23,6 +23,8 @@ class ProviderManifest(TypedDict):
     display_name: str
     protocol: ProviderProtocol
     default_base_url: str | None
+    default_model: str | None
+    reasoning_efforts: list[str]
     supports_tool_choice: bool
     default_max_tokens: int
     model_max_tokens: dict[str, int]
@@ -37,6 +39,7 @@ class ProviderSpec:
     display_name: str
     protocol: ProviderProtocol
     default_base_url: str | None
+    default_model: str | None = None
     supports_tool_choice: bool = True
     default_max_tokens: int = 4096
     model_max_tokens: dict[str, int] = field(default_factory=dict[str, int])
@@ -45,6 +48,12 @@ class ProviderSpec:
 PROVIDER_ALIASES: dict[str, str] = {
     "openai_response": "openai-response",
     "openairesponses": "openai-response",
+    "xai": "grok",
+    "x-ai": "grok",
+    "x_ai": "grok",
+    "zai": "zhipu",
+    "z.ai": "zhipu",
+    "z_ai": "zhipu",
 }
 
 
@@ -54,6 +63,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Anthropic",
         protocol="anthropic",
         default_base_url="https://api.anthropic.com",
+        default_model="claude-opus-5",
         supports_tool_choice=False,
         default_max_tokens=8192,
     ),
@@ -62,6 +72,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI",
         protocol="openai_compatible",
         default_base_url="https://api.openai.com/v1",
+        default_model="gpt-5.6",
         default_max_tokens=16384,
     ),
     "openai-response": ProviderSpec(
@@ -69,6 +80,15 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI Responses",
         protocol="openai_responses",
         default_base_url="https://api.openai.com/v1",
+        default_model="gpt-5.6",
+        default_max_tokens=16384,
+    ),
+    "grok": ProviderSpec(
+        provider="grok",
+        display_name="Grok (xAI)",
+        protocol="openai_compatible",
+        default_base_url="https://api.x.ai/v1",
+        default_model="grok-4.6",
         default_max_tokens=16384,
     ),
     "azure": ProviderSpec(
@@ -76,6 +96,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Azure OpenAI",
         protocol="openai_compatible",
         default_base_url=None,
+        default_model="gpt-5.6",
         default_max_tokens=16384,
     ),
     "deepseek": ProviderSpec(
@@ -83,6 +104,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="DeepSeek",
         protocol="openai_compatible",
         default_base_url="https://api.deepseek.com/v1",
+        default_model="deepseek-v4-pro",
         default_max_tokens=8192,
     ),
     "qwen": ProviderSpec(
@@ -90,12 +112,14 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Qwen (DashScope)",
         protocol="openai_compatible",
         default_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        default_model="qwen3.7-max",
         default_max_tokens=8192,
         model_max_tokens={
             "qwen-plus": 16384,
             "qwen-long": 16384,
             "qwen-turbo": 8192,
             "qwen-max": 8192,
+            "qwen3.7-max": 16384,
         },
     ),
     "minimax": ProviderSpec(
@@ -103,6 +127,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="MiniMax",
         protocol="openai_compatible",
         default_base_url="https://api.minimaxi.com/v1",
+        default_model="MiniMax-M3",
         default_max_tokens=16384,
     ),
     "openrouter": ProviderSpec(
@@ -110,13 +135,15 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenRouter",
         protocol="openai_compatible",
         default_base_url="https://openrouter.ai/api/v1",
+        default_model="openrouter/auto",
         default_max_tokens=4096,
     ),
     "zhipu": ProviderSpec(
         provider="zhipu",
-        display_name="Zhipu",
+        display_name="Z.ai",
         protocol="openai_compatible",
-        default_base_url="https://open.bigmodel.cn/api/paas/v4",
+        default_base_url="https://api.z.ai/api/paas/v4",
+        default_model="glm-5.3",
         default_max_tokens=8192,
     ),
     "baidu": ProviderSpec(
@@ -124,6 +151,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Baidu (Qianfan)",
         protocol="openai_compatible",
         default_base_url="https://qianfan.baidubce.com/v2",
+        default_model="ernie-5.0",
         supports_tool_choice=False,
         default_max_tokens=4096,
     ),
@@ -132,6 +160,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Gemini",
         protocol="gemini",
         default_base_url="https://generativelanguage.googleapis.com/v1beta",
+        default_model="gemini-3.7-flash",
         default_max_tokens=8192,
     ),
     "kimi": ProviderSpec(
@@ -139,6 +168,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Kimi (Moonshot)",
         protocol="openai_compatible",
         default_base_url="https://api.moonshot.cn/v1",
+        default_model="kimi-k3",
         default_max_tokens=8192,
     ),
     "vllm": ProviderSpec(
@@ -185,12 +215,16 @@ def get_provider_spec(provider: str) -> ProviderSpec | None:
 
 def get_provider_manifest() -> list[ProviderManifest]:
     """List supported providers and capabilities for UI/config discovery."""
+    from app.services.llm.reasoning import supported_reasoning_efforts
+
     return [
         {
             "provider": spec.provider,
             "display_name": spec.display_name,
             "protocol": spec.protocol,
             "default_base_url": spec.default_base_url,
+            "default_model": spec.default_model,
+            "reasoning_efforts": list(supported_reasoning_efforts(spec.provider)),
             "supports_tool_choice": spec.supports_tool_choice,
             "default_max_tokens": spec.default_max_tokens,
             "model_max_tokens": spec.model_max_tokens,

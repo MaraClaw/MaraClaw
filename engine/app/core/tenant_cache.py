@@ -78,6 +78,12 @@ def _dump(tenant: TenantRecord, ver: str) -> dict[str, object]:
         "max_webhook_rate_ceiling": tenant.max_webhook_rate_ceiling,
         "a2a_async_enabled": tenant.a2a_async_enabled,
         "default_model_id": str(tenant.default_model_id) if tenant.default_model_id else None,
+        "default_fallback_model_id": (
+            str(tenant.default_fallback_model_id) if tenant.default_fallback_model_id else None
+        ),
+        "default_secondary_model_id": (
+            str(tenant.default_secondary_model_id) if tenant.default_secondary_model_id else None
+        ),
         "is_system": tenant.is_system,
         "is_default_end_user_org": tenant.is_default_end_user_org,
     }
@@ -114,6 +120,8 @@ def _load(data: object) -> TenantRecord | None:
         max_webhook_rate_ceiling=json_as_int(payload.get("max_webhook_rate_ceiling"), 5),
         a2a_async_enabled=json_as_bool(payload.get("a2a_async_enabled"), True),
         default_model_id=_parse_uuid(payload.get("default_model_id")),
+        default_fallback_model_id=_parse_uuid(payload.get("default_fallback_model_id")),
+        default_secondary_model_id=_parse_uuid(payload.get("default_secondary_model_id")),
         is_system=json_as_bool(payload.get("is_system")),
         is_default_end_user_org=json_as_bool(payload.get("is_default_end_user_org")),
     )

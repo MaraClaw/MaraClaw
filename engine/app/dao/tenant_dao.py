@@ -49,6 +49,8 @@ _TENANT_COLUMNS = (
     "max_webhook_rate_ceiling",
     "a2a_async_enabled",
     "default_model_id",
+    "default_fallback_model_id",
+    "default_secondary_model_id",
     "is_system",
     "is_default_end_user_org",
 )

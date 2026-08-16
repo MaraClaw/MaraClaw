@@ -522,6 +522,8 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                 user_text=user_text,
             )
             logger.info(f"[Teams] LLM reply generated: {reply_text[:80]}")
+            if channel_inbound.is_queued_channel_reply(reply_text):
+                return None
         except Exception as e:
             logger.exception(f"[Teams] Failed to call LLM for agent {agent_id}: {e}")
             reply_text = "Sorry, I encountered an error processing your message."

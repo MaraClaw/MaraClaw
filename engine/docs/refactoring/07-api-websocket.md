@@ -21,12 +21,12 @@ The file owns local websocket connection tracking and the full chat streaming li
 - `WebSocketChatHandler` at lines 238-1089.
 - Handler setup at lines 289-363.
 - Chat-session resolution/history/model/quota steps at lines 365-653.
-- OpenClaw routing and LLM streaming at lines 655-937.
-- Preview/workspace metadata injection, tool-call persistence, activity/quota updates, task creation, and assistant reply persistence at lines 939-1089.
+- OpenClaw enqueue after user-message persistence. Guest replies arrive via gateway report.
+- Read-status helper `maybe_mark_session_read_for_active_viewer()` used by platform messaging and triggers.
 
 ## Why It Hurts Maintainability
 
-One class owns authentication-adjacent state, session resolution, message-loop concurrency, LLM streaming, finish-tool streaming, tool-call persistence, quota updates, activity logging, task creation, and DB writes. This is difficult to test and risky to change because websocket behavior has fewer route-level tests than ordinary HTTP endpoints.
+The handler still owns authentication-adjacent state, session resolution, and user-message persistence before enqueueing to the OpenClaw gateway. Engine-side LLM streaming is gone; replies arrive through gateway report + realtime.
 
 ## Coupling Map
 

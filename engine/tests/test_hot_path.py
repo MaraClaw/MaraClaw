@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -252,6 +253,43 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
     )
     assert result == "ok"
     assert loaded_ids == [[fallback_id]]
+
+
+@pytest.mark.asyncio
+async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_failover(**kwargs: object) -> str:
+        seen["primary"] = kwargs.get("primary_model")
+        seen["fallback"] = kwargs.get("fallback_model")
+        return "ok"
+
+    from app.dao.llm_dao import llm_model_dao
+
+    monkeypatch.setattr(llm_model_dao, "get_many", AsyncMock(return_value=[]))
+    monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
+
+    primary = SimpleNamespace(id=uuid4(), model="p", enabled=True, supports_vision=False)
+    secondary = SimpleNamespace(id=uuid4(), model="s", enabled=True, supports_vision=False)
+    agent = SimpleNamespace(
+        id=uuid4(),
+        name="Agent",
+        role_description="role",
+        primary_model_id=primary.id,
+        secondary_model_id=secondary.id,
+        fallback_model_id=None,
+        is_expired=False,
+        expires_at=None,
+    )
+    result = await caller.call_agent_llm(
+        None,
+        agent.id,
+        "hi",
+        turn=TurnContext(agent=agent, primary_model=primary, secondary_model=secondary),
+    )
+    assert result == "ok"
+    assert seen["primary"] is secondary
+    assert seen["fallback"] is primary
 
 
 @pytest.mark.asyncio

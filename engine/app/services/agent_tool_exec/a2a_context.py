@@ -4,16 +4,13 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal
 
 from app.core.logging import logger
 from app.core.permissions import evaluate_agent_relationship_status
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
-from app.dao.tenant_dao import tenant_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_tool_exec.registry import ToolArguments
@@ -34,6 +31,7 @@ class A2AContext:
     origin_source_channel: str
     origin_session_id: str | None
     primary_model: LLMModelRecord | None = None
+    secondary_model: LLMModelRecord | None = None
     fallback_model: LLMModelRecord | None = None
     conversation_history: list[OpenAIMessage] = field(default_factory=list[OpenAIMessage])
 
@@ -78,7 +76,7 @@ async def _build_a2a_context(
     agent_name = agent_name.strip() if isinstance(agent_name, str) else ""
     message_text = message_text.strip() if isinstance(message_text, str) else ""
     msg_type = msg_type.strip().lower() if isinstance(msg_type, str) else "notify"
-    force_async = bool(args.get("force_async"))
+    _ = bool(args.get("force_async"))
 
     if not agent_name or not message_text:
         return "❌ Please provide target agent name and message content"
@@ -168,54 +166,6 @@ async def _build_a2a_context(
             obj_in={"last_message_at": datetime.now(UTC)},
         )
 
-        if getattr(target, "agent_type", "native") == "openclaw":
-            return A2AContext(
-                source_agent=source_agent,
-                target_agent=target,
-                chat_session_id=session_id,
-                session_agent_id=session_agent_id,
-                owner_id=owner_id,
-                src_participant_id=src_participant_id,
-                tgt_participant_id=tgt_participant_id,
-                msg_type=msg_type,
-                message_text=message_text,
-                origin_source_channel=origin_source_channel,
-                origin_session_id=origin_session_id,
-            )
-
-        a2a_async = False
-        if source_tenant_id:
-            with suppress(Exception):
-                tenant = await tenant_dao.get(source_tenant_id)
-                if tenant:
-                    a2a_async = bool(getattr(tenant, "a2a_async_enabled", False))
-        if not a2a_async and not force_async and msg_type in ("notify", "task_delegate"):
-            msg_type = "consult"
-
-        primary_model = None
-        fallback_model = None
-        conversation_history: list[OpenAIMessage] = []
-
-        if msg_type == "consult":
-            if target.primary_model_id:
-                primary_model = await llm_model_dao.get(target.primary_model_id)
-            if target.fallback_model_id:
-                fallback_model = await llm_model_dao.get(target.fallback_model_id)
-            if not primary_model and not fallback_model:
-                return f"⚠️ {target.name} has no LLM model configured"
-
-            hist = await chat_message_dao.list_recent(
-                agent_id=session_agent_id,
-                conversation_id=session_id,
-                limit=20,
-            )
-            for message in hist:
-                if message.participant_id and src_participant_id and message.participant_id == src_participant_id:
-                    role: Literal["user", "assistant"] = "user"
-                else:
-                    role = "assistant"
-                conversation_history.append({"role": role, "content": message.content})
-
         return A2AContext(
             source_agent=source_agent,
             target_agent=target,
@@ -228,9 +178,6 @@ async def _build_a2a_context(
             message_text=message_text,
             origin_source_channel=origin_source_channel,
             origin_session_id=origin_session_id,
-            primary_model=primary_model,
-            fallback_model=fallback_model,
-            conversation_history=conversation_history,
         )
     except Exception as error:
         logger.exception(f"[A2A] _build_a2a_context failed: from={from_agent_id}")

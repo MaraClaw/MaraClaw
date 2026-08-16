@@ -223,6 +223,9 @@ async def _process_message_event(
         logger.exception("[GoogleChat] LLM failed for agent %s", agent_id)
         reply_text = "Sorry - I hit an error generating a reply. Please try again."
 
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        return
+
     await channel_inbound.persist_assistant_message(
         agent_id=agent_id,
         user_id=platform_user.id,
@@ -405,6 +408,13 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         except Exception:
             logger.exception("[GoogleChat] Sync LLM failed for agent %s", agent_id)
             reply_text = "Sorry - I hit an error generating a reply. Please try again."
+
+        if channel_inbound.is_queued_channel_reply(reply_text):
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
+            return gchat.sync_text_response(
+                "Working on that — I'll reply here shortly.",
+                thread_name=event.thread_name,
+            )
 
         await channel_inbound.persist_assistant_message(
             agent_id=agent_id,

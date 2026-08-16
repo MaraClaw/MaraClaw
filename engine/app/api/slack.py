@@ -31,6 +31,7 @@ from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
+from app.services.channels import inbound as channel_inbound
 from app.services.storage import store_agent_upload
 
 router = APIRouter(tags=["slack"])
@@ -197,7 +198,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     logger.info(f"[Slack] Message from={sender_id}, channel={channel_id}: {user_text[:80]}")
 
-    from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+    from app.api.feishu import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     agent_obj = await agent_dao.get(agent_id)
@@ -409,18 +410,24 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     _cfs_s_token = _cfs_s.set(_slack_file_sender)
 
-    reply_text = await _call_llm_with_config(
-        _agent_model,
-        _llm_model,
-        _fallback_model,
-        agent_id,
-        user_text,
+    reply_text = await channel_inbound.generate_channel_reply(
+        agent_id=agent_id,
+        user_text=user_text,
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        agent_model=_agent_model,
+        llm_model=_llm_model,
+        fallback_model=_fallback_model,
     )
     _cfs_s.reset(_cfs_s_token)
     logger.info(f"[Slack] LLM reply: {reply_text[:80]}")
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        if event_id:
+            from app.services.channels import dedup as channel_dedup
+
+            await channel_dedup.mark_processed_shared("slack", event_id, cap=2000)
+        return {"ok": True}
 
     _ = await chat_message_dao.insert_message(
         agent_id=agent_id,

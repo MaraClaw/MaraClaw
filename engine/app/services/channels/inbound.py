@@ -19,6 +19,12 @@ from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
+CHANNEL_REPLY_QUEUED = "Message forwarded to the agent. Waiting for response..."
+
+
+def is_queued_channel_reply(text: str) -> bool:
+    """True when inbound enqueue returned the waiting stub, not a real answer."""
+    return text.strip() == CHANNEL_REPLY_QUEUED
 
 
 async def load_agent(agent_id: uuid.UUID) -> AgentRecord | None:
@@ -142,28 +148,28 @@ async def generate_channel_reply(
     on_thinking: ThinkingCallback | None = None,
     on_tool_call: ToolCallback | None = None,
 ) -> str:
-    """Run the shared channel LLM path used by Feishu / Slack / Teams / Google Chat.
+    """Queue the inbound turn for the OpenClaw guest. Reply arrives via gateway report."""
+    from typing import cast
 
-    ``history`` must be prior turns only; ``user_text`` is the new user turn
-    (``_call_llm_with_config`` appends it).
-    """
-    from app.services.channels.llm_bridge import _call_llm_with_config, _load_agent_and_model
+    from app.dao.agent_dao import agent_dao
+    from app.services.llm.types import OpenAIMessage
+    from app.services.openclaw_routing import enqueue_openclaw_message
 
-    if agent_model is None and llm_model is None:
-        agent_model, llm_model, fallback_model = await _load_agent_and_model(None, agent_id)
-    return await _call_llm_with_config(
-        agent_model,
-        llm_model,
-        fallback_model,
-        agent_id,
-        user_text,
-        history=history,
-        user_id=user_id,
-        session_id=session_id,
-        on_chunk=on_chunk,
-        on_thinking=on_thinking,
-        on_tool_call=on_tool_call,
+    del llm_model, fallback_model, on_chunk, on_thinking, on_tool_call
+    target = agent_model
+    if target is None:
+        target = await agent_dao.get(agent_id)
+    if target is None:
+        return "⚠️ Agent not found."
+    prior = cast(list[OpenAIMessage], history) if history else None
+    _ = await enqueue_openclaw_message(
+        agent=target,
+        content=user_text,
+        sender_user_id=user_id,
+        conversation_id=session_id,
+        history=prior,
     )
+    return CHANNEL_REPLY_QUEUED
 
 
 async def run_text_turn(
@@ -183,10 +189,11 @@ async def run_text_turn(
     persist_user: bool = True,
     touch_last_active_on_reply: bool = True,
 ) -> str:
-    """Load history → persist user (optional) → LLM → persist assistant.
+    """Load history → persist user (optional) → enqueue for the OpenClaw guest.
 
     History is loaded *before* persisting the current user message so
-    ``generate_channel_reply`` receives prior turns only.
+    ``generate_channel_reply`` receives prior turns only. The assistant
+    reply is persisted later when the guest reports.
     """
     history = await load_history_for_session(
         agent_id=agent_id,
@@ -214,12 +221,5 @@ async def run_text_turn(
         on_thinking=on_thinking,
         on_tool_call=on_tool_call,
     )
-    await persist_assistant_message(
-        agent_id=agent_id,
-        user_id=platform_user.id,
-        session=session,
-        content=reply_text,
-        agent=agent,
-        touch_last_active=touch_last_active_on_reply,
-    )
+    del touch_last_active_on_reply
     return reply_text

@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -25,10 +25,17 @@ type FormValues = z.infer<typeof schema>
 
 export function AgentNewPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const templates = useQuery({ queryKey: ['agent-templates'], queryFn: listTemplates })
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', template_id: '', role_description: '', visibility: 'private', gogcli_enabled: false },
+    defaultValues: {
+      name: '',
+      template_id: '',
+      role_description: '',
+      visibility: 'private',
+      gogcli_enabled: false,
+    },
   })
 
   const mutation = useMutation({
@@ -39,10 +46,10 @@ export function AgentNewPage() {
         role_description: values.role_description,
         permission_scope_type: values.visibility === 'private' ? 'user' : 'company',
         permission_access_level: 'use',
-        agent_type: 'native',
         gogcli_enabled: values.gogcli_enabled,
       }),
     onSuccess(agent) {
+      queryClient.setQueryData(['agent', agent.id], agent)
       toast.success(`${agent.name} created`)
       navigate(`/app/agents/${agent.id}/chat`)
     },
@@ -51,9 +58,27 @@ export function AgentNewPage() {
     },
   })
 
+  function goBack() {
+    if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
+      navigate(-1)
+      return
+    }
+    navigate('/app/agents')
+  }
+
   return (
     <div className="mx-auto max-w-lg space-y-6 p-6">
       <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mb-3 rounded-full px-4"
+          onClick={goBack}
+        >
+          <ArrowLeft className="size-4" aria-hidden />
+          Back
+        </Button>
         <h1 className="font-display text-2xl font-semibold">New agent</h1>
         <p className="text-sm text-muted-foreground">Private by default. Share with the company if teammates should use it.</p>
       </div>
@@ -94,7 +119,7 @@ export function AgentNewPage() {
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" {...form.register('gogcli_enabled')} />
-          Enable gogcli (Google CLI in the agent container)
+          Enable Google CLI (gogcli) in the agent container
         </label>
         <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? <Loader2 className="size-4 animate-spin" /> : 'Create'}

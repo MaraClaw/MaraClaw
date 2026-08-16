@@ -32,6 +32,7 @@ _AGENT_COLUMNS = (
     "container_id",
     "container_port",
     "primary_model_id",
+    "secondary_model_id",
     "fallback_model_id",
     "autonomy_policy",
     "max_tokens_per_day",
@@ -230,7 +231,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": api_key},
             )
             if row:
@@ -238,7 +239,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": key_hash},
             )
             return AgentRecord.from_row(row) if row else None
@@ -256,9 +257,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return uuid_list_from_rows(rows)
 
-    async def list_for_creator(
-        self, creator_id: UUID, *, tenant_id: UUID | None = None
-    ) -> Sequence[AgentRecord]:
+    async def list_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         clauses = ["creator_id = %(creator_id)s"]
         params: dict[str, Any] = {"creator_id": creator_id}
         if tenant_id is not None:
@@ -604,9 +603,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             memo_drop("agent", uuid_from_row(row["id"]))
         return len(rows)
 
-    async def disable_for_creator(
-        self, creator_id: UUID, *, tenant_id: UUID | None = None
-    ) -> Sequence[AgentRecord]:
+    async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         """Stop agents created by this user (optionally limited to one tenant)."""
         clauses = ["creator_id = %(creator_id)s", "status <> 'stopped'"]
         params: dict[str, Any] = {"creator_id": creator_id}
@@ -722,6 +719,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             rows = await db.fetchall(
                 "SELECT name FROM agents "
                 + "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
+                + "OR secondary_model_id = %(model_id)s "
                 + "ORDER BY name",
                 {"model_id": model_id},
             )
@@ -737,6 +735,106 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "UPDATE agents SET fallback_model_id = NULL WHERE fallback_model_id = %(model_id)s",
                 {"model_id": model_id},
             )
+            await db.execute(
+                "UPDATE agents SET secondary_model_id = NULL WHERE secondary_model_id = %(model_id)s",
+                {"model_id": model_id},
+            )
+
+    async def clear_other_slots_matching(
+        self,
+        *,
+        tenant_id: UUID,
+        model_id: UUID,
+        keep: str,
+    ) -> None:
+        """Null every slot except ``keep`` that still points at ``model_id``."""
+        async with self.session() as db:
+            if keep != "primary":
+                await db.execute(
+                    "UPDATE agents SET primary_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+            if keep != "secondary":
+                await db.execute(
+                    "UPDATE agents SET secondary_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+            if keep != "fallback":
+                await db.execute(
+                    "UPDATE agents SET fallback_model_id = NULL "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(model_id)s",
+                    {"tenant_id": tenant_id, "model_id": model_id},
+                )
+
+    async def migrate_secondary_model(
+        self,
+        *,
+        tenant_id: UUID,
+        old_model_id: UUID | None,
+        new_model_id: UUID,
+    ) -> int:
+        distinct = (
+            "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
+            + "AND fallback_model_id IS DISTINCT FROM %(new_model_id)s"
+        )
+        async with self.session() as db:
+            if old_model_id is None:
+                rows = await db.fetchall(
+                    "UPDATE agents SET secondary_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id IS NULL "
+                    + distinct
+                    + " RETURNING id",
+                    {"tenant_id": tenant_id, "new_model_id": new_model_id},
+                )
+            else:
+                rows = await db.fetchall(
+                    "UPDATE agents SET secondary_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(old_model_id)s "
+                    + distinct
+                    + " RETURNING id",
+                    {
+                        "tenant_id": tenant_id,
+                        "old_model_id": old_model_id,
+                        "new_model_id": new_model_id,
+                    },
+                )
+            return len(rows)
+
+    async def migrate_fallback_model(
+        self,
+        *,
+        tenant_id: UUID,
+        old_model_id: UUID | None,
+        new_model_id: UUID,
+    ) -> int:
+        distinct = (
+            "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
+            + "AND secondary_model_id IS DISTINCT FROM %(new_model_id)s"
+        )
+        async with self.session() as db:
+            if old_model_id is None:
+                rows = await db.fetchall(
+                    "UPDATE agents SET fallback_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id IS NULL "
+                    + distinct
+                    + " RETURNING id",
+                    {"tenant_id": tenant_id, "new_model_id": new_model_id},
+                )
+            else:
+                rows = await db.fetchall(
+                    "UPDATE agents SET fallback_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(old_model_id)s "
+                    + distinct
+                    + " RETURNING id",
+                    {
+                        "tenant_id": tenant_id,
+                        "old_model_id": old_model_id,
+                        "new_model_id": new_model_id,
+                    },
+                )
+            return len(rows)
 
     async def migrate_primary_model(
         self,

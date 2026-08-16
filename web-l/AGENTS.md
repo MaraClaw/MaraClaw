@@ -93,6 +93,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - Admin UI or privileged `/api/admin/*` (those stay in `web-a`).
+- LLM provider, model names, or model pickers (that is `web-a` `/models` for org admins).
 - Inventing IM connectors engine does not support (Google Workspace / Email are not channel types; WhatsApp/Discord/Atlassian are incomplete).
 - Growing `workspace-api.ts` for a new domain — add `lib/*-api.ts` (Plaza/OKR/control pattern).
 - `fetch` in pages — go through `lib/http.ts`. QueryClient on App/main — it belongs in `AppShell`.

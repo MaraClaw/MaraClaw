@@ -53,6 +53,24 @@ async def connection_ctx() -> AsyncIterator[DbConnection]:
             _conn_ctx.reset(token)
 
 
+async def flush_request_transaction() -> None:
+    """Commit the request-scoped connection so later HTTP GETs can see writes.
+
+    ``bind_crud_connection`` stays open until after the response (and any
+    FastAPI background tasks) finish. Create-then-navigate would 404 without
+    this flush.
+    """
+    db = _conn_ctx.get()
+    if db is None:
+        return
+    from app.core.access_cache import flush_deferred_acl
+    from app.core.redis_cache import flush_deferred_versions
+
+    await db.commit()
+    await flush_deferred_acl()
+    await flush_deferred_versions()
+
+
 async def get_db() -> AsyncGenerator[DbConnection]:
     """FastAPI dependency: request-scoped connection with commit/rollback."""
     async with connection_ctx() as db:

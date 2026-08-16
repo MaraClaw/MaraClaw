@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import secrets
 import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -31,14 +29,20 @@ from app.dao.skill_dao import skill_dao
 from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
-from app.db.session import connection_ctx
+from app.db.session import connection_ctx, flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.agent_manager import agent_manager
+from app.services.enterprise_llm import (
+    assert_distinct_model_slots,
+    assert_models_in_tenant_pool,
+    is_llm_pool_admin,
+)
 from app.services.gogcli_runtime import gogcli_skill_folder_names
 from app.services.okr_agent_hook import hook_new_agent
+from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
 from app.services.resource_discovery import import_mcp_from_smithery
 from app.services.storage import get_storage_backend
@@ -347,16 +351,13 @@ async def _background_agent_setup(
     try:
         agent = await agent_dao.get(agent_id)
         if not agent:
-            logger.error(f"[background_agent_setup] Agent {agent_id} not found before starting container")
+            logger.error(f"[background_agent_setup] Agent {agent_id} not found after file setup")
             return
-
-        _ = await agent_manager.start_container(None, agent)
-        _ = await _persist_agent_runtime(agent)
 
         if agent.tenant_id:
             await hook_new_agent(None, agent.id, agent.tenant_id)
     except Exception as e:
-        logger.exception(f"Error starting container for agent {agent_id}: {e}")
+        logger.exception(f"Error finishing agent setup for {agent_id}: {e}")
         await _set_agent_status_error(agent_id)
 
 
@@ -382,6 +383,8 @@ async def create_agent(
     default_webhook_rate = 5
     default_heartbeat_interval = 240
     tenant_default_model_id = None
+    tenant_secondary_model_id = None
+    tenant_fallback_model_id = None
     if target_tenant_id:
         tenant = await tenant_dao.get(target_tenant_id)
         if tenant:
@@ -391,13 +394,33 @@ async def create_agent(
             default_min_poll = tenant.min_poll_interval_floor or 5
             default_webhook_rate = tenant.max_webhook_rate_ceiling or 5
             tenant_default_model_id = tenant.default_model_id
+            tenant_secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
+            tenant_fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
             if (
                 tenant.min_heartbeat_interval_minutes
                 and tenant.min_heartbeat_interval_minutes > default_heartbeat_interval
             ):
                 default_heartbeat_interval = tenant.min_heartbeat_interval_minutes
 
-    effective_primary_model_id = data.primary_model_id or tenant_default_model_id
+    can_assign_models = is_llm_pool_admin(current_user)
+    effective_primary_model_id = (
+        data.primary_model_id or tenant_default_model_id if can_assign_models else tenant_default_model_id
+    )
+    effective_secondary_model_id = (
+        data.secondary_model_id or tenant_secondary_model_id if can_assign_models else tenant_secondary_model_id
+    )
+    effective_fallback_model_id = (
+        data.fallback_model_id or tenant_fallback_model_id if can_assign_models else tenant_fallback_model_id
+    )
+    await assert_models_in_tenant_pool(
+        target_tenant_id,
+        effective_primary_model_id,
+        effective_secondary_model_id,
+        effective_fallback_model_id,
+    )
+    assert_distinct_model_slots(
+        effective_primary_model_id, effective_secondary_model_id, effective_fallback_model_id
+    )
     expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours) if ttl_hours and ttl_hours > 0 else None
 
     access_level = data.permission_access_level if data.permission_access_level in ("use", "manage") else "use"
@@ -420,14 +443,15 @@ async def create_agent(
                 "avatar_url": data.avatar_url,
                 "creator_id": current_user.id,
                 "tenant_id": target_tenant_id,
-                "agent_type": data.agent_type or "native",
-                "gogcli_enabled": data.gogcli_enabled,
+                "agent_type": "openclaw",
+                "gogcli_enabled": bool(data.gogcli_enabled),
                 "primary_model_id": effective_primary_model_id,
-                "fallback_model_id": data.fallback_model_id,
+                "secondary_model_id": effective_secondary_model_id,
+                "fallback_model_id": effective_fallback_model_id,
                 "max_tokens_per_day": data.max_tokens_per_day,
                 "max_tokens_per_month": data.max_tokens_per_month,
                 "template_id": data.template_id,
-                "status": "creating" if data.agent_type != "openclaw" else "idle",
+                "status": "idle",
                 "expires_at": expires_at,
                 "max_llm_calls_per_day": max_llm_calls,
                 "max_triggers": default_max_triggers,
@@ -485,22 +509,13 @@ async def create_agent(
 
     _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
 
-    if agent.agent_type == "openclaw":
-        raw_key = f"oc-{secrets.token_urlsafe(32)}"
-        agent = await agent_dao.update(
-            db_obj=agent,
-            obj_in={
-                "api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest(),
-                "status": "idle",
-            },
-        )
-        if agent.tenant_id:
-            await hook_new_agent(None, agent.id, agent.tenant_id)
-
-        out_model = await _agent_to_out(agent, current_user.id)
-        out = out_model.model_dump()
-        out["api_key"] = raw_key
-        return out
+    raw_key, key_hash = mint_openclaw_gateway_key()
+    agent = await agent_dao.update(
+        db_obj=agent,
+        obj_in={"api_key_hash": key_hash},
+    )
+    write_gateway_api_key(agent, raw_key)
+    await flush_request_transaction()
 
     folder_names: list[str] = []
     template_mcp_servers: list[str] = []
@@ -515,8 +530,6 @@ async def create_agent(
             if folder_name not in folder_names:
                 folder_names.append(folder_name)
 
-    out = await _agent_to_out(agent, current_user.id)
-
     background_tasks.add_task(
         _background_agent_setup,
         agent_id=agent.id,
@@ -527,6 +540,9 @@ async def create_agent(
         template_mcp_servers=template_mcp_servers,
     )
 
+    out = (await _agent_to_out(agent, current_user.id)).model_dump()
+    out["api_key"] = raw_key
+    out["access_level"] = "manage"
     return out
 
 
@@ -807,6 +823,31 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
+    if (
+        "primary_model_id" in update_data
+        or "fallback_model_id" in update_data
+        or "secondary_model_id" in update_data
+    ):
+        if not is_llm_pool_admin(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an organization admin can change an agent's models",
+            )
+        next_primary = update_data.get("primary_model_id", agent.primary_model_id)
+        next_secondary = update_data.get("secondary_model_id", getattr(agent, "secondary_model_id", None))
+        next_fallback = update_data.get("fallback_model_id", agent.fallback_model_id)
+        await assert_models_in_tenant_pool(
+            agent.tenant_id,
+            next_primary if isinstance(next_primary, uuid.UUID) else None,
+            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
+            next_fallback if isinstance(next_fallback, uuid.UUID) else None,
+        )
+        assert_distinct_model_slots(
+            next_primary if isinstance(next_primary, uuid.UUID) else None,
+            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
+            next_fallback if isinstance(next_fallback, uuid.UUID) else None,
+        )
+
     if "expires_at" in update_data:
         if not is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin can modify agent expiry time")
@@ -1010,14 +1051,12 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only creator or admin can manage API keys")
-    if agent.agent_type != "openclaw":
-        raise HTTPException(status_code=400, detail="API keys are only available for OpenClaw agents")
-
-    raw_key = f"oc-{secrets.token_urlsafe(32)}"
+    raw_key, key_hash = mint_openclaw_gateway_key()
     _ = await agent_dao.update(
         db_obj=agent,
-        obj_in={"api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest()},
+        obj_in={"api_key_hash": key_hash},
     )
+    write_gateway_api_key(agent, raw_key)
 
     return {"api_key": raw_key, "message": "Key configured successfully."}
 

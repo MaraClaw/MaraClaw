@@ -65,7 +65,7 @@ Keep `app/api/agents.py` as an HTTP layer and move reusable behavior into focuse
 ## Risks
 
 - Background task behavior depends on committing the agent before setup starts.
-- OpenClaw creation has a different side-effect profile from native agents.
+- All agents are OpenClaw guests: create issues a gateway key and runs workspace setup.
 - Agent permission semantics are security-sensitive and should use existing `check_agent_access()` and relationship helpers.
 
 ## Out Of Scope

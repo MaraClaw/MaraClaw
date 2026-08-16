@@ -52,10 +52,16 @@ class LocalStorageBackend(StorageBackend):
             return []
         entries: list[StorageEntry] = []
         for entry in sorted(base.iterdir(), key=lambda item: (not item.is_dir(), item.name)):
-            if entry.name == ".gitkeep":
+            if entry.name == ".gitkeep" or entry.is_symlink():
                 continue
-            stat = entry.stat()
-            rel = str(entry.resolve().relative_to(self.root.resolve()))
+            try:
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            try:
+                rel = str(entry.resolve().relative_to(self.root.resolve()))
+            except (OSError, ValueError):
+                continue
             entries.append(
                 StorageEntry(
                     name=entry.name,

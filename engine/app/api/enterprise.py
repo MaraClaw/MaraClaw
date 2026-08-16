@@ -51,6 +51,14 @@ from app.schemas.schemas import (
     UserInviteRequest,
 )
 from app.services.autonomy_service import autonomy_service
+from app.services.enterprise_llm import (
+    assert_can_manage_model,
+    assert_llm_pool_admin,
+    is_llm_pool_admin,
+    require_llm_pool_tenant_id,
+    resolve_llm_pool_tenant_id,
+    serialize_llm_model,
+)
 from app.services.enterprise_sync import enterprise_sync_service
 from app.services.llm import LLMMessage, create_llm_client, get_model_api_key, get_provider_manifest
 from app.services.org_sync_adapter import derive_member_department_paths
@@ -82,10 +90,10 @@ async def check_email_exists(data: CheckEmailRequest):
 
 @router.get("/llm-providers")
 async def list_llm_providers(
-    current_user: UserRecord = Depends(get_current_user),
+    current_user: UserRecord = Depends(get_current_admin),
 ):
-    """List supported LLM providers and capabilities from registry."""
-    _ = current_user
+    """List supported LLM providers and capabilities (org/platform admin)."""
+    assert_llm_pool_admin(current_user)
     return get_provider_manifest()
 
 
@@ -116,7 +124,14 @@ async def probe_llm_model(
     """Test an LLM model configuration by making a simple API call."""
     import time
 
-    _ = current_user
+    assert_llm_pool_admin(current_user)
+    if data.model_id:
+        try:
+            existing = await llm_model_dao.get(uuid.UUID(data.model_id))
+        except ValueError:
+            existing = None
+        if existing:
+            assert_can_manage_model(current_user, existing)
     api_key = data.api_key if data.api_key and not data.api_key.startswith("****") else None
     if not api_key and data.model_id:
         api_key = await _load_llm_test_api_key(data.model_id)
@@ -147,22 +162,40 @@ async def probe_llm_model(
 async def list_llm_models(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> list[LLMModelOut]:
-    """List LLM models scoped to the selected tenant."""
-    if tenant_id and current_user.role != "platform_admin" and str(current_user.tenant_id) != tenant_id:
-        raise HTTPException(status_code=403, detail="Cannot access other tenant's models")
+    """List LLM models scoped to the selected tenant.
 
-    tid: uuid.UUID | None = None
-    if tenant_id:
-        tid = uuid.UUID(tenant_id)
-    elif current_user.tenant_id:
-        tid = current_user.tenant_id
+    Members receive the company catalog (enabled models only, no keys or
+    endpoints). Org/platform admins receive the full pool including disabled
+    rows and masked keys.
+    """
+    tid = resolve_llm_pool_tenant_id(current_user, tenant_id)
+    if tid is None and not is_llm_pool_admin(current_user):
+        return []
+
+    admin = is_llm_pool_admin(current_user)
+    default_model_id = None
+    fallback_model_id = None
+    secondary_model_id = None
+    if tid:
+        tenant = await tenant_dao.get(tid)
+        if tenant:
+            default_model_id = tenant.default_model_id
+            fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
+            secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
 
     models_out = []
     for m in await llm_model_dao.list_for_tenant(tid):
-        out = LLMModelOut.model_validate(m)
-        key = get_model_api_key(m)
-        out.api_key_masked = f"****{key[-4:]}" if len(key) > 4 else "****"
-        models_out.append(out)
+        if not admin and not m.enabled:
+            continue
+        models_out.append(
+            serialize_llm_model(
+                m,
+                is_admin=admin,
+                default_model_id=default_model_id,
+                fallback_model_id=fallback_model_id,
+                secondary_model_id=secondary_model_id,
+            )
+        )
     return models_out
 
 
@@ -170,8 +203,8 @@ async def list_llm_models(
 async def add_llm_model(
     data: LLMModelCreate, tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)
 ):
-    """Add a new LLM model to the tenant's pool (admin)."""
-    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
+    """Add a new LLM model to the tenant's pool (org/platform admin)."""
+    tid = require_llm_pool_tenant_id(current_user, tenant_id)
     model = await llm_model_dao.create(
         obj_in={
             "provider": data.provider,
@@ -185,25 +218,38 @@ async def add_llm_model(
             "supports_vision": data.supports_vision,
             "max_output_tokens": data.max_output_tokens,
             "request_timeout": data.request_timeout,
-            "tenant_id": uuid.UUID(tid) if tid else None,
+            "reasoning_effort": data.reasoning_effort,
+            "tenant_id": tid,
         }
     )
 
+    assigned_primary = False
+    assigned_fallback = False
     if model.tenant_id and model.enabled:
         tenant = await tenant_dao.get(model.tenant_id)
-        if tenant and tenant.default_model_id is None:
-            _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+        if tenant:
+            if tenant.default_model_id is None:
+                _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+                assigned_primary = True
+            elif getattr(tenant, "default_fallback_model_id", None) is None:
+                _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
+                assigned_fallback = True
 
-    return LLMModelOut.model_validate(model)
+    return serialize_llm_model(
+        model,
+        is_admin=True,
+        default_model_id=model.id if assigned_primary else None,
+        fallback_model_id=model.id if assigned_fallback else None,
+    )
 
 
 @router.post("/llm-models/{model_id}/set-default", status_code=status.HTTP_204_NO_CONTENT)
 async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
     """Mark this model as the tenant's default for new agents."""
-    _ = current_user
     model = await llm_model_dao.get(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
     if not model.tenant_id:
         raise HTTPException(status_code=400, detail="Model is not tenant-scoped")
     if not model.enabled:
@@ -214,7 +260,12 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     previous_default = tenant.default_model_id
-    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+    updates: dict[str, Any] = {"default_model_id": model.id}
+    if getattr(tenant, "default_fallback_model_id", None) == model.id:
+        updates["default_fallback_model_id"] = None
+    if getattr(tenant, "default_secondary_model_id", None) == model.id:
+        updates["default_secondary_model_id"] = None
+    _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
 
     if previous_default and previous_default != model.id:
         _ = await agent_dao.migrate_primary_model(
@@ -225,6 +276,81 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
         logger.info(
             f"[set_default_llm_model] Migrated agents in tenant {tenant.id} from {previous_default} -> {model.id}"
         )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="primary")
+
+
+@router.post("/llm-models/{model_id}/set-fallback", status_code=status.HTTP_204_NO_CONTENT)
+async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    """Mark this model as the tenant's fallback for agents."""
+    model = await llm_model_dao.get(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
+    if not model.tenant_id:
+        raise HTTPException(status_code=400, detail="Model is not tenant-scoped")
+    if not model.enabled:
+        raise HTTPException(status_code=400, detail="Model is disabled")
+
+    tenant = await tenant_dao.get(model.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.default_model_id == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Fallback must be different from the primary model",
+        )
+    if getattr(tenant, "default_secondary_model_id", None) == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Fallback must be different from the secondary model",
+        )
+
+    previous_fallback = getattr(tenant, "default_fallback_model_id", None)
+    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
+    _ = await agent_dao.migrate_fallback_model(
+        tenant_id=tenant.id,
+        old_model_id=previous_fallback,
+        new_model_id=model.id,
+    )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="fallback")
+    logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
+
+
+@router.post("/llm-models/{model_id}/set-secondary", status_code=status.HTTP_204_NO_CONTENT)
+async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    """Mark this model as the tenant's secondary (manageable-task) model."""
+    model = await llm_model_dao.get(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
+    if not model.tenant_id:
+        raise HTTPException(status_code=400, detail="Model is not tenant-scoped")
+    if not model.enabled:
+        raise HTTPException(status_code=400, detail="Model is disabled")
+
+    tenant = await tenant_dao.get(model.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.default_model_id == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Secondary must be different from the primary model",
+        )
+    if getattr(tenant, "default_fallback_model_id", None) == model.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Secondary must be different from the fallback model",
+        )
+
+    previous_secondary = getattr(tenant, "default_secondary_model_id", None)
+    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_secondary_model_id": model.id})
+    _ = await agent_dao.migrate_secondary_model(
+        tenant_id=tenant.id,
+        old_model_id=previous_secondary,
+        new_model_id=model.id,
+    )
+    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="secondary")
+    logger.info(f"[set_secondary_llm_model] Set secondary for tenant {tenant.id} to {model.id}")
 
 
 @router.delete("/llm-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -232,10 +358,10 @@ async def remove_llm_model(
     model_id: uuid.UUID, force: bool = False, current_user: UserRecord = Depends(get_current_admin)
 ):
     """Remove an LLM model from the pool."""
-    _ = current_user
     model = await llm_model_dao.get(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
 
     agent_names = await agent_dao.names_referencing_model(model_id)
     if agent_names and not force:
@@ -256,11 +382,11 @@ async def remove_llm_model(
 async def update_llm_model(
     model_id: uuid.UUID, data: LLMModelUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
-    """Update an existing LLM model in the pool (admin)."""
-    _ = current_user
+    """Update an existing LLM model in the pool (org/platform admin)."""
     model = await llm_model_dao.get(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
+    assert_can_manage_model(current_user, model)
 
     updates: dict[str, Any] = {}
     if data.provider:
@@ -285,10 +411,37 @@ async def update_llm_model(
         updates["max_output_tokens"] = data.max_output_tokens
     if hasattr(data, "request_timeout") and data.request_timeout is not None:
         updates["request_timeout"] = data.request_timeout
+    if data.reasoning_effort is not None:
+        updates["reasoning_effort"] = data.reasoning_effort or None
 
     try:
         model = await llm_model_dao.update(db_obj=model, obj_in=updates)
-        return LLMModelOut.model_validate(model)
+        default_model_id = None
+        fallback_model_id = None
+        secondary_model_id = None
+        if model.tenant_id:
+            tenant = await tenant_dao.get(model.tenant_id)
+            if tenant and updates.get("enabled") is False:
+                slot_clears: dict[str, Any] = {}
+                if tenant.default_model_id == model.id:
+                    slot_clears["default_model_id"] = None
+                if getattr(tenant, "default_fallback_model_id", None) == model.id:
+                    slot_clears["default_fallback_model_id"] = None
+                if getattr(tenant, "default_secondary_model_id", None) == model.id:
+                    slot_clears["default_secondary_model_id"] = None
+                if slot_clears:
+                    tenant = await tenant_dao.update(db_obj=tenant, obj_in=slot_clears) or tenant
+            if tenant:
+                default_model_id = tenant.default_model_id
+                fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
+                secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
+        return serialize_llm_model(
+            model,
+            is_admin=True,
+            default_model_id=default_model_id,
+            fallback_model_id=fallback_model_id,
+            secondary_model_id=secondary_model_id,
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update model") from None
 

@@ -56,6 +56,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Landing copy / channels list | `web-l` | `web-l/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
+| Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-l` | `web-l/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
@@ -72,7 +73,7 @@ cd engine && uv run --extra dev pytest
 
 **`web-l/`** - public marketing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-l/AGENTS.md`**. `cd web-l && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains, Users (activate members and additional admins), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains, Users (activate members and additional admins), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 

@@ -86,6 +86,7 @@ PROVIDER_KEYS: Final = (
     "anthropic",
     "openai",
     "openai-response",
+    "grok",
     "azure",
     "deepseek",
     "qwen",
@@ -179,6 +180,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
         "display_name",
         "protocol",
         "default_base_url",
+        "default_model",
         "supports_tool_choice",
         "default_max_tokens",
         "model_max_tokens",
@@ -189,6 +191,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
     assert openai.display_name == "OpenAI"
     assert openai.protocol == "openai_compatible"
     assert openai.default_base_url == "https://api.openai.com/v1"
+    assert openai.default_model == "gpt-5.6"
     assert openai.supports_tool_choice is True
     assert openai.default_max_tokens == 16384
     assert openai.model_max_tokens == {}
@@ -199,6 +202,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
         "qwen-long": 16384,
         "qwen-turbo": 8192,
         "qwen-max": 8192,
+        "qwen3.7-max": 16384,
     }
 
     first = client.ProviderSpec(
@@ -225,15 +229,26 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     assert client.PROVIDER_ALIASES == {
         "openai_response": "openai-response",
         "openairesponses": "openai-response",
+        "xai": "grok",
+        "x-ai": "grok",
+        "x_ai": "grok",
+        "zai": "zhipu",
+        "z.ai": "zhipu",
+        "z_ai": "zhipu",
     }
     assert client.normalize_provider(" OpenAI_Response ") == "openai-response"
     assert client.get_provider_spec("openairesponses") is client.PROVIDER_REGISTRY["openai-response"]
+    assert client.normalize_provider("XAI") == "grok"
+    assert client.get_provider_spec("x-ai") is client.PROVIDER_REGISTRY["grok"]
+    assert client.normalize_provider("Z.AI") == "zhipu"
+    assert client.get_provider_spec("zai") is client.PROVIDER_REGISTRY["zhipu"]
 
     assert client.PROVIDER_CLIENTS["anthropic"] is client.AnthropicClient
     assert client.PROVIDER_CLIENTS["openai"] is client.OpenAICompatibleClient
     assert client.PROVIDER_CLIENTS["openai-response"] is client.OpenAIResponsesClient
     assert client.PROVIDER_CLIENTS["gemini"] is client.GeminiClient
     assert client.PROVIDER_CLIENTS["custom"] is client.OpenAICompatibleClient
+    assert client.PROVIDER_CLIENTS["grok"] is client.OpenAICompatibleClient
 
     expected_provider_urls = {key: spec.default_base_url for key, spec in client.PROVIDER_REGISTRY.items()}
     assert expected_provider_urls == client.PROVIDER_URLS
@@ -244,6 +259,7 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
         "qwen-long": 16384,
         "qwen-turbo": 8192,
         "qwen-max": 8192,
+        "qwen3.7-max": 16384,
     }
     assert "anthropic" not in client.TOOL_CHOICE_PROVIDERS
     assert "baidu" not in client.TOOL_CHOICE_PROVIDERS
@@ -252,6 +268,19 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     manifest_by_provider = {item["provider"]: item for item in client.get_provider_manifest()}
     assert tuple(manifest_by_provider) == PROVIDER_KEYS
     assert manifest_by_provider["openai-response"]["aliases"] == ["openai_response", "openairesponses"]
+    assert manifest_by_provider["grok"]["display_name"] == "Grok (xAI)"
+    assert manifest_by_provider["grok"]["default_base_url"] == "https://api.x.ai/v1"
+    assert manifest_by_provider["grok"]["default_model"] == "grok-4.6"
+    assert manifest_by_provider["grok"]["aliases"] == ["xai", "x-ai", "x_ai"]
+    assert manifest_by_provider["zhipu"]["display_name"] == "Z.ai"
+    assert manifest_by_provider["zhipu"]["default_model"] == "glm-5.3"
+    assert manifest_by_provider["zhipu"]["default_base_url"] == "https://api.z.ai/api/paas/v4"
+    assert manifest_by_provider["zhipu"]["aliases"] == ["zai", "z.ai", "z_ai"]
+    assert manifest_by_provider["openai"]["default_model"] == "gpt-5.6"
+    assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5"
+    assert manifest_by_provider["grok"]["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh"]
+    assert manifest_by_provider["gemini"]["reasoning_efforts"] == ["none", "low", "medium", "high"]
+    assert manifest_by_provider["ollama"]["reasoning_efforts"] == []
 
 
 def test_create_llm_client_factory_returns_current_provider_classes_and_flags():
@@ -270,6 +299,12 @@ def test_create_llm_client_factory_returns_current_provider_classes_and_flags():
     gemini = client.create_llm_client("gemini", "secret", "gemini-2.5-pro")
     assert type(gemini) is client.GeminiClient
     assert gemini.base_url == "https://generativelanguage.googleapis.com/v1beta"
+
+    grok = client.create_llm_client("xai", "secret", "grok-4")
+    assert type(grok) is client.OpenAICompatibleClient
+    assert grok.base_url == "https://api.x.ai/v1"
+    assert grok.model == "grok-4"
+    assert grok.supports_tool_choice is True
 
     qwen = client.create_llm_client("qwen", "secret", "qwen-plus")
     assert type(qwen) is client.OpenAICompatibleClient

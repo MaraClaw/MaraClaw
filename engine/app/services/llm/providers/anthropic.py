@@ -133,6 +133,14 @@ class AnthropicClient(LLMClient):
         if system_blocks:
             payload["system"] = system_blocks
 
+        from app.services.llm.reasoning import apply_reasoning_effort
+
+        apply_reasoning_effort(
+            payload,
+            provider=str(kwargs.pop("llm_provider", "") or "anthropic"),
+            effort=kwargs.pop("reasoning_effort", None),
+        )
+
         # Handle Extended Thinking
         thinking = kwargs.pop("thinking", None)
         if thinking:

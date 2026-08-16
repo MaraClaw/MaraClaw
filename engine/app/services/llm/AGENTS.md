@@ -11,8 +11,11 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - `providers/` contains provider/protocol clients. Read `providers/AGENTS.md` before changing protocol parsing or streaming normalization.
 - `client.py` is now a compatibility/public-contract surface around the split modules; do not move large new provider logic back into it.
 - `caller.py` is the agent orchestration layer. Agent/chat/trigger/websocket flows should enter through `call_agent_llm`, `call_agent_llm_with_tools`, `call_llm`, or `call_llm_with_failover`.
-- `turn.py` is the preloaded `TurnContext` (agent/models/user) so callers skip redundant DAO loads. Do not hold a DB connection across `call_llm*`.
+- `router.py` is the complexity preflight. Conversational turns call `select_turn_model` once, then pass the **selected** model into `call_llm_with_failover`. Fallback is a failure lane, never a cheap-model substitute. Do not grow this logic inside `caller.py`.
+- OpenClaw Docker guests do not call the engine LLM. `app.services.openclaw_routing` classifies at enqueue, persists the slot on `gateway_messages`, and rewrites the bind-mounted `openclaw.json` primary (fail-closed: a pending primary blocks a secondary downgrade). Guest failover still uses the tenant fallback slot, never secondary.
+- `turn.py` is the preloaded `TurnContext` / `ModelBundle` (agent/models/user) so callers skip redundant DAO loads. Do not hold a DB connection across `call_llm*`.
 - `utils.py` handles encrypted API-key compatibility, chat-history conversion, and truncation that preserves assistant/tool-result pairs.
+- `reasoning.py` maps canonical `none|low|medium|high|xhigh` onto provider-native request fields. Do not encode those translations in individual provider clients.
 - `vision_content.py` builds vision/screenshot parts when the selected model supports vision.
 - `finish.py` defines the required `finish(content=...)` control tool.
 - `failover.py` classifies retryable provider failures.
@@ -23,6 +26,8 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - Unknown providers currently fall back to OpenAI-compatible behavior; do not remove that compatibility without migrating stored model rows.
 - Preserve streaming normalization for tool-call ids, partial JSON deltas, usage chunks, reasoning/thinking fields, and provider-native message shapes.
 - New providers should be added through `ProviderSpec`/registry plus a provider client class or explicit OpenAI-compatible mapping.
+- Grok (xAI) is registered as `grok` (`xai` / `x-ai` / `x_ai` aliases) on the OpenAI-compatible protocol at `https://api.x.ai/v1`.
+- `ProviderSpec.default_model` is the current flagship API id for the admin Models form (e.g. `grok-4.6`, `gpt-5.6`). Local runtimes may leave it unset.
 
 ## Tool Loop
 

@@ -13,7 +13,6 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
   deleteSession,
-  listLlmModels,
   listSessionMessages,
   listSessions,
   renameSession,
@@ -38,7 +37,6 @@ export function AgentChatPage() {
   const [busy, setBusy] = useState(false)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
-  const [modelId, setModelId] = useState(agent.primary_model_id ?? '')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
@@ -49,7 +47,6 @@ export function AgentChatPage() {
     queryKey: ['sessions', agent.id],
     queryFn: () => listSessions(agent.id, user?.id === agent.creator_id ? 'all' : 'mine'),
   })
-  const models = useQuery({ queryKey: ['llm-models'], queryFn: listLlmModels })
 
   const activeId = sessionId ?? sessionsQuery.data?.[0]?.id
 
@@ -166,7 +163,7 @@ export function AgentChatPage() {
     setDraft('')
     setLines((prev) => [...prev, { role: 'user', content: text }])
     setBusy(true)
-    sendRef.current({ content: text, model_id: modelId || undefined })
+    sendRef.current({ content: text })
   }
 
   async function onFile(file: File) {
@@ -318,18 +315,6 @@ export function AgentChatPage() {
             }}
           />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <select
-              className="h-9 max-w-48 rounded-lg border border-input bg-transparent px-2 text-xs"
-              value={modelId}
-              onChange={(event) => setModelId(event.target.value)}
-            >
-              <option value="">Default model</option>
-              {(models.data ?? []).map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.provider} / {model.model}
-                </option>
-              ))}
-            </select>
             <input
               type="file"
               className="text-xs"

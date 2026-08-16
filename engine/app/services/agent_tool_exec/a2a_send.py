@@ -11,10 +11,12 @@ from app.dao.agent_dao import agent_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
-from app.services import agent_tools
 from app.services.audit_logger import write_audit_log
+from app.services.storage_runtime.facade import get_storage_backend
+from app.services.storage_runtime.utils import normalize_storage_key
 
-from .a2a_context import _resolve_target_agent
+from .a2a_context import _build_a2a_context, _resolve_target_agent
+from .a2a_handlers import _a2a_handle_openclaw
 from .registry import ToolArguments
 
 
@@ -27,8 +29,8 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
     if not agent_name or not rel_path:
         return "❌ Please provide both agent_name and file_path"
 
-    storage = agent_tools.get_storage_backend()
-    source_key = agent_tools.normalize_storage_key(f"{from_agent_id}/{rel_path}")
+    storage = get_storage_backend()
+    source_key = normalize_storage_key(f"{from_agent_id}/{rel_path}")
     if not await storage.is_file(source_key):
         return f"❌ Source file not found: {rel_path}"
     source_entry = await storage.stat(source_key)
@@ -91,17 +93,17 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         stamp = ts.strftime("%Y%m%d_%H%M%S_%f")
         delivered_name = source_name
         target_rel_path = f"workspace/inbox/files/{delivered_name}"
-        target_key = agent_tools.normalize_storage_key(f"{target_id}/{target_rel_path}")
+        target_key = normalize_storage_key(f"{target_id}/{target_rel_path}")
         while await storage.exists(target_key):
             delivered_name = f"{stamp}_{source_name}"
             target_rel_path = f"workspace/inbox/files/{delivered_name}"
-            target_key = agent_tools.normalize_storage_key(f"{target_id}/{target_rel_path}")
+            target_key = normalize_storage_key(f"{target_id}/{target_rel_path}")
 
         await storage.write_bytes(target_key, source_bytes)
 
         sender_short = str(from_agent_id)[:8]
         note_rel_path = f"workspace/inbox/{stamp}_{sender_short}_file_delivery.md"
-        note_key = agent_tools.normalize_storage_key(f"{target_id}/{note_rel_path}")
+        note_key = normalize_storage_key(f"{target_id}/{note_rel_path}")
         note_lines = [
             f"# File delivery from {source_agent_name}",
             "",
@@ -245,18 +247,12 @@ async def _send_message_to_agent(
     origin_session_id: str | None = None,
 ) -> str:
     """Send a message to another digital employee."""
-    ctx_or_err = await agent_tools._build_a2a_context(from_agent_id, args, user_id, origin_session_id)
+    ctx_or_err = await _build_a2a_context(from_agent_id, args, user_id, origin_session_id)
     if isinstance(ctx_or_err, str):
         return ctx_or_err
     ctx = ctx_or_err
 
-    if ctx.target_agent.agent_type == "openclaw":
-        return await agent_tools._a2a_handle_openclaw(ctx)
-    if ctx.msg_type == "notify":
-        return await agent_tools._a2a_handle_notify(ctx)
-    if ctx.msg_type == "task_delegate":
-        return await agent_tools._a2a_handle_task_delegate(ctx)
-    return await agent_tools._a2a_handle_consult(ctx)
+    return await _a2a_handle_openclaw(ctx)
 
 
 def _string_argument(arguments: ToolArguments, name: str) -> str:

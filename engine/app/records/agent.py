@@ -51,7 +51,7 @@ class AgentRecord:
     role_description: str = ""
     bio: str | None = None
     welcome_message: str | None = None
-    agent_type: str = "native"
+    agent_type: str = "openclaw"
     gogcli_enabled: bool = False
     api_key_hash: str | None = None
     openclaw_last_seen: datetime | None = None
@@ -59,6 +59,7 @@ class AgentRecord:
     container_id: str | None = None
     container_port: int | None = None
     primary_model_id: UUID | None = None
+    secondary_model_id: UUID | None = None
     fallback_model_id: UUID | None = None
     autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
     max_tokens_per_day: int | None = None
@@ -109,7 +110,7 @@ class AgentRecord:
             role_description=str_from_row(row.get("role_description")),
             bio=str_from_row(row.get("bio")) or None,
             welcome_message=str_from_row(row.get("welcome_message")) or None,
-            agent_type=str_from_row(row.get("agent_type"), "native") or "native",
+            agent_type=str_from_row(row.get("agent_type"), "openclaw") or "openclaw",
             gogcli_enabled=bool(row.get("gogcli_enabled", False)),
             api_key_hash=str_from_row(row.get("api_key_hash")) or None,
             openclaw_last_seen=datetime_from_row(row.get("openclaw_last_seen")),
@@ -117,6 +118,7 @@ class AgentRecord:
             container_id=str_from_row(row.get("container_id")) or None,
             container_port=int_from_row(row["container_port"]) if row.get("container_port") is not None else None,
             primary_model_id=uuid_from_row_opt(row.get("primary_model_id")),
+            secondary_model_id=uuid_from_row_opt(row.get("secondary_model_id")),
             fallback_model_id=uuid_from_row_opt(row.get("fallback_model_id")),
             autonomy_policy=policy,
             max_tokens_per_day=int_from_row(row["max_tokens_per_day"])

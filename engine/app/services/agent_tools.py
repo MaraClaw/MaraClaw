@@ -78,10 +78,7 @@ from .agent_tool_exec.a2a_context import (
     _build_a2a_context as _build_a2a_context,
 )
 from .agent_tool_exec.a2a_handlers import (
-    _a2a_handle_consult as _a2a_handle_consult,
-    _a2a_handle_notify as _a2a_handle_notify,
     _a2a_handle_openclaw as _a2a_handle_openclaw,
-    _a2a_handle_task_delegate as _a2a_handle_task_delegate,
 )
 from .agent_tool_exec.a2a_send import (
     _send_file_to_agent as _send_file_to_agent,

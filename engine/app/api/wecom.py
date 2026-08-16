@@ -626,19 +626,21 @@ async def _process_wecom_text(
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
-    from app.api.feishu import _call_llm_with_config
+    from app.services.channels import inbound as channel_inbound
 
-    reply_text = await _call_llm_with_config(
-        _agent_model,
-        _llm_model,
-        _fallback_model,
-        agent_id,
-        user_text,
+    reply_text = await channel_inbound.generate_channel_reply(
+        agent_id=agent_id,
+        user_text=user_text,
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        agent_model=_agent_model,
+        llm_model=_llm_model,
+        fallback_model=_fallback_model,
     )
     logger.info(f"[WeCom] LLM reply: {reply_text[:100]}")
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        return
 
     # Send reply via WeCom API
     wecom_agent_id_str = json_as_str_or(json_object_from(config.extra_config).get("wecom_agent_id"))

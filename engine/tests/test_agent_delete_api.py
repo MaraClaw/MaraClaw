@@ -36,7 +36,7 @@ def make_agent(creator_id: uuid.UUID, **overrides):
         "role_description": "assistant",
         "creator_id": creator_id,
         "status": "idle",
-        "agent_type": "native",
+        "agent_type": "openclaw",
         "is_system": False,
         "tenant_id": uuid.uuid4(),
         "container_id": None,

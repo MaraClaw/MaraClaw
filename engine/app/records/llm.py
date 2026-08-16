@@ -34,6 +34,7 @@ class LLMModelRecord:
     temperature: float | None = None
     request_timeout: int | None = None
     max_output_tokens: int | None = None
+    reasoning_effort: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -57,6 +58,7 @@ class LLMModelRecord:
             max_output_tokens=int_from_row(row["max_output_tokens"])
             if row.get("max_output_tokens") is not None
             else None,
+            reasoning_effort=str_from_row(row.get("reasoning_effort")) or None,
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
         )
