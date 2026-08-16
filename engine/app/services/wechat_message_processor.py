@@ -98,7 +98,7 @@ def _parse_wechat_delivery_config(
 async def process_wechat_message(
     agent_id: uuid.UUID, raw_message: JsonValue, config: ChannelConfigRecord | object
 ) -> None:
-    from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+    from app.api.feishu import _load_agent_and_model
     from app.services.activity_logger import log_activity
     from app.services.llm.utils import convert_chat_messages_to_llm_format
     from app.services.wechat_channel import (
@@ -177,16 +177,20 @@ async def process_wechat_message(
     _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
-    reply_text = await _call_llm_with_config(
-        _agent_model,
-        _llm_model,
-        _fallback_model,
-        agent_id,
-        user_text,
+    from app.services.channels import inbound as channel_inbound
+
+    reply_text = await channel_inbound.generate_channel_reply(
+        agent_id=agent_id,
+        user_text=user_text,
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        agent_model=_agent_model,
+        llm_model=_llm_model,
+        fallback_model=_fallback_model,
     )
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        return
     await send_wechat_text_message(
         token=delivery_config["token"],
         base_url=delivery_config["base_url"],

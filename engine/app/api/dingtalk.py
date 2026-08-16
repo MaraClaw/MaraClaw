@@ -21,6 +21,7 @@ from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
+from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["dingtalk"])
 
@@ -157,7 +158,7 @@ async def process_dingtalk_message(
 
     import httpx
 
-    from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+    from app.api.feishu import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     _ = sender_nick
@@ -305,14 +306,15 @@ async def process_dingtalk_message(
         _cfs_token = _cfs.set(_dingtalk_file_sender)
 
     try:
-        reply_text = await _call_llm_with_config(
-            _agent_model,
-            _llm_model,
-            _fallback_model,
-            agent_id,
-            llm_user_text,
+        reply_text = await channel_inbound.generate_channel_reply(
+            agent_id=agent_id,
+            user_text=llm_user_text,
             history=history,
             user_id=platform_user_id,
+            session_id=session_conv_id,
+            agent_model=_agent_model,
+            llm_model=_llm_model,
+            fallback_model=_fallback_model,
         )
     finally:
         if _cfs_token is not None:
@@ -332,6 +334,8 @@ async def process_dingtalk_message(
 
     has_media = bool(image_base64_list or saved_file_paths)
     logger.info(f"[DingTalk] LLM reply ({'media' if has_media else 'text'} input): {reply_text[:100]}")
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        return
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

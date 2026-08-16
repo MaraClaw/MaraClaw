@@ -418,7 +418,7 @@ async def _process_wecom_stream_message(
     """Process a WeCom message through the LLM pipeline and return the reply text."""
     from datetime import datetime
 
-    from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+    from app.api.feishu import _load_agent_and_model
     from app.core.agent_constants import DEFAULT_CONTEXT_WINDOW_SIZE
     from app.dao import agent_dao
     from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -475,17 +475,21 @@ async def _process_wecom_stream_message(
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
-    reply_text = await _call_llm_with_config(
-        _agent_model,
-        _llm_model,
-        _fallback_model,
-        agent_id,
-        user_text,
+    from app.services.channels import inbound as channel_inbound
+
+    reply_text = await channel_inbound.generate_channel_reply(
+        agent_id=agent_id,
+        user_text=user_text,
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        agent_model=_agent_model,
+        llm_model=_llm_model,
+        fallback_model=_fallback_model,
     )
     logger.info(f"[WeCom Stream] LLM reply: {reply_text[:100]}")
+    if channel_inbound.is_queued_channel_reply(reply_text):
+        return ""
 
     _ = await chat_message_dao.insert_message(
         agent_id=agent_id,

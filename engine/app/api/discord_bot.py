@@ -268,7 +268,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
         logger.info(f"[Discord] /{command_name} from {sender_id}: {user_text[:80]}")
 
         async def handle_in_background():
-            from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+            from app.api.feishu import _load_agent_and_model
             from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
             agent_obj = await agent_dao.get(agent_id)
@@ -336,17 +336,21 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             _bot_token_bg = cfg.app_secret if cfg else ""
             _app_id_bg = cfg.app_id if cfg else ""
 
-            reply_text = await _call_llm_with_config(
-                _agent_model,
-                _llm_model,
-                _fallback_model,
-                agent_id,
-                user_text,
+            from app.services.channels import inbound as channel_inbound
+
+            reply_text = await channel_inbound.generate_channel_reply(
+                agent_id=agent_id,
+                user_text=user_text,
                 history=history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
+                agent_model=_agent_model,
+                llm_model=_llm_model,
+                fallback_model=_fallback_model,
             )
             logger.info(f"[Discord] LLM reply: {reply_text[:80]}")
+            if channel_inbound.is_queued_channel_reply(reply_text):
+                return
 
             _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,

@@ -101,6 +101,7 @@ async def test_process_wechat_message_returns_before_database_for_malformed_boun
 
     monkeypatch.setattr(wechat_message_processor.agent_dao, "get", unexpected_agent_get)
     monkeypatch.setattr(feishu, "_call_llm_with_config", unexpected_llm_call)
+    monkeypatch.setattr("app.services.channels.inbound.generate_channel_reply", unexpected_llm_call)
 
     await wechat_message_processor.process_wechat_message(uuid.uuid4(), raw_message, config)
 

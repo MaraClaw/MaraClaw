@@ -248,7 +248,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 if not user_text or not sender_phone:
                     continue
 
-                from app.api.feishu import _call_llm_with_config, _load_agent_and_model
+                from app.api.feishu import _load_agent_and_model
                 from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
                 agent_obj = await agent_dao.get(agent_id)
@@ -292,20 +292,25 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
 
                 _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
 
+                from app.services.channels import inbound as channel_inbound
+
                 try:
-                    reply_text = await _call_llm_with_config(
-                        _agent_model,
-                        _llm_model,
-                        _fallback_model,
-                        agent_id,
-                        user_text,
+                    reply_text = await channel_inbound.generate_channel_reply(
+                        agent_id=agent_id,
+                        user_text=user_text,
                         history=history,
                         user_id=platform_user_id,
                         session_id=session_conv_id,
+                        agent_model=_agent_model,
+                        llm_model=_llm_model,
+                        fallback_model=_fallback_model,
                     )
                 except Exception as exc:
                     logger.exception(f"[WhatsApp] LLM failed for agent {agent_id}: {exc}")
                     reply_text = "Sorry, I encountered an error processing your message."
+
+                if channel_inbound.is_queued_channel_reply(reply_text):
+                    return {"ok": True}
 
                 try:
                     await _send_whatsapp_messages(config, sender_phone, reply_text)
