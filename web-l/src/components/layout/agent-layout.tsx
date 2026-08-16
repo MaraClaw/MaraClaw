@@ -84,9 +84,11 @@ export function AgentLayout() {
           {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
           {agent.access_level === 'manage' ? (
             <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
-                Start
-              </Button>
+              {agent.status !== 'running' ? (
+                <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
+                  Start
+                </Button>
+              ) : null}
               <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
                 Stop
               </Button>

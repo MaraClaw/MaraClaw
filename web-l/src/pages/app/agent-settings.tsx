@@ -54,9 +54,11 @@ export function AgentSettingsPage() {
       <div className="flex gap-2">
         {canManage ? (
           <>
-            <Button size="sm" variant="outline" onClick={() => void startAgent(agent.id).then(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))}>
-              Start
-            </Button>
+            {agent.status !== 'running' ? (
+              <Button size="sm" variant="outline" onClick={() => void startAgent(agent.id).then(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))}>
+                Start
+              </Button>
+            ) : null}
             <Button size="sm" variant="outline" onClick={() => void stopAgent(agent.id).then(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))}>
               Stop
             </Button>
