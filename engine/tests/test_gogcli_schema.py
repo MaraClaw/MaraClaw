@@ -2,6 +2,9 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 
 
@@ -12,6 +15,21 @@ def test_agent_create_accepts_gogcli_enabled_true() -> None:
 
     # Then: the explicit true value is preserved.
     assert agent.gogcli_enabled is True
+
+
+def test_agent_create_defaults_to_openclaw() -> None:
+    agent = AgentCreate(name="Guest Bot")
+    assert agent.agent_type == "openclaw"
+
+
+def test_agent_create_accepts_openclaw_type() -> None:
+    agent = AgentCreate(name="Guest Bot", agent_type="openclaw")
+    assert agent.agent_type == "openclaw"
+
+
+def test_agent_create_rejects_unknown_type() -> None:
+    with pytest.raises(ValidationError):
+        _ = AgentCreate(name="Guest Bot", agent_type="guest")
 
 
 def test_agent_create_defaults_gogcli_enabled_to_false() -> None:

@@ -431,6 +431,10 @@ async def create_agent(
     if data.permission_scope_type not in ("company", "user", "custom"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported permission_scope_type")
 
+    agent_type = data.agent_type or "openclaw"
+    if agent_type not in ("native", "openclaw"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported agent_type")
+
     if data.permission_scope_type == "company":
         access_mode = "company"
     elif data.permission_scope_type == "user":
@@ -447,15 +451,15 @@ async def create_agent(
                 "avatar_url": data.avatar_url,
                 "creator_id": current_user.id,
                 "tenant_id": target_tenant_id,
-                "agent_type": data.agent_type or "native",
-                "gogcli_enabled": data.gogcli_enabled,
+                "agent_type": agent_type,
+                "gogcli_enabled": data.gogcli_enabled if agent_type == "openclaw" else False,
                 "primary_model_id": effective_primary_model_id,
                 "secondary_model_id": effective_secondary_model_id,
                 "fallback_model_id": effective_fallback_model_id,
                 "max_tokens_per_day": data.max_tokens_per_day,
                 "max_tokens_per_month": data.max_tokens_per_month,
                 "template_id": data.template_id,
-                "status": "creating" if data.agent_type != "openclaw" else "idle",
+                "status": "creating" if agent_type != "openclaw" else "idle",
                 "expires_at": expires_at,
                 "max_llm_calls_per_day": max_llm_calls,
                 "max_triggers": default_max_triggers,

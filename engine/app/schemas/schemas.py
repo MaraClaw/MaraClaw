@@ -244,7 +244,7 @@ class UserUpdate(BaseModel):
 
 class AgentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100, description="Agent name, 2-100 characters")
-    agent_type: str = "native"  # native | openclaw
+    agent_type: str = Field(default="openclaw", pattern="^(native|openclaw)$")
     gogcli_enabled: bool = False
     role_description: str = Field(default="", max_length=500, description="Role description, max 500 characters")
     bio: str | None = None
