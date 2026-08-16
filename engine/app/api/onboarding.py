@@ -14,6 +14,7 @@ from app.dao.onboarding_dao import user_tenant_onboarding_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.tenant_dao import tenant_dao
+from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
@@ -95,7 +96,7 @@ async def _ensure_row(user: UserRecord, entry_mode: str) -> UserTenantOnboarding
 def _usable_slot_id(
     tenant_id: uuid.UUID | None,
     model_id: uuid.UUID | None,
-    loaded: dict[uuid.UUID, Any],
+    loaded: dict[uuid.UUID, LLMModelRecord],
 ) -> uuid.UUID | None:
     if model_id is None:
         return None

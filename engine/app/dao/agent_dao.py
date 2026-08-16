@@ -257,9 +257,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return uuid_list_from_rows(rows)
 
-    async def list_for_creator(
-        self, creator_id: UUID, *, tenant_id: UUID | None = None
-    ) -> Sequence[AgentRecord]:
+    async def list_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         clauses = ["creator_id = %(creator_id)s"]
         params: dict[str, Any] = {"creator_id": creator_id}
         if tenant_id is not None:
@@ -605,9 +603,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             memo_drop("agent", uuid_from_row(row["id"]))
         return len(rows)
 
-    async def disable_for_creator(
-        self, creator_id: UUID, *, tenant_id: UUID | None = None
-    ) -> Sequence[AgentRecord]:
+    async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         """Stop agents created by this user (optionally limited to one tenant)."""
         clauses = ["creator_id = %(creator_id)s", "status <> 'stopped'"]
         params: dict[str, Any] = {"creator_id": creator_id}

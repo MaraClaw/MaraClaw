@@ -59,9 +59,7 @@ def test_member_is_not_pool_admin():
         pool.assert_llm_pool_admin(_user(role="agent_admin"))
     pool.assert_llm_pool_admin(_user(role="org_admin"))
     pool.assert_llm_pool_admin(_user(role="platform_admin"))
-    pool.assert_llm_pool_admin(
-        _user(role="member", identity=SimpleNamespace(is_platform_admin=True))
-    )
+    pool.assert_llm_pool_admin(_user(role="member", identity=SimpleNamespace(is_platform_admin=True)))
 
 
 def test_org_admin_cannot_target_another_tenant():
@@ -95,16 +93,12 @@ def test_member_serialization_strips_secrets():
     assert public.is_fallback is False
     assert public.provider == "anthropic"
 
-    fallback = pool.serialize_llm_model(
-        model, is_admin=False, default_model_id=None, fallback_model_id=model.id
-    )
+    fallback = pool.serialize_llm_model(model, is_admin=False, default_model_id=None, fallback_model_id=model.id)
     assert fallback.is_fallback is True
     assert fallback.is_default is False
     assert fallback.is_secondary is False
 
-    secondary = pool.serialize_llm_model(
-        model, is_admin=False, default_model_id=None, secondary_model_id=model.id
-    )
+    secondary = pool.serialize_llm_model(model, is_admin=False, default_model_id=None, secondary_model_id=model.id)
     assert secondary.is_secondary is True
     assert secondary.is_default is False
     assert secondary.is_fallback is False
@@ -202,9 +196,7 @@ async def test_add_model_org_admin_own_tenant_only(monkeypatch):
     assert member_denied.value.status_code == 403
 
     with pytest.raises(HTTPException) as pa_needs_company:
-        await enterprise_api.add_llm_model(
-            data, current_user=_user(role="platform_admin", tenant_id=_TENANT)
-        )
+        await enterprise_api.add_llm_model(data, current_user=_user(role="platform_admin", tenant_id=_TENANT))
     assert pa_needs_company.value.status_code == 400
 
     out = await enterprise_api.add_llm_model(data, current_user=_user(role="org_admin"))
@@ -339,12 +331,14 @@ async def test_disable_model_clears_tenant_secondary(monkeypatch):
     monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=secondary))
     monkeypatch.setattr(enterprise_api.llm_model_dao, "update", AsyncMock(return_value=updated))
     monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=tenant))
-    tenant_update = AsyncMock(return_value=SimpleNamespace(
-        id=_TENANT,
-        default_model_id=tenant.default_model_id,
-        default_fallback_model_id=None,
-        default_secondary_model_id=None,
-    ))
+    tenant_update = AsyncMock(
+        return_value=SimpleNamespace(
+            id=_TENANT,
+            default_model_id=tenant.default_model_id,
+            default_fallback_model_id=None,
+            default_secondary_model_id=None,
+        )
+    )
     monkeypatch.setattr(enterprise_api.tenant_dao, "update", tenant_update)
     out = await enterprise_api.update_llm_model(
         secondary.id, LLMModelUpdate(enabled=False), current_user=_user(role="org_admin")

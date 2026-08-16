@@ -307,7 +307,7 @@ class WebSocketChatHandler:
         self.llm_model: LLMModelRecord | None = None
         self.secondary_llm_model: LLMModelRecord | None = None
         self.fallback_llm_model: LLMModelRecord | None = None
-        self._honor_override = False
+        self._honor_override: bool = False
         self.history_messages: list[ChatMessageRecord] = []
         self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
@@ -580,9 +580,7 @@ class WebSocketChatHandler:
 
             bundle = await load_agent_model_bundle(_agent_cur)
             self.llm_model = bundle.primary if bundle.primary and bundle.primary.enabled else None
-            self.secondary_llm_model = (
-                bundle.secondary if bundle.secondary and bundle.secondary.enabled else None
-            )
+            self.secondary_llm_model = bundle.secondary if bundle.secondary and bundle.secondary.enabled else None
             self.fallback_llm_model = bundle.fallback if bundle.fallback and bundle.fallback.enabled else None
 
         self._honor_override = False
@@ -595,10 +593,7 @@ class WebSocketChatHandler:
                 if (
                     _ovr
                     and _ovr.enabled
-                    and (
-                        _ovr.tenant_id is None
-                        or (agent_tenant is not None and _ovr.tenant_id == agent_tenant)
-                    )
+                    and (_ovr.tenant_id is None or (agent_tenant is not None and _ovr.tenant_id == agent_tenant))
                 ):
                     effective_llm_model = _ovr
                     self._honor_override = True

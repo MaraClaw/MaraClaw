@@ -31,9 +31,7 @@ def test_heuristic_force_complex() -> None:
     assert router.heuristic_complexity("look in the repo") == "complex"
     history = [{"role": "assistant", "tool_calls": [{"id": "1"}]}]
     assert router.heuristic_complexity("ok next", history=history) == "complex"
-    assert (
-        router.heuristic_complexity("What is the status? And the owner?\n1. first\n2. second") == "complex"
-    )
+    assert router.heuristic_complexity("What is the status? And the owner?\n1. first\n2. second") == "complex"
 
 
 def test_heuristic_force_manageable() -> None:

@@ -29,7 +29,7 @@ RECENT_HISTORY_TURNS = 6
 
 CLASSIFIER_SYSTEM_PROMPT = (
     "You classify one user request for a digital employee.\n"
-    "Reply with JSON only: {\"complexity\":\"complex\"} or {\"complexity\":\"manageable\"}.\n"
+    'Reply with JSON only: {"complexity":"complex"} or {"complexity":"manageable"}.\n'
     "manageable: greetings, acknowledgements, single-fact answers, short rewrites, "
     "short translations, format conversion, yes/no, or a one-step lookup that needs "
     "at most one tool.\n"
@@ -135,7 +135,10 @@ def _usable(model: LLMModelRecord | None) -> LLMModelRecord | None:
 
 
 def _model_id(model: LLMModelRecord | None) -> uuid.UUID | None:
-    return getattr(model, "id", None) if model is not None else None
+    if model is None:
+        return None
+    mid = getattr(model, "id", None)
+    return mid if isinstance(mid, uuid.UUID) else None
 
 
 async def load_agent_model_bundle(
@@ -242,18 +245,24 @@ def parse_complexity_label(text: str | None) -> Complexity | None:
         candidates.append(match.group(0))
     for candidate in candidates:
         try:
-            data = json.loads(candidate)
+            parsed: object = json.loads(candidate)  # type: ignore[assignment]
         except json.JSONDecodeError:
             continue
-        if isinstance(data, dict):
-            value = str(data.get("complexity", "")).strip().lower()
-            if value in {"complex", "manageable"}:
-                return value  # type: ignore[return-value]
-        if isinstance(data, str) and data.strip().lower() in {"complex", "manageable"}:
-            return data.strip().lower()  # type: ignore[return-value]
-    word = stripped.strip("\"'` \n\t{}").lower()
-    if word in {"complex", "manageable"}:
-        return word  # type: ignore[return-value]
+        if isinstance(parsed, dict):
+            raw = parsed.get("complexity")
+            labeled = _as_complexity(str(raw or "").strip().lower())
+            if labeled is not None:
+                return labeled
+        if isinstance(parsed, str):
+            labeled = _as_complexity(parsed.strip().lower())
+            if labeled is not None:
+                return labeled
+    return _as_complexity(stripped.strip("\"'` \n\t{}").lower())
+
+
+def _as_complexity(value: str) -> Complexity | None:
+    if value == "complex" or value == "manageable":
+        return value
     return None
 
 
@@ -452,7 +461,9 @@ async def select_turn_model(
     else:
         guessed = heuristic_complexity(user_text, history=prior_history, has_images=images)
         if guessed == "complex":
-            selected = _selection(primary or default_model, "primary" if primary else default_slot, "complex", "heuristic_complex", bundle)
+            selected = _selection(
+                primary or default_model, "primary" if primary else default_slot, "complex", "heuristic_complex", bundle
+            )
         elif guessed == "manageable":
             selected = _selection(secondary, "secondary", "manageable", "heuristic_manageable", bundle)
         else:

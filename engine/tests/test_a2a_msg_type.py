@@ -123,10 +123,10 @@ def _patch_a2a_daos(
     async def get_tenant(_tenant_id):
         return tenant
 
-    async def get_model(model_id):
-        if primary_model and model_id == primary_model.id:
-            return primary_model
-        return None
+    async def get_many(ids):
+        if primary_model and primary_model.id in list(ids):
+            return [primary_model]
+        return []
 
     async def list_recent(**_kwargs):
         return history
@@ -166,7 +166,7 @@ def _patch_a2a_daos(
             side_effect=update_session,
         ),
         patch("app.services.agent_tool_exec.a2a_context.tenant_dao.get", side_effect=get_tenant),
-        patch("app.services.agent_tool_exec.a2a_context.llm_model_dao.get", side_effect=get_model),
+        patch("app.dao.llm_dao.llm_model_dao.get_many", side_effect=get_many),
         patch(
             "app.services.agent_tool_exec.a2a_context.chat_message_dao.list_recent",
             side_effect=list_recent,
