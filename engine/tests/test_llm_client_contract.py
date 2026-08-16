@@ -274,6 +274,7 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     assert manifest_by_provider["grok"]["aliases"] == ["xai", "x-ai", "x_ai"]
     assert manifest_by_provider["zhipu"]["display_name"] == "Z.ai"
     assert manifest_by_provider["zhipu"]["default_model"] == "glm-5.3"
+    assert manifest_by_provider["zhipu"]["default_base_url"] == "https://api.z.ai/api/paas/v4"
     assert manifest_by_provider["zhipu"]["aliases"] == ["zai", "z.ai", "z_ai"]
     assert manifest_by_provider["openai"]["default_model"] == "gpt-5.6"
     assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5"

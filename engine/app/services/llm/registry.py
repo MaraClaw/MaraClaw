@@ -142,7 +142,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         provider="zhipu",
         display_name="Z.ai",
         protocol="openai_compatible",
-        default_base_url="https://open.bigmodel.cn/api/paas/v4",
+        default_base_url="https://api.z.ai/api/paas/v4",
         default_model="glm-5.3",
         default_max_tokens=8192,
     ),
