@@ -3,28 +3,70 @@ import { Loader2 } from 'lucide-react'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ApiError } from '@/lib/http'
 import { getAgent, getAgentMetrics, startAgent, stopAgent } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
-const tabs = [
-  { to: 'chat', label: 'Chat' },
-  { to: 'files', label: 'Files' },
-  { to: 'skills', label: 'Skills' },
-  { to: 'tools', label: 'Tools' },
-  { to: 'tasks', label: 'Tasks' },
-  { to: 'schedules', label: 'Schedules' },
-  { to: 'channels', label: 'Channels' },
-  { to: 'relationships', label: 'People' },
-  { to: 'permissions', label: 'Access' },
-  { to: 'control', label: 'Control' },
-  { to: 'credentials', label: 'Vault' },
-  { to: 'pages', label: 'Pages' },
-  { to: 'playwright', label: 'Browser' },
-  { to: 'settings', label: 'Settings' },
+const tabs: { to: string; label: string; icon: NavIconName }[] = [
+  { to: 'chat', label: 'Chat', icon: 'chat' },
+  { to: 'files', label: 'Files', icon: 'files' },
+  { to: 'skills', label: 'Skills', icon: 'skills' },
+  { to: 'tools', label: 'Tools', icon: 'tools' },
+  { to: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { to: 'schedules', label: 'Schedules', icon: 'schedules' },
+  { to: 'channels', label: 'Channels', icon: 'channels' },
+  { to: 'relationships', label: 'People', icon: 'people' },
+  { to: 'permissions', label: 'Access', icon: 'access' },
+  { to: 'control', label: 'Control', icon: 'control' },
+  { to: 'credentials', label: 'Vault', icon: 'vault' },
+  { to: 'pages', label: 'Pages', icon: 'pages' },
+  { to: 'playwright', label: 'Browser', icon: 'browser' },
+  { to: 'settings', label: 'Settings', icon: 'settings' },
 ]
+
+function AgentSectionLink({
+  tab,
+  compact = false,
+}: {
+  tab: (typeof tabs)[number]
+  compact?: boolean
+}) {
+  return (
+    <NavLink
+      to={tab.to}
+      className={({ isActive }) =>
+        cn(
+          'relative flex touch-manipulation select-none flex-col items-center justify-center text-muted-foreground',
+          'transition-[color,transform] duration-150 ease-out',
+          'hover:text-foreground',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'active:scale-[0.96]',
+          isActive && 'text-foreground',
+          compact
+            ? 'min-h-12 shrink-0 gap-0.5 rounded-lg px-2 py-1.5'
+            : 'min-h-12 w-full gap-0.5 rounded-lg px-1 py-1.5',
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <NavIcon name={tab.icon} active={isActive} className={compact ? 'size-6' : 'size-8'} />
+          <span
+            className={cn(
+              'max-w-full text-center font-medium leading-tight text-pretty',
+              compact ? 'text-[10px]' : 'text-[11px]',
+            )}
+          >
+            {tab.label}
+          </span>
+        </>
+      )}
+    </NavLink>
+  )
+}
 
 export function AgentLayout() {
   const { agentId = '' } = useParams()
@@ -75,8 +117,8 @@ export function AgentLayout() {
   const agent = query.data
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border px-5 py-4">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
           <Badge variant="soft">{agent.status}</Badge>
@@ -107,25 +149,27 @@ export function AgentLayout() {
         {agent.role_description ? (
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
         ) : null}
-        <nav className="mt-3 flex flex-wrap gap-1" aria-label="Agent sections">
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <nav
+          className="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-background px-3 py-1.5 md:hidden"
+          aria-label="Agent sections"
+        >
           {tabs.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={tab.to}
-              className={({ isActive }) =>
-                cn(
-                  'rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                  isActive && 'bg-muted text-foreground',
-                )
-              }
-            >
-              {tab.label}
-            </NavLink>
+            <AgentSectionLink key={tab.to} tab={tab} compact />
           ))}
         </nav>
-      </div>
-      <div className="min-h-0 flex-1">
-        <Outlet context={{ agent }} />
+        <nav
+          className="sticky top-0 hidden h-full w-24 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-background px-1.5 py-2 md:flex"
+          aria-label="Agent sections"
+        >
+          {tabs.map((tab) => (
+            <AgentSectionLink key={tab.to} tab={tab} />
+          ))}
+        </nav>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
+          <Outlet context={{ agent }} />
+        </div>
       </div>
     </div>
   )

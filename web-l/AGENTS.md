@@ -43,7 +43,7 @@ web-l/
 | Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |
 | Workspace screens | `pages/app/*` | Nested `pages/app/AGENTS.md` |
 | Workspace chrome + Query | `layout/app-shell.tsx` | **Only** `QueryClientProvider` (not App/main) |
-| Agent tabs + outlet `agent` | `layout/agent-layout.tsx` | Start/stop when `access_level === 'manage'` |
+| Agent tabs + outlet `agent` | `layout/agent-layout.tsx` | Icon submenu (smaller than workspace rail); Start/stop when `access_level === 'manage'` |
 | First-run redirect | `layout/onboarding-gate.tsx` | Skip key `maraclaw-onboarding-skipped` |
 | Engine HTTP / WS clients | `src/lib/*` | Nested `lib/AGENTS.md` |
 | Marketing copy | `components/sections/*` | Nested `sections/AGENTS.md` |
