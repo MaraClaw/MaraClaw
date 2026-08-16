@@ -90,7 +90,10 @@ export function UsersPage() {
     [platformAdmins.data],
   )
 
-  const visibleCompany = useMemo(() => filterUsers(companyRows, search), [companyRows, search])
+  const visibleCompany = useMemo(
+    () => sortAdminsFirst(filterUsers(companyRows, search)),
+    [companyRows, search],
+  )
   const visiblePlatform = useMemo(() => filterUsers(platformRows, search), [platformRows, search])
 
   function canToggle(row: AdminUser): boolean {
@@ -189,31 +192,6 @@ export function UsersPage() {
         <p className="text-sm text-muted-foreground">No companies yet.</p>
       ) : null}
 
-      {users.isLoading ? <p className="text-sm text-muted-foreground">Loading users…</p> : null}
-      {users.error ? (
-        <p className="text-sm text-destructive">
-          {users.error instanceof ApiError ? users.error.message : 'Failed to load users'}
-        </p>
-      ) : null}
-
-      {!users.isLoading && !users.error && companyId && visibleCompany.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {search.trim() ? `No users match “${search.trim()}”.` : 'No users in this company.'}
-        </p>
-      ) : null}
-
-      <div className="grid gap-4">
-        {visibleCompany.map((row) => (
-          <UserCard
-            key={row.id}
-            row={row}
-            canToggle={canToggle(row)}
-            pending={toggle.isPending}
-            onToggle={() => toggle.mutate({ row, isActive: !row.is_active })}
-          />
-        ))}
-      </div>
-
       {platformAdmin ? (
         <div className="flex flex-col gap-4">
           <div>
@@ -250,6 +228,39 @@ export function UsersPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="flex flex-col gap-4">
+        {platformAdmin ? (
+          <div>
+            <h2 className="font-display text-lg font-semibold tracking-tight">Company users</h2>
+            <p className="mt-1 text-sm text-muted-foreground">People in the selected company.</p>
+          </div>
+        ) : null}
+        {users.isLoading ? <p className="text-sm text-muted-foreground">Loading users…</p> : null}
+        {users.error ? (
+          <p className="text-sm text-destructive">
+            {users.error instanceof ApiError ? users.error.message : 'Failed to load users'}
+          </p>
+        ) : null}
+
+        {!users.isLoading && !users.error && companyId && visibleCompany.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {search.trim() ? `No users match “${search.trim()}”.` : 'No users in this company.'}
+          </p>
+        ) : null}
+
+        <div className="grid gap-4">
+          {visibleCompany.map((row) => (
+            <UserCard
+              key={row.id}
+              row={row}
+              canToggle={canToggle(row)}
+              pending={toggle.isPending}
+              onToggle={() => toggle.mutate({ row, isActive: !row.is_active })}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -261,6 +272,10 @@ function filterUsers(rows: AdminUser[], search: string): AdminUser[] {
     const haystack = `${row.display_name ?? ''} ${row.email ?? ''} ${row.username ?? ''}`.toLowerCase()
     return haystack.includes(needle)
   })
+}
+
+function sortAdminsFirst(rows: AdminUser[]): AdminUser[] {
+  return [...rows].sort((a, b) => Number(isEndUserRole(a.role)) - Number(isEndUserRole(b.role)))
 }
 
 function UserCard({
