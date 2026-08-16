@@ -85,11 +85,14 @@ class AgentManager:
             return agent_dir
         for entry in await storage.list_dir(agent_prefix):
             await self._materialize_entry(storage, entry.key, agent_dir)
+        self._ensure_openclaw_workspace_layout(agent_dir)
         return agent_dir
 
     async def _materialize_entry(self, storage: StorageBackend, storage_key: str, local_root: Path) -> None:
         rel = Path(storage_key).relative_to(Path(storage_key).parts[0]).as_posix()
         local_path = local_root / rel
+        if local_path.is_symlink():
+            return
         if await storage.is_dir(storage_key):
             local_path.mkdir(parents=True, exist_ok=True)
             for child in await storage.list_dir(storage_key):
@@ -97,6 +100,17 @@ class AgentManager:
             return
         local_path.parent.mkdir(parents=True, exist_ok=True)
         _ = local_path.write_bytes(await storage.read_bytes(storage_key))
+
+    def _ensure_openclaw_workspace_layout(self, agent_dir: Path) -> None:
+        """Guarantee ``workspace/`` exists and ``.openclaw/workspace`` links to it."""
+        workspace = agent_dir / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        config_dir = agent_dir / ".openclaw"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        link = config_dir / "workspace"
+        if link.is_symlink() or link.exists():
+            return
+        link.symlink_to(workspace)
 
     async def initialize_agent_files(
         self, agent: AgentRecord, personality: str = "", boundaries: str = "", db: object | None = None
@@ -107,7 +121,8 @@ class AgentManager:
         storage = get_storage_backend()
         agent_prefix = self._agent_storage_prefix(agent.id)
 
-        if await storage.exists(agent_prefix) or await storage.is_dir(agent_prefix):
+        # A gateway key file may already be on disk; that is not a workspace.
+        if await storage.exists(f"{agent_prefix}/soul.md"):
             logger.warning(f"Agent dir already exists: {agent_dir}")
             return
 
@@ -424,11 +439,7 @@ class AgentManager:
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         self._atomic_write_json(agent_dir / "openclaw.json", config)
-
-        # Create workspace symlink
-        workspace_dir = config_dir / "workspace"
-        if not workspace_dir.exists():
-            workspace_dir.symlink_to(agent_dir / "workspace")
+        self._ensure_openclaw_workspace_layout(agent_dir)
 
         # Assign a unique port
         container_port = 18789 + hash(str(agent.id)) % 10000
