@@ -132,8 +132,8 @@ export function AdminShell() {
   const { user, logout, mustChangePassword } = useAuth()
 
   return (
-    <div className="flex min-h-svh bg-background">
-      <aside className="hidden w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
+    <div className="flex h-svh overflow-hidden bg-background">
+      <aside className="hidden h-full w-48 shrink-0 flex-col border-r border-border bg-card/70 md:flex">
         <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
@@ -161,8 +161,8 @@ export function AdminShell() {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-border px-4 py-3 md:hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="shrink-0 border-b border-border px-4 py-3 md:hidden">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
               <MaraClawLogo className="size-8" />
@@ -183,7 +183,7 @@ export function AdminShell() {
             <NavItems compact />
           </nav>
         </header>
-        <main id="main" className="min-w-0 flex-1 p-6">
+        <main id="main" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain p-6">
           <Outlet />
         </main>
       </div>
