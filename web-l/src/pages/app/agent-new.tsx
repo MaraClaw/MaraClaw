@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import { createAgent, listTemplates } from '@/lib/workspace-api'
@@ -89,18 +90,14 @@ export function AgentNewPage() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="template">Template</Label>
-          <select
-            id="template"
-            className="h-11 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
-            {...form.register('template_id')}
-          >
+          <Select id="template" {...form.register('template_id')}>
             <option value="">None</option>
             {(templates.data ?? []).map((template) => (
               <option key={template.id} value={template.id}>
                 {template.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="space-y-2">
           <Label htmlFor="role">Role</Label>
@@ -108,14 +105,10 @@ export function AgentNewPage() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="visibility">Visibility</Label>
-          <select
-            id="visibility"
-            className="h-11 w-full rounded-xl border border-input bg-transparent px-3 text-sm"
-            {...form.register('visibility')}
-          >
+          <Select id="visibility" {...form.register('visibility')}>
             <option value="private">Private (just me)</option>
             <option value="company">Company-wide</option>
-          </select>
+          </Select>
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" {...form.register('gogcli_enabled')} />
