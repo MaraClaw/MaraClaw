@@ -2,29 +2,22 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 
 import { cn } from '@/lib/utils'
 
-const ICONS = {
-  overview: '/nav-icons/overview.svg',
-  companies: '/nav-icons/companies.svg',
-  search: '/nav-icons/search.svg',
-  users: '/nav-icons/users.svg',
-  models: '/nav-icons/models.svg',
-  tools: '/nav-icons/tools.svg',
-  account: '/nav-icons/account.svg',
-  settings: '/nav-icons/settings.svg',
-} as const
+const ICON_NAMES = [
+  'overview',
+  'companies',
+  'search',
+  'users',
+  'models',
+  'tools',
+  'account',
+  'settings',
+  'keys',
+  'analytics',
+] as const
 
-export type NavIconName = keyof typeof ICONS
+export type NavIconName = (typeof ICON_NAMES)[number]
 
-const INACTIVE_ICONS: Record<NavIconName, string> = {
-  overview: '/nav-icons/overview-inactive.svg',
-  companies: '/nav-icons/companies-inactive.svg',
-  search: '/nav-icons/search-inactive.svg',
-  users: '/nav-icons/users-inactive.svg',
-  models: '/nav-icons/models-inactive.svg',
-  tools: '/nav-icons/tools-inactive.svg',
-  account: '/nav-icons/account-inactive.svg',
-  settings: '/nav-icons/settings-inactive.svg',
-}
+export { ICON_NAMES }
 
 export function NavIcon({
   name,
@@ -37,7 +30,7 @@ export function NavIcon({
 }) {
   const reduceMotion = useReducedMotion()
   const state = active ? 'active' : 'inactive'
-  const src = active ? ICONS[name] : INACTIVE_ICONS[name]
+  const src = `/nav-icons/${name}${active ? '' : '-inactive'}.svg`
 
   if (reduceMotion) {
     return (

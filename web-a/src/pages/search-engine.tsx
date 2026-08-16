@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useId, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,8 +16,14 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
-import { cn } from '@/lib/utils'
 import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
+
+const sections = [
+  { id: 'keys', label: 'Keys', icon: 'keys' },
+  { id: 'analytics', label: 'Analytics', icon: 'analytics' },
+] as const satisfies readonly SectionRailItem[]
+
+type SearchEngineTab = (typeof sections)[number]['id']
 
 const schema = z.object({
   label: z.string().trim().min(1, 'Enter a label').max(200, 'Label is too long'),
@@ -49,9 +56,9 @@ export function SearchEnginePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
-  const tab = searchParams.get('tab') === 'analytics' ? 'analytics' : 'keys'
+  const tab: SearchEngineTab = searchParams.get('tab') === 'analytics' ? 'analytics' : 'keys'
 
-  function setTab(next: 'keys' | 'analytics') {
+  function setTab(next: SearchEngineTab) {
     const copy = new URLSearchParams(searchParams)
     if (next === 'analytics') copy.set('tab', 'analytics')
     else {
@@ -116,68 +123,52 @@ export function SearchEnginePage() {
     }
   }
 
+  function onRailKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setTab(tab === 'keys' ? 'analytics' : 'keys')
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setTab('keys')
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      setTab('analytics')
+    }
+  }
+
+  const railProps = {
+    items: sections,
+    active: tab,
+    onSelect: setTab,
+    label: 'Search engine sections',
+    role: 'tablist' as const,
+    onKeyDown: onRailKeyDown,
+    itemProps: (item: SectionRailItem<SearchEngineTab>, isActive: boolean) => ({
+      role: 'tab' as const,
+      id: `search-engine-tab-${item.id}`,
+      'aria-selected': isActive,
+      'aria-controls': `search-engine-panel-${item.id}`,
+      tabIndex: isActive ? 0 : -1,
+    }),
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
-        <p className="mt-2 text-muted-foreground">
-          {tab === 'analytics'
-            ? 'System-wide and per-company search activity from billed Linkup calls.'
-            : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
-        </p>
-      </div>
-
-      <div
-        className="flex gap-2"
-        role="tablist"
-        aria-label="Search engine sections"
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-            event.preventDefault()
-            setTab(tab === 'keys' ? 'analytics' : 'keys')
-          }
-          if (event.key === 'Home') {
-            event.preventDefault()
-            setTab('keys')
-          }
-          if (event.key === 'End') {
-            event.preventDefault()
-            setTab('analytics')
-          }
-        }}
-      >
-        <button
-          type="button"
-          id="search-engine-tab-keys"
-          role="tab"
-          aria-selected={tab === 'keys'}
-          aria-controls="search-engine-panel-keys"
-          tabIndex={tab === 'keys' ? 0 : -1}
-          className={cn(
-            'rounded-xl px-3 py-1.5 text-sm font-medium',
-            tab === 'keys' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
-          )}
-          onClick={() => setTab('keys')}
-        >
-          Keys
-        </button>
-        <button
-          type="button"
-          id="search-engine-tab-analytics"
-          role="tab"
-          aria-selected={tab === 'analytics'}
-          aria-controls="search-engine-panel-analytics"
-          tabIndex={tab === 'analytics' ? 0 : -1}
-          className={cn(
-            'rounded-xl px-3 py-1.5 text-sm font-medium',
-            tab === 'analytics' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
-          )}
-          onClick={() => setTab('analytics')}
-        >
-          Analytics
-        </button>
-      </div>
-
+    <div className="-m-6 flex h-[calc(100%+3rem)] min-h-0 overflow-hidden">
+      <SectionRail {...railProps} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border bg-background px-6 py-4">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
+          <p className="mt-2 text-muted-foreground">
+            {tab === 'analytics'
+              ? 'System-wide and per-company search activity from billed Linkup calls.'
+              : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
+          </p>
+        </div>
+        <SectionRail {...railProps} compact />
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-6">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       {tab === 'analytics' ? (
         <div
           id="search-engine-panel-analytics"
@@ -272,6 +263,9 @@ export function SearchEnginePage() {
       </div>
       </div>
       ) : null}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
