@@ -43,8 +43,9 @@ def normalize_reasoning_effort(value: object) -> ReasoningEffort | None:
     if value is None:
         return None
     text = str(value).strip().lower()
-    if text in CANONICAL_REASONING_EFFORTS:
-        return text  # type: ignore[return-value]
+    for effort in CANONICAL_REASONING_EFFORTS:
+        if text == effort:
+            return effort
     return None
 
 

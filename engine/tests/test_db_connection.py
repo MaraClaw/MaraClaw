@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 from app.db.connection import DbConnection
 from app.db.errors import DbError, UniqueViolationError, map_psycopg_error
@@ -18,11 +20,17 @@ class _FakeCursor:
     async def __aenter__(self) -> _FakeCursor:
         return self
 
-    async def __aexit__(self, *_args: object) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        del exc_type, exc, tb
         return False
 
-    async def execute(self, query: str, params: Any = None) -> None:
-        self._parent.executed.append((query, params))
+    async def execute(self, query: object, params: object = None) -> None:
+        self._parent.executed.append((str(query), params))
         if self._parent.fail_with is not None:
             raise self._parent.fail_with
         self._rows = list(self._parent.next_rows)
@@ -32,6 +40,23 @@ class _FakeCursor:
 
     async def fetchall(self) -> list[dict[str, Any]]:
         return list(self._rows)
+
+    async def executemany(self, query: object, params_seq: object = None) -> None:
+        del query, params_seq
+
+
+class _FakeTransaction:
+    async def __aenter__(self) -> _FakeTransaction:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        del exc_type, exc, tb
+        return False
 
 
 class _FakeRawConnection:
@@ -51,13 +76,20 @@ class _FakeRawConnection:
     async def rollback(self) -> None:
         self.rollbacks += 1
 
+    def transaction(self) -> _FakeTransaction:
+        return _FakeTransaction()
+
+
+def _wrap(raw: _FakeRawConnection) -> DbConnection:
+    return DbConnection(cast(AsyncConnection[DictRow], raw))
+
 
 @pytest.mark.asyncio
 async def test_fetchone_and_fetchall_return_dicts() -> None:
     # Given
     raw = _FakeRawConnection()
     raw.next_rows = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
-    db = DbConnection(raw)  # type: ignore[arg-type]
+    db = _wrap(raw)
 
     # When
     one = await db.fetchone("SELECT id, name FROM t WHERE id = %(id)s", {"id": 1})
@@ -74,7 +106,7 @@ async def test_fetchone_and_fetchall_return_dicts() -> None:
 async def test_fetchval_by_name_and_index() -> None:
     raw = _FakeRawConnection()
     raw.next_rows = [{"ok": 1, "label": "x"}]
-    db = DbConnection(raw)  # type: ignore[arg-type]
+    db = _wrap(raw)
 
     assert await db.fetchval("SELECT 1 AS ok", column="ok") == 1
     raw.next_rows = [{"ok": 1, "label": "x"}]
@@ -91,20 +123,22 @@ async def test_execute_maps_errors() -> None:
         pass
 
     raw.fail_with = _BoomError("nope")
-    db = DbConnection(raw)  # type: ignore[arg-type]
+    db = _wrap(raw)
 
     with pytest.raises(DbError):
         await db.execute("SELECT 1")
 
 
 def test_map_psycopg_unique_violation() -> None:
+    from types import SimpleNamespace
+
+    from app.db.errors import _constraint_name
+
     psycopg_errors = pytest.importorskip("psycopg.errors")
 
-    class _FakeUnique(psycopg_errors.UniqueViolation):
-        @property
-        def diag(self):  # type: ignore[override]
-            return type("Diag", (), {"constraint_name": "users_email_key"})()
-
-    mapped = map_psycopg_error(_FakeUnique("duplicate"))
+    mapped = map_psycopg_error(psycopg_errors.UniqueViolation("duplicate"))
     assert isinstance(mapped, UniqueViolationError)
-    assert mapped.constraint == "users_email_key"
+    assert mapped.orig is not None
+    assert (
+        _constraint_name(SimpleNamespace(diag=SimpleNamespace(constraint_name="users_email_key"))) == "users_email_key"
+    )

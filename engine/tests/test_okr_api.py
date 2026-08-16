@@ -12,7 +12,6 @@ from app.api import okr as okr_api
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.user import UserRecord
 
-
 TENANT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 USER_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 AGENT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
@@ -29,22 +28,32 @@ def _member() -> UserRecord:
     return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role="member", display_name="Member")
 
 
-def _settings(**overrides: object) -> OKRSettingsRecord:
-    values: dict[str, object] = {
-        "tenant_id": TENANT_ID,
-        "enabled": False,
-        "first_enabled_at": None,
-        "daily_report_enabled": False,
-        "daily_report_time": "18:00",
-        "daily_report_skip_non_workdays": True,
-        "weekly_report_enabled": True,
-        "weekly_report_day": 4,
-        "period_frequency": "quarterly",
-        "period_length_days": None,
-        "okr_agent_id": None,
-    }
-    values.update(overrides)
-    return OKRSettingsRecord(**values)  # type: ignore[arg-type]
+def _settings(
+    *,
+    enabled: bool = False,
+    first_enabled_at: datetime | None = None,
+    daily_report_enabled: bool = False,
+    daily_report_time: str = "18:00",
+    daily_report_skip_non_workdays: bool = True,
+    weekly_report_enabled: bool = True,
+    weekly_report_day: int = 4,
+    period_frequency: str = "quarterly",
+    period_length_days: int | None = None,
+    okr_agent_id: uuid.UUID | None = None,
+) -> OKRSettingsRecord:
+    return OKRSettingsRecord(
+        tenant_id=TENANT_ID,
+        enabled=enabled,
+        first_enabled_at=first_enabled_at,
+        daily_report_enabled=daily_report_enabled,
+        daily_report_time=daily_report_time,
+        daily_report_skip_non_workdays=daily_report_skip_non_workdays,
+        weekly_report_enabled=weekly_report_enabled,
+        weekly_report_day=weekly_report_day,
+        period_frequency=period_frequency,
+        period_length_days=period_length_days,
+        okr_agent_id=okr_agent_id,
+    )
 
 
 @pytest.mark.asyncio

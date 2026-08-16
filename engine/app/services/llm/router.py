@@ -7,13 +7,13 @@ fallback as a cheap-model substitute.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.json_types import json_loads_value
 from app.core.logging import logger
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
@@ -245,8 +245,8 @@ def parse_complexity_label(text: str | None) -> Complexity | None:
         candidates.append(match.group(0))
     for candidate in candidates:
         try:
-            parsed: object = json.loads(candidate)  # type: ignore[assignment]
-        except json.JSONDecodeError:
+            parsed = json_loads_value(candidate)
+        except ValueError:
             continue
         if isinstance(parsed, dict):
             raw = parsed.get("complexity")

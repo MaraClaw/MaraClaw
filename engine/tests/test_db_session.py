@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 from app.db import pool as pool_module, session as session_module
 from app.db.connection import DbConnection
@@ -19,17 +21,40 @@ class _FakeCursor:
     async def __aenter__(self) -> _FakeCursor:
         return self
 
-    async def __aexit__(self, *_args: object) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        del exc_type, exc, tb
         return False
 
-    async def execute(self, query: str, params: Any = None) -> None:
-        self._parent.executed.append((query, params))
+    async def execute(self, query: object, params: object = None) -> None:
+        self._parent.executed.append((str(query), params))
 
     async def fetchone(self) -> None:
         return None
 
     async def fetchall(self) -> list[Any]:
         return []
+
+    async def executemany(self, query: object, params_seq: object = None) -> None:
+        del query, params_seq
+
+
+class _FakeTransaction:
+    async def __aenter__(self) -> _FakeTransaction:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        del exc_type, exc, tb
+        return False
 
 
 class _FakeRawConnection:
@@ -46,6 +71,13 @@ class _FakeRawConnection:
 
     async def rollback(self) -> None:
         self.rollbacks += 1
+
+    def transaction(self) -> _FakeTransaction:
+        return _FakeTransaction()
+
+
+def _wrap(raw: _FakeRawConnection) -> DbConnection:
+    return DbConnection(cast(AsyncConnection[DictRow], raw))
 
 
 class _PoolConnectionCM:
@@ -128,7 +160,7 @@ async def test_nested_transaction_joins_existing(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_transaction_with_explicit_connection_commits() -> None:
     raw = _FakeRawConnection()
-    db = DbConnection(raw)  # type: ignore[arg-type]
+    db = _wrap(raw)
 
     async with transaction(db) as bound:
         assert bound is db

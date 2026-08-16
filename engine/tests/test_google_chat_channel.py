@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -216,7 +215,9 @@ def test_redact_service_account_json():
 
 
 def test_channel_config_out_redacts_secrets():
-    config = SimpleNamespace(
+    from app.records.channel_config import ChannelConfigRecord
+
+    config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=uuid4(),
         channel_type="google_chat",
@@ -230,7 +231,7 @@ def test_channel_config_out_redacts_secrets():
         extra_config={"service_account_json": {"private_key": "x", "client_email": "a@b.c"}},
         created_at=None,
     )
-    out = channel_config_out(config)  # type: ignore[arg-type]
+    out = channel_config_out(config)
     assert out.app_secret == "***"
     assert out.encrypt_key == "***"
     assert out.verification_token == "***"

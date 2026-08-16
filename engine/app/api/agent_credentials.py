@@ -38,8 +38,8 @@ class AgentCredentialPayload(TypedDict):
     last_login_at: datetime | None
     last_injected_at: datetime | None
     has_cookies: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None
+    updated_at: datetime | None
 
 
 def _to_response(cred: AgentCredentialRecord) -> AgentCredentialPayload:
@@ -58,8 +58,8 @@ def _to_response(cred: AgentCredentialRecord) -> AgentCredentialPayload:
         "last_login_at": cred.last_login_at,
         "last_injected_at": cred.last_injected_at,
         "has_cookies": bool(cred.cookies_json),
-        "created_at": cred.created_at,  # type: ignore[typeddict-item]
-        "updated_at": cred.updated_at,  # type: ignore[typeddict-item]
+        "created_at": cred.created_at,
+        "updated_at": cred.updated_at,
     }
 
 

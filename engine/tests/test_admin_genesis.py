@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
 from app.api import admin as admin_api, auth as auth_api
@@ -16,6 +17,7 @@ from app.core import security as security_mod
 from app.core.security import hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+
 
 def _dummy_request() -> Request:
     return Request(
@@ -162,9 +164,9 @@ async def test_get_current_user_blocks_when_must_change_password(monkeypatch):
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
-    credentials = SimpleNamespace(credentials=token)
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     with pytest.raises(HTTPException) as exc:
-        await security_mod.get_current_user(credentials)  # type: ignore[arg-type]
+        await security_mod.get_current_user(credentials)
     assert exc.value.status_code == 403
     assert isinstance(exc.value.detail, dict)
     assert exc.value.detail["must_change_password"] is True
@@ -178,8 +180,8 @@ async def test_get_authenticated_user_allows_must_change_password(monkeypatch):
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
-    credentials = SimpleNamespace(credentials=token)
-    got = await security_mod.get_authenticated_user(credentials)  # type: ignore[arg-type]
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    got = await security_mod.get_authenticated_user(credentials)
     assert got.id == user.id
 
 
