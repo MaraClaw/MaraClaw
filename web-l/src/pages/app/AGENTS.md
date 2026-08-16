@@ -19,7 +19,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
 | `/app/directory` | `directory.tsx` | directory-api |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
-| `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user` |
+| `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user`; member picks `native` or `openclaw` (default OpenClaw) |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
 | `…/chat` (+ `:sessionId`) | `agent-chat.tsx` | workspace-api REST history + `connectAgentChat` WS |
 | `…/files` `skills` `tools` `tasks` `schedules` `channels` `relationships` `permissions` `settings` | `agent-*.tsx` | workspace-api |
