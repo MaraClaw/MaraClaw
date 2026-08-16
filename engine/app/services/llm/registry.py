@@ -51,6 +51,9 @@ PROVIDER_ALIASES: dict[str, str] = {
     "xai": "grok",
     "x-ai": "grok",
     "x_ai": "grok",
+    "zai": "zhipu",
+    "z.ai": "zhipu",
+    "z_ai": "zhipu",
 }
 
 
@@ -137,10 +140,10 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
     ),
     "zhipu": ProviderSpec(
         provider="zhipu",
-        display_name="Zhipu",
+        display_name="Z.ai",
         protocol="openai_compatible",
         default_base_url="https://open.bigmodel.cn/api/paas/v4",
-        default_model="glm-5.1",
+        default_model="glm-5.3",
         default_max_tokens=8192,
     ),
     "baidu": ProviderSpec(

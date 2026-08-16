@@ -232,11 +232,16 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
         "xai": "grok",
         "x-ai": "grok",
         "x_ai": "grok",
+        "zai": "zhipu",
+        "z.ai": "zhipu",
+        "z_ai": "zhipu",
     }
     assert client.normalize_provider(" OpenAI_Response ") == "openai-response"
     assert client.get_provider_spec("openairesponses") is client.PROVIDER_REGISTRY["openai-response"]
     assert client.normalize_provider("XAI") == "grok"
     assert client.get_provider_spec("x-ai") is client.PROVIDER_REGISTRY["grok"]
+    assert client.normalize_provider("Z.AI") == "zhipu"
+    assert client.get_provider_spec("zai") is client.PROVIDER_REGISTRY["zhipu"]
 
     assert client.PROVIDER_CLIENTS["anthropic"] is client.AnthropicClient
     assert client.PROVIDER_CLIENTS["openai"] is client.OpenAICompatibleClient
@@ -267,6 +272,9 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     assert manifest_by_provider["grok"]["default_base_url"] == "https://api.x.ai/v1"
     assert manifest_by_provider["grok"]["default_model"] == "grok-4.6"
     assert manifest_by_provider["grok"]["aliases"] == ["xai", "x-ai", "x_ai"]
+    assert manifest_by_provider["zhipu"]["display_name"] == "Z.ai"
+    assert manifest_by_provider["zhipu"]["default_model"] == "glm-5.3"
+    assert manifest_by_provider["zhipu"]["aliases"] == ["zai", "z.ai", "z_ai"]
     assert manifest_by_provider["openai"]["default_model"] == "gpt-5.6"
     assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5"
     assert manifest_by_provider["grok"]["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh"]
