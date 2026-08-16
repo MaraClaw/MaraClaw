@@ -1,5 +1,7 @@
 """Company onboarding APIs."""
 
+import hashlib
+import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -157,7 +159,8 @@ async def _create_personal_assistant(
         "bio": bio,
         "creator_id": user.id,
         "tenant_id": user.tenant_id,
-        "agent_type": "native",
+        "agent_type": "openclaw",
+        "api_key_hash": hashlib.sha256(f"oc-{secrets.token_urlsafe(32)}".encode()).hexdigest(),
         "primary_model_id": primary_model_id,
         "secondary_model_id": secondary_model_id,
         "fallback_model_id": fallback_model_id,

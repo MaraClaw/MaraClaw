@@ -352,16 +352,13 @@ async def _background_agent_setup(
     try:
         agent = await agent_dao.get(agent_id)
         if not agent:
-            logger.error(f"[background_agent_setup] Agent {agent_id} not found before starting container")
+            logger.error(f"[background_agent_setup] Agent {agent_id} not found after file setup")
             return
-
-        _ = await agent_manager.start_container(None, agent)
-        _ = await _persist_agent_runtime(agent)
 
         if agent.tenant_id:
             await hook_new_agent(None, agent.id, agent.tenant_id)
     except Exception as e:
-        logger.exception(f"Error starting container for agent {agent_id}: {e}")
+        logger.exception(f"Error finishing agent setup for {agent_id}: {e}")
         await _set_agent_status_error(agent_id)
 
 
@@ -431,10 +428,6 @@ async def create_agent(
     if data.permission_scope_type not in ("company", "user", "custom"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported permission_scope_type")
 
-    agent_type = data.agent_type or "openclaw"
-    if agent_type not in ("native", "openclaw"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported agent_type")
-
     if data.permission_scope_type == "company":
         access_mode = "company"
     elif data.permission_scope_type == "user":
@@ -451,15 +444,15 @@ async def create_agent(
                 "avatar_url": data.avatar_url,
                 "creator_id": current_user.id,
                 "tenant_id": target_tenant_id,
-                "agent_type": agent_type,
-                "gogcli_enabled": data.gogcli_enabled if agent_type == "openclaw" else False,
+                "agent_type": "openclaw",
+                "gogcli_enabled": bool(data.gogcli_enabled),
                 "primary_model_id": effective_primary_model_id,
                 "secondary_model_id": effective_secondary_model_id,
                 "fallback_model_id": effective_fallback_model_id,
                 "max_tokens_per_day": data.max_tokens_per_day,
                 "max_tokens_per_month": data.max_tokens_per_month,
                 "template_id": data.template_id,
-                "status": "creating" if agent_type != "openclaw" else "idle",
+                "status": "idle",
                 "expires_at": expires_at,
                 "max_llm_calls_per_day": max_llm_calls,
                 "max_triggers": default_max_triggers,
@@ -517,22 +510,11 @@ async def create_agent(
 
     _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
 
-    if agent.agent_type == "openclaw":
-        raw_key = f"oc-{secrets.token_urlsafe(32)}"
-        agent = await agent_dao.update(
-            db_obj=agent,
-            obj_in={
-                "api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest(),
-                "status": "idle",
-            },
-        )
-        if agent.tenant_id:
-            await hook_new_agent(None, agent.id, agent.tenant_id)
-
-        out_model = await _agent_to_out(agent, current_user.id)
-        out = out_model.model_dump()
-        out["api_key"] = raw_key
-        return out
+    raw_key = f"oc-{secrets.token_urlsafe(32)}"
+    agent = await agent_dao.update(
+        db_obj=agent,
+        obj_in={"api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest()},
+    )
 
     folder_names: list[str] = []
     template_mcp_servers: list[str] = []
@@ -547,8 +529,6 @@ async def create_agent(
             if folder_name not in folder_names:
                 folder_names.append(folder_name)
 
-    out = await _agent_to_out(agent, current_user.id)
-
     background_tasks.add_task(
         _background_agent_setup,
         agent_id=agent.id,
@@ -559,6 +539,8 @@ async def create_agent(
         template_mcp_servers=template_mcp_servers,
     )
 
+    out = (await _agent_to_out(agent, current_user.id)).model_dump()
+    out["api_key"] = raw_key
     return out
 
 
@@ -1067,9 +1049,6 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only creator or admin can manage API keys")
-    if agent.agent_type != "openclaw":
-        raise HTTPException(status_code=400, detail="API keys are only available for OpenClaw agents")
-
     raw_key = f"oc-{secrets.token_urlsafe(32)}"
     _ = await agent_dao.update(
         db_obj=agent,

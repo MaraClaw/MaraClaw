@@ -231,7 +231,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": api_key},
             )
             if row:
@@ -239,7 +239,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s AND agent_type = 'openclaw' LIMIT 1",
+                + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": key_hash},
             )
             return AgentRecord.from_row(row) if row else None

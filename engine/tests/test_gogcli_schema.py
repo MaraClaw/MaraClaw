@@ -32,6 +32,11 @@ def test_agent_create_rejects_unknown_type() -> None:
         _ = AgentCreate(name="Guest Bot", agent_type="guest")
 
 
+def test_agent_create_rejects_native_type() -> None:
+    with pytest.raises(ValidationError):
+        _ = AgentCreate(name="Legacy Bot", agent_type="native")
+
+
 def test_agent_create_defaults_gogcli_enabled_to_false() -> None:
     # Given: an agent creation payload omits gogcli_enabled.
     # When: the payload is parsed by the request schema.

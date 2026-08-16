@@ -51,7 +51,7 @@ class AgentRecord:
     role_description: str = ""
     bio: str | None = None
     welcome_message: str | None = None
-    agent_type: str = "native"
+    agent_type: str = "openclaw"
     gogcli_enabled: bool = False
     api_key_hash: str | None = None
     openclaw_last_seen: datetime | None = None
@@ -110,7 +110,7 @@ class AgentRecord:
             role_description=str_from_row(row.get("role_description")),
             bio=str_from_row(row.get("bio")) or None,
             welcome_message=str_from_row(row.get("welcome_message")) or None,
-            agent_type=str_from_row(row.get("agent_type"), "native") or "native",
+            agent_type=str_from_row(row.get("agent_type"), "openclaw") or "openclaw",
             gogcli_enabled=bool(row.get("gogcli_enabled", False)),
             api_key_hash=str_from_row(row.get("api_key_hash")) or None,
             openclaw_last_seen=datetime_from_row(row.get("openclaw_last_seen")),

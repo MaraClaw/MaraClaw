@@ -279,6 +279,8 @@ PATCHES = [
     "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS guest_model_ref VARCHAR(200)",
     "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS complexity VARCHAR(20)",
     "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS routing_reason VARCHAR(40)",
+    "UPDATE agents SET agent_type = 'openclaw' WHERE agent_type IS DISTINCT FROM 'openclaw'",
+    "ALTER TABLE agents ALTER COLUMN agent_type SET DEFAULT 'openclaw'",
 ]
 
 

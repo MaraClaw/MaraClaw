@@ -91,6 +91,14 @@ def test_patches_add_openclaw_routing_columns() -> None:
     assert "routing_reason VARCHAR(40)" in block
 
 
+def test_patches_migrate_agents_to_openclaw() -> None:
+    from app.scripts.bootstrap_db import PATCHES
+
+    joined = "\n".join(PATCHES)
+    assert "UPDATE agents SET agent_type = 'openclaw' WHERE agent_type IS DISTINCT FROM 'openclaw'" in joined
+    assert "ALTER TABLE agents ALTER COLUMN agent_type SET DEFAULT 'openclaw'" in joined
+
+
 def test_patches_add_secondary_model_columns() -> None:
     from app.scripts.bootstrap_db import PATCHES
 

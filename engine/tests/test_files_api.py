@@ -28,7 +28,7 @@ def make_agent(creator_id: uuid.UUID, **overrides):
         "role_description": "assistant",
         "creator_id": creator_id,
         "status": "idle",
-        "agent_type": "native",
+        "agent_type": "openclaw",
     }
     values.update(overrides)
     return SimpleNamespace(**values)

@@ -218,7 +218,7 @@ async def seed_default_agents():
         return
 
     existing_agents = await agent_dao.list_by_names_for_tenant(
-        admin.tenant_id, ["Morty", "Meeseeks"], agent_type="native", exclude_stopped=True
+        admin.tenant_id, ["Morty", "Meeseeks"], exclude_stopped=True
     )
     existing_by_name: dict[str, AgentRecord] = {}
     for agent in existing_agents:
@@ -241,6 +241,7 @@ async def seed_default_agents():
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
+                "agent_type": "openclaw",
                 "status": "idle",
             }
         )
@@ -258,6 +259,7 @@ async def seed_default_agents():
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
+                "agent_type": "openclaw",
                 "status": "idle",
             }
         )
