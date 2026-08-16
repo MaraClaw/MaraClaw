@@ -16,8 +16,8 @@ import pytest
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 WRAPPER_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-officecli.sh"
 TENCENT_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-memory-tencentdb.sh"
-OFFICECLI_TAG: Final = "v1.0.143"
-OFFICECLI_ARM64_SHA256: Final = "c50298e4698fcd1b15fe1a0f096405ad260b5c84d4440882582d0bba1e57bd49"
+OFFICECLI_TAG: Final = "v1.0.144"
+OFFICECLI_ARM64_SHA256: Final = "56ec2c3114b66f6490888b6778cbb8413a65911a26cacc7207f29e13424966da"
 RELEASE_ROOT: Final = "https://github.com/iOfficeAI/OfficeCLI/releases/download"
 SKILL_ROOT: Final = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI"
 FAKE_GNU_MV: Final = """#!/usr/bin/env python3
