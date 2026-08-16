@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ApiError } from '@/lib/http'
 import { getAgent, getAgentMetrics, startAgent, stopAgent } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
@@ -32,6 +33,8 @@ export function AgentLayout() {
     queryKey: ['agent', agentId],
     queryFn: () => getAgent(agentId),
     enabled: Boolean(agentId),
+    retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
+    retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
   })
   const metrics = useQuery({
     queryKey: ['metrics', agentId],

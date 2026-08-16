@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
@@ -24,6 +24,7 @@ type FormValues = z.infer<typeof schema>
 
 export function OnboardingPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { name: 'My assistant', personality: 'warm', work_style: 'concise', boundaries: '' },
@@ -37,6 +38,7 @@ export function OnboardingPage() {
       return created.agent
     },
     onSuccess(agent) {
+      queryClient.setQueryData(['agent', agent.id], { ...agent, access_level: 'manage' })
       toast.success(`${agent.name} is ready`)
       navigate(`/app/agents/${agent.id}/chat`, { replace: true })
     },

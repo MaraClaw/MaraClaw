@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
@@ -25,6 +25,7 @@ type FormValues = z.infer<typeof schema>
 
 export function AgentNewPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const templates = useQuery({ queryKey: ['agent-templates'], queryFn: listTemplates })
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -48,6 +49,7 @@ export function AgentNewPage() {
         gogcli_enabled: values.gogcli_enabled,
       }),
     onSuccess(agent) {
+      queryClient.setQueryData(['agent', agent.id], agent)
       toast.success(`${agent.name} created`)
       navigate(`/app/agents/${agent.id}/chat`)
     },
