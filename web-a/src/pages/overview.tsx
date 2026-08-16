@@ -2,7 +2,6 @@ import { motion } from 'framer-motion'
 import { Building2, LineChart, Settings2, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
@@ -48,9 +47,6 @@ export function OverviewPage() {
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
         className="flex flex-col gap-3"
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {isPlatformAdminUser(user) ? <Badge variant="soft">Platform</Badge> : <Badge variant="soft">Admin</Badge>}
-        </div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           Overview
         </h1>
