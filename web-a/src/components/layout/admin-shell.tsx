@@ -1,5 +1,5 @@
 import { LogOut } from 'lucide-react'
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
@@ -130,6 +130,8 @@ function NavItems({
 
 export function AdminShell() {
   const { user, logout, mustChangePassword } = useAuth()
+  const { pathname } = useLocation()
+  const flushMain = pathname.startsWith('/search-engine')
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">
@@ -183,7 +185,13 @@ export function AdminShell() {
             <NavItems compact />
           </nav>
         </header>
-        <main id="main" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain p-6">
+        <main
+          id="main"
+          className={cn(
+            'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain',
+            !flushMain && 'p-6',
+          )}
+        >
           <Outlet />
         </main>
       </div>

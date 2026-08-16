@@ -10,6 +10,8 @@ function Select({
   ref,
   ...props
 }: React.ComponentProps<'select'> & { fit?: boolean }) {
+  const pointerCommit = React.useRef(false)
+
   return (
     <span className={cn('relative inline-flex min-w-0', fit ? 'w-max' : 'w-full', className)}>
       <select
@@ -23,14 +25,23 @@ function Select({
           fit ? 'w-max' : 'w-full',
         )}
         {...props}
+        onPointerDown={() => {
+          pointerCommit.current = true
+        }}
+        onKeyDown={() => {
+          pointerCommit.current = false
+        }}
         onChange={(event) => {
           const target = event.currentTarget
           onChange?.(event)
-          target.blur()
+          if (pointerCommit.current) {
+            target.blur()
+            pointerCommit.current = false
+          }
         }}
       />
       <ChevronDown
-        className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground"
+        className="pointer-events-none absolute top-1/2 end-3.5 size-4 -translate-y-1/2 text-muted-foreground"
         aria-hidden
       />
     </span>

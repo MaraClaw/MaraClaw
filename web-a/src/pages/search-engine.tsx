@@ -50,6 +50,11 @@ function statusVariant(status: string): 'success' | 'secondary' | 'destructive' 
   return 'secondary'
 }
 
+function statusLabel(status: string): string {
+  if (!status) return status
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
 export function SearchEnginePage() {
   const queryClient = useQueryClient()
   const formId = useId()
@@ -123,51 +128,59 @@ export function SearchEnginePage() {
     }
   }
 
+  function selectTab(next: SearchEngineTab) {
+    setTab(next)
+    queueMicrotask(() => document.getElementById(`search-engine-tab-${next}`)?.focus())
+  }
+
   function onRailKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+    const order: SearchEngineTab[] = ['keys', 'analytics']
+    const index = order.indexOf(tab)
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
       event.preventDefault()
-      setTab(tab === 'keys' ? 'analytics' : 'keys')
+      selectTab(order[(index + 1) % order.length] ?? 'keys')
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectTab(order[(index - 1 + order.length) % order.length] ?? 'keys')
     }
     if (event.key === 'Home') {
       event.preventDefault()
-      setTab('keys')
+      selectTab('keys')
     }
     if (event.key === 'End') {
       event.preventDefault()
-      setTab('analytics')
+      selectTab('analytics')
     }
   }
 
-  const railProps = {
-    items: sections,
-    active: tab,
-    onSelect: setTab,
-    label: 'Search engine sections',
-    role: 'tablist' as const,
-    onKeyDown: onRailKeyDown,
-    itemProps: (item: SectionRailItem<SearchEngineTab>, isActive: boolean) => ({
-      role: 'tab' as const,
-      id: `search-engine-tab-${item.id}`,
-      'aria-selected': isActive,
-      'aria-controls': `search-engine-panel-${item.id}`,
-      tabIndex: isActive ? 0 : -1,
-    }),
-  }
-
   return (
-    <div className="-m-6 flex h-[calc(100%+3rem)] min-h-0 overflow-hidden">
-      <SectionRail {...railProps} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 bg-background px-6 py-4">
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
-          <p className="mt-2 text-muted-foreground">
-            {tab === 'analytics'
-              ? 'System-wide and per-company search activity from billed Linkup calls.'
-              : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
-          </p>
-        </div>
-        <SectionRail {...railProps} compact />
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-6">
+    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
+      <div className="min-w-0 bg-background px-6 py-4 md:col-start-2 md:row-start-1">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
+        <p className="mt-2 text-muted-foreground">
+          {tab === 'analytics'
+            ? 'System-wide and per-company search activity from billed Linkup calls.'
+            : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
+        </p>
+      </div>
+      <SectionRail
+        items={sections}
+        active={tab}
+        onSelect={selectTab}
+        label="Search engine sections"
+        role="tablist"
+        onKeyDown={onRailKeyDown}
+        className="md:col-start-1 md:row-start-1 md:row-span-2"
+        itemProps={(item, isActive) => ({
+          role: 'tab',
+          id: `search-engine-tab-${item.id}`,
+          'aria-selected': isActive,
+          'aria-controls': `search-engine-panel-${item.id}`,
+          tabIndex: isActive ? 0 : -1,
+        })}
+      />
+      <div className="min-h-0 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       {tab === 'analytics' ? (
         <div
@@ -265,7 +278,6 @@ export function SearchEnginePage() {
       ) : null}
           </div>
         </div>
-      </div>
     </div>
   )
 }
@@ -299,7 +311,7 @@ function KeyCard({
             Position {item.position + 1} · {shortFingerprint(item.fingerprint)}
           </CardDescription>
         </div>
-        <Badge variant={statusVariant(item.status)}>{item.status}</Badge>
+        <Badge variant={statusVariant(item.status)}>{statusLabel(item.status)}</Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
