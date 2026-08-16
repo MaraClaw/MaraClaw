@@ -443,6 +443,7 @@ class LLMModelCreate(BaseModel):
     supports_vision: bool = False
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
 
 
 class LLMModelUpdate(BaseModel):
@@ -457,6 +458,7 @@ class LLMModelUpdate(BaseModel):
     supports_vision: bool | None = None
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
 
 
 class LLMModelOut(BaseModel):
@@ -472,6 +474,10 @@ class LLMModelOut(BaseModel):
     supports_vision: bool = False
     max_output_tokens: int | None = None
     request_timeout: int | None = None
+    tenant_id: uuid.UUID | None = None
+    is_default: bool = False
+    is_fallback: bool = False
+    reasoning_effort: str | None = None
     created_at: datetime
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

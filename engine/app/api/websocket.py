@@ -599,11 +599,14 @@ class WebSocketChatHandler:
             try:
                 _ovr_uuid = uuid.UUID(str(override_model_id))
                 _ovr = await llm_model_dao.get(_ovr_uuid)
+                agent_tenant = getattr(self.agent, "tenant_id", None)
                 if (
                     _ovr
                     and _ovr.enabled
-                    and _ovr.tenant_id
-                    and (not self.llm_model or _ovr.tenant_id == self.llm_model.tenant_id)
+                    and (
+                        _ovr.tenant_id is None
+                        or (agent_tenant is not None and _ovr.tenant_id == agent_tenant)
+                    )
                 ):
                     effective_llm_model = _ovr
                 else:

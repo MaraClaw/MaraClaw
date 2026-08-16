@@ -37,6 +37,7 @@ from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.agent_manager import agent_manager
+from app.services.enterprise_llm import assert_models_in_tenant_pool, is_llm_pool_admin
 from app.services.gogcli_runtime import gogcli_skill_folder_names
 from app.services.okr_agent_hook import hook_new_agent
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
@@ -382,6 +383,7 @@ async def create_agent(
     default_webhook_rate = 5
     default_heartbeat_interval = 240
     tenant_default_model_id = None
+    tenant_fallback_model_id = None
     if target_tenant_id:
         tenant = await tenant_dao.get(target_tenant_id)
         if tenant:
@@ -391,13 +393,21 @@ async def create_agent(
             default_min_poll = tenant.min_poll_interval_floor or 5
             default_webhook_rate = tenant.max_webhook_rate_ceiling or 5
             tenant_default_model_id = tenant.default_model_id
+            tenant_fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
             if (
                 tenant.min_heartbeat_interval_minutes
                 and tenant.min_heartbeat_interval_minutes > default_heartbeat_interval
             ):
                 default_heartbeat_interval = tenant.min_heartbeat_interval_minutes
 
-    effective_primary_model_id = data.primary_model_id or tenant_default_model_id
+    can_assign_models = is_llm_pool_admin(current_user)
+    effective_primary_model_id = (
+        data.primary_model_id or tenant_default_model_id if can_assign_models else tenant_default_model_id
+    )
+    effective_fallback_model_id = (
+        data.fallback_model_id or tenant_fallback_model_id if can_assign_models else tenant_fallback_model_id
+    )
+    await assert_models_in_tenant_pool(target_tenant_id, effective_primary_model_id, effective_fallback_model_id)
     expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours) if ttl_hours and ttl_hours > 0 else None
 
     access_level = data.permission_access_level if data.permission_access_level in ("use", "manage") else "use"
@@ -423,7 +433,7 @@ async def create_agent(
                 "agent_type": data.agent_type or "native",
                 "gogcli_enabled": data.gogcli_enabled,
                 "primary_model_id": effective_primary_model_id,
-                "fallback_model_id": data.fallback_model_id,
+                "fallback_model_id": effective_fallback_model_id,
                 "max_tokens_per_day": data.max_tokens_per_day,
                 "max_tokens_per_month": data.max_tokens_per_month,
                 "template_id": data.template_id,
@@ -806,6 +816,20 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
         )
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
+
+    if "primary_model_id" in update_data or "fallback_model_id" in update_data:
+        if not is_llm_pool_admin(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an organization admin can change an agent's models",
+            )
+        next_primary = update_data.get("primary_model_id", agent.primary_model_id)
+        next_fallback = update_data.get("fallback_model_id", agent.fallback_model_id)
+        await assert_models_in_tenant_pool(
+            agent.tenant_id,
+            next_primary if isinstance(next_primary, uuid.UUID) else None,
+            next_fallback if isinstance(next_fallback, uuid.UUID) else None,
+        )
 
     if "expires_at" in update_data:
         if not is_admin:

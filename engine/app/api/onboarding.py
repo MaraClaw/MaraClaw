@@ -91,13 +91,15 @@ async def _ensure_row(user: UserRecord, entry_mode: str) -> UserTenantOnboarding
     return row
 
 
-async def _tenant_default_model_id(tenant_id: uuid.UUID | None) -> uuid.UUID | None:
+async def _tenant_model_ids(tenant_id: uuid.UUID | None) -> tuple[uuid.UUID | None, uuid.UUID | None]:
     if not tenant_id:
-        return None
+        return None, None
     tenant = await tenant_dao.get(tenant_id)
     if tenant and tenant.default_model_id:
-        return tenant.default_model_id
-    return await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
+        return tenant.default_model_id, getattr(tenant, "default_fallback_model_id", None)
+    primary = await llm_model_dao.first_enabled_id_for_tenant(tenant_id)
+    fallback = getattr(tenant, "default_fallback_model_id", None) if tenant else None
+    return primary, fallback
 
 
 async def _create_personal_assistant(
@@ -109,7 +111,7 @@ async def _create_personal_assistant(
         raise HTTPException(status_code=400, detail="Company is required before creating a personal assistant")
 
     template = await agent_template_dao.get_by_name("Private Assistant")
-    primary_model_id = await _tenant_default_model_id(user.tenant_id)
+    primary_model_id, fallback_model_id = await _tenant_model_ids(user.tenant_id)
     personality_note = f"Personality: {data.personality}. Work style: {data.work_style}."
     boundaries = data.boundaries.strip()
     bio = (
@@ -126,6 +128,7 @@ async def _create_personal_assistant(
         "tenant_id": user.tenant_id,
         "agent_type": "native",
         "primary_model_id": primary_model_id,
+        "fallback_model_id": fallback_model_id,
         "template_id": template.id if template else None,
         "status": "creating",
         "access_mode": "private",

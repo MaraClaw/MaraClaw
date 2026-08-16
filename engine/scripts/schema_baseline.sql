@@ -65,12 +65,15 @@ CREATE TABLE IF NOT EXISTS llm_models (
 	temperature FLOAT, 
 	request_timeout INTEGER, 
 	max_output_tokens INTEGER, 
+	reasoning_effort VARCHAR(16), 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_llm_models_tenant_id ON llm_models (tenant_id);
+
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16);
 
 CREATE TABLE IF NOT EXISTS okr_alignments (
 	id UUID NOT NULL, 
@@ -156,10 +159,12 @@ CREATE TABLE IF NOT EXISTS tenants (
 	max_webhook_rate_ceiling INTEGER NOT NULL DEFAULT 5, 
 	a2a_async_enabled BOOLEAN NOT NULL DEFAULT true, 
 	default_model_id UUID, 
+	default_fallback_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
+	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
+	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
@@ -169,6 +174,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_sso_domain ON tenants (sso_domain);
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_fallback_model_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
 	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;

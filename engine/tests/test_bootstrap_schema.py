@@ -63,6 +63,7 @@ def test_tenant_not_null_columns_have_defaults() -> None:
         "a2a_async_enabled BOOLEAN NOT NULL DEFAULT true",
         "is_system BOOLEAN NOT NULL DEFAULT false",
         "is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
+        "default_fallback_model_id UUID",
     ):
         assert column in block, column
     assert "CREATE TABLE IF NOT EXISTS tenant_email_domains" in sql

@@ -24,6 +24,7 @@ _LLM_COLUMNS = (
     "temperature",
     "request_timeout",
     "max_output_tokens",
+    "reasoning_effort",
     "created_at",
     "updated_at",
 )

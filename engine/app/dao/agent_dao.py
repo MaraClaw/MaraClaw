@@ -738,6 +738,34 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"model_id": model_id},
             )
 
+    async def migrate_fallback_model(
+        self,
+        *,
+        tenant_id: UUID,
+        old_model_id: UUID | None,
+        new_model_id: UUID,
+    ) -> int:
+        async with self.session() as db:
+            if old_model_id is None:
+                rows = await db.fetchall(
+                    "UPDATE agents SET fallback_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id IS NULL "
+                    + "RETURNING id",
+                    {"tenant_id": tenant_id, "new_model_id": new_model_id},
+                )
+            else:
+                rows = await db.fetchall(
+                    "UPDATE agents SET fallback_model_id = %(new_model_id)s "
+                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(old_model_id)s "
+                    + "RETURNING id",
+                    {
+                        "tenant_id": tenant_id,
+                        "old_model_id": old_model_id,
+                        "new_model_id": new_model_id,
+                    },
+                )
+            return len(rows)
+
     async def migrate_primary_model(
         self,
         *,

@@ -130,6 +130,16 @@ PATCHES = [
     """,
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_fallback_model_id UUID",
+    "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16)",
+    """
+    DO $$ BEGIN
+        ALTER TABLE tenants
+            ADD CONSTRAINT tenants_default_fallback_model_id_fkey
+            FOREIGN KEY (default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+    """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
     ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE
