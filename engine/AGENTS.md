@@ -58,7 +58,7 @@ No `alembic/`, no `app/models/`.
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
-| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.7 / gogcli 0.36 / OpenClaw 2026.7.1-2; Hub publish is `publish-openclaw-local-dockerfile.sh` |
+| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.7 / gogcli 0.37 / OpenClaw 2026.7.1-2; Hub publish is `publish-openclaw-local-dockerfile.sh` |
 
 ## CODE MAP
 
