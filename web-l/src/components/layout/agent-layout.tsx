@@ -72,7 +72,7 @@ export function AgentLayout() {
   const agent = query.data
 
   return (
-    <div className="flex h-full min-h-[calc(100svh-3.5rem)] flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
