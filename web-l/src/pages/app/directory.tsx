@@ -2,17 +2,23 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 
+import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
 import { ApiError } from '@/lib/http'
-import { cn } from '@/lib/utils'
 
-const tabs = ['People', 'Synced', 'Departments'] as const
+const tabs = [
+  { id: 'people', label: 'People', icon: 'people' },
+  { id: 'synced', label: 'Synced', icon: 'synced' },
+  { id: 'departments', label: 'Departments', icon: 'departments' },
+] as const satisfies readonly SectionRailItem[]
+
+type DirectoryTab = (typeof tabs)[number]['id']
 
 export function DirectoryPage() {
-  const [tab, setTab] = useState<(typeof tabs)[number]>('People')
+  const [tab, setTab] = useState<DirectoryTab>('people')
   const [search, setSearch] = useState('')
   const users = useQuery({ queryKey: ['directory', 'users'], queryFn: listOrgUsers })
   const members = useQuery({ queryKey: ['directory', 'members', search], queryFn: () => listOrgMembers(search) })
@@ -31,36 +37,32 @@ export function DirectoryPage() {
   const query = search.trim()
 
   return (
-    <div className="space-y-5 p-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold">Directory</h1>
-        <p className="text-sm text-muted-foreground">People in this company and members synced from IM providers.</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {tabs.map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={cn(
-              'rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted',
-              tab === item && 'bg-muted text-foreground',
-            )}
-            onClick={() => setTab(item)}
-          >
-            {item}
-          </button>
-        ))}
-        <Input
-          type="search"
-          className="ml-auto h-9 max-w-xs"
-          placeholder="Search"
-          aria-label="Search directory"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </div>
-
-      {tab === 'People' ? (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
+      <SectionRail items={tabs} active={tab} onSelect={setTab} label="Directory sections" />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border bg-background px-5 py-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="font-display text-2xl font-semibold">Directory</h1>
+              <p className="text-sm text-muted-foreground">
+                People in this company and members synced from IM providers.
+              </p>
+            </div>
+            {tab !== 'departments' ? (
+              <Input
+                type="search"
+                className="h-9 max-w-xs"
+                placeholder="Search"
+                aria-label="Search directory"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            ) : null}
+          </div>
+        </div>
+        <SectionRail items={tabs} active={tab} onSelect={setTab} label="Directory sections" compact />
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain p-6">
+      {tab === 'people' ? (
         <PersonCardList
           loading={users.isLoading}
           error={users.error}
@@ -84,7 +86,7 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'Synced' ? (
+      {tab === 'synced' ? (
         <PersonCardList
           loading={members.isLoading}
           error={members.error}
@@ -109,7 +111,7 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'Departments' ? (
+      {tab === 'departments' ? (
         <div className="space-y-2">
           {departments.isLoading ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -128,6 +130,8 @@ export function DirectoryPage() {
           </ul>
         </div>
       ) : null}
+        </div>
+      </div>
     </div>
   )
 }

@@ -17,7 +17,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
-| `/app/directory` | `directory.tsx` | directory-api |
+| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
 | `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user`; always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |

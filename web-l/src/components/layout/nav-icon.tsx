@@ -23,6 +23,8 @@ const ICON_NAMES = [
   'vault',
   'pages',
   'browser',
+  'synced',
+  'departments',
 ] as const
 
 export type NavIconName = (typeof ICON_NAMES)[number]
