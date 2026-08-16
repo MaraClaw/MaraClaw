@@ -805,7 +805,7 @@ class WebSocketChatHandler:
                 nonlocal needs_onboarding_mark, onboarding_target_phase
 
                 async def _on_failover(reason: str):
-                    await self.websocket.send_json({"type": "info", "content": f"Primary model error, {reason}"})
+                    await self.websocket.send_json({"type": "info", "content": reason})
 
                 _truncated = truncate_messages_with_pair_integrity(self.conversation, self.ctx_size)
 

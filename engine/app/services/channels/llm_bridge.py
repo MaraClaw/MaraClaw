@@ -72,14 +72,13 @@ async def _call_llm_with_config(
     on_tool_call: ToolCallback | None = None,
 ) -> str:
     """Call LLM with pre-loaded agent/model objects. No DB session needed."""
-    from app.services.llm import call_llm
+    from app.services.llm import call_llm_with_failover
+    from app.services.llm.router import load_agent_model_bundle, select_turn_model
 
     if agent is None:
         return "⚠️ Agent not found."
     if is_agent_expired(agent):
         return "This Agent has expired and is off duty. Please contact your admin to extend its service."
-
-    from app.services.llm.router import load_agent_model_bundle, select_turn_model
 
     bundle = await load_agent_model_bundle(agent, primary=model, fallback=fallback_model)
     choice = await select_turn_model(
@@ -88,8 +87,7 @@ async def _call_llm_with_config(
         history=history,
         agent_id=agent_id,
     )
-    selected = choice.model or model
-    selected_fallback = choice.failover_model if choice.model is not None else fallback_model
+    selected = choice.model
     if not selected:
         return f"⚠️ {agent.name} has no LLM model configured. Set one in the admin console."
 
@@ -101,6 +99,8 @@ async def _call_llm_with_config(
 
     effective_user_id = user_id or agent_id
     timeout = _get_llm_timeout(selected)
+    if choice.failover_model:
+        timeout = max(timeout, _get_llm_timeout(choice.failover_model))
     turn = TurnContext(
         agent=agent,
         primary_model=bundle.primary,
@@ -114,11 +114,12 @@ async def _call_llm_with_config(
 
     try:
         return await asyncio.wait_for(
-            call_llm(
-                selected,
-                messages,
-                agent.name,
-                agent.role_description or "",
+            call_llm_with_failover(
+                primary_model=selected,
+                fallback_model=choice.failover_model,
+                messages=messages,
+                agent_name=agent.name,
+                role_description=agent.role_description or "",
                 agent_id=agent_id,
                 user_id=effective_user_id,
                 session_id=session_id,
@@ -132,78 +133,10 @@ async def _call_llm_with_config(
         )
     except TimeoutError:
         logger.error(f"[LLM] Call timed out after {timeout}s (agent_id={agent_id}, model={selected.model})")
-        if selected_fallback:
-            fallback_timeout = _get_llm_timeout(selected_fallback)
-            logger.info(
-                f"[LLM] Retrying timed-out request with fallback model: {selected_fallback.model} "
-                + f"(timeout={fallback_timeout}s)"
-            )
-            try:
-                return await asyncio.wait_for(
-                    call_llm(
-                        selected_fallback,
-                        messages,
-                        agent.name,
-                        agent.role_description or "",
-                        agent_id=agent_id,
-                        user_id=effective_user_id,
-                        session_id=session_id,
-                        supports_vision=selected_fallback.supports_vision,
-                        on_chunk=on_chunk,
-                        on_thinking=on_thinking,
-                        on_tool_call=on_tool_call,
-                        turn=turn,
-                    ),
-                    timeout=fallback_timeout,
-                )
-            except TimeoutError:
-                logger.error(
-                    f"[LLM] Fallback call also timed out after {fallback_timeout}s "
-                    + f"(agent_id={agent_id}, model={selected_fallback.model})"
-                )
-                return f"⚠️ Model response timed out (>{int(fallback_timeout)}s). Please retry or shorten your request."
-            except Exception as fallback_error:
-                import traceback
-
-                traceback.print_exc()
-                return f"⚠️ Model error: Primary Timeout | Fallback: {str(fallback_error)[:80]}"
         return f"⚠️ Model response timed out (>{int(timeout)}s). Please retry or shorten your request."
     except Exception as error:
-        import traceback
-
-        traceback.print_exc()
         error_msg = str(error) or repr(error)
-        logger.error(f"[LLM] Primary model error: {error_msg}")
-        if selected_fallback:
-            logger.info(f"[LLM] Retrying with fallback model: {selected_fallback.model}")
-            fallback_timeout = _get_llm_timeout(selected_fallback)
-            try:
-                return await asyncio.wait_for(
-                    call_llm(
-                        selected_fallback,
-                        messages,
-                        agent.name,
-                        agent.role_description or "",
-                        agent_id=agent_id,
-                        user_id=effective_user_id,
-                        session_id=session_id,
-                        supports_vision=selected_fallback.supports_vision,
-                        on_chunk=on_chunk,
-                        on_thinking=on_thinking,
-                        on_tool_call=on_tool_call,
-                        turn=turn,
-                    ),
-                    timeout=fallback_timeout,
-                )
-            except TimeoutError:
-                logger.error(
-                    f"[LLM] Fallback call timed out after {fallback_timeout}s "
-                    + f"(agent_id={agent_id}, model={selected_fallback.model})"
-                )
-                return f"⚠️ Model error: Primary: {str(error)[:80]} | Fallback Timeout"
-            except Exception as fallback_error:
-                traceback.print_exc()
-                return f"⚠️ Model error: Primary: {str(error)[:80]} | Fallback: {str(fallback_error)[:80]}"
+        logger.error(f"[LLM] Model call failed: {error_msg}")
         return f"⚠️ Model call failed: {error_msg[:150]}"
 
 

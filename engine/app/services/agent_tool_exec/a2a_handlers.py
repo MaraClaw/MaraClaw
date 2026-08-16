@@ -184,7 +184,7 @@ async def _a2a_handle_consult(ctx: A2AContext) -> str:
             history=ctx.conversation_history,
             agent_id=ctx.target_agent.id,
         )
-        selected = choice.model or ctx.primary_model or ctx.fallback_model
+        selected = choice.model
         if selected is None:
             return f"⚠️ {ctx.target_agent.name} has no LLM model configured"
 

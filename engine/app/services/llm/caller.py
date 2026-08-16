@@ -827,7 +827,7 @@ async def call_llm_with_failover(
 
     if on_failover:
         try:
-            await on_failover(f"Switched to fallback model: {fallback_model.model}")
+            await on_failover("Switched to a backup model")
         except Exception as exc:
             logger.debug("[Failover] Callback failed: {}", exc)
 
@@ -918,24 +918,17 @@ async def call_agent_llm(
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": user_text})
 
-    if turn and turn.selected_model is not None:
-        selected_model = turn.selected_model
-        failover_model = turn.fallback_model
-        selected_slot = turn.selected_slot
-        complexity = turn.complexity
-        routing_reason = turn.routing_reason
-    else:
-        choice = await select_turn_model(
-            bundle,
-            user_text=user_text,
-            history=history,
-            agent_id=agent_id,
-        )
-        selected_model = choice.model
-        failover_model = choice.failover_model
-        selected_slot = choice.slot
-        complexity = choice.complexity
-        routing_reason = choice.reason
+    choice = await select_turn_model(
+        bundle,
+        user_text=user_text,
+        history=history,
+        agent_id=agent_id,
+    )
+    selected_model = choice.model
+    failover_model = choice.failover_model
+    selected_slot = choice.slot
+    complexity = choice.complexity
+    routing_reason = choice.reason
 
     if not selected_model:
         return f"⚠️ {agent.name} has no LLM model configured. Configure one in the admin console."
