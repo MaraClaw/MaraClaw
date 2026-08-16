@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -58,9 +58,27 @@ export function AgentNewPage() {
     },
   })
 
+  function goBack() {
+    if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
+      navigate(-1)
+      return
+    }
+    navigate('/app/agents')
+  }
+
   return (
     <div className="mx-auto max-w-lg space-y-6 p-6">
       <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mb-3 rounded-full px-4"
+          onClick={goBack}
+        >
+          <ArrowLeft className="size-4" aria-hidden />
+          Back
+        </Button>
         <h1 className="font-display text-2xl font-semibold">New agent</h1>
         <p className="text-sm text-muted-foreground">Private by default. Share with the company if teammates should use it.</p>
       </div>
