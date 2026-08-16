@@ -158,7 +158,7 @@ export function SearchEnginePage() {
     <div className="-m-6 flex h-[calc(100%+3rem)] min-h-0 overflow-hidden">
       <SectionRail {...railProps} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-background px-6 py-4">
+        <div className="shrink-0 bg-background px-6 py-4">
           <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
           <p className="mt-2 text-muted-foreground">
             {tab === 'analytics'
