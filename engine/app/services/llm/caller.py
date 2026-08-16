@@ -632,6 +632,8 @@ async def call_llm(
                 on_chunk=_buffer_chunk,
                 on_tool_delta=on_tool_delta,
                 on_thinking=on_thinking,
+                llm_provider=model.provider,
+                reasoning_effort=getattr(model, "reasoning_effort", None),
             )
         except LLMError as e:
             logger.error(
@@ -1042,6 +1044,8 @@ async def call_agent_llm_with_tools(
                         tools=tools_for_llm if tools_for_llm else None,
                         temperature=model.temperature,
                         max_tokens=max_tokens,
+                        llm_provider=model.provider,
+                        reasoning_effort=getattr(model, "reasoning_effort", None),
                     )
                 except Exception as e:
                     logger.error(f"[call_agent_llm_with_tools] Agent {agent_id}: LLM call error: {e}")

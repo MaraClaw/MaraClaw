@@ -291,6 +291,13 @@ class GeminiClient(LLMClient):
         if tool_config:
             payload["toolConfig"] = tool_config
 
+        from app.services.llm.reasoning import apply_reasoning_effort
+
+        apply_reasoning_effort(
+            payload,
+            provider=str(kwargs.pop("llm_provider", "") or "gemini"),
+            effort=kwargs.pop("reasoning_effort", None),
+        )
         payload.update(kwargs)
         return payload
 
