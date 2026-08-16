@@ -11,7 +11,13 @@ from psycopg.rows import DictRow
 
 from app.db import pool as pool_module, session as session_module
 from app.db.connection import DbConnection
-from app.db.session import bind_crud_connection, connection_ctx, get_connection, transaction
+from app.db.session import (
+    bind_crud_connection,
+    connection_ctx,
+    flush_request_transaction,
+    get_connection,
+    transaction,
+)
 
 
 class _FakeCursor:
@@ -168,6 +174,22 @@ async def test_transaction_with_explicit_connection_commits() -> None:
         await bound.execute("UPDATE t SET x = 1")
 
     assert raw.commits == 1
+    assert get_connection() is None
+
+
+@pytest.mark.asyncio
+async def test_flush_request_transaction_commits_before_request_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    agen = bind_crud_connection()
+    await agen.__anext__()
+    assert get_connection() is not None
+    await flush_request_transaction()
+    assert raw.commits == 1
+    with pytest.raises(StopAsyncIteration):
+        await agen.__anext__()
+    assert raw.commits == 2
     assert get_connection() is None
 
 

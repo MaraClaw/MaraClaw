@@ -198,6 +198,9 @@ async def _create_personal_assistant(
     from app.services.agent_manager import agent_manager
 
     write_gateway_api_key(agent, raw_key)
+    from app.db.session import flush_request_transaction
+
+    await flush_request_transaction()
     await agent_manager.initialize_agent_files(
         agent,
         personality=personality_note,

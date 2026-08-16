@@ -29,7 +29,7 @@ from app.dao.skill_dao import skill_dao
 from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
-from app.db.session import connection_ctx
+from app.db.session import connection_ctx, flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
@@ -515,6 +515,7 @@ async def create_agent(
         obj_in={"api_key_hash": key_hash},
     )
     write_gateway_api_key(agent, raw_key)
+    await flush_request_transaction()
 
     folder_names: list[str] = []
     template_mcp_servers: list[str] = []
@@ -541,6 +542,7 @@ async def create_agent(
 
     out = (await _agent_to_out(agent, current_user.id)).model_dump()
     out["api_key"] = raw_key
+    out["access_level"] = "manage"
     return out
 
 
