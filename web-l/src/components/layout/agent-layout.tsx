@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
-import { NavLink, Outlet, useParams } from 'react-router-dom'
+import { ArrowLeft, Loader2 } from 'lucide-react'
+import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
@@ -68,6 +68,23 @@ function AgentSectionLink({
   )
 }
 
+function AgentsListButton() {
+  const navigate = useNavigate()
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="rounded-full px-4"
+      onClick={() => navigate('/app/agents')}
+    >
+      <ArrowLeft className="size-4" aria-hidden />
+      Back
+    </Button>
+  )
+}
+
 export function AgentLayout() {
   const { agentId = '' } = useParams()
   const queryClient = useQueryClient()
@@ -111,60 +128,68 @@ export function AgentLayout() {
   }
 
   if (query.isError || !query.data) {
-    return <p className="p-6 text-sm text-destructive">This agent is not available.</p>
+    return (
+      <div className="space-y-3 p-6">
+        <AgentsListButton />
+        <p className="text-sm text-destructive">This agent is not available.</p>
+      </div>
+    )
   }
 
   const agent = query.data
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border px-5 py-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
-          <Badge variant="soft">{agent.status}</Badge>
-          {agent.is_expired ? <Badge>Expired</Badge> : null}
-          {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
-          {agent.access_level === 'manage' ? (
-            <div className="ml-auto flex gap-2">
-              {agent.status !== 'running' ? (
-                <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
-                  Start
+    <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
+      <nav
+        className="sticky top-0 hidden h-full w-24 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-background px-1.5 py-2 md:flex"
+        aria-label="Agent sections"
+      >
+        {tabs.map((tab) => (
+          <AgentSectionLink key={tab.to} tab={tab} />
+        ))}
+      </nav>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border bg-background px-5 py-4">
+          <div className="mb-3">
+            <AgentsListButton />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
+            <Badge variant="soft">{agent.status}</Badge>
+            {agent.is_expired ? <Badge>Expired</Badge> : null}
+            {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
+            {agent.access_level === 'manage' ? (
+              <div className="ml-auto flex gap-2">
+                {agent.status !== 'running' ? (
+                  <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
+                    Start
+                  </Button>
+                ) : null}
+                <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
+                  Stop
                 </Button>
-              ) : null}
-              <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
-                Stop
-              </Button>
-            </div>
+              </div>
+            ) : null}
+          </div>
+          {metrics.data ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Tokens today {metrics.data.tokens?.used_today ?? 0}
+              {metrics.data.tokens?.limit_day ? ` / ${metrics.data.tokens.limit_day}` : ''}
+              {' · '}
+              Tasks {metrics.data.tasks?.done ?? 0}/{metrics.data.tasks?.total ?? 0}
+              {metrics.data.approvals?.pending ? ` · ${metrics.data.approvals.pending} approvals` : ''}
+            </p>
+          ) : null}
+          {agent.role_description ? (
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
           ) : null}
         </div>
-        {metrics.data ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Tokens today {metrics.data.tokens?.used_today ?? 0}
-            {metrics.data.tokens?.limit_day ? ` / ${metrics.data.tokens.limit_day}` : ''}
-            {' · '}
-            Tasks {metrics.data.tasks?.done ?? 0}/{metrics.data.tasks?.total ?? 0}
-            {metrics.data.approvals?.pending ? ` · ${metrics.data.approvals.pending} approvals` : ''}
-          </p>
-        ) : null}
-        {agent.role_description ? (
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
-        ) : null}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           className="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-background px-3 py-1.5 md:hidden"
           aria-label="Agent sections"
         >
           {tabs.map((tab) => (
             <AgentSectionLink key={tab.to} tab={tab} compact />
-          ))}
-        </nav>
-        <nav
-          className="sticky top-0 hidden h-full w-24 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-background px-1.5 py-2 md:flex"
-          aria-label="Agent sections"
-        >
-          {tabs.map((tab) => (
-            <AgentSectionLink key={tab.to} tab={tab} />
           ))}
         </nav>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
