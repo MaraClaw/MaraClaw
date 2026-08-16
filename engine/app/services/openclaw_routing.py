@@ -1,7 +1,7 @@
 """Complexity routing for Docker-managed OpenClaw guests.
 
 The guest LLM is whatever ``openclaw.json`` currently names. Classify in the
-engine (same ``select_turn_model`` as native), persist the choice on the
+engine (``select_turn_model``), persist the choice on the
 gateway message, then rewrite the guest primary to the fail-closed applied
 model so the next heartbeat runs on that model. Fallback stays failover-only.
 """
