@@ -1,7 +1,5 @@
 """Company onboarding APIs."""
 
-import hashlib
-import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -16,6 +14,7 @@ from app.dao.onboarding_dao import user_tenant_onboarding_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.tenant_dao import tenant_dao
+from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.user import UserRecord
@@ -139,7 +138,7 @@ async def _create_personal_assistant(
     db: object | None,
     user: UserRecord,
     data: PersonalAssistantRequest,
-):
+) -> tuple[AgentRecord, str]:
     if not user.tenant_id:
         raise HTTPException(status_code=400, detail="Company is required before creating a personal assistant")
 
@@ -153,6 +152,9 @@ async def _create_personal_assistant(
         + (f" Boundaries: {boundaries}" if boundaries else "")
     )
 
+    from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
+
+    raw_key, key_hash = mint_openclaw_gateway_key()
     obj_in: dict[str, Any] = {
         "name": data.name.strip(),
         "role_description": "Private Assistant",
@@ -160,12 +162,12 @@ async def _create_personal_assistant(
         "creator_id": user.id,
         "tenant_id": user.tenant_id,
         "agent_type": "openclaw",
-        "api_key_hash": hashlib.sha256(f"oc-{secrets.token_urlsafe(32)}".encode()).hexdigest(),
+        "api_key_hash": key_hash,
         "primary_model_id": primary_model_id,
         "secondary_model_id": secondary_model_id,
         "fallback_model_id": fallback_model_id,
         "template_id": template.id if template else None,
-        "status": "creating",
+        "status": "idle",
         "access_mode": "private",
         "company_access_level": "use",
     }
@@ -192,8 +194,10 @@ async def _create_personal_assistant(
     )
     _ = await ensure_access_granted_platform_relationships(db, agent, created_by_user_id=user.id)
 
+    from app.api.agents import _persist_agent_runtime
     from app.services.agent_manager import agent_manager
 
+    write_gateway_api_key(agent, raw_key)
     await agent_manager.initialize_agent_files(
         agent,
         personality=personality_note,
@@ -205,12 +209,12 @@ async def _create_personal_assistant(
 
     try:
         _ = await agent_manager.start_container(db, agent)
+        agent = await _persist_agent_runtime(agent)
     except Exception:
         _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
         raise
 
-    refreshed = await agent_dao.get(agent.id)
-    return refreshed or agent
+    return agent, raw_key
 
 
 @router.get("/status")
@@ -238,7 +242,7 @@ async def create_personal_assistant(
             row = await user_tenant_onboarding_dao.update(db_obj=row, obj_in={"current_step": "opening"}) or row
             return {"agent": {"id": str(existing.id), "name": existing.name}, "onboarding": _status_payload(row)}
 
-    agent = await _create_personal_assistant(db, current_user, data)
+    agent, raw_key = await _create_personal_assistant(db, current_user, data)
     row = (
         await user_tenant_onboarding_dao.update(
             db_obj=row,
@@ -250,7 +254,10 @@ async def create_personal_assistant(
         )
         or row
     )
-    return {"agent": {"id": str(agent.id), "name": agent.name}, "onboarding": _status_payload(row)}
+    return {
+        "agent": {"id": str(agent.id), "name": agent.name, "api_key": raw_key},
+        "onboarding": _status_payload(row),
+    }
 
 
 @router.post("/complete")

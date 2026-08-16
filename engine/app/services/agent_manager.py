@@ -26,6 +26,14 @@ from app.services.storage_runtime.base import StorageBackend
 settings = get_settings()
 
 
+def _read_gateway_key_file(agent_dir: Path) -> str | None:
+    path = agent_dir / ".maraclaw-gateway-key"
+    if not path.is_file():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
 def guest_model_ref(model: LLMModelRecord | None) -> str | None:
     """OpenClaw ``provider/model`` ref, or ``None`` when either part is missing."""
     if model is None:
@@ -426,6 +434,17 @@ class AgentManager:
         container_port = 18789 + hash(str(agent.id)) % 10000
 
         try:
+            container_envs: dict[str, str] = {
+                "OPENCLAW_GATEWAY_TOKEN": str(uuid.uuid4()),
+                "OPENCLAW_HOME": "/home/node",
+                "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
+                "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
+                "TENCENTDB_PLUGIN_VERSION": settings.TENCENTDB_PLUGIN_VERSION,
+                **gogcli_envs,
+            }
+            gateway_key = _read_gateway_key_file(agent_dir)
+            if gateway_key:
+                container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
             container = self.docker_client.run(
                 settings.OPENCLAW_IMAGE,
                 detach=True,
@@ -433,14 +452,7 @@ class AgentManager:
                 networks=[settings.DOCKER_NETWORK],
                 publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
                 volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
-                envs={
-                    "OPENCLAW_GATEWAY_TOKEN": str(uuid.uuid4()),
-                    "OPENCLAW_HOME": "/home/node",
-                    "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
-                    "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
-                    "TENCENTDB_PLUGIN_VERSION": settings.TENCENTDB_PLUGIN_VERSION,
-                    **gogcli_envs,
-                },
+                envs=container_envs,
                 restart="unless-stopped",
                 labels={
                     "maraclaw.agent_id": str(agent.id),

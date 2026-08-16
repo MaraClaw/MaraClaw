@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import secrets
 import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -44,6 +42,7 @@ from app.services.enterprise_llm import (
 )
 from app.services.gogcli_runtime import gogcli_skill_folder_names
 from app.services.okr_agent_hook import hook_new_agent
+from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
 from app.services.resource_discovery import import_mcp_from_smithery
 from app.services.storage import get_storage_backend
@@ -510,11 +509,12 @@ async def create_agent(
 
     _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
 
-    raw_key = f"oc-{secrets.token_urlsafe(32)}"
+    raw_key, key_hash = mint_openclaw_gateway_key()
     agent = await agent_dao.update(
         db_obj=agent,
-        obj_in={"api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest()},
+        obj_in={"api_key_hash": key_hash},
     )
+    write_gateway_api_key(agent, raw_key)
 
     folder_names: list[str] = []
     template_mcp_servers: list[str] = []
@@ -1049,11 +1049,12 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only creator or admin can manage API keys")
-    raw_key = f"oc-{secrets.token_urlsafe(32)}"
+    raw_key, key_hash = mint_openclaw_gateway_key()
     _ = await agent_dao.update(
         db_obj=agent,
-        obj_in={"api_key_hash": hashlib.sha256(raw_key.encode()).hexdigest()},
+        obj_in={"api_key_hash": key_hash},
     )
+    write_gateway_api_key(agent, raw_key)
 
     return {"api_key": raw_key, "message": "Key configured successfully."}
 
