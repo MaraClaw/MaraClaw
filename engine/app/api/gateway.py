@@ -417,7 +417,9 @@ async def get_setup_guide(
         raise HTTPException(status_code=403, detail="Key does not match this agent")
 
     # Note: we use the raw key from the header since the agent already authenticated
-    base_url = "https://try.maraclaw.ai"
+    from app.services.openclaw_inbox import guest_engine_base_url
+
+    base_url = guest_engine_base_url()
 
     skill_content = f"""---
 name: maraclaw_sync

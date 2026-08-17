@@ -123,4 +123,12 @@ async def enqueue_openclaw_message(
         choice.reason,
         guest_model_ref(choice.model),
     )
+    try:
+        from app.services.openclaw_inbox import wake_openclaw_inbox
+
+        woke = await wake_openclaw_inbox(agent, content=content)
+        if not woke:
+            logger.warning("[OpenClaw] guest did not accept inbox wake for {}", agent.id)
+    except Exception as exc:
+        logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
     return created

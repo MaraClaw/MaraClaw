@@ -163,6 +163,8 @@ class Settings(BaseSettings):
     DOCKER_NETWORK: str = "maraclaw_network"
     OPENCLAW_IMAGE: str = "openclaw:local"
     OPENCLAW_GATEWAY_PORT: int = 18789
+    # How OpenClaw guests reach this engine on the Docker network.
+    OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     OPENCLAW_MEMORY_TENCENTDB_ENABLED: bool = True
     TENCENTDB_PLUGIN_VERSION: str = "1.0.1"
     GOGCLI_ENABLED: bool = True

@@ -1,6 +1,7 @@
 """Agent lifecycle manager - Docker container management for OpenClaw Gateway instances."""
 
 import json
+import secrets
 import shutil
 import uuid
 from datetime import UTC, datetime
@@ -21,6 +22,13 @@ from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_subscription import ensure_fresh_access_token
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
+from app.services.openclaw_inbox import (
+    ensure_openclaw_tokens,
+    guest_engine_base_url,
+    heartbeat_block,
+    inbox_config_block,
+    write_maraclaw_sync_skill,
+)
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
 
@@ -333,6 +341,7 @@ class AgentManager:
         )
         path = agent_dir / "openclaw.json"
         self._atomic_write_json(path, config)
+        write_maraclaw_sync_skill(agent_dir)
         return path
 
     def _generate_openclaw_config(
@@ -354,14 +363,20 @@ class AgentManager:
         aliases = self._model_aliases(model, secondary, fallback)
         if aliases:
             defaults["models"] = aliases
+        defaults["heartbeat"] = heartbeat_block()
         config: JsonObject = {
-            "agent": {"model": chosen_ref},
             "agents": {"defaults": defaults},
         }
+        agent_dir = self._agent_dir(agent.id)
+        if agent_dir.exists():
+            gateway_token, hooks_token = ensure_openclaw_tokens(agent_dir)
+        else:
+            gateway_token, hooks_token = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+        config.update(inbox_config_block(hooks_token, gateway_token))
 
         env = self._collect_provider_env(model, secondary, fallback)
-        if env:
-            config["env"] = env
+        env["MARACLAW_API_BASE"] = guest_engine_base_url()
+        config["env"] = {"vars": env}
 
         linkup_skill_env: JsonObject = {}
         if linkup_proxy:
@@ -476,12 +491,15 @@ class AgentManager:
         container_port = 18789 + hash(str(agent.id)) % 10000
 
         try:
+            gateway_token, _hooks_token = ensure_openclaw_tokens(agent_dir)
+            write_maraclaw_sync_skill(agent_dir)
             container_envs: dict[str, str] = {
-                "OPENCLAW_GATEWAY_TOKEN": str(uuid.uuid4()),
+                "OPENCLAW_GATEWAY_TOKEN": gateway_token,
                 "OPENCLAW_HOME": "/home/node",
                 "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
                 "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
                 "TENCENTDB_PLUGIN_VERSION": settings.TENCENTDB_PLUGIN_VERSION,
+                "MARACLAW_API_BASE": guest_engine_base_url(),
                 **gogcli_envs,
             }
             gateway_key = _read_gateway_key_file(agent_dir)

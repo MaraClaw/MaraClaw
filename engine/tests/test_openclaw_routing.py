@@ -84,15 +84,15 @@ def test_generate_openclaw_config_registers_secondary_and_selects_it() -> None:
         selected=secondary,
     )
 
-    assert config["agent"]["model"] == "anthropic/haiku"
+    assert "agent" not in config
     defaults = config["agents"]["defaults"]
     assert defaults["model"]["primary"] == "anthropic/haiku"
     assert defaults["model"]["fallbacks"] == ["openai/gpt-5.4"]
     assert defaults["models"]["anthropic/opus"] == {"alias": "primary"}
     assert defaults["models"]["anthropic/haiku"] == {"alias": "secondary"}
     assert defaults["models"]["openai/gpt-5.4"] == {"alias": "fallback"}
-    assert config["env"]["ANTHROPIC_API_KEY"] == "sk-opus"
-    assert config["env"]["OPENAI_API_KEY"] == "sk-gpt"
+    assert config["env"]["vars"]["ANTHROPIC_API_KEY"] == "sk-opus"
+    assert config["env"]["vars"]["OPENAI_API_KEY"] == "sk-gpt"
 
 
 def test_write_guest_config_skips_missing_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

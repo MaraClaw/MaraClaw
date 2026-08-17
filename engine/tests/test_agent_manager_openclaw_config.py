@@ -129,13 +129,17 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         agent, primary, secondary=secondary, fallback=fallback, selected=primary
     )
 
-    assert config["agent"]["model"] == "xai/grok-4.6"
+    assert "agent" not in config
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
     assert config["agents"]["defaults"]["model"]["fallbacks"] == ["xai/grok-4.5"]
     assert config["agents"]["defaults"]["models"]["xai/grok-4.6"] == {"alias": "primary"}
-    assert config["env"]["XAI_API_KEY"] == "xai-sub-access-token"
-    assert "GROK_API_KEY" not in config["env"]
-    assert "xai-sub-access-token" == config["env"]["XAI_API_KEY"]
+    assert config["env"]["vars"]["XAI_API_KEY"] == "xai-sub-access-token"
+    assert "GROK_API_KEY" not in config["env"]["vars"]
+    assert config["hooks"]["enabled"] is True
+    assert config["gateway"]["mode"] == "local"
+    assert config["gateway"]["bind"] == "loopback"
+    assert config["agents"]["defaults"]["heartbeat"]["every"] == "1m"
+    assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
 
 def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):
@@ -183,6 +187,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert config["plugins"]["slots"]["memory"] == "memory-tencentdb"
     assert config["plugins"]["slots"]["contextEngine"] == "memory-tencentdb"
     assert config["plugins"]["entries"]["memory-tencentdb"]["config"]["offload"] == {"enabled": True}
+    assert (agent_dir / "workspace" / "skills" / "maraclaw-sync" / "SKILL.md").is_file()
 
     run_kwargs = docker_client.run_kwargs
     assert run_kwargs is not None
@@ -195,6 +200,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
     assert run_kwargs["envs"]["TENCENTDB_PLUGIN_VERSION"] == "7.8.9"
     assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
+    assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
     assert run_kwargs["publish"] == [(agent.container_port, settings.OPENCLAW_GATEWAY_PORT)]
     assert run_kwargs["restart"] == "unless-stopped"
