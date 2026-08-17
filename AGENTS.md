@@ -67,7 +67,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 **`engine/`** - multi-tenant digital-employee platform. Entry: `app/main.py`, `app/config.py`, `app/api/`, `app/services/`, `app/db/` + `dao/` + `records/`, `scripts/schema_baseline.sql`. Role catalog `agent_templates/` ≠ workspace scaffold `agent_template/`. IM: `app/services/channels/` + `docs/channels.md`. Hard rules: psycopg3 only (no SQLAlchemy/Alembic/`app/models/`); `from app.core.logging import logger`; thin routes. Deep map: **`engine/AGENTS.md`**.
 
 ```bash
-cd engine && ./start-from-sourcecode.sh   # or ./start-from-docker.sh
+cd engine && ./start-from-docker.sh
 cd engine && uv run --extra dev pytest
 ```
 

@@ -10,6 +10,22 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.core.logging import logger, set_trace_id
 from app.core.row_memo import clear_row_memo
 
+_QUIET_EXACT_PATHS = frozenset({"/api/health", "/health", "/healthz"})
+
+
+def is_quiet_access_log(method: str, path: str) -> bool:
+    """True for high-frequency probes that should not flood INFO logs."""
+    verb = method.upper()
+    if path in _QUIET_EXACT_PATHS:
+        return True
+    if verb == "GET" and path.endswith("/unread-count"):
+        return True
+    if verb == "GET" and "/sessions/" in path and path.endswith("/messages"):
+        return True
+    if path.endswith(("/gateway/poll", "/gateway/heartbeat")):
+        return verb in {"GET", "POST"}
+    return False
+
 
 class TraceIdMiddleware(BaseHTTPMiddleware):
     """Middleware to inject trace ID into request context and log requests."""
@@ -28,7 +44,10 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
 
         # Log request
         client_host = request.client.host if request.client else "-"
-        logger.info(f"--> {request.method} {request.url.path} [client: {client_host}]")
+        path = request.url.path
+        quiet = is_quiet_access_log(request.method, path)
+        emit = logger.debug if quiet else logger.info
+        emit(f"--> {request.method} {path} [client: {client_host}]")
 
         try:
             response = await call_next(request)
@@ -37,8 +56,11 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
             # Add trace ID to response headers
             response.headers["X-Trace-Id"] = trace_id
 
-            # Log response
-            logger.info(f"<-- {request.method} {request.url.path} {response.status_code} {duration:.3f}s")
+            # Failed probes stay visible; successes stay on debug.
+            if quiet and response.status_code < 400:
+                logger.debug(f"<-- {request.method} {path} {response.status_code} {duration:.3f}s")
+            else:
+                logger.info(f"<-- {request.method} {path} {response.status_code} {duration:.3f}s")
 
             return response
 

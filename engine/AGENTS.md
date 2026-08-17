@@ -84,7 +84,7 @@ No `codegraph_*` in this harness. LSP document symbols + ripgrep centrality (202
 
 ## CONVENTIONS
 
-- Start via `./start-from-sourcecode.sh` or `./start-from-docker.sh`. Requires **≥3.14.5** (`pyproject`); pin/runtime **3.14.7** (`.python-version`, Docker `python:3.14.7-slim-trixie`). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
+- Start via `./start-from-docker.sh`. Requires **≥3.14.5** (`pyproject`); pin/runtime **3.14.7** (`.python-version`, Docker `python:3.14.7-slim-trixie`). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
 - Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
 - Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
@@ -121,8 +121,6 @@ No `codegraph_*` in this harness. LSP document symbols + ripgrep centrality (202
 ## COMMANDS
 
 ```bash
-./start-from-sourcecode.sh
-SKIP_INSTALL=1 SKIP_MIGRATIONS=1 ./start-from-sourcecode.sh
 ./start-from-docker.sh
 
 uv run --extra dev ruff check .
@@ -141,7 +139,7 @@ uv run python -m app.scripts.bootstrap_db
 
 - No `.github/workflows` in this checkout. Local gates: ruff, basedpyright (`reportAny`), both freeze scripts, ty, pytest. No Docker/schema job. `scripts/lint.sh` skips freezes and runs `ty check --force-exclude`. `scripts/test.sh` is the 90% gate.
 - Backend `Dockerfile` `pip install`s from `pyproject.toml` (no `uv.lock`). `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. It also mounts the host Docker socket plus a Linux `docker` CLI so python-on-whales can start OpenClaw agent containers, dual-mounts `DATA_DIR` so those bind-mounts resolve on the host, and creates `DOCKER_NETWORK` (`maraclaw_network`). Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
-- `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. Source start always bootstraps unless `SKIP_MIGRATIONS=1`. `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
+- `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
 - Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).

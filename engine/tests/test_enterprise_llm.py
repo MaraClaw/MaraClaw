@@ -82,6 +82,17 @@ def test_org_admin_cannot_manage_foreign_or_global_model():
     pool.assert_can_manage_model(_user(role="platform_admin", tenant_id=None), _model(tenant_id=_OTHER))
 
 
+def test_model_usable_in_tenant_is_org_only():
+    own = _model()
+    assert pool.model_usable_in_tenant(own, _TENANT) is True
+    assert pool.model_usable_in_tenant(own, _OTHER) is False
+    assert pool.model_usable_in_tenant(own, None) is False
+    assert pool.model_usable_in_tenant(_model(tenant_id=None), _TENANT) is False
+    assert pool.model_usable_in_tenant(_model(enabled=False), _TENANT) is False
+    assert pool.owned_model_or_none(_model(tenant_id=_OTHER), _TENANT) is None
+    assert pool.owned_model_or_none(own, _TENANT) is own
+
+
 def test_member_serialization_strips_secrets():
     model = _model()
     public = pool.serialize_llm_model(model, is_admin=False, default_model_id=model.id)
@@ -127,6 +138,13 @@ async def test_assert_models_in_tenant_pool_rejects_foreign_and_disabled():
     with patch.object(pool.llm_model_dao, "get_many", AsyncMock(return_value=[ok])):
         await pool.assert_models_in_tenant_pool(_TENANT, ok.id)
     await pool.assert_models_in_tenant_pool(_TENANT, None)
+    global_row = _model(tenant_id=None)
+    with (
+        patch.object(pool.llm_model_dao, "get_many", AsyncMock(return_value=[global_row])),
+        pytest.raises(HTTPException) as global_denied,
+    ):
+        await pool.assert_models_in_tenant_pool(_TENANT, global_row.id)
+    assert global_denied.value.status_code == 400
 
 
 @pytest.mark.asyncio

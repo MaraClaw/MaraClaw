@@ -17,7 +17,7 @@ from app.services.chat_persist import persist_chat_message
 from app.services.chat_session_service import ensure_primary_platform_session
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
-from app.services.onboarding import is_onboarded
+from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
@@ -100,14 +100,40 @@ class ConnectionManager:
             local_connections=self._local_connections(agent_id),
         )
 
-    async def send_to_session(self, agent_id: str, session_id: str, message: RealtimeMessage):
-        """Send message only to WebSocket connections matching the given session_id."""
-        await realtime_router.route_message(
-            agent_id=agent_id,
-            message=message,
-            local_connections=self._local_connections(agent_id),
-            session_id=session_id,
-        )
+    async def send_to_session(
+        self,
+        agent_id: str,
+        session_id: str,
+        message: RealtimeMessage,
+        user_id: str | None = None,
+    ):
+        """Send to sockets on ``session_id``, or the user's live sockets if none match."""
+        wanted = (session_id or "").strip().lower()
+        local = self._local_connections(agent_id)
+        session_hits = [(ws, sid, uid) for ws, sid, uid in local if (sid or "").strip().lower() == wanted]
+        if session_hits:
+            await realtime_router.route_message(
+                agent_id=agent_id,
+                message=message,
+                local_connections=session_hits,
+                session_id=None,
+            )
+            return
+        if user_id:
+            logger.info(
+                "[WS] no socket for session {} agent={}; delivering to user {}",
+                session_id,
+                agent_id,
+                user_id,
+            )
+            await realtime_router.route_message(
+                agent_id=agent_id,
+                message=message,
+                local_connections=local,
+                user_id=user_id,
+            )
+            return
+        logger.warning("[WS] dropped live reply; no socket agent={} session={}", agent_id, session_id)
 
     async def send_to_user(self, agent_id: str, user_id: str, message: RealtimeMessage):
         """Send message to all live WebSocket sessions of a given platform user for an agent."""
@@ -390,9 +416,19 @@ class WebSocketChatHandler:
             continue
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
-        """Returns True if the onboarding trigger was ignored (already onboarded)."""
+        """Returns True if the onboarding trigger was ignored (already started)."""
         if await is_onboarded(None, self.agent_id, self.user.id):
             logger.info("[WS] Onboarding trigger ignored - pair already onboarded")
+            await self.websocket.send_json(
+                {
+                    "type": "onboarded",
+                    "agent_id": str(self.agent_id),
+                }
+            )
+            return True
+        claimed = await try_begin_onboarding_greeting(None, self.agent_id, self.user.id)
+        if not claimed:
+            logger.info("[WS] Onboarding trigger ignored - greeting already claimed")
             await self.websocket.send_json(
                 {
                     "type": "onboarded",
@@ -456,20 +492,21 @@ class WebSocketChatHandler:
 
     async def _route_openclaw(self, content: str):
         """Enqueues message for OpenClaw edge node poll."""
-        from app.services.openclaw_routing import enqueue_openclaw_message
+        from app.services.openclaw_routing import NoCompanyModelError, enqueue_openclaw_message
 
-        _ = await enqueue_openclaw_message(
-            agent=self.agent,
-            content=content,
-            sender_user_id=self.user.id,
-            conversation_id=self.conv_id,
-            history=self.conversation,
-        )
+        await self.websocket.send_json({"type": "status", "content": "thinking"})
+        try:
+            _ = await enqueue_openclaw_message(
+                agent=self.agent,
+                content=content,
+                sender_user_id=self.user.id,
+                conversation_id=self.conv_id,
+                history=self.conversation,
+                await_wake=False,
+            )
+        except NoCompanyModelError as exc:
+            logger.warning("[WS] OpenClaw enqueue blocked: {}", exc)
+            await self.websocket.send_json({"type": "error", "content": str(exc)})
+            return
         logger.info("[WS] OpenClaw: message queued for gateway poll")
-        await self.websocket.send_json(
-            {
-                "type": "info",
-                "content": "Message forwarded to OpenClaw agent. Waiting for response...",
-            }
-        )
 

@@ -1,6 +1,7 @@
 import uuid
 from types import SimpleNamespace
 
+import pytest
 from fastapi import WebSocket
 from starlette.datastructures import State
 from starlette.types import Message, Scope
@@ -56,3 +57,27 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
     assert calls["get_primary"]["user_id"] == user_id
     assert calls["ensure"]["agent_id"] == agent_id
     assert calls["ensure"]["user_id"] == user_id
+
+
+@pytest.mark.asyncio
+async def test_send_to_session_falls_back_to_user(monkeypatch) -> None:
+    sent: list[object] = []
+
+    async def route_message(**kwargs):
+        sent.append(kwargs)
+
+    monkeypatch.setattr(websocket.realtime_router, "route_message", route_message)
+    manager = websocket.ConnectionManager()
+    ws = object()
+    user_id = str(uuid.uuid4())
+    manager.active_connections["agent-1"] = [(ws, "other-session", user_id)]
+
+    await manager.send_to_session(
+        "agent-1",
+        "wanted-session",
+        {"type": "done", "content": "hi"},
+        user_id=user_id,
+    )
+
+    assert sent[0]["user_id"] == user_id
+    assert sent[0]["local_connections"] == [(ws, "other-session", user_id)]

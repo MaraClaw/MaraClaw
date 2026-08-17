@@ -8,7 +8,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - New storage behavior goes under `storage_runtime/`.
 - New sandbox backends go under `sandbox/local`, `sandbox/api`, or `sandbox/remote` and are registered through `sandbox/registry.py`. Read `sandbox/AGENTS.md` and `sandbox/local/AGENTS.md` before changing isolation, proxy, or bwrap behavior.
 - New trigger behavior goes under `trigger_runtime/`, not in `trigger_daemon.py` unless it is process-loop wiring.
-- New LLM provider/protocol work goes under `llm/`, preferably in `base.py`, `types.py`, `registry.py`, `factory.py`, or `providers/` rather than the compatibility-heavy `llm/client.py`. Company pool RBAC (who may add keys / assign tenant models) lives in `enterprise_llm.py`; routes stay thin.
+- New LLM provider/protocol work goes under `llm/`, preferably in `base.py`, `types.py`, `registry.py`, `factory.py`, or `providers/` rather than the compatibility-heavy `llm/client.py`. Company pool RBAC (who may add keys / assign tenant models) lives in `enterprise_llm.py`; routes stay thin. SuperGrok / X Premium device-code is `grok_oauth.py` (fakeable HTTP) + `grok_subscription.py` (session + encrypted pool upsert + refresh).
 - New document conversion belongs in `document_conversion/`, not in `agent_tools.py`.
 - New OKR behavior should use focused `okr_*.py` modules. Dashboard period math is `okr_periods.py` (UTC). HTTP models are `app/schemas/okr.py`. Do not grow `okr_reporting.py`. Gap/outreach still lives in `app/api/okr.py`.
 - New org-sync adapter/coordinator behavior belongs in `org_sync/`; keep `org_sync_adapter.py` as compatibility/facade glue when possible.

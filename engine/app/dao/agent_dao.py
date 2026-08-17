@@ -836,6 +836,17 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 )
             return len(rows)
 
+    async def assign_primary_where_null(self, *, tenant_id: UUID, model_id: UUID) -> int:
+        """Give the company model to agents that still have no primary."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agents SET primary_model_id = %(model_id)s "
+                + "WHERE tenant_id = %(tenant_id)s AND primary_model_id IS NULL "
+                + "RETURNING id",
+                {"tenant_id": tenant_id, "model_id": model_id},
+            )
+            return len(rows)
+
     async def migrate_primary_model(
         self,
         *,
@@ -888,7 +899,6 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM tasks WHERE agent_id = %(aid)s",
     "DELETE FROM chat_sessions WHERE peer_agent_id = %(aid)s",
     "DELETE FROM gateway_messages WHERE sender_agent_id = %(aid)s",
-    "UPDATE chat_messages SET sender_agent_id = NULL WHERE sender_agent_id = %(aid)s",
     "DELETE FROM agent_agent_relationships WHERE agent_id = %(aid)s OR target_agent_id = %(aid)s",
     "DELETE FROM plaza_posts WHERE author_id = %(aid)s",
     "DELETE FROM participants WHERE type = 'agent' AND ref_id = %(aid)s",

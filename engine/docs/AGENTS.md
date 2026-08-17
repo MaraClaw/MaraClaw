@@ -27,7 +27,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 ## Rules
 
 - Keep docs tied to real files, commands, env vars, or observed behavior in this repo.
-- Update docs when runner behavior changes in `start-from-sourcecode.sh`, `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
+- Update docs when runner behavior changes in `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
 - Prefer concise operational notes over broad design essays; root `AGENTS.md` carries global commands and hierarchy.
 - Refactoring notes should name concrete modules and verification blockers rather than vague cleanup goals.
 - Credential docs may describe paths and rotation, but must not include live tokens, OAuth refresh secrets, keyring passwords, or customer data.

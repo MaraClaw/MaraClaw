@@ -120,7 +120,9 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
                 await mark_trigger_executions_failed(execution_ids, "Agent has no LLM model configured")
             return
         model = await llm_model_dao.get(agent.primary_model_id)
-        if not model or not model.enabled:
+        from app.services.enterprise_llm import model_usable_in_tenant
+
+        if not model or not model_usable_in_tenant(model, getattr(agent, "tenant_id", None)):
             logger.warning(f"Agent {agent.name}'s model is unavailable, skipping trigger invocation")
             if execution_ids:
                 await mark_trigger_executions_failed(execution_ids, "Agent primary model is unavailable or disabled")

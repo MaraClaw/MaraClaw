@@ -160,11 +160,14 @@ async def _resolve_report_models(tenant_id: uuid.UUID) -> ResolvedReportModels:
     primary: LLMModelRecord | None = None
     fallback: LLMModelRecord | None = None
 
+    from app.services.enterprise_llm import owned_model_or_none
+
+    tenant_id = getattr(agent, "tenant_id", None)
     if agent.primary_model_id:
-        primary = await llm_model_dao.get(agent.primary_model_id)
+        primary = owned_model_or_none(await llm_model_dao.get(agent.primary_model_id), tenant_id)
 
     if agent.fallback_model_id:
-        fallback = await llm_model_dao.get(agent.fallback_model_id)
+        fallback = owned_model_or_none(await llm_model_dao.get(agent.fallback_model_id), tenant_id)
 
     if not primary and fallback:
         primary, fallback = fallback, None

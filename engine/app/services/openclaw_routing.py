@@ -8,6 +8,7 @@ model so the next heartbeat runs on that model. Fallback stays failover-only.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from uuid import UUID
 
@@ -17,9 +18,26 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_manager import agent_manager, guest_model_ref
+from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
+from app.services.openclaw_hot_cache import (
+    get_cached_bundle,
+    mark_ensured,
+    recently_ensured,
+    set_cached_bundle,
+)
+
+
+def _bundle_usable(bundle: ModelBundle | None) -> bool:
+    return bundle is not None and (
+        bundle.primary is not None or bundle.secondary is not None or bundle.fallback is not None
+    )
+
+
+class NoCompanyModelError(RuntimeError):
+    """The tenant pool has no usable model for this OpenClaw guest."""
 
 
 def requires_primary(messages: Sequence[GatewayMessageRecord]) -> bool:
@@ -69,16 +87,53 @@ async def enqueue_openclaw_message(
     sender_agent_id: UUID | None = None,
     conversation_id: str | None = None,
     history: list[OpenAIMessage] | None = None,
+    await_wake: bool = True,
 ) -> GatewayMessageRecord:
-    """Classify ``content``, rewrite guest config, and queue the gateway row."""
-    bundle = await load_agent_model_bundle(agent)
+    """Classify ``content``, rewrite guest config, and queue the gateway row.
+
+    Chat WS passes ``await_wake=False`` so the socket can ack immediately.
+    Background wake still runs the guest turn.
+    """
+    if not recently_ensured(agent):
+        agent = await ensure_agent_company_models(agent)
+    bundle = get_cached_bundle(agent)
+    if bundle is None:
+        bundle = await load_agent_model_bundle(agent)
+    if not _bundle_usable(bundle):
+        raise NoCompanyModelError(
+            "This company has no model assigned. Connect a Grok subscription or add a model in Admin → Models, "
+            + "then set it as primary."
+        )
+    mark_ensured(agent)
+    set_cached_bundle(agent, bundle)
     choice = await select_turn_model(
         bundle,
         user_text=content,
         history=history,
         agent_id=agent.id,
+        skip_classifier=True,
     )
     pending = await gateway_message_dao.list_pending(agent.id)
+    duplicate = next(
+        (
+            row
+            for row in pending
+            if (
+                row.content == content
+                and row.sender_user_id == sender_user_id
+                and sender_user_id is not None
+                and (row.conversation_id or "") == (conversation_id or "")
+            )
+        ),
+        None,
+    )
+    if duplicate is not None:
+        logger.info("[OpenClaw] skip duplicate pending inbox item agent={} id={}", agent.id, duplicate.id)
+        if await_wake:
+            await _run_inbox_wake(agent, content, duplicate.id)
+        else:
+            _schedule_inbox_wake(agent, content, duplicate.id)
+        return duplicate
     apply_model = applied_guest_model(choice.slot, choice.model, bundle, pending)
     try:
         _ = agent_manager.write_guest_config(
@@ -112,4 +167,54 @@ async def enqueue_openclaw_message(
         choice.reason,
         guest_model_ref(choice.model),
     )
+    if await_wake:
+        await _run_inbox_wake(agent, content, created.id)
+    else:
+        _schedule_inbox_wake(agent, content, created.id)
     return created
+
+
+async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
+    try:
+        from app.services.openclaw_inbox import wake_openclaw_inbox
+
+        woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
+        if not woke:
+            logger.info("[OpenClaw] inbox left pending for {}; guest gateway will pick it up", agent.id)
+            return
+        if message_id is not None:
+            _ = await gateway_message_dao.mark_delivered(message_id, agent.id)
+    except Exception as exc:
+        logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
+
+
+_wake_tasks: set[asyncio.Task[None]] = set()
+_wake_running: set[UUID] = set()
+_wake_again: dict[UUID, tuple[str, UUID | None]] = {}
+
+
+def _schedule_inbox_wake(
+    agent: AgentRecord, content: str, message_id: UUID | None = None
+) -> None:
+    """Start inbox wake without blocking the chat socket."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if agent.id in _wake_running:
+        _wake_again[agent.id] = (content, message_id)
+        return
+
+    async def _run() -> None:
+        _wake_running.add(agent.id)
+        try:
+            await _run_inbox_wake(agent, content, message_id)
+            follow = _wake_again.pop(agent.id, None)
+            if follow is not None:
+                await _run_inbox_wake(agent, follow[0], follow[1])
+        finally:
+            _wake_running.discard(agent.id)
+
+    task = loop.create_task(_run())
+    _wake_tasks.add(task)
+    task.add_done_callback(_wake_tasks.discard)

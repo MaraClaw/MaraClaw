@@ -482,6 +482,7 @@ class LLMModelOut(BaseModel):
     is_fallback: bool = False
     is_secondary: bool = False
     reasoning_effort: str | None = None
+    auth_kind: str = "api_key"
     created_at: datetime
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

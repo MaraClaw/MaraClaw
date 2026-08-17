@@ -37,7 +37,6 @@ from app.services.storage import store_agent_upload
 router = APIRouter(tags=["slack"])
 
 SLACK_MSG_LIMIT = 4000  # Slack text message char limit
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
 class SlackChannelPayload(TypedDict, total=False):
@@ -206,7 +205,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         logger.warning(f"[Slack] Agent {agent_id} not found")
         return {"ok": True}
     creator_id = agent_obj.creator_id
-    ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+    ctx_size = channel_inbound.routing_history_limit(agent_obj.context_window_size)
 
     _bot_token_for_info = config.app_secret or ""
     _slack_real_name = ""

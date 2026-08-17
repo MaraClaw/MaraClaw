@@ -281,6 +281,14 @@ PATCHES = [
     "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS routing_reason VARCHAR(40)",
     "UPDATE agents SET agent_type = 'openclaw' WHERE agent_type IS DISTINCT FROM 'openclaw'",
     "ALTER TABLE agents ALTER COLUMN agent_type SET DEFAULT 'openclaw'",
+    "ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT",
+    "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key'",
+    "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT",
+    "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
+    ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription'
+    """,
 ]
 
 

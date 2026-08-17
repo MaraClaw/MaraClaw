@@ -169,7 +169,14 @@ async def load_agent_model_bundle(
         secondary = loaded.get(agent.secondary_model_id)
     if fallback is None and getattr(agent, "fallback_model_id", None):
         fallback = loaded.get(agent.fallback_model_id)
-    return ModelBundle(primary=primary, secondary=secondary, fallback=fallback)
+    from app.services.enterprise_llm import owned_model_or_none
+
+    tenant_id = getattr(agent, "tenant_id", None)
+    return ModelBundle(
+        primary=owned_model_or_none(primary, tenant_id),
+        secondary=owned_model_or_none(secondary, tenant_id),
+        fallback=owned_model_or_none(fallback, tenant_id),
+    )
 
 
 def message_text(content: object) -> str:
@@ -355,6 +362,15 @@ def _default_worker(bundle: ModelBundle) -> tuple[LLMModelRecord | None, ModelSl
     return None, "primary"
 
 
+def _same_inference_target(left: LLMModelRecord | None, right: LLMModelRecord | None) -> bool:
+    if left is None or right is None:
+        return False
+    return (getattr(left, "provider", None), getattr(left, "model", None)) == (
+        getattr(right, "provider", None),
+        getattr(right, "model", None),
+    )
+
+
 def classifier_user_payload(user_text: str, history: list[OpenAIMessage] | None) -> str:
     prior = history_without_current_user(history, user_text)
     previous = ""
@@ -435,6 +451,7 @@ async def select_turn_model(
     has_images: bool | None = None,
     force_primary: bool = False,
     agent_id: uuid.UUID | None = None,
+    skip_classifier: bool = False,
 ) -> TurnSelection:
     """Pick the model for one inbound user turn."""
     prior_history = history_without_current_user(history, user_text)
@@ -454,6 +471,10 @@ async def select_turn_model(
             selected = _selection(default_model, default_slot, "manageable", "greeting", bundle)
     elif secondary is None:
         selected = _selection(default_model, default_slot, None, "no_secondary", bundle)
+    elif _same_inference_target(primary, secondary):
+        selected = _selection(
+            primary or default_model, "primary" if primary else default_slot, None, "same_model", bundle
+        )
     elif images and primary_vision and not secondary_vision:
         selected = _selection(primary or default_model, "primary", "complex", "vision", bundle)
     elif images and secondary_vision and not primary_vision:
@@ -466,6 +487,14 @@ async def select_turn_model(
             )
         elif guessed == "manageable":
             selected = _selection(secondary, "secondary", "manageable", "heuristic_manageable", bundle)
+        elif skip_classifier:
+            selected = _selection(
+                primary or default_model,
+                "primary" if primary else default_slot,
+                "complex",
+                "heuristic_unknown",
+                bundle,
+            )
         else:
             label, classifier_ms, classifier_tokens = await _classify_with_llm(
                 secondary, user_text, prior_history, agent_id

@@ -290,13 +290,26 @@ class UserDAO(BaseDAO[UserRecord]):
             return [UserRecord.from_row(row) for row in rows]
 
     async def display_name_for_id(self, user_id: UUID) -> str | None:
+        from app.core.row_memo import memo_get, memo_set
+        from app.services.openclaw_hot_cache import get_cached_display_name, set_cached_display_name
+
+        memo = memo_get("user_display", user_id)
+        if isinstance(memo, str):
+            return memo or None
+        cached = get_cached_display_name(user_id)
+        if cached is not None:
+            return cached or None
         async with self.session() as db:
-            return str_from_row_opt(
+            name = str_from_row_opt(
                 await db.fetchval(
                     "SELECT display_name FROM users WHERE id = %(id)s",
                     {"id": user_id},
                 )
             )
+        store = name or ""
+        memo_set("user_display", user_id, store)
+        set_cached_display_name(user_id, store)
+        return name
 
     async def first_by_role(self, role: str) -> UserRecord | None:
         async with self.session() as db:

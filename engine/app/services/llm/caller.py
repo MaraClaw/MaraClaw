@@ -999,6 +999,11 @@ async def call_agent_llm_with_tools(
             primary_model = loaded.get(agent.primary_model_id)
         if fallback_model is None and agent.fallback_model_id:
             fallback_model = loaded.get(agent.fallback_model_id)
+    from app.services.enterprise_llm import owned_model_or_none
+
+    tenant_id = getattr(agent, "tenant_id", None)
+    primary_model = owned_model_or_none(primary_model, tenant_id)
+    fallback_model = owned_model_or_none(fallback_model, tenant_id)
 
     # Config-level fallback
     if not primary_model and fallback_model:

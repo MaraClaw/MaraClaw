@@ -13,7 +13,7 @@ USER: node
 
 | File | When | Role |
 |---|---|---|
-| `bootstrap-officecli.sh` | entrypoint | Download pinned OfficeCLI (arm64 + SHA256); then exec TencentDB bootstrap |
+| `bootstrap-officecli.sh` | entrypoint | Download pinned OfficeCLI (arm64 + SHA256); if that fails with no last-known-good release, continue to TencentDB bootstrap / gateway |
 | `bootstrap-memory-tencentdb.sh` | first start | Install cached `@tencentdb-agent-memory` plugin from `/opt/openclaw-plugin-cache` |
 | `validate-gogcli.sh` | CMD | If `GOG_KEYRING_PASSWORD_FILE` set, load into process env and exec |
 | `verify-tencentdb-openclaw-patch.sh` | **image build only** | Patch verifier |

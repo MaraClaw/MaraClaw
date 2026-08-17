@@ -32,7 +32,6 @@ from app.services.channel_user_service import channel_user_service
 router = APIRouter(tags=["discord"])
 
 DISCORD_MSG_LIMIT = 2000  # Discord message char limit
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
 class DiscordChannelPayload(TypedDict, total=False):
@@ -276,7 +275,9 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
                 logger.warning(f"[Discord] Agent {agent_id} not found")
                 return
             creator_id = agent_obj.creator_id
-            ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+            from app.services.channels.inbound import routing_history_limit
+
+            ctx_size = routing_history_limit(agent_obj.context_window_size)
 
             _discord_username = json_as_str(member_user.get("username")) or json_as_str_or(user_obj.get("username"))
             _display = _discord_username or f"Discord User {sender_id[:8]}"

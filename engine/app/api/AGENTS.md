@@ -34,7 +34,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 - `tools.py`: tenant override is platform-admin only; catalog mutations need org/platform admin; mask company/agent secrets; `/test-mcp` uses `is_private_url`.
 - `update_agent_tool_config`: only `platform_admin` / `org_admin` may set `allow_network` or proxy fields.
-- LLM pool writes (`/enterprise/llm-models`, `/llm-test`, `/llm-providers`) are org/platform admin only. Members may `GET /llm-models` for the enabled catalog (no keys or base URLs). Company primary is `POST .../set-default`; fallback is `POST .../set-fallback`. Agent `primary_model_id` / `fallback_model_id` writes are org/platform admin only. Helpers: `app.services.enterprise_llm`.
+- LLM pool writes (`/enterprise/llm-models`, `/llm-test`, `/llm-providers`) are org/platform admin only. Members may `GET /llm-models` for the enabled catalog (no keys or base URLs). Company primary is `POST .../set-default`; fallback is `POST .../set-fallback`. Agent `primary_model_id` / `fallback_model_id` writes are org/platform admin only. Helpers: `app.services.enterprise_llm`. End users and agents may use **only** their company's pool rows (`model_usable_in_tenant` rejects global and cross-tenant). Grok SuperGrok / X Premium device-code is `POST .../grok-subscription/start` + `GET .../grok-subscription/status` (no tokens in responses); refresh is `POST .../{id}/refresh-subscription`. Service: `app.services.grok_subscription` + `grok_oauth`.
 
 ## Hotspots
 

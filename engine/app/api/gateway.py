@@ -38,9 +38,16 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 async def _get_agent_by_key(api_key: str, db: object | None = None) -> AgentRecord:
     """Authenticate an OpenClaw agent by its API key."""
+    del db
+    from app.services.openclaw_hot_cache import get_cached_agent_by_key, set_cached_agent_by_key
+
+    cached = get_cached_agent_by_key(api_key)
+    if cached is not None:
+        return cached
     agent = await agent_dao.get_openclaw_by_api_key(api_key)
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    set_cached_agent_by_key(api_key, agent)
     return agent
 
 
@@ -54,17 +61,19 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
     Returns all pending messages and marks them as delivered.
     Also updates openclaw_last_seen for online status tracking.
     """
-    logger.info(f"[Gateway] poll called, key_prefix={x_api_key[:8]}...")
+    logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
     agent = await _get_agent_by_key(x_api_key, db)
 
-    # Update last seen
-    agent = (
-        await agent_dao.update(
-            db_obj=agent,
-            obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+    from app.services.openclaw_hot_cache import should_touch_last_seen
+
+    if should_touch_last_seen(agent.id):
+        agent = (
+            await agent_dao.update(
+                db_obj=agent,
+                obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+            )
+            or agent
         )
-        or agent
-    )
 
     # Fetch pending messages
     messages = await gateway_message_dao.list_pending(agent.id)
@@ -126,9 +135,13 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
             )
         )
 
-    rel_items = []
+    # Inbox turns should answer first; relationship catalogs wait for empty polls.
+    rel_items = [] if out else await _poll_relationships(agent)
+    return GatewayPollResponse(messages=out, relationships=rel_items)
 
-    # Human relationships (with available channels)
+
+async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipItem]:
+    rel_items: list[GatewayRelationshipItem] = []
     for r in await agent_relationship_dao.list_for_agent_with_members(agent.id):
         status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
         if r.member and status_info["access_status"] == "active":
@@ -146,8 +159,6 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                     channels=channels,
                 )
             )
-
-    # Agent-to-agent relationships
     for r in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
         status_info = await evaluate_agent_relationship_status(None, r)
         if r.target_agent and status_info["access_status"] == "active":
@@ -160,8 +171,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                     channels=["agent"],
                 )
             )
-
-    return GatewayPollResponse(messages=out, relationships=rel_items)
+    return rel_items
 
 
 # ─── Report results ─────────────────────────────────────
@@ -196,23 +206,22 @@ async def report_result(
     # Save result as assistant chat message and push via WebSocket
     # (works for both user-originated and agent-to-agent messages)
     session = None
-    if body.result and msg.conversation_id:
-        participant = await participant_dao.get_by_type_ref("agent", agent.id)
+    if msg.conversation_id:
+        if body.result:
+            participant = await participant_dao.get_by_type_ref("agent", agent.id)
 
-        _ = await chat_message_dao.insert_message(
-            agent_id=agent.id,
-            user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
-            role="assistant",
-            content=body.result,
-            conversation_id=msg.conversation_id,
-            participant_id=participant.id if participant else None,
-        )
-        try:
-            session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
-        except ValueError, TypeError:
-            session = None
-
-    if body.result and msg.conversation_id:
+            _ = await chat_message_dao.insert_message(
+                agent_id=agent.id,
+                user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
+                role="assistant",
+                content=body.result,
+                conversation_id=msg.conversation_id,
+                participant_id=participant.id if participant else None,
+            )
+            try:
+                session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
+            except ValueError, TypeError:
+                session = None
         try:
             from app.api.websocket import manager
 
@@ -222,11 +231,17 @@ async def report_result(
                 {
                     "type": "done",
                     "role": "assistant",
-                    "content": body.result,
+                    "content": body.result or "",
                 },
+                user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
+            )
+            logger.info(
+                "[Gateway] pushed reply to session {} agent={}",
+                msg.conversation_id,
+                agent.id,
             )
         except Exception as error:
-            logger.debug(f"[Gateway] Skipped done notification for disconnected user: {error}")
+            logger.warning("[Gateway] Skipped done notification for disconnected user: {}", error)
 
     if body.result and session is not None:
         from app.services.channels.outbound import deliver_session_reply
@@ -244,6 +259,7 @@ async def report_result(
                 content=body.result,
                 sender_agent_id=agent.id,
                 conversation_id=conv_id,
+                await_wake=False,
             )
         logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
 
@@ -309,6 +325,7 @@ async def send_message(
             content=content,
             sender_agent_id=agent.id,
             conversation_id=conv_id,
+            await_wake=False,
         )
         return {
             "status": "accepted",
@@ -417,7 +434,9 @@ async def get_setup_guide(
         raise HTTPException(status_code=403, detail="Key does not match this agent")
 
     # Note: we use the raw key from the header since the agent already authenticated
-    base_url = "https://try.maraclaw.ai"
+    from app.services.openclaw_inbox import guest_engine_base_url
+
+    base_url = guest_engine_base_url()
 
     skill_content = f"""---
 name: maraclaw_sync

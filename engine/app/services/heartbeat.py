@@ -204,6 +204,11 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         model = await llm_model_dao.get(model_id)
         if not model:
             return
+        from app.services.enterprise_llm import model_usable_in_tenant
+
+        if not model_usable_in_tenant(model, getattr(agent, "tenant_id", None)):
+            logger.warning("[heartbeat] skip agent {}: model is not this company's", agent.id)
+            return
 
         # Cache values we need for Phase 2
         agent_name = agent.name

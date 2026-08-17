@@ -9,6 +9,7 @@ from app.services.onboarding import (
     PHASE_GREETED,
     PHASE_TEMPLATE_FOCUS,
     resolve_onboarding_prompt,
+    try_begin_onboarding_greeting,
 )
 
 
@@ -142,3 +143,13 @@ async def test_custom_boundary_follow_up_keeps_tools_enabled(monkeypatch):
     assert injection is not None
     assert injection.is_greeting_turn is False
     assert injection.target_phase == onboarding_mod.PHASE_CUSTOM_BOUNDARIES
+
+
+@pytest.mark.asyncio
+async def test_try_begin_onboarding_greeting_claims_once(monkeypatch):
+    agent_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    _patch_connection(monkeypatch, [{"agent_id": agent_id}, None])
+
+    assert await try_begin_onboarding_greeting(None, agent_id, user_id) is True
+    assert await try_begin_onboarding_greeting(None, agent_id, user_id) is False

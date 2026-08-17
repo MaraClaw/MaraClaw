@@ -6,7 +6,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, NotRequired, TypedDict
 
-from app.core.agent_constants import DEFAULT_CONTEXT_WINDOW_SIZE
 from app.core.json_types import JsonValue
 from app.core.logging import logger
 from app.dao import agent_dao
@@ -160,10 +159,12 @@ async def process_wechat_message(
         conv_id=conv_id,
     )
 
+    from app.services.channels.inbound import routing_history_limit
+
     history_msgs = await chat_message_dao.list_recent(
         agent_id=agent_id,
         conversation_id=session_conv_id,
-        limit=agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE,
+        limit=routing_history_limit(agent_obj.context_window_size),
     )
     history = convert_chat_messages_to_llm_format(history_msgs)
 

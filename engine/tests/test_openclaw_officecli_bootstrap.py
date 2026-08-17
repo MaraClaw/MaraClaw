@@ -294,7 +294,7 @@ def test_no_arguments_reaches_unchanged_tencent_gateway_default(tmp_path: Path) 
 
 
 @pytest.mark.parametrize("mode", ["binary_fail", "manifest_bad", "skill_fail"])
-def test_initial_fetch_failures_block_tencent_and_child_sentinels(tmp_path: Path, mode: str) -> None:
+def test_initial_fetch_failures_continue_without_officecli(tmp_path: Path, mode: str) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v3.0.0", "failure")
@@ -303,7 +303,9 @@ def test_initial_fetch_failures_block_tencent_and_child_sentinels(tmp_path: Path
     result = fixture.run("sh", "-c", 'printf reached > "$CHILD_SENTINEL"', mode=mode)
 
     # Then
-    assert result.returncode != 0
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert result.returncode == 0, result.stderr
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
     assert not fixture.poison_path.exists()
+    assert not (fixture.state_dir / ".officecli" / "current").exists()
+    assert "OfficeCLI unavailable; continuing without it" in result.stderr

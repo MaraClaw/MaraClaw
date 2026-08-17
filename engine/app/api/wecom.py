@@ -53,7 +53,6 @@ from app.services.wecom_stream import wecom_stream_manager
 
 router = APIRouter(tags=["wecom"])
 _background_tasks: set[asyncio.Task[None]] = set()
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
 class WeComChannelPayload(TypedDict, total=False):
@@ -570,7 +569,9 @@ async def _process_wecom_text(
         logger.warning(f"[WeCom] Agent {agent_id} not found")
         return
     creator_id = agent_obj.creator_id
-    ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+    from app.services.channels.inbound import routing_history_limit
+
+    ctx_size = routing_history_limit(agent_obj.context_window_size)
 
     # Distinguish group chat from P2P by chat_id presence
     _is_group = bool(chat_id)

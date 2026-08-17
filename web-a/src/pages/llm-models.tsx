@@ -20,16 +20,19 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
   deleteLlmModel,
+  getGrokSubscriptionStatus,
   listLlmModels,
   listLlmProviders,
   setDefaultLlmModel,
   setFallbackLlmModel,
   setSecondaryLlmModel,
+  startGrokSubscription,
   testLlmModel,
   updateLlmModel,
   reasoningEffortLabel,
   reasoningEffortsFor,
   withKnownProviders,
+  type GrokSubscriptionStart,
   type LlmModel,
 } from '@/lib/llm-models-api'
 import { isPlatformAdminUser } from '@/lib/types/auth'
@@ -260,6 +263,8 @@ export function LlmModelsPage() {
         </label>
       ) : null}
 
+      <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+
       <Card>
         <CardHeader>
           <CardTitle>Add model</CardTitle>
@@ -405,6 +410,114 @@ export function LlmModelsPage() {
   )
 }
 
+function GrokSubscriptionCard({
+  tenantId,
+  platformAdmin,
+}: {
+  tenantId: string
+  platformAdmin: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [session, setSession] = useState<GrokSubscriptionStart | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
+
+  const start = useMutation({
+    mutationFn: () => startGrokSubscription(platformAdmin ? tenantId : undefined),
+    onSuccess: (started) => {
+      setSession(started)
+      setStartError(null)
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) {
+        if (error.status === 403) {
+          setStartError('Only an organization admin can connect a Grok subscription.')
+          return
+        }
+        setStartError(formatApiDetail(error.detail) ?? 'Could not start Grok sign-in.')
+        return
+      }
+      setStartError('Could not start Grok sign-in. Check your connection and try again.')
+    },
+  })
+
+  const status = useQuery({
+    queryKey: ['admin-grok-subscription', session?.session_id],
+    queryFn: () => getGrokSubscriptionStatus(session!.session_id),
+    enabled: Boolean(session?.session_id),
+    refetchInterval: (query) => {
+      const current = query.state.data?.status
+      if (!current || current === 'pending') {
+        return Math.max((session?.interval ?? 5) * 1000, 2000)
+      }
+      return false
+    },
+  })
+
+  useEffect(() => {
+    if (status.data?.status !== 'authorized') return
+    void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
+    toast.success('Grok subscription connected. Assign it as primary, secondary, or fallback.')
+    setSession(null)
+  }, [status.data?.status, queryClient])
+
+  const pending = session && (status.data?.status ?? 'pending') === 'pending'
+  const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect Grok subscription</CardTitle>
+        <CardDescription>
+          Sign in with SuperGrok or X Premium. The verification code is shown here; access tokens stay on the
+          server and are stored encrypted for this company.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {pending && session ? (
+          <div className="grid gap-2 text-sm">
+            <p>
+              Open{' '}
+              <a
+                className="font-medium text-primary underline underline-offset-4"
+                href={session.verification_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {session.verification_url}
+              </a>
+            </p>
+            <p>
+              Enter code{' '}
+              <span className="font-mono text-base tracking-wide">{session.user_code}</span>
+            </p>
+            <p className="text-muted-foreground">Waiting for sign-in…</p>
+          </div>
+        ) : null}
+        {failed ? (
+          <p className="text-sm text-destructive" role="alert">
+            {status.data?.detail || 'Grok sign-in did not complete. Start again.'}
+          </p>
+        ) : null}
+        {startError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {startError}
+          </p>
+        ) : null}
+        <div>
+          <Button
+            type="button"
+            disabled={start.isPending || !tenantId || Boolean(pending)}
+            onClick={() => start.mutate()}
+          >
+            {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {pending ? 'Waiting for Grok' : 'Connect Grok subscription'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const queryClient = useQueryClient()
   const formId = useId()
@@ -523,6 +636,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             {item.is_default ? <Badge variant="soft">Primary</Badge> : null}
             {item.is_secondary ? <Badge variant="outline">Secondary</Badge> : null}
             {item.is_fallback ? <Badge variant="outline">Fallback</Badge> : null}
+            {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">Grok subscription</Badge> : null}
             <Badge variant="outline">{reasoningEffortLabel(item.reasoning_effort || 'none')}</Badge>
             {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
           </CardTitle>
