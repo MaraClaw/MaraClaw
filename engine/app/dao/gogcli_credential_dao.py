@@ -1,4 +1,4 @@
-"""DAO for gogcli_credential_states (psycopg)."""
+"""DAO for gogcli_credential_states"""
 
 from __future__ import annotations
 

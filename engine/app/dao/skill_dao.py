@@ -1,4 +1,4 @@
-"""DAO for skills and skill_files (psycopg)."""
+"""DAO for skills and skill_files"""
 
 from __future__ import annotations
 

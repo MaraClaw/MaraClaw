@@ -1,4 +1,4 @@
-"""DAO for system_settings table (psycopg)."""
+"""DAO for system_settings table"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DAO for audit_logs (psycopg)."""
+"""DAO for audit_logs"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DAO for tenants table (psycopg)."""
+"""DAO for tenants table"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""OKR domain records (psycopg)."""
+"""OKR domain records"""
 
 from __future__ import annotations
 

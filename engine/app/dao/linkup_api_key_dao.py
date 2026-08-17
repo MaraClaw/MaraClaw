@@ -1,4 +1,4 @@
-"""DAO for Linkup API key ring tables (psycopg)."""
+"""DAO for Linkup API key ring tables"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DAO for OKR objectives, key results, progress logs, and reports (psycopg)."""
+"""DAO for OKR objectives, key results, progress logs, and reports"""
 
 from __future__ import annotations
 

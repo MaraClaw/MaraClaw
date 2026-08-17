@@ -1,4 +1,4 @@
-"""DAO for agent_credentials (psycopg)."""
+"""DAO for agent_credentials"""
 
 from __future__ import annotations
 
