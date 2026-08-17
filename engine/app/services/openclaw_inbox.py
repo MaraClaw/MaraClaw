@@ -226,12 +226,14 @@ def _hooks_recently_refused(agent_id: UUID) -> bool:
 
 
 def _hooks_unreachable(error: str) -> bool:
+    """True only for connect/DNS failures, not HTTP 4xx/5xx or a port in the URL."""
     needle = error.lower()
+    if "http " in needle and any(code in needle for code in (" 401", " 403", " 404", " 409", " 422", " 500", " 502", " 503")):
+        return False
     return any(
         token in needle
         for token in (
             "econnrefused",
-            "18789",
             "connecterror",
             "connect timeout",
             "all connection attempts failed",
@@ -292,8 +294,6 @@ _PROBE_GATEWAY = (
 _START_GATEWAY = "nohup openclaw gateway >/tmp/maraclaw-gateway.log 2>&1 &"
 _GATEWAY_WAIT_ATTEMPTS = 20
 _GATEWAY_WAIT_SECONDS = 0.5
-_RECREATE_COOLDOWN_SECONDS = 120.0
-_gateway_recreate_after: dict[UUID, float] = {}
 
 
 def _guest_gateway_listening(agent: AgentRecord) -> bool:
@@ -394,44 +394,9 @@ async def wake_openclaw_inbox(
                 logger.info("[OpenClaw] woke inbox via HTTP after starting guest gateway for {}", agent.id)
                 return True
             last_error = hook_error or http_error
-        if await _recreate_guest_gateway(agent):
-            hook_error = await run_sync(_exec_in_guest_hooks, agent, agent_dir, body)
-            if hook_error is None:
-                logger.info("[OpenClaw] woke inbox after recreating guest for {}", agent.id)
-                return True
-            http_error = await _http_hooks_wake(agent, agent_dir, body)
-            if http_error is None:
-                logger.info("[OpenClaw] woke inbox via HTTP after recreating guest for {}", agent.id)
-                return True
-            last_error = hook_error or http_error
     logger.info(
         "[OpenClaw] hooks unavailable for {}; inbox stays pending for the next guest poll ({})",
         agent.id,
         last_error,
     )
     return False
-
-
-async def _recreate_guest_gateway(agent: AgentRecord) -> bool:
-    """Replace a guest whose PID 1 never became ``openclaw gateway``."""
-    now = time.monotonic()
-    if now < _gateway_recreate_after.get(agent.id, 0):
-        return False
-    _gateway_recreate_after[agent.id] = now + _RECREATE_COOLDOWN_SECONDS
-    from app.dao.agent_dao import agent_dao
-    from app.services.agent_manager import agent_manager
-
-    logger.info("[OpenClaw] recreating guest container so the gateway can bind for {}", agent.id)
-    container_id = await agent_manager.start_container(None, agent)
-    if not container_id:
-        return False
-    _ = await agent_dao.update(
-        db_obj=agent,
-        obj_in={
-            "container_id": agent.container_id,
-            "container_port": agent.container_port,
-            "status": agent.status,
-            "last_active_at": agent.last_active_at,
-        },
-    )
-    return await run_sync(_wait_for_guest_gateway, agent)

@@ -284,6 +284,43 @@ async def test_skips_cli_when_inbox_already_reported(tmp_path, monkeypatch) -> N
     assert execute_calls == []
 
 
+def test_hooks_unreachable_ignores_port_and_http_status() -> None:
+    url_401 = "http://maraclaw-agent-deadbeef:18789/hooks/agent: HTTP 401"
+    assert openclaw_inbox._hooks_unreachable(url_401) is False
+    assert openclaw_inbox._hooks_unreachable("ECONNREFUSED 127.0.0.1:18789") is True
+    assert openclaw_inbox._hooks_unreachable("ConnectError: all connection attempts failed") is True
+
+
+async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> None:
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    execute_calls: list[list[str]] = []
+
+    class FakeDocker:
+        def __init__(self) -> None:
+            self.container = self
+
+        def execute(self, container, argv, stream=False):
+            execute_calls.append(list(argv))
+            raise RuntimeError("http://127.0.0.1:18789/hooks/agent: HTTP 401")
+
+    async def http_down(*_args, **_kwargs):
+        return "http://maraclaw-agent-deadbeef:18789/hooks/agent: HTTP 401"
+
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
+    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+
+    woke = await wake_openclaw_inbox(agent, content="Hello.")
+    assert woke is False
+    assert execute_calls[0][0] == "node"
+    assert not any("nohup openclaw gateway" in " ".join(call) for call in execute_calls)
+
+
 def test_wake_body_includes_message_id_for_direct_report() -> None:
     message_id = uuid.uuid4()
     body = openclaw_inbox._wake_body("Please introduce yourself.", message_id=message_id)
