@@ -30,6 +30,12 @@ from app.services.openclaw_hot_cache import (
 )
 
 
+def _bundle_usable(bundle: ModelBundle | None) -> bool:
+    return bundle is not None and (
+        bundle.primary is not None or bundle.secondary is not None or bundle.fallback is not None
+    )
+
+
 class NoCompanyModelError(RuntimeError):
     """The tenant pool has no usable model for this OpenClaw guest."""
 
@@ -90,16 +96,16 @@ async def enqueue_openclaw_message(
     """
     if not recently_ensured(agent):
         agent = await ensure_agent_company_models(agent)
-        mark_ensured(agent)
     bundle = get_cached_bundle(agent)
     if bundle is None:
         bundle = await load_agent_model_bundle(agent)
-        set_cached_bundle(agent, bundle)
-    if bundle.primary is None and bundle.secondary is None and bundle.fallback is None:
+    if not _bundle_usable(bundle):
         raise NoCompanyModelError(
             "This company has no model assigned. Connect a Grok subscription or add a model in Admin → Models, "
             + "then set it as primary."
         )
+    mark_ensured(agent)
+    set_cached_bundle(agent, bundle)
     choice = await select_turn_model(
         bundle,
         user_text=content,
@@ -112,7 +118,12 @@ async def enqueue_openclaw_message(
         (
             row
             for row in pending
-            if row.content == content and row.sender_user_id == sender_user_id and sender_user_id is not None
+            if (
+                row.content == content
+                and row.sender_user_id == sender_user_id
+                and sender_user_id is not None
+                and (row.conversation_id or "") == (conversation_id or "")
+            )
         ),
         None,
     )

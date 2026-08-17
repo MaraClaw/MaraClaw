@@ -120,6 +120,24 @@ def test_write_guest_config_skips_unchanged_fingerprint(tmp_path, monkeypatch: p
     assert path.read_text() == "sentinel-unchanged"
 
 
+def test_write_guest_config_rewrites_when_api_key_changes(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agent_manager_module._guest_config_fingerprints.clear()
+    manager = AgentManager.__new__(AgentManager)
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    monkeypatch.setattr(manager, "_agent_dir", lambda _agent_id: agent_dir)
+    agent = SimpleNamespace(id=agent_id)
+    primary = _model(name="opus", key="sk-old")
+    path = manager.write_guest_config(agent, primary=primary, selected=primary)
+    assert path is not None
+    rotated = _model(name="opus", key="sk-new")
+    rotated.id = primary.id
+    again = manager.write_guest_config(agent, primary=rotated, selected=rotated)
+    assert again == path
+    assert "sk-new" in path.read_text(encoding="utf-8")
+
+
 def test_write_guest_config_rewrites_selected_model(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     manager = AgentManager.__new__(AgentManager)
     agent_id = uuid.uuid4()
@@ -356,6 +374,7 @@ async def test_enqueue_skips_duplicate_pending_from_same_sender(monkeypatch: pyt
         agent_id=agent.id,
         content="Please begin the onboarding.",
         sender_user_id=user_id,
+        conversation_id="session-a",
         status="pending",
     )
     created: list[object] = []
@@ -384,11 +403,102 @@ async def test_enqueue_skips_duplicate_pending_from_same_sender(monkeypatch: pyt
         agent=agent,
         content="Please begin the onboarding.",
         sender_user_id=user_id,
+        conversation_id="session-a",
         await_wake=True,
     )
     assert row.id == existing.id
     assert created == []
     assert wakes == [existing.id]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_same_text_in_other_session_is_not_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = _model(name="opus")
+    user_id = uuid.uuid4()
+    agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        primary_model_id=primary.id,
+        secondary_model_id=None,
+        fallback_model_id=None,
+    )
+    existing = GatewayMessageRecord(
+        id=uuid.uuid4(),
+        agent_id=agent.id,
+        content="ok",
+        sender_user_id=user_id,
+        conversation_id="session-a",
+        status="pending",
+    )
+    created: list[object] = []
+
+    async def fake_load(_agent, **_kwargs):
+        return ModelBundle(primary=primary)
+
+    async def fake_pending(_agent_id):
+        return [existing]
+
+    async def fake_create(*, obj_in):
+        created.append(obj_in)
+        return GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent.id, content=str(obj_in["content"]))
+
+    monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", fake_pending)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "create", fake_create)
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", lambda *_a, **_k: None)
+
+    row = await openclaw_routing.enqueue_openclaw_message(
+        agent=agent,
+        content="ok",
+        sender_user_id=user_id,
+        conversation_id="session-b",
+        await_wake=False,
+    )
+    assert row.id != existing.id
+    assert created
+
+
+@pytest.mark.asyncio
+async def test_enqueue_does_not_cache_empty_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import openclaw_hot_cache
+
+    openclaw_hot_cache.reset()
+    primary = _model(name="opus")
+    agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        primary_model_id=None,
+        secondary_model_id=None,
+        fallback_model_id=None,
+        tenant_id=uuid.uuid4(),
+    )
+    loads = 0
+
+    async def fake_ensure(loaded):
+        return loaded
+
+    async def fake_load(_agent, **_kwargs):
+        nonlocal loads
+        loads += 1
+        if loads == 1:
+            return ModelBundle(primary=None)
+        return ModelBundle(primary=primary)
+
+    async def fake_pending(_agent_id):
+        return []
+
+    async def fake_create(*, obj_in):
+        return GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent.id, content=str(obj_in["content"]))
+
+    monkeypatch.setattr(openclaw_routing, "ensure_agent_company_models", fake_ensure)
+    monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", fake_pending)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "create", fake_create)
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", lambda *_a, **_k: None)
+
+    with pytest.raises(openclaw_routing.NoCompanyModelError):
+        await openclaw_routing.enqueue_openclaw_message(agent=agent, content="hi", await_wake=False)
+    row = await openclaw_routing.enqueue_openclaw_message(agent=agent, content="hi", await_wake=False)
+    assert loads == 2
+    assert row.content == "hi"
 
 
 @pytest.mark.asyncio

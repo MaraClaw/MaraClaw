@@ -206,23 +206,22 @@ async def report_result(
     # Save result as assistant chat message and push via WebSocket
     # (works for both user-originated and agent-to-agent messages)
     session = None
-    if body.result and msg.conversation_id:
-        participant = await participant_dao.get_by_type_ref("agent", agent.id)
+    if msg.conversation_id:
+        if body.result:
+            participant = await participant_dao.get_by_type_ref("agent", agent.id)
 
-        _ = await chat_message_dao.insert_message(
-            agent_id=agent.id,
-            user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
-            role="assistant",
-            content=body.result,
-            conversation_id=msg.conversation_id,
-            participant_id=participant.id if participant else None,
-        )
-        try:
-            session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
-        except ValueError, TypeError:
-            session = None
-
-    if body.result and msg.conversation_id:
+            _ = await chat_message_dao.insert_message(
+                agent_id=agent.id,
+                user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
+                role="assistant",
+                content=body.result,
+                conversation_id=msg.conversation_id,
+                participant_id=participant.id if participant else None,
+            )
+            try:
+                session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
+            except ValueError, TypeError:
+                session = None
         try:
             from app.api.websocket import manager
 
@@ -232,7 +231,7 @@ async def report_result(
                 {
                     "type": "done",
                     "role": "assistant",
-                    "content": body.result,
+                    "content": body.result or "",
                 },
                 user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
             )
@@ -260,6 +259,7 @@ async def report_result(
                 content=body.result,
                 sender_agent_id=agent.id,
                 conversation_id=conv_id,
+                await_wake=False,
             )
         logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
 
@@ -325,6 +325,7 @@ async def send_message(
             content=content,
             sender_agent_id=agent.id,
             conversation_id=conv_id,
+            await_wake=False,
         )
         return {
             "status": "accepted",
