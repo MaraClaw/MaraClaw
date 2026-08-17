@@ -60,6 +60,14 @@ from app.services.enterprise_llm import (
     serialize_llm_model,
 )
 from app.services.enterprise_sync import enterprise_sync_service
+from app.services.grok_subscription import (
+    GrokSubscriptionRefreshOut,
+    GrokSubscriptionStartOut,
+    GrokSubscriptionStatusOut,
+    grok_subscription_status,
+    refresh_grok_subscription_for_admin,
+    start_grok_subscription_handoff,
+)
 from app.services.llm import LLMMessage, create_llm_client, get_model_api_key, get_provider_manifest
 from app.services.org_sync_adapter import derive_member_department_paths
 from app.services.platform_service import platform_service
@@ -132,6 +140,9 @@ async def probe_llm_model(
             existing = None
         if existing:
             assert_can_manage_model(current_user, existing)
+            from app.services.grok_subscription import ensure_fresh_access_token
+
+            _ = await ensure_fresh_access_token(existing)
     api_key = data.api_key if data.api_key and not data.api_key.startswith("****") else None
     if not api_key and data.model_id:
         api_key = await _load_llm_test_api_key(data.model_id)
@@ -156,6 +167,34 @@ async def probe_llm_model(
     except Exception as e:
         latency_ms = int((time.time() - start) * 1000)
         return {"success": False, "latency_ms": latency_ms, "error": str(e)[:500]}
+
+
+@router.post("/llm-models/grok-subscription/start", response_model=GrokSubscriptionStartOut)
+async def start_grok_subscription(
+    tenant_id: str | None = None,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> GrokSubscriptionStartOut:
+    """Start a SuperGrok / X Premium device-code handoff. Tokens never leave the server."""
+    assert_llm_pool_admin(current_user)
+    return await start_grok_subscription_handoff(current_user, tenant_id)
+
+
+@router.get("/llm-models/grok-subscription/status", response_model=GrokSubscriptionStatusOut)
+async def get_grok_subscription_status(
+    session_id: str,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> GrokSubscriptionStatusOut:
+    """Poll a pending Grok subscription handoff. Response never includes tokens."""
+    assert_llm_pool_admin(current_user)
+    return await grok_subscription_status(current_user, session_id)
+
+
+@router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)
+async def refresh_grok_subscription(
+    model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)
+) -> GrokSubscriptionRefreshOut:
+    """Refresh a stored Grok subscription without a new browser login."""
+    return await refresh_grok_subscription_for_admin(current_user, model_id)
 
 
 @router.get("/llm-models", response_model=list[LLMModelOut])

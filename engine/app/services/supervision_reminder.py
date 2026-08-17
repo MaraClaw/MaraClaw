@@ -158,6 +158,10 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
     model = await llm_model_dao.get(model_id)
     if not model:
         return None
+    from app.services.enterprise_llm import model_usable_in_tenant
+
+    if not model_usable_in_tenant(model, getattr(target_agent, "tenant_id", None)):
+        return None
 
     base_url = get_provider_base_url(model.provider, model.base_url)
     if not base_url:

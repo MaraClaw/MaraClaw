@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS llm_models (
 	tenant_id UUID, 
 	provider VARCHAR(50) NOT NULL, 
 	model VARCHAR(100) NOT NULL, 
-	api_key_encrypted VARCHAR(1024) NOT NULL, 
+	api_key_encrypted TEXT NOT NULL, 
 	base_url VARCHAR(500), 
 	label VARCHAR(200) NOT NULL, 
 	max_tokens_per_day INTEGER, 
@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS llm_models (
 	request_timeout INTEGER, 
 	max_output_tokens INTEGER, 
 	reasoning_effort VARCHAR(16), 
+	auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key', 
+	refresh_token_encrypted TEXT, 
+	token_expires_at TIMESTAMP WITH TIME ZONE, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id)
@@ -74,6 +77,12 @@ CREATE TABLE IF NOT EXISTS llm_models (
 CREATE INDEX IF NOT EXISTS ix_llm_models_tenant_id ON llm_models (tenant_id);
 
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16);
+ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key';
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
+	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription';
 
 CREATE TABLE IF NOT EXISTS okr_alignments (
 	id UUID NOT NULL, 

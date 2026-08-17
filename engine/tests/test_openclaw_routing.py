@@ -39,6 +39,8 @@ def test_guest_model_ref_requires_both_parts() -> None:
     assert guest_model_ref(None) is None
     assert guest_model_ref(SimpleNamespace(provider="openai", model="")) is None
     assert guest_model_ref(SimpleNamespace(provider="openai", model="gpt-5.4")) == "openai/gpt-5.4"
+    assert guest_model_ref(SimpleNamespace(provider="grok", model="grok-4.6")) == "xai/grok-4.6"
+    assert guest_model_ref(SimpleNamespace(provider="xai", model="auto")) == "xai/auto"
 
 
 def test_requires_primary_treats_missing_slot_as_primary() -> None:
@@ -208,3 +210,20 @@ async def test_enqueue_does_not_downgrade_guest_when_primary_is_pending(
 
     assert row.selected_slot == "secondary"
     assert writes[0]["selected"] is primary
+
+
+@pytest.mark.asyncio
+async def test_enqueue_raises_when_company_has_no_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), primary_model_id=None)
+
+    async def fake_ensure(loaded):
+        return loaded
+
+    async def fake_load(_agent, **_kwargs):
+        return ModelBundle(primary=None, secondary=None, fallback=None)
+
+    monkeypatch.setattr(openclaw_routing, "ensure_agent_company_models", fake_ensure)
+    monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
+
+    with pytest.raises(openclaw_routing.NoCompanyModelError):
+        await openclaw_routing.enqueue_openclaw_message(agent=agent, content="Hello Grok")

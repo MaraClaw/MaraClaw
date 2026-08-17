@@ -169,7 +169,14 @@ async def load_agent_model_bundle(
         secondary = loaded.get(agent.secondary_model_id)
     if fallback is None and getattr(agent, "fallback_model_id", None):
         fallback = loaded.get(agent.fallback_model_id)
-    return ModelBundle(primary=primary, secondary=secondary, fallback=fallback)
+    from app.services.enterprise_llm import owned_model_or_none
+
+    tenant_id = getattr(agent, "tenant_id", None)
+    return ModelBundle(
+        primary=owned_model_or_none(primary, tenant_id),
+        secondary=owned_model_or_none(secondary, tenant_id),
+        fallback=owned_model_or_none(fallback, tenant_id),
+    )
 
 
 def message_text(content: object) -> str:

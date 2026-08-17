@@ -18,12 +18,31 @@ from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
+from app.services.grok_subscription import ensure_fresh_access_token
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
 
 settings = get_settings()
+
+_XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
+
+
+def guest_provider_id(provider: str) -> str:
+    """OpenClaw bundled plugin id. Grok/xAI pool rows map to ``xai``."""
+    normalized = (provider or "").strip().lower()
+    if normalized in _XAI_GUEST_PROVIDERS:
+        return "xai"
+    return normalized
+
+
+def guest_provider_env_key(provider: str) -> str:
+    """Env var the guest plugin reads for this pool provider."""
+    if guest_provider_id(provider) == "xai":
+        return "XAI_API_KEY"
+    name = (provider or "").strip()
+    return f"{name.upper()}_API_KEY" if name else ""
 
 
 def _read_gateway_key_file(agent_dir: Path) -> str | None:
@@ -38,7 +57,7 @@ def guest_model_ref(model: LLMModelRecord | None) -> str | None:
     """OpenClaw ``provider/model`` ref, or ``None`` when either part is missing."""
     if model is None:
         return None
-    provider = (getattr(model, "provider", None) or "").strip()
+    provider = guest_provider_id(getattr(model, "provider", None) or "")
     name = (getattr(model, "model", None) or "").strip()
     if not provider or not name:
         return None
@@ -276,8 +295,8 @@ class AgentManager:
             provider = (getattr(row, "provider", None) or "").strip()
             if not provider:
                 continue
-            key_name = f"{provider.upper()}_API_KEY"
-            if key_name in env or not getattr(row, "api_key_encrypted", None):
+            key_name = guest_provider_env_key(provider)
+            if not key_name or key_name in env or not getattr(row, "api_key_encrypted", None):
                 continue
             secret = get_model_api_key(row)
             if secret:
@@ -418,13 +437,25 @@ class AgentManager:
         def _uuid_or_none(value: object) -> uuid.UUID | None:
             return value if isinstance(value, uuid.UUID) else None
 
+        from app.services.enterprise_llm import ensure_agent_company_models, owned_model_or_none
+
+        agent = await ensure_agent_company_models(agent)
         secondary_id = _uuid_or_none(getattr(agent, "secondary_model_id", None))
         fallback_id = _uuid_or_none(getattr(agent, "fallback_model_id", None))
         model_ids = [mid for mid in (agent.primary_model_id, secondary_id, fallback_id) if mid]
         loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
-        primary = loaded.get(agent.primary_model_id) if agent.primary_model_id else None
-        secondary = loaded.get(secondary_id) if secondary_id else None
-        fallback = loaded.get(fallback_id) if fallback_id else None
+        tenant_id = getattr(agent, "tenant_id", None)
+        primary = owned_model_or_none(
+            loaded.get(agent.primary_model_id) if agent.primary_model_id else None, tenant_id
+        )
+        secondary = owned_model_or_none(loaded.get(secondary_id) if secondary_id else None, tenant_id)
+        fallback = owned_model_or_none(loaded.get(fallback_id) if fallback_id else None, tenant_id)
+        if primary is not None:
+            primary = await ensure_fresh_access_token(primary)
+        if secondary is not None:
+            secondary = await ensure_fresh_access_token(secondary)
+        if fallback is not None:
+            fallback = await ensure_fresh_access_token(fallback)
 
         # Generate OpenClaw config. Proxy on/off is settings-only so container
         # start does not need the key-ring tables to exist.

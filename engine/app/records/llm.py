@@ -35,6 +35,9 @@ class LLMModelRecord:
     request_timeout: int | None = None
     max_output_tokens: int | None = None
     reasoning_effort: str | None = None
+    auth_kind: str = "api_key"
+    refresh_token_encrypted: str | None = None
+    token_expires_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -59,6 +62,9 @@ class LLMModelRecord:
             if row.get("max_output_tokens") is not None
             else None,
             reasoning_effort=str_from_row(row.get("reasoning_effort")) or None,
+            auth_kind=str_from_row(row.get("auth_kind")) or "api_key",
+            refresh_token_encrypted=str_from_row(row.get("refresh_token_encrypted")) or None,
+            token_expires_at=datetime_from_row(row.get("token_expires_at")),
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
         )

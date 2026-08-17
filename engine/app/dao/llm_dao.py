@@ -25,6 +25,9 @@ _LLM_COLUMNS = (
     "request_timeout",
     "max_output_tokens",
     "reasoning_effort",
+    "auth_kind",
+    "refresh_token_encrypted",
+    "token_expires_at",
     "created_at",
     "updated_at",
 )
@@ -42,7 +45,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
         params: dict[str, Any] = {}
         clauses = ["enabled = TRUE"]
         if tenant_id is not None:
-            clauses.append("(tenant_id IS NULL OR tenant_id = %(tenant_id)s)")
+            clauses.append("tenant_id = %(tenant_id)s")
             params["tenant_id"] = tenant_id
         where = " AND ".join(clauses)
         async with self.session() as db:
@@ -77,6 +80,19 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
                     {"tenant_id": tenant_id},
                 )
             return [LLMModelRecord.from_row(row) for row in rows]
+
+    async def get_subscription_for_tenant(
+        self, tenant_id: UUID, *, auth_kind: str = "grok_subscription"
+    ) -> LLMModelRecord | None:
+        """Return the company Grok subscription row when one exists."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM llm_models "
+                + "WHERE tenant_id = %(tenant_id)s AND auth_kind = %(auth_kind)s "
+                + "ORDER BY updated_at DESC NULLS LAST LIMIT 1",
+                {"tenant_id": tenant_id, "auth_kind": auth_kind},
+            )
+            return LLMModelRecord.from_row(row) if row else None
 
 
 llm_model_dao = LLMModelDAO()

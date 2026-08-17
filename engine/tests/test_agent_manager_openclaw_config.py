@@ -92,6 +92,52 @@ def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_enabled(
     assert config["plugins"]["entries"]["memory-tencentdb"]["config"]["offload"] == {"enabled": True}
 
 
+def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    manager = AgentManager.__new__(AgentManager)
+    agent = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="grok",
+        model="grok-4.6",
+        api_key_encrypted="xai-sub-access-token",
+        auth_kind="grok_subscription",
+        label="Grok SuperGrok",
+    )
+    secondary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        api_key_encrypted="sk-ant-test",
+        auth_kind="api_key",
+        label="Claude",
+    )
+    fallback = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="xai",
+        model="grok-4.5",
+        api_key_encrypted="xai-fallback-token",
+        auth_kind="api_key",
+        label="Grok fallback",
+    )
+
+    config = manager._generate_openclaw_config(
+        agent, primary, secondary=secondary, fallback=fallback, selected=primary
+    )
+
+    assert config["agent"]["model"] == "xai/grok-4.6"
+    assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
+    assert config["agents"]["defaults"]["model"]["fallbacks"] == ["xai/grok-4.5"]
+    assert config["agents"]["defaults"]["models"]["xai/grok-4.6"] == {"alias": "primary"}
+    assert config["env"]["XAI_API_KEY"] == "xai-sub-access-token"
+    assert "GROK_API_KEY" not in config["env"]
+    assert "xai-sub-access-token" == config["env"]["XAI_API_KEY"]
+
+
 def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):
     # Given
     settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True)

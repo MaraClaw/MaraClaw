@@ -17,9 +17,14 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_manager import agent_manager, guest_model_ref
+from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
+
+
+class NoCompanyModelError(RuntimeError):
+    """The tenant pool has no usable model for this OpenClaw guest."""
 
 
 def requires_primary(messages: Sequence[GatewayMessageRecord]) -> bool:
@@ -71,7 +76,13 @@ async def enqueue_openclaw_message(
     history: list[OpenAIMessage] | None = None,
 ) -> GatewayMessageRecord:
     """Classify ``content``, rewrite guest config, and queue the gateway row."""
+    agent = await ensure_agent_company_models(agent)
     bundle = await load_agent_model_bundle(agent)
+    if bundle.primary is None and bundle.secondary is None and bundle.fallback is None:
+        raise NoCompanyModelError(
+            "This company has no model assigned. Connect a Grok subscription or add a model in Admin → Models, "
+            + "then set it as primary."
+        )
     choice = await select_turn_model(
         bundle,
         user_text=content,

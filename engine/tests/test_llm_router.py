@@ -266,9 +266,11 @@ async def test_disabled_secondary_behaves_as_unset() -> None:
 
 @pytest.mark.asyncio
 async def test_load_bundle_fetches_missing_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id = uuid4()
     secondary_id = uuid4()
     secondary = _model(name="secondary")
     secondary.id = secondary_id
+    secondary.tenant_id = tenant_id
 
     async def fake_get_many(ids):
         assert list(ids) == [secondary_id]
@@ -277,6 +279,32 @@ async def test_load_bundle_fetches_missing_ids(monkeypatch: pytest.MonkeyPatch) 
     from app.dao.llm_dao import llm_model_dao
 
     monkeypatch.setattr(llm_model_dao, "get_many", fake_get_many)
-    agent = SimpleNamespace(primary_model_id=None, secondary_model_id=secondary_id, fallback_model_id=None)
+    agent = SimpleNamespace(
+        primary_model_id=None,
+        secondary_model_id=secondary_id,
+        fallback_model_id=None,
+        tenant_id=tenant_id,
+    )
     bundle = await router.load_agent_model_bundle(agent)
     assert bundle.secondary is secondary
+
+
+@pytest.mark.asyncio
+async def test_load_bundle_drops_foreign_tenant_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    foreign = _model(name="leak")
+    foreign.tenant_id = uuid4()
+
+    async def fake_get_many(ids):
+        return [foreign]
+
+    from app.dao.llm_dao import llm_model_dao
+
+    monkeypatch.setattr(llm_model_dao, "get_many", fake_get_many)
+    agent = SimpleNamespace(
+        primary_model_id=foreign.id,
+        secondary_model_id=None,
+        fallback_model_id=None,
+        tenant_id=uuid4(),
+    )
+    bundle = await router.load_agent_model_bundle(agent)
+    assert bundle.primary is None

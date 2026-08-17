@@ -456,15 +456,20 @@ class WebSocketChatHandler:
 
     async def _route_openclaw(self, content: str):
         """Enqueues message for OpenClaw edge node poll."""
-        from app.services.openclaw_routing import enqueue_openclaw_message
+        from app.services.openclaw_routing import NoCompanyModelError, enqueue_openclaw_message
 
-        _ = await enqueue_openclaw_message(
-            agent=self.agent,
-            content=content,
-            sender_user_id=self.user.id,
-            conversation_id=self.conv_id,
-            history=self.conversation,
-        )
+        try:
+            _ = await enqueue_openclaw_message(
+                agent=self.agent,
+                content=content,
+                sender_user_id=self.user.id,
+                conversation_id=self.conv_id,
+                history=self.conversation,
+            )
+        except NoCompanyModelError as exc:
+            logger.warning("[WS] OpenClaw enqueue blocked: {}", exc)
+            await self.websocket.send_json({"type": "error", "content": str(exc)})
+            return
         logger.info("[WS] OpenClaw: message queued for gateway poll")
         await self.websocket.send_json(
             {
