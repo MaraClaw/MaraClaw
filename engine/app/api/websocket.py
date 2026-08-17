@@ -494,12 +494,7 @@ class WebSocketChatHandler:
         """Enqueues message for OpenClaw edge node poll."""
         from app.services.openclaw_routing import NoCompanyModelError, enqueue_openclaw_message
 
-        await self.websocket.send_json(
-            {
-                "type": "info",
-                "content": "Message forwarded to OpenClaw agent. Waiting for response...",
-            }
-        )
+        await self.websocket.send_json({"type": "status", "content": "thinking"})
         try:
             _ = await enqueue_openclaw_message(
                 agent=self.agent,
