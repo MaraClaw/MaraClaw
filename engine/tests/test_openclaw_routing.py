@@ -295,6 +295,53 @@ async def test_enqueue_skips_llm_classifier_for_ambiguous_text(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_enqueue_reuses_cached_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import openclaw_hot_cache
+
+    openclaw_hot_cache.reset()
+    primary = _model(name="opus")
+    agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        primary_model_id=primary.id,
+        secondary_model_id=None,
+        fallback_model_id=None,
+        tenant_id=None,
+    )
+    loads: list[int] = []
+
+    async def fake_ensure(loaded):
+        return loaded
+
+    async def fake_load(_agent, **_kwargs):
+        loads.append(1)
+        return ModelBundle(primary=primary)
+
+    async def fake_pending(_agent_id):
+        return []
+
+    created = 0
+
+    async def fake_create(*, obj_in):
+        nonlocal created
+        created += 1
+        return GatewayMessageRecord(
+            id=uuid.uuid4(),
+            agent_id=agent.id,
+            content=str(obj_in["content"]) + str(created),
+        )
+
+    monkeypatch.setattr(openclaw_routing, "ensure_agent_company_models", fake_ensure)
+    monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", fake_pending)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "create", fake_create)
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", lambda *_a, **_k: None)
+
+    _ = await openclaw_routing.enqueue_openclaw_message(agent=agent, content="one", await_wake=False)
+    _ = await openclaw_routing.enqueue_openclaw_message(agent=agent, content="two", await_wake=False)
+    assert loads == [1]
+
+
+@pytest.mark.asyncio
 async def test_enqueue_skips_duplicate_pending_from_same_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     user_id = uuid.uuid4()

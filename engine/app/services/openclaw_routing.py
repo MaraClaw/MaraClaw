@@ -22,6 +22,12 @@ from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
+from app.services.openclaw_hot_cache import (
+    get_cached_bundle,
+    mark_ensured,
+    recently_ensured,
+    set_cached_bundle,
+)
 
 
 class NoCompanyModelError(RuntimeError):
@@ -82,8 +88,13 @@ async def enqueue_openclaw_message(
     Chat WS passes ``await_wake=False`` so the socket can ack immediately.
     Background wake still runs the guest turn.
     """
-    agent = await ensure_agent_company_models(agent)
-    bundle = await load_agent_model_bundle(agent)
+    if not recently_ensured(agent):
+        agent = await ensure_agent_company_models(agent)
+        mark_ensured(agent)
+    bundle = get_cached_bundle(agent)
+    if bundle is None:
+        bundle = await load_agent_model_bundle(agent)
+        set_cached_bundle(agent, bundle)
     if bundle.primary is None and bundle.secondary is None and bundle.fallback is None:
         raise NoCompanyModelError(
             "This company has no model assigned. Connect a Grok subscription or add a model in Admin → Models, "

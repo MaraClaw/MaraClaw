@@ -389,11 +389,16 @@ class AgentManager:
             env[key_name] = secret
         return env
 
-    def _atomic_write_json(self, path: Path, data: JsonObject) -> None:
+    def _atomic_write_json(self, path: Path, data: JsonObject) -> bool:
+        """Write JSON. False when the file already has the same bytes."""
+        text = json.dumps(data, indent=2)
+        if path.is_file() and path.read_text(encoding="utf-8") == text:
+            return False
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.tmp")
-        _ = tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _ = tmp.write_text(text, encoding="utf-8")
         _ = tmp.replace(path)
+        return True
 
     def _upsert_auth_profile_sqlite(self, agent_dir: Path, store: JsonObject) -> None:
         db_path = agent_dir / "agents" / "main" / "agent" / "openclaw-agent.sqlite"
@@ -438,8 +443,14 @@ class AgentManager:
                 "clientId": credential["clientId"],
             }
         }
-        self._atomic_write_json(agent_dir / "credentials" / "oauth.json", json_object_from(legacy))
-        self._atomic_write_json(agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store)
+        wrote_legacy = self._atomic_write_json(
+            agent_dir / "credentials" / "oauth.json", json_object_from(legacy)
+        )
+        wrote_store = self._atomic_write_json(
+            agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store
+        )
+        if not wrote_legacy and not wrote_store:
+            return
         self._upsert_auth_profile_sqlite(agent_dir, store)
         logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
 
@@ -488,7 +499,12 @@ class AgentManager:
             selected=selected,
             linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
-        self._atomic_write_json(path, config)
+        wrote = self._atomic_write_json(path, config)
+        if not wrote:
+            _guest_config_fingerprints[str(agent.id)] = fingerprint
+            self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
+            logger.info("[OpenClaw] skip guest config write; file already current for {}", agent.id)
+            return path
         self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
         write_maraclaw_sync_skill(agent_dir)
         _guest_config_fingerprints[str(agent.id)] = fingerprint

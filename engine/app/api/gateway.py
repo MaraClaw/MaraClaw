@@ -38,9 +38,16 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 async def _get_agent_by_key(api_key: str, db: object | None = None) -> AgentRecord:
     """Authenticate an OpenClaw agent by its API key."""
+    del db
+    from app.services.openclaw_hot_cache import get_cached_agent_by_key, set_cached_agent_by_key
+
+    cached = get_cached_agent_by_key(api_key)
+    if cached is not None:
+        return cached
     agent = await agent_dao.get_openclaw_by_api_key(api_key)
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    set_cached_agent_by_key(api_key, agent)
     return agent
 
 
@@ -54,17 +61,19 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
     Returns all pending messages and marks them as delivered.
     Also updates openclaw_last_seen for online status tracking.
     """
-    logger.info(f"[Gateway] poll called, key_prefix={x_api_key[:8]}...")
+    logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
     agent = await _get_agent_by_key(x_api_key, db)
 
-    # Update last seen
-    agent = (
-        await agent_dao.update(
-            db_obj=agent,
-            obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+    from app.services.openclaw_hot_cache import should_touch_last_seen
+
+    if should_touch_last_seen(agent.id):
+        agent = (
+            await agent_dao.update(
+                db_obj=agent,
+                obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
+            )
+            or agent
         )
-        or agent
-    )
 
     # Fetch pending messages
     messages = await gateway_message_dao.list_pending(agent.id)
