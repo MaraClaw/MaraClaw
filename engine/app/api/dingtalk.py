@@ -25,8 +25,6 @@ from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["dingtalk"])
 
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
-
 
 class DingTalkExtraConfig(TypedDict, total=False):
     connection_mode: str
@@ -172,7 +170,7 @@ async def process_dingtalk_message(
         logger.warning("[DingTalk] Skip message attribution because sender_staff_id is empty")
         return
 
-    ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+    ctx_size = channel_inbound.routing_history_limit(agent_obj.context_window_size)
     conv_id = f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
 
     platform_user = await channel_user_service.resolve_channel_user(

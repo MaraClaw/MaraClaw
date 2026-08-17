@@ -42,6 +42,7 @@ settings = get_settings()
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 TENCENTDB_BOOTSTRAP_MARKER = ".bootstrap-tencentdb-version"
 XAI_OAUTH_PROFILE_ID = "xai:default"
+_guest_config_fingerprints: dict[str, str] = {}
 
 
 def tencentdb_plugin_ready(agent_dir: Path) -> bool:
@@ -442,6 +443,22 @@ class AgentManager:
         self._upsert_auth_profile_sqlite(agent_dir, store)
         logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
 
+    def _guest_config_fingerprint(
+        self,
+        *,
+        primary: LLMModelRecord | None,
+        secondary: LLMModelRecord | None,
+        fallback: LLMModelRecord | None,
+        selected: LLMModelRecord | None,
+    ) -> str:
+        parts: list[str] = []
+        for row in (selected, primary, secondary, fallback):
+            ref = guest_model_ref(row) or ""
+            expires = getattr(row, "token_expires_at", None) if row is not None else None
+            kind = getattr(row, "auth_kind", "") if row is not None else ""
+            parts.append(f"{ref}:{kind}:{expires}")
+        return "|".join(parts)
+
     def write_guest_config(
         self,
         agent: AgentRecord,
@@ -456,6 +473,13 @@ class AgentManager:
         if not agent_dir.exists():
             logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
             return None
+        fingerprint = self._guest_config_fingerprint(
+            primary=primary, secondary=secondary, fallback=fallback, selected=selected
+        )
+        path = agent_dir / "openclaw.json"
+        if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
+            logger.info("[OpenClaw] skip guest config write; unchanged for {}", agent.id)
+            return path
         config = self._generate_openclaw_config(
             agent,
             primary,
@@ -464,10 +488,10 @@ class AgentManager:
             selected=selected,
             linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
-        path = agent_dir / "openclaw.json"
         self._atomic_write_json(path, config)
         self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
         write_maraclaw_sync_skill(agent_dir)
+        _guest_config_fingerprints[str(agent.id)] = fingerprint
         return path
 
     def _generate_openclaw_config(

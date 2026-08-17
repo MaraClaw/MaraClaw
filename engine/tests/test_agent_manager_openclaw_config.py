@@ -160,7 +160,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["hooks"]["enabled"] is True
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "loopback"
-    assert config["agents"]["defaults"]["heartbeat"]["every"] == "1m"
+    assert config["agents"]["defaults"]["heartbeat"]["every"] == "30s"
     assert config["agents"]["defaults"]["memorySearch"] == {"enabled": False, "provider": "none"}
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 

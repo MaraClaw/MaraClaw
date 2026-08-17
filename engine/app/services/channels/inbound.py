@@ -19,7 +19,22 @@ from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
+ROUTING_HISTORY_LIMIT = 8
 CHANNEL_REPLY_QUEUED = "Message forwarded to the agent. Waiting for response..."
+
+
+def routing_history_limit(context_window_size: int | None = None) -> int:
+    """How many prior turns to load for OpenClaw slot routing.
+
+    Guests receive conversation history from ``/api/gateway/poll``. Engine-side
+    history is only for the heuristic preflight, so a long window just delays
+    the wake.
+    """
+    if isinstance(context_window_size, int) and context_window_size > 0:
+        wanted = context_window_size
+    else:
+        wanted = DEFAULT_CONTEXT_WINDOW_SIZE
+    return min(wanted, ROUTING_HISTORY_LIMIT)
 
 
 def is_queued_channel_reply(text: str) -> bool:
@@ -77,7 +92,7 @@ async def load_history_for_session(
     context_window_size: int | None,
 ) -> list[Any]:
     """Load prior turns for a session (does not include the current user message)."""
-    limit = context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+    limit = routing_history_limit(context_window_size)
     history_msgs = await chat_message_dao.list_recent(
         agent_id=agent_id,
         conversation_id=str(session.id),
@@ -161,13 +176,14 @@ async def generate_channel_reply(
         target = await agent_dao.get(agent_id)
     if target is None:
         return "⚠️ Agent not found."
-    prior = cast(list[OpenAIMessage], history) if history else None
+    prior = cast(list[OpenAIMessage], history[-ROUTING_HISTORY_LIMIT:]) if history else None
     _ = await enqueue_openclaw_message(
         agent=target,
         content=user_text,
         sender_user_id=user_id,
         conversation_id=session_id,
         history=prior,
+        await_wake=False,
     )
     return CHANNEL_REPLY_QUEUED
 

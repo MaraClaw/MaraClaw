@@ -99,7 +99,6 @@ if not _HAS_DISCORD:
     )
 
 DISCORD_MSG_LIMIT = 2000  # Discord message character limit
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
 class DiscordGatewayManager:
@@ -239,7 +238,9 @@ class DiscordGatewayManager:
             agent_obj = await agent_dao.get(agent_id)
             if not agent_obj:
                 return "Agent not found."
-            ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+            from app.services.channels.inbound import routing_history_limit
+
+            ctx_size = routing_history_limit(agent_obj.context_window_size)
 
             _discord_display_name = message.author.display_name or message.author.name
             _display = _discord_display_name or f"Discord User {sender_id[:8]}"

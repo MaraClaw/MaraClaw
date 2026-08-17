@@ -210,6 +210,37 @@ async def test_select_classifier_fail_closed(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_select_same_model_skips_classifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = _model(name="grok-4.6")
+    secondary = _model(name="grok-4.6")
+
+    async def boom(*_args: object, **_kwargs: object) -> tuple[None, int, int]:
+        raise AssertionError("classifier should not run when slots share a model")
+
+    monkeypatch.setattr(router, "_classify_with_llm", boom)
+    choice = await router.select_turn_model(
+        ModelBundle(primary=primary, secondary=secondary),
+        user_text="Can you help me with this tomorrow morning please",
+    )
+    assert choice.reason == "same_model"
+    assert choice.model is primary
+
+
+@pytest.mark.asyncio
+async def test_select_skip_classifier_fail_closes_unknown() -> None:
+    primary = _model(name="primary")
+    secondary = _model(name="secondary")
+    choice = await router.select_turn_model(
+        ModelBundle(primary=primary, secondary=secondary),
+        user_text="Can you help me with this tomorrow morning please",
+        skip_classifier=True,
+    )
+    assert choice.reason == "heuristic_unknown"
+    assert choice.model is primary
+    assert choice.complexity == "complex"
+
+
+@pytest.mark.asyncio
 async def test_select_classifier_manageable(monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="primary")
     secondary = _model(name="secondary")

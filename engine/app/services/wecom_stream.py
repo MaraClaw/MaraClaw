@@ -419,11 +419,11 @@ async def _process_wecom_stream_message(
     from datetime import datetime
 
     from app.api.feishu import _load_agent_and_model
-    from app.core.agent_constants import DEFAULT_CONTEXT_WINDOW_SIZE
     from app.dao import agent_dao
     from app.dao.chat_dao import chat_message_dao, chat_session_dao
     from app.services.channel_session import find_or_create_channel_session
     from app.services.channel_user_service import channel_user_service
+    from app.services.channels.inbound import routing_history_limit
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     agent_obj = await agent_dao.get(agent_id)
@@ -431,7 +431,7 @@ async def _process_wecom_stream_message(
         logger.warning(f"[WeCom Stream] Agent {agent_id} not found")
         return "Agent not found"
 
-    ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
+    ctx_size = routing_history_limit(agent_obj.context_window_size)
     normalized_chat_type = (chat_type or "single").strip().lower()
     conv_id = _build_wecom_conv_id(sender_id, chat_id, normalized_chat_type)
 

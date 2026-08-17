@@ -28,7 +28,6 @@ router = APIRouter(tags=["whatsapp"])
 
 WHATSAPP_TEXT_LIMIT = 4096
 DEFAULT_WHATSAPP_API_VERSION = "v23.0"
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
 class WhatsAppChannelPayload(TypedDict, total=False):
@@ -249,6 +248,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     continue
 
                 from app.api.feishu import _load_agent_and_model
+                from app.services.channels.inbound import routing_history_limit
                 from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
                 agent_obj = await agent_dao.get(agent_id)
@@ -273,11 +273,10 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     first_message_title=user_text,
                 )
                 session_conv_id = str(sess.id)
-                ctx_size = agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
                 history_msgs = await chat_message_dao.list_recent(
                     agent_id=agent_id,
                     conversation_id=session_conv_id,
-                    limit=ctx_size,
+                    limit=routing_history_limit(agent_obj.context_window_size),
                 )
                 history = _conv(history_msgs)
 
