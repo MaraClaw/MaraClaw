@@ -21,9 +21,8 @@ Use stable kebab-case folder names and stable `meta.yaml` `name` values. Renamin
 - Startup calls `seed_agent_templates()` from `app.services.template_seeder`.
 - `_TEMPLATE_ROOT` is hardcoded by `app/services/template_seeder.py` to repo-root `agent_templates`; this path does not come from `Settings.AGENT_TEMPLATE_DIR`.
 - Every direct child directory is treated as a role-template candidate; keep archives and temporary grouping folders outside this tree.
-- Folder templates are merged with legacy Python `DEFAULT_TEMPLATES`.
-- Folder templates win over legacy templates by name.
-- Seeded DB rows may be removed as stale if a builtin template disappears and is unreferenced.
+- The seeder loads only these folders.
+- Builtins that are no longer in this tree are retired on startup: `agents.template_id` is cleared, then the catalog row is deleted. Agent workspaces are left in place.
 
 ## Editing Rules
 

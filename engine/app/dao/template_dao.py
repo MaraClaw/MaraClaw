@@ -61,6 +61,19 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
             )
             return int_from_row(value)
 
+    async def clear_agent_references(self, template_id: UUID) -> int:
+        """Detach agents from ``template_id`` so the catalog row can be deleted.
+
+        Workspace soul/files stay on the agent; only the catalog pointer is cleared.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE agents SET template_id = NULL "
+                + "WHERE template_id = %(template_id)s RETURNING id",
+                {"template_id": template_id},
+            )
+            return len(rows)
+
     async def list_all_ordered(self) -> Sequence[AgentTemplateRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
