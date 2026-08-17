@@ -1,4 +1,4 @@
-"""DAO for okr_settings (psycopg)."""
+"""DAO for okr_settings"""
 
 from __future__ import annotations
 

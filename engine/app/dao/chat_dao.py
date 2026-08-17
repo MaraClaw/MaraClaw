@@ -1,4 +1,4 @@
-"""DAO for chat_sessions and chat_messages (psycopg)."""
+"""DAO for chat_sessions and chat_messages"""
 
 from __future__ import annotations
 

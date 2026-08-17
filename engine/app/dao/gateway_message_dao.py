@@ -1,4 +1,4 @@
-"""DAO for gateway_messages (psycopg)."""
+"""DAO for gateway_messages"""
 
 from __future__ import annotations
 

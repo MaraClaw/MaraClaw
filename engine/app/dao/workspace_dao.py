@@ -1,4 +1,4 @@
-"""DAO for workspace_file_revisions and workspace_edit_locks (psycopg)."""
+"""DAO for workspace_file_revisions and workspace_edit_locks"""
 
 from __future__ import annotations
 

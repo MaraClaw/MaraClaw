@@ -1,4 +1,4 @@
-"""DAO for published_pages (psycopg)."""
+"""DAO for published_pages"""
 
 from __future__ import annotations
 

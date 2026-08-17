@@ -1,4 +1,4 @@
-"""DAO for sso_scan_sessions (psycopg)."""
+"""DAO for sso_scan_sessions"""
 
 from __future__ import annotations
 

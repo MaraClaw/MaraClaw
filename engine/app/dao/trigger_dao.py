@@ -1,4 +1,4 @@
-"""DAO for agent_triggers and trigger_executions (psycopg)."""
+"""DAO for agent_triggers and trigger_executions"""
 
 from __future__ import annotations
 
