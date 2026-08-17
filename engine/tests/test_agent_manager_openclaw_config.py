@@ -1,10 +1,11 @@
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from app.config import Settings
 from app.services import agent_manager as agent_manager_module
-from app.services.agent_manager import TENCENTDB_BOOTSTRAP_MARKER, AgentManager
+from app.services.agent_manager import TENCENTDB_BOOTSTRAP_MARKER, XAI_OAUTH_PROFILE_ID, AgentManager
 
 
 class RecordingContainerApi:
@@ -152,13 +153,80 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
     assert config["agents"]["defaults"]["model"]["fallbacks"] == ["xai/grok-4.5"]
     assert config["agents"]["defaults"]["models"]["xai/grok-4.6"] == {"alias": "primary"}
-    assert config["env"]["vars"]["XAI_API_KEY"] == "xai-sub-access-token"
+    assert config["env"]["vars"]["XAI_API_KEY"] == "xai-fallback-token"
     assert "GROK_API_KEY" not in config["env"]["vars"]
+    assert config["auth"]["profiles"][XAI_OAUTH_PROFILE_ID] == {"provider": "xai", "mode": "oauth"}
+    assert config["auth"]["order"]["xai"] == [XAI_OAUTH_PROFILE_ID]
     assert config["hooks"]["enabled"] is True
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "loopback"
     assert config["agents"]["defaults"]["heartbeat"]["every"] == "1m"
+    assert config["agents"]["defaults"]["memorySearch"] == {"enabled": False, "provider": "none"}
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
+
+
+def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    manager = AgentManager.__new__(AgentManager)
+    agent = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="grok",
+        model="grok-4.6",
+        api_key_encrypted="hgklshglsjgh-not-a-key",
+        auth_kind="api_key",
+        label="Grok 4.6",
+    )
+
+    config = manager._generate_openclaw_config(agent, primary, selected=primary)
+
+    assert "XAI_API_KEY" not in config["env"]["vars"]
+    assert "auth" not in config
+
+
+def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> None:
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
+    manager = AgentManager.__new__(AgentManager)
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    agent = SimpleNamespace(id=agent_id, name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    expires = datetime.now(UTC) + timedelta(hours=2)
+    primary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="grok",
+        model="grok-4.6",
+        api_key_encrypted="xai-sub-access-token",
+        refresh_token_encrypted="xai-sub-refresh-token",
+        token_expires_at=expires,
+        auth_kind="grok_subscription",
+        label="Grok SuperGrok",
+    )
+
+    path = manager.write_guest_config(agent, primary=primary, selected=primary)
+
+    assert path == agent_dir / "openclaw.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert "XAI_API_KEY" not in config["env"]["vars"]
+    assert config["auth"]["profiles"][XAI_OAUTH_PROFILE_ID]["mode"] == "oauth"
+    profiles = json.loads((agent_dir / "agents" / "main" / "agent" / "auth-profiles.json").read_text(encoding="utf-8"))
+    cred = profiles["profiles"][XAI_OAUTH_PROFILE_ID]
+    assert cred["type"] == "oauth"
+    assert cred["provider"] == "xai"
+    assert cred["access"] == "xai-sub-access-token"
+    assert cred["refresh"] == "xai-sub-refresh-token"
+    assert cred["expires"] == int(expires.timestamp() * 1000)
+    legacy = json.loads((agent_dir / "credentials" / "oauth.json").read_text(encoding="utf-8"))
+    assert legacy["xai"]["access"] == "xai-sub-access-token"
 
 
 def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):
@@ -210,7 +278,20 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
 
     run_kwargs = docker_client.run_kwargs
     assert run_kwargs is not None
-    assert docker_client.run_args == (settings.OPENCLAW_IMAGE,)
+    assert docker_client.run_args == (
+        settings.OPENCLAW_IMAGE,
+        [
+            "-s",
+            "--",
+            "/usr/local/bin/bootstrap-memory-tencentdb.sh",
+            "/usr/local/bin/validate-gogcli.sh",
+            "openclaw",
+            "gateway",
+        ],
+    )
+    assert run_kwargs["entrypoint"] == "tini"
+    assert docker_client.container.stop_calls
+    assert docker_client.container.remove_calls
     assert run_kwargs["detach"] is True
     assert run_kwargs["name"] == f"maraclaw-agent-{str(agent.id)[:8]}"
     assert run_kwargs["volumes"] == [(str(agent_dir), "/home/node/.openclaw", "rw")]
@@ -285,7 +366,8 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
     # Then
     assert container_id is None
     assert agent.status == "error"
-    assert docker_client.run_args == (settings.OPENCLAW_IMAGE,)
+    assert docker_client.run_args is not None
+    assert docker_client.run_args[0] == settings.OPENCLAW_IMAGE
 
 
 async def test_stop_container_clears_status_and_container_id_when_container_missing(monkeypatch):

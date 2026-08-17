@@ -130,6 +130,18 @@ def owned_model_or_none(model: LLMModelRecord | None, tenant_id: uuid.UUID | Non
     return model
 
 
+def is_grok_family(model: LLMModelRecord | None) -> bool:
+    provider = (getattr(model, "provider", None) or "").strip().lower()
+    return provider in {"grok", "xai", "x-ai", "x_ai"}
+
+
+def is_grok_api_key_row(model: LLMModelRecord | None) -> bool:
+    """True for a company Grok/xAI console-key row (not SuperGrok OAuth)."""
+    if model is None or not is_grok_family(model):
+        return False
+    return (getattr(model, "auth_kind", None) or "api_key") != "grok_subscription"
+
+
 def assert_distinct_model_slots(
     primary_id: uuid.UUID | None,
     secondary_id: uuid.UUID | None,
@@ -153,6 +165,18 @@ async def activate_pool_model_for_tenant(model: LLMModelRecord) -> None:
         return
     if tenant.default_model_id is None:
         _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+        _ = await agent_dao.assign_primary_where_null(tenant_id=model.tenant_id, model_id=model.id)
+        return
+    current_default = await llm_model_dao.get(tenant.default_model_id)
+    if getattr(model, "auth_kind", "") == "grok_subscription" and (
+        current_default is None or is_grok_api_key_row(current_default)
+    ):
+        _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
+        for row in await llm_model_dao.list_for_tenant(model.tenant_id):
+            if row.id != model.id and is_grok_api_key_row(row):
+                _ = await agent_dao.migrate_primary_model(
+                    tenant_id=model.tenant_id, old_model_id=row.id, new_model_id=model.id
+                )
         _ = await agent_dao.assign_primary_where_null(tenant_id=model.tenant_id, model_id=model.id)
         return
     if getattr(tenant, "default_fallback_model_id", None) is None and tenant.default_model_id != model.id:
@@ -213,6 +237,16 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
         return owned_model_or_none(loaded.get(mid) if mid else None, tenant_id)
 
     tenant_primary = owned(tenant.default_model_id)
+    subscription = None
+    if tenant_primary is None or is_grok_api_key_row(tenant_primary):
+        subscription = await llm_model_dao.get_subscription_for_tenant(tenant_id)
+        if subscription is not None and model_usable_in_tenant(subscription, tenant_id):
+            loaded[subscription.id] = subscription
+            if tenant_primary is None or is_grok_api_key_row(tenant_primary):
+                tenant_primary = subscription
+                if tenant.default_model_id != subscription.id:
+                    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": subscription.id})
+                    _ = await agent_dao.assign_primary_where_null(tenant_id=tenant_id, model_id=subscription.id)
     if tenant_primary is None:
         picked = await _first_usable_tenant_model(tenant_id)
         if picked is not None:
@@ -225,9 +259,19 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
     tenant_secondary = owned(getattr(tenant, "default_secondary_model_id", None))
     tenant_fallback = owned(getattr(tenant, "default_fallback_model_id", None))
     updates: dict[str, uuid.UUID | None] = {}
-    primary_next = _slot_replacement(getattr(agent, "primary_model_id", None), owned(agent.primary_model_id), tenant_primary)
-    if primary_next is not _UNCHANGED:
-        updates["primary_model_id"] = primary_next if isinstance(primary_next, uuid.UUID) else None
+    agent_primary = owned(agent.primary_model_id)
+    if (
+        is_grok_api_key_row(agent_primary)
+        and tenant_primary is not None
+        and getattr(tenant_primary, "auth_kind", "") == "grok_subscription"
+    ):
+        updates["primary_model_id"] = tenant_primary.id
+    else:
+        primary_next = _slot_replacement(
+            getattr(agent, "primary_model_id", None), agent_primary, tenant_primary
+        )
+        if primary_next is not _UNCHANGED:
+            updates["primary_model_id"] = primary_next if isinstance(primary_next, uuid.UUID) else None
     secondary_next = _slot_replacement(
         getattr(agent, "secondary_model_id", None),
         owned(getattr(agent, "secondary_model_id", None)),

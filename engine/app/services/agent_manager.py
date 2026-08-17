@@ -3,8 +3,11 @@
 import json
 import secrets
 import shutil
+import sqlite3
+import time
 import uuid
-from datetime import UTC, datetime
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
 
@@ -14,12 +17,14 @@ from python_on_whales.exceptions import DockerException, NoSuchContainer
 from app.config import get_settings
 from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.core.logging import logger
+from app.core.security import decrypt_data
 from app.dao import llm_model_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
-from app.services.grok_subscription import ensure_fresh_access_token
+from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
+from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.openclaw_inbox import (
@@ -36,6 +41,7 @@ settings = get_settings()
 
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 TENCENTDB_BOOTSTRAP_MARKER = ".bootstrap-tencentdb-version"
+XAI_OAUTH_PROFILE_ID = "xai:default"
 
 
 def tencentdb_plugin_ready(agent_dir: Path) -> bool:
@@ -53,6 +59,14 @@ def guest_provider_id(provider: str) -> str:
     if normalized in _XAI_GUEST_PROVIDERS:
         return "xai"
     return normalized
+
+
+def looks_like_xai_console_key(secret: str) -> bool:
+    return secret.startswith("xai-") and len(secret) > 8
+
+
+def looks_like_oauth_access_token(secret: str) -> bool:
+    return secret.count(".") >= 2 and len(secret) >= 80
 
 
 def guest_provider_env_key(provider: str) -> str:
@@ -80,6 +94,49 @@ def guest_model_ref(model: LLMModelRecord | None) -> str | None:
     if not provider or not name:
         return None
     return f"{provider}/{name}"
+
+
+def is_grok_subscription(model: LLMModelRecord | None) -> bool:
+    return (getattr(model, "auth_kind", None) or "") == AUTH_KIND_GROK_SUBSCRIPTION
+
+
+def _decrypt_model_secret(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return decrypt_data(text, settings.SECRET_KEY)
+    except ValueError:
+        return text
+
+
+def _token_expires_ms(model: LLMModelRecord) -> int:
+    expires = getattr(model, "token_expires_at", None)
+    if isinstance(expires, datetime):
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        return int(expires.timestamp() * 1000)
+    return int((datetime.now(UTC) + timedelta(hours=1)).timestamp() * 1000)
+
+
+def xai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
+    """OpenClaw auth-profile payload for a SuperGrok / X Premium row."""
+    if model is None:
+        return None
+    access = get_model_api_key(model).strip()
+    if not access:
+        return None
+    if not is_grok_subscription(model) and not looks_like_oauth_access_token(access):
+        return None
+    refresh = _decrypt_model_secret(getattr(model, "refresh_token_encrypted", None))
+    return {
+        "type": "oauth",
+        "provider": "xai",
+        "access": access,
+        "refresh": refresh,
+        "expires": _token_expires_ms(model),
+        "clientId": XAI_OAUTH_CLIENT_ID,
+    }
 
 
 class ContainerStatus(TypedDict):
@@ -316,9 +373,19 @@ class AgentManager:
             key_name = guest_provider_env_key(provider)
             if not key_name or key_name in env or not getattr(row, "api_key_encrypted", None):
                 continue
+            if is_grok_subscription(row):
+                continue
             secret = get_model_api_key(row)
-            if secret:
-                env[key_name] = secret
+            if not secret:
+                continue
+            if guest_provider_id(provider) == "xai" and not looks_like_xai_console_key(secret):
+                logger.warning(
+                    "[OpenClaw] skipping {} env for {}; value is not an xAI console key",
+                    key_name,
+                    getattr(row, "label", None) or getattr(row, "id", provider),
+                )
+                continue
+            env[key_name] = secret
         return env
 
     def _atomic_write_json(self, path: Path, data: JsonObject) -> None:
@@ -326,6 +393,54 @@ class AgentManager:
         tmp = path.with_name(f"{path.name}.tmp")
         _ = tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         _ = tmp.replace(path)
+
+    def _upsert_auth_profile_sqlite(self, agent_dir: Path, store: JsonObject) -> None:
+        db_path = agent_dir / "agents" / "main" / "agent" / "openclaw-agent.sqlite"
+        if not db_path.is_file():
+            return
+        payload = json.dumps(store)
+        now_ms = int(time.time() * 1000)
+        try:
+            with sqlite3.connect(db_path) as conn:
+                _ = conn.execute(
+                    "CREATE TABLE IF NOT EXISTS auth_profile_store "
+                    + "(store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+                )
+                _ = conn.execute(
+                    "INSERT INTO auth_profile_store (store_key, store_json, updated_at) "
+                    + "VALUES ('primary', ?, ?) "
+                    + "ON CONFLICT(store_key) DO UPDATE SET store_json = excluded.store_json, "
+                    + "updated_at = excluded.updated_at",
+                    (payload, now_ms),
+                )
+        except sqlite3.Error as exc:
+            logger.warning("[OpenClaw] could not write guest auth sqlite for {}: {}", agent_dir.name, exc)
+
+    def _sync_guest_xai_oauth(
+        self,
+        agent_dir: Path,
+        *models: LLMModelRecord | None,
+    ) -> None:
+        credential: JsonObject | None = None
+        for row in models:
+            credential = xai_oauth_credential(row)
+            if credential is not None:
+                break
+        if credential is None:
+            return
+        store: JsonObject = {"version": 1, "profiles": {XAI_OAUTH_PROFILE_ID: credential}}
+        legacy = {
+            "xai": {
+                "access": credential["access"],
+                "refresh": credential["refresh"],
+                "expires": credential["expires"],
+                "clientId": credential["clientId"],
+            }
+        }
+        self._atomic_write_json(agent_dir / "credentials" / "oauth.json", json_object_from(legacy))
+        self._atomic_write_json(agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store)
+        self._upsert_auth_profile_sqlite(agent_dir, store)
+        logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
 
     def write_guest_config(
         self,
@@ -351,6 +466,7 @@ class AgentManager:
         )
         path = agent_dir / "openclaw.json"
         self._atomic_write_json(path, config)
+        self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
         write_maraclaw_sync_skill(agent_dir)
         return path
 
@@ -374,6 +490,8 @@ class AgentManager:
         if aliases:
             defaults["models"] = aliases
         defaults["heartbeat"] = heartbeat_block()
+        # Default memorySearch provider is OpenAI; guests often have only xAI.
+        defaults["memorySearch"] = {"enabled": False, "provider": "none"}
         config: JsonObject = {
             "agents": {"defaults": defaults},
         }
@@ -387,6 +505,11 @@ class AgentManager:
         env = self._collect_provider_env(model, secondary, fallback)
         env["MARACLAW_API_BASE"] = guest_engine_base_url()
         config["env"] = {"vars": env}
+        if any(is_grok_subscription(row) for row in (selected, model, secondary, fallback)):
+            config["auth"] = {
+                "profiles": {XAI_OAUTH_PROFILE_ID: {"provider": "xai", "mode": "oauth"}},
+                "order": {"xai": [XAI_OAUTH_PROFILE_ID]},
+            }
 
         linkup_skill_env: JsonObject = {}
         if linkup_proxy:
@@ -457,6 +580,8 @@ class AgentManager:
         if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
             _ = await restore_gogcli_state(db, agent.id, agent_dir)
 
+        self._replace_existing_guest_container(agent)
+
         gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
 
         # Get model config (pure-psycopg). Guest starts on primary; secondary
@@ -497,6 +622,7 @@ class AgentManager:
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         self._atomic_write_json(agent_dir / "openclaw.json", config)
+        self._sync_guest_xai_oauth(agent_dir, primary, secondary, fallback)
         self._ensure_openclaw_workspace_layout(agent_dir)
 
         # Assign a unique port
@@ -522,8 +648,12 @@ class AgentManager:
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
             container = self.docker_client.run(
                 settings.OPENCLAW_IMAGE,
+                # Skip OfficeCLI download; a failed refresh restarts the guest
+                # and SIGKILLs in-flight inbox CLI turns (exit 137).
+                ["-s", "--", "/usr/local/bin/bootstrap-memory-tencentdb.sh", "/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway"],
                 detach=True,
                 name=f"maraclaw-agent-{str(agent.id)[:8]}",
+                entrypoint="tini",
                 networks=[settings.DOCKER_NETWORK],
                 publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
                 volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
@@ -547,6 +677,26 @@ class AgentManager:
             logger.error(f"Failed to start container for agent {agent.name}: {e}")
             agent.status = "error"
             return None
+
+    def _replace_existing_guest_container(self, agent: AgentRecord) -> None:
+        """Stop and remove any guest with this id/name so a new entrypoint can apply."""
+        if not self.docker_client:
+            return
+        refs: list[str] = []
+        container_id = getattr(agent, "container_id", None)
+        if isinstance(container_id, str) and container_id.strip():
+            refs.append(container_id.strip())
+        refs.append(f"maraclaw-agent-{str(agent.id)[:8]}")
+        seen: set[str] = set()
+        for ref in refs:
+            if ref in seen:
+                continue
+            seen.add(ref)
+            with suppress(NoSuchContainer, ClientNotFoundError, DockerException):
+                self.docker_client.container.stop(ref, time=10)
+            with suppress(NoSuchContainer, ClientNotFoundError, DockerException):
+                type(self.docker_client.container).remove(self.docker_client.container, [ref])
+        agent.container_id = None
 
     async def stop_container(self, agent: AgentRecord) -> bool:
         """Stop the agent's Docker container."""

@@ -373,6 +373,7 @@ async def test_ensure_agent_inherits_grok_subscription_when_primary_missing(monk
     )
     monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(pool.llm_model_dao, "get_many", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pool.llm_model_dao, "get_subscription_for_tenant", AsyncMock(return_value=grok))
     monkeypatch.setattr(pool.llm_model_dao, "list_for_tenant", AsyncMock(return_value=[grok]))
     monkeypatch.setattr(pool.tenant_dao, "update", AsyncMock(return_value=tenant))
     monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", AsyncMock(return_value=1))
@@ -380,6 +381,63 @@ async def test_ensure_agent_inherits_grok_subscription_when_primary_missing(monk
     monkeypatch.setattr(pool.agent_dao, "update", AsyncMock(return_value=saved))
     out = await pool.ensure_agent_company_models(agent)
     assert out.primary_model_id == grok.id
+
+
+@pytest.mark.asyncio
+async def test_ensure_agent_prefers_subscription_over_grok_api_key(monkeypatch):
+    grok = _model()
+    dummy = _model(
+        id=uuid.uuid4(),
+        auth_kind="api_key",
+        label="Grok 4.6",
+        api_key_encrypted="enc-short",
+        refresh_token_encrypted=None,
+    )
+    agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=_TENANT,
+        primary_model_id=dummy.id,
+        secondary_model_id=None,
+        fallback_model_id=None,
+    )
+    tenant = SimpleNamespace(
+        id=_TENANT,
+        default_model_id=dummy.id,
+        default_secondary_model_id=None,
+        default_fallback_model_id=None,
+    )
+    monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(pool.llm_model_dao, "get_many", AsyncMock(return_value=[dummy]))
+    monkeypatch.setattr(pool.llm_model_dao, "get_subscription_for_tenant", AsyncMock(return_value=grok))
+    monkeypatch.setattr(pool.tenant_dao, "update", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", AsyncMock(return_value=0))
+    saved = SimpleNamespace(**{**agent.__dict__, "primary_model_id": grok.id})
+    update = AsyncMock(return_value=saved)
+    monkeypatch.setattr(pool.agent_dao, "update", update)
+    out = await pool.ensure_agent_company_models(agent)
+    assert out.primary_model_id == grok.id
+    assert update.await_args.kwargs["obj_in"]["primary_model_id"] == grok.id
+
+
+@pytest.mark.asyncio
+async def test_activate_subscription_replaces_grok_api_key_default(monkeypatch):
+    created = _model()
+    dummy_id = uuid.uuid4()
+    dummy = _model(id=dummy_id, auth_kind="api_key", label="Grok 4.6")
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=dummy_id, default_fallback_model_id=None)
+    monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(pool.llm_model_dao, "get", AsyncMock(return_value=dummy))
+    monkeypatch.setattr(pool.llm_model_dao, "list_for_tenant", AsyncMock(return_value=[dummy, created]))
+    tenant_update = AsyncMock(return_value=tenant)
+    migrate = AsyncMock(return_value=2)
+    assign = AsyncMock(return_value=0)
+    monkeypatch.setattr(pool.tenant_dao, "update", tenant_update)
+    monkeypatch.setattr(pool.agent_dao, "migrate_primary_model", migrate)
+    monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", assign)
+    await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args.kwargs["obj_in"]["default_model_id"] == created.id
+    assert migrate.await_args.kwargs["old_model_id"] == dummy_id
+    assert migrate.await_args.kwargs["new_model_id"] == created.id
 
 
 @pytest.mark.asyncio
