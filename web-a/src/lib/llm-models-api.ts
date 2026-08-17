@@ -90,7 +90,26 @@ export type LlmModel = {
   is_fallback: boolean
   is_secondary: boolean
   reasoning_effort?: string | null
+  auth_kind?: string
   created_at: string
+}
+
+export type GrokSubscriptionStart = {
+  session_id: string
+  verification_url: string
+  user_code: string
+  expires_in: number
+  interval: number
+}
+
+export type GrokSubscriptionStatus = {
+  status: 'pending' | 'authorized' | 'expired' | 'denied' | 'error'
+  session_id: string
+  verification_url?: string | null
+  user_code?: string | null
+  model_id?: string | null
+  detail?: string | null
+  interval?: number | null
 }
 
 export type LlmModelWrite = {
@@ -158,6 +177,20 @@ export async function deleteLlmModel(modelId: string, force = false): Promise<vo
   return apiRequest(`/api/enterprise/llm-models/${encodeURIComponent(modelId)}${suffix}`, {
     method: 'DELETE',
   })
+}
+
+export async function startGrokSubscription(tenantId?: string): Promise<GrokSubscriptionStart> {
+  return apiRequest<GrokSubscriptionStart>(
+    `/api/enterprise/llm-models/grok-subscription/start${tenantQuery(tenantId)}`,
+    { method: 'POST' },
+  )
+}
+
+export async function getGrokSubscriptionStatus(sessionId: string): Promise<GrokSubscriptionStatus> {
+  const query = new URLSearchParams({ session_id: sessionId })
+  return apiRequest<GrokSubscriptionStatus>(
+    `/api/enterprise/llm-models/grok-subscription/status?${query.toString()}`,
+  )
 }
 
 export async function testLlmModel(input: {
