@@ -25,21 +25,39 @@ import { cn } from '@/lib/utils'
 type Line = ChatMessage & { pending?: boolean }
 
 const FORWARDED_INFO = /forwarded to openclaw|waiting for response/i
+const THINKING_TIMEOUT_MS = 90_000
+
+function sameUserLine(saved: Line, pending: Line): boolean {
+  if (saved.role !== 'user') return false
+  if (saved.content === pending.content) return true
+  return Boolean(pending.file_name && saved.content.startsWith(`[file:${pending.file_name}]`))
+}
 
 function mergeServerHistory(server: Line[], local: Line[]): Line[] {
-  const pending = local.filter(
+  const serverUsers = server.filter((row) => row.role === 'user')
+  const used = new Set<number>()
+  const leftoverPending: Line[] = []
+  for (const row of local) {
+    if (!row.pending || row.role !== 'user') continue
+    const match = serverUsers.findIndex((saved, index) => !used.has(index) && sameUserLine(saved, row))
+    if (match >= 0) used.add(match)
+    else leftoverPending.push(row)
+  }
+  const leftoverLocal = local.filter(
     (row) =>
-      row.pending &&
-      row.role === 'user' &&
-      !server.some((saved) => saved.role === 'user' && saved.content === row.content),
+      !row.pending &&
+      (row.role === 'assistant' || row.role === 'tool') &&
+      !server.some((saved) => saved.role === row.role && saved.content === row.content),
   )
-  return pending.length ? [...server, ...pending] : server
+  if (!leftoverPending.length && !leftoverLocal.length) return server
+  return [...server, ...leftoverPending, ...leftoverLocal]
 }
 
 function ThinkingStatus() {
   return (
     <p
       className="flex items-center gap-2 text-sm text-muted-foreground duration-200 ease-out animate-in fade-in motion-reduce:animate-none"
+      role="status"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1" aria-hidden>
@@ -89,18 +107,31 @@ export function AgentChatPage() {
     queryKey: ['messages', agent.id, activeId],
     queryFn: () => listSessionMessages(agent.id, activeId!),
     enabled: Boolean(activeId),
+    refetchOnMount: 'always',
   })
 
   useEffect(() => {
     if (!historyQuery.data) return
-    const switched = historySessionRef.current !== activeId
+    const firstLoad = historySessionRef.current === undefined
+    const switched = !firstLoad && historySessionRef.current !== activeId
     historySessionRef.current = activeId
     historyCountRef.current = historyQuery.data.length
     const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
     setLines(next)
+    if (switched) {
+      liveRef.current = ''
+      setLive('')
+      setThinking('')
+      setInfo(null)
+      setBusy(false)
+      return
+    }
     if (!next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
+      setThinking('')
+    } else if (next.at(-1)?.role === 'user') {
+      setBusy(true)
     }
   }, [historyQuery.data, activeId])
 
@@ -111,6 +142,16 @@ export function AgentChatPage() {
     }, 5000)
     return () => window.clearInterval(timer)
   }, [busy, activeId, agent.id, queryClient])
+
+  useEffect(() => {
+    if (!busy) return
+    const timer = window.setTimeout(() => {
+      setBusy(false)
+      setThinking('')
+      setInfo('No reply yet. You can send again.')
+    }, THINKING_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [busy])
 
   useEffect(() => {
     const queued = queuedSendRef.current
@@ -126,7 +167,8 @@ export function AgentChatPage() {
   useEffect(() => {
     const thread = threadRef.current
     if (!thread) return
-    thread.scrollTop = thread.scrollHeight
+    const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80
+    if (nearBottom) thread.scrollTop = thread.scrollHeight
   }, [lines, live, thinking, info])
 
   useEffect(() => {
@@ -195,16 +237,25 @@ export function AgentChatPage() {
         }
         if (event.type === 'error') {
           setInfo(event.content ?? 'Chat error')
+          setThinking('')
           setBusy(false)
           return
         }
         if (event.type === 'done') {
           const content = event.content || liveRef.current
-          if (content) setLines((prev) => [...prev, { role: event.role ?? 'assistant', content }])
+          const role = event.role ?? 'assistant'
+          if (content) {
+            setLines((prev) => {
+              const last = prev.at(-1)
+              if (last?.role === role && last.content === content) return prev
+              return [...prev, { role, content }]
+            })
+          }
           liveRef.current = ''
           setLive('')
           setThinking('')
           setBusy(false)
+          void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
           return
         }
         if (event.type === 'onboarded') {
@@ -215,7 +266,10 @@ export function AgentChatPage() {
       onClose(code) {
         if (code === 4001) toast.error('Session expired. Sign in again.')
         if (code === 4003) toast.error('This agent is expired or you cannot use it.')
-        setBusy(false)
+        if (code === 4001 || code === 4003) {
+          setBusy(false)
+          setThinking('')
+        }
       },
     })
     sendRef.current = conn.send
@@ -250,6 +304,8 @@ export function AgentChatPage() {
       queuedSendRef.current = text
       setDraft('')
       setBusy(true)
+      setInfo(null)
+      setLines([{ role: 'user', content: text, pending: true }])
       try {
         const session = await createSession(agent.id, text.slice(0, 48) || 'New chat')
         void queryClient.invalidateQueries({ queryKey: ['sessions', agent.id] })
@@ -276,6 +332,11 @@ export function AgentChatPage() {
   }
 
   async function onFile(file: File) {
+    if (busy) return
+    if (!sendRef.current) {
+      toast.error('Chat is not connected yet. Try again in a moment.')
+      return
+    }
     try {
       const uploaded = await uploadChatFile(file, agent.id)
       const extracted = uploaded.extracted_text || `[Uploaded ${uploaded.filename}]`
@@ -283,7 +344,7 @@ export function AgentChatPage() {
         ...prev,
         { role: 'user', content: extracted, file_name: uploaded.filename, pending: true },
       ])
-      sendRef.current?.({
+      sendRef.current({
         content: extracted,
         display_content: uploaded.filename,
         file_name: uploaded.filename,
@@ -379,7 +440,11 @@ export function AgentChatPage() {
             </Button>
           </div>
         ) : null}
-        <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4">
+        <div
+          ref={threadRef}
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4"
+          aria-busy={busy}
+        >
           {visible.map((line, index) => (
             <article
               key={`${line.created_at ?? 'row'}-${index}`}
@@ -401,11 +466,7 @@ export function AgentChatPage() {
             >
               <ChatMarkdown text={live} />
             </article>
-          ) : (
-            <div className="sr-only" aria-live="polite">
-              {busy ? 'Assistant is responding' : ''}
-            </div>
-          )}
+          ) : null}
           {busy && !live ? <ThinkingStatus /> : null}
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
         </div>
@@ -433,6 +494,7 @@ export function AgentChatPage() {
               type="file"
               className="text-xs"
               aria-label="Attach a file"
+              disabled={busy}
               onChange={(event) => {
                 const file = event.target.files?.[0]
                 if (file) void onFile(file)
@@ -440,7 +502,7 @@ export function AgentChatPage() {
               }}
             />
             <Button type="submit" disabled={busy || !draft.trim()}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+              {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" />}
               Send
             </Button>
           </div>
