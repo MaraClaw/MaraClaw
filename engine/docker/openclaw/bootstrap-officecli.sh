@@ -246,9 +246,13 @@ mkdir -p "$STATE_DIR" "$OFFICECLI_ROOT" "$RELEASES_DIR" "$STATE_DIR/skills" || f
 if ! refresh_and_activate; then
     cleanup_staging
     cleanup_temporary_link
-    validate_current_release || fail "refresh failed and no valid OfficeCLI release is active"
+    if ! validate_current_release; then
+        printf '%s\n' "[officecli-bootstrap] OfficeCLI unavailable; continuing without it" >&2
+    fi
 fi
 
-PATH="$CURRENT_LINK:$PATH"
-export PATH
+if [ -L "$CURRENT_LINK" ] && validate_current_release; then
+    PATH="$CURRENT_LINK:$PATH"
+    export PATH
+fi
 exec "$SCRIPT_DIR/bootstrap-memory-tencentdb.sh" "$@"

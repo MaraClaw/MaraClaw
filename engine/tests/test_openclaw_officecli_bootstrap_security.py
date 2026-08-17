@@ -127,7 +127,7 @@ def test_tag_scoped_downloads_do_not_use_redirect_discovery(tmp_path: Path, redi
         "a" * 64 + "  officecli-linux-arm64\n" + "b" * 64 + "  officecli-linux-arm64\n",
     ],
 )
-def test_untrusted_manifests_fail_closed_without_lkg(tmp_path: Path, manifest: str) -> None:
+def test_untrusted_manifests_skip_officecli_and_still_start_gateway(tmp_path: Path, manifest: str) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v1.2.3", "candidate")
@@ -137,9 +137,10 @@ def test_untrusted_manifests_fail_closed_without_lkg(tmp_path: Path, manifest: s
     result = fixture.run("sh", "-c", 'printf reached > "$CHILD_SENTINEL"')
 
     # Then
-    assert result.returncode != 0
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert result.returncode == 0, result.stderr
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
+    assert not (fixture.state_dir / ".officecli" / "current").exists()
 
 
 def test_checksum_mismatch_preserves_lkg(tmp_path: Path) -> None:
@@ -156,7 +157,7 @@ def test_checksum_mismatch_preserves_lkg(tmp_path: Path) -> None:
     assert_lkg_execution(fixture, result, snapshot)
 
 
-def test_matching_tampered_manifest_and_binary_block_all_downstream_execution(tmp_path: Path) -> None:
+def test_matching_tampered_manifest_and_binary_skip_officecli_and_still_start_gateway(tmp_path: Path) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v1.2.3", "candidate")
@@ -170,9 +171,10 @@ def test_matching_tampered_manifest_and_binary_block_all_downstream_execution(tm
     result = fixture.run("sh", "-c", 'printf reached > "$CHILD_SENTINEL"')
 
     # Then
-    assert result.returncode != 0
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert result.returncode == 0, result.stderr
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
+    assert not (fixture.state_dir / ".officecli" / "current").exists()
 
 
 @pytest.mark.parametrize("mode", ["publish_fail", "activation_fail"])
@@ -221,7 +223,7 @@ def test_metadata_write_failure_retains_lkg(tmp_path: Path) -> None:
         "skill_link_escape",
     ],
 )
-def test_corrupt_lkg_blocks_all_downstream_execution(tmp_path: Path, corruption: str) -> None:
+def test_corrupt_lkg_is_not_used_but_gateway_still_starts(tmp_path: Path, corruption: str) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     prepare_lkg(fixture)
@@ -263,9 +265,10 @@ def test_corrupt_lkg_blocks_all_downstream_execution(tmp_path: Path, corruption:
     result = fixture.run("sh", "-c", 'printf reached > "$CHILD_SENTINEL"', mode="binary_fail")
 
     # Then
-    assert result.returncode != 0
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert result.returncode == 0, result.stderr
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
+    assert not fixture.poison_path.exists()
 
 
 def test_unmanaged_skill_directory_blocks_refresh_without_deletion(tmp_path: Path) -> None:
@@ -281,11 +284,11 @@ def test_unmanaged_skill_directory_blocks_refresh_without_deletion(tmp_path: Pat
     result = fixture.run("sh", "-c", 'printf reached > "$CHILD_SENTINEL"')
 
     # Then
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert skill_link.is_dir()
     assert not skill_link.is_symlink()
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
 
 
 def test_curl_disables_config_proxy_and_non_https_protocols(tmp_path: Path) -> None:
@@ -320,8 +323,9 @@ def test_linux_fixture_uses_real_mv_until_failure_injection(tmp_path: Path, monk
     result = fixture.run(mode="activation_fail")
 
     # Then
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert fixture.bin_dir.joinpath("mv").exists()
+    assert fixture.child_sentinel.exists()
 
 
 def test_same_tag_drift_retains_existing_immutable_release(tmp_path: Path) -> None:

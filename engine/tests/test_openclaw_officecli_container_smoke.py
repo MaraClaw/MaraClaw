@@ -258,10 +258,10 @@ def test_real_linux_arm64_officecli_restart_smoke() -> None:
             workspace,
             RunRequest(workspace.container_names[2], workspace.empty_state_dir, offline=True),
         )
-        assert empty.returncode != 0, f"empty-state offline start unexpectedly succeeded\n{empty.describe()}"
-        assert not (workspace.empty_state_dir / TENCENT_MARKER).exists()
-        assert not (workspace.empty_state_dir / GOG_MARKER).exists()
-        assert not (workspace.empty_state_dir / CHILD_MARKER).exists()
+        assert empty.returncode == 0, f"empty-state offline start failed\n{empty.describe()}"
+        assert (workspace.empty_state_dir / TENCENT_MARKER).is_file()
+        assert (workspace.empty_state_dir / GOG_MARKER).is_file()
+        assert (workspace.empty_state_dir / CHILD_MARKER).is_file()
 
     finally:
         if message := cleanup_error_message(workspace.cleanup(), sys.exception()):

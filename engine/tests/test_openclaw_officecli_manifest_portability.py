@@ -100,7 +100,7 @@ def test_exact_manifest_installs_when_awk_rejects_interval_syntax(
     ],
     ids=("nonhex", "short", "near-name", "missing", "duplicate"),
 )
-def test_malformed_near_missing_or_duplicate_manifest_blocks_downstream(tmp_path: Path, manifest: str) -> None:
+def test_malformed_near_missing_or_duplicate_manifest_skips_officecli(tmp_path: Path, manifest: str) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release(VALID_TAG, "rejected")
@@ -110,9 +110,9 @@ def test_malformed_near_missing_or_duplicate_manifest_blocks_downstream(tmp_path
     result = fixture.run("sh", "-c", ":")
 
     # Then
-    assert result.returncode != 0
-    assert not fixture.tencent_sentinel.exists()
-    assert not fixture.child_sentinel.exists()
+    assert result.returncode == 0, result.stderr
+    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert not (fixture.state_dir / ".officecli" / "current").exists()
 
 
 @pytest.mark.parametrize(
