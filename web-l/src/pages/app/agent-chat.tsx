@@ -35,11 +35,14 @@ export function AgentChatPage() {
   const [live, setLive] = useState('')
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
+  const [socketReady, setSocketReady] = useState(0)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
+  const queuedSendRef = useRef<string | null>(null)
+  const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
@@ -59,6 +62,16 @@ export function AgentChatPage() {
   useEffect(() => {
     if (historyQuery.data) setLines(historyQuery.data)
   }, [historyQuery.data])
+
+  useEffect(() => {
+    const queued = queuedSendRef.current
+    const sendFn = sendRef.current
+    if (!queued || !sendFn || !activeId || historyQuery.isLoading) return
+    queuedSendRef.current = null
+    setLines((prev) => [...prev, { role: 'user', content: queued }])
+    setBusy(true)
+    sendFn({ content: queued })
+  }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -140,6 +153,7 @@ export function AgentChatPage() {
       },
     })
     sendRef.current = conn.send
+    setSocketReady((n) => n + 1)
     return () => {
       sendRef.current = null
       conn.close()
@@ -159,7 +173,35 @@ export function AgentChatPage() {
 
   async function send() {
     const text = draft.trim()
-    if (!text || !sendRef.current) return
+    if (!text || busy) return
+    if (!token) {
+      toast.error('Sign in again to send.')
+      return
+    }
+    if (!activeId) {
+      if (creatingSessionRef.current) return
+      creatingSessionRef.current = true
+      queuedSendRef.current = text
+      setDraft('')
+      setBusy(true)
+      try {
+        const session = await createSession(agent.id, text.slice(0, 48) || 'New chat')
+        void queryClient.invalidateQueries({ queryKey: ['sessions', agent.id] })
+        navigate(`/app/agents/${agent.id}/chat/${session.id}`)
+      } catch (error) {
+        queuedSendRef.current = null
+        setDraft(text)
+        setBusy(false)
+        toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not start a chat')
+      } finally {
+        creatingSessionRef.current = false
+      }
+      return
+    }
+    if (!sendRef.current) {
+      toast.error('Chat is not connected yet. Try again in a moment.')
+      return
+    }
     setDraft('')
     setLines((prev) => [...prev, { role: 'user', content: text }])
     setBusy(true)
