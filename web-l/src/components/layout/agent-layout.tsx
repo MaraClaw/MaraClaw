@@ -153,8 +153,10 @@ export function AgentLayout() {
         label="Agent sections"
         className="md:col-start-1 md:row-start-1 md:row-span-2"
       />
-      <div className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-2">
-        <Outlet context={{ agent }} />
+      <div className="relative min-h-0 min-w-0 md:col-start-2 md:row-start-2">
+        <div className="absolute inset-0 overflow-y-auto overscroll-y-contain">
+          <Outlet context={{ agent }} />
+        </div>
       </div>
     </div>
   )

@@ -44,7 +44,8 @@ export function AgentChatPage() {
   const queuedSendRef = useRef<string | null>(null)
   const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
-  const bottomRef = useRef<HTMLDivElement | null>(null)
+  const threadRef = useRef<HTMLDivElement | null>(null)
+  const historyCountRef = useRef(0)
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', agent.id],
@@ -61,7 +62,21 @@ export function AgentChatPage() {
 
   useEffect(() => {
     if (historyQuery.data) setLines(historyQuery.data)
-  }, [historyQuery.data])
+    historyCountRef.current = historyQuery.data?.length ?? 0
+    const last = historyQuery.data?.[historyQuery.data.length - 1]
+    if (busy && last?.role === 'assistant') {
+      setBusy(false)
+      setInfo(null)
+    }
+  }, [historyQuery.data, busy])
+
+  useEffect(() => {
+    if (!busy || !activeId) return
+    const timer = window.setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [busy, activeId, agent.id, queryClient])
 
   useEffect(() => {
     const queued = queuedSendRef.current
@@ -74,17 +89,23 @@ export function AgentChatPage() {
   }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [lines, live])
+    const thread = threadRef.current
+    if (!thread) return
+    thread.scrollTop = thread.scrollHeight
+  }, [lines, live, thinking, info])
 
   useEffect(() => {
-    if (!token || !activeId) return
+    if (!token || !activeId || historyQuery.isLoading) return
     let greeted = false
     const conn = connectAgentChat(agent.id, token, activeId, {
       onEvent(event: ChatInbound) {
         if (event.type === 'connected') {
-          if (agent.onboarded_for_me === false && !greeted) {
+          const sentKey = `maraclaw-onboarding-sent:${agent.id}`
+          const alreadySent =
+            typeof sessionStorage !== 'undefined' && sessionStorage.getItem(sentKey) === '1'
+          if (agent.onboarded_for_me === false && !greeted && !alreadySent && historyCountRef.current === 0) {
             greeted = true
+            sessionStorage.setItem(sentKey, '1')
             conn.send({ kind: 'onboarding_trigger' })
           }
           return
@@ -143,6 +164,7 @@ export function AgentChatPage() {
           return
         }
         if (event.type === 'onboarded') {
+          sessionStorage.setItem(`maraclaw-onboarding-sent:${agent.id}`, '1')
           void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
         }
       },
@@ -158,7 +180,7 @@ export function AgentChatPage() {
       sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, token, queryClient])
+  }, [agent.id, agent.onboarded_for_me, activeId, token, queryClient, historyQuery.isLoading])
 
   const newSession = useMutation({
     mutationFn: () => createSession(agent.id, 'New chat'),
@@ -225,8 +247,8 @@ export function AgentChatPage() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[220px_1fr]">
-      <aside className="p-3 md:border-r md:border-border">
+    <div className="grid h-full min-h-0 overflow-hidden grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
+      <aside className="min-h-0 max-h-36 overflow-y-auto p-3 md:max-h-none md:border-r md:border-border">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">Sessions</p>
           <Button size="sm" variant="ghost" aria-label="New session" onClick={() => newSession.mutate()}>
@@ -294,7 +316,7 @@ export function AgentChatPage() {
         </ul>
       </aside>
 
-      <section className="flex min-h-0 flex-col">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden">
         {livePreview ? (
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
             <p className="text-xs text-muted-foreground">
@@ -308,7 +330,7 @@ export function AgentChatPage() {
             </Button>
           </div>
         ) : null}
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4">
           {visible.map((line, index) => (
             <article
               key={`${line.created_at ?? 'row'}-${index}`}
@@ -336,10 +358,9 @@ export function AgentChatPage() {
             </div>
           )}
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
-          <div ref={bottomRef} />
         </div>
         <form
-          className="border-t border-border p-3"
+          className="shrink-0 border-t border-border bg-background p-3"
           onSubmit={(event) => {
             event.preventDefault()
             void send()
@@ -349,6 +370,7 @@ export function AgentChatPage() {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={`Message ${agent.name}…`}
+            className="max-h-32"
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
