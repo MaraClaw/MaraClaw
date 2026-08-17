@@ -1,4 +1,4 @@
-"""DAO for tasks and task_logs (psycopg)."""
+"""DAO for tasks and task_logs"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DAO for approval_requests (psycopg)."""
+"""DAO for approval_requests"""
 
 from __future__ import annotations
 

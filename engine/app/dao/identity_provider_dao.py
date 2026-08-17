@@ -1,4 +1,4 @@
-"""DAO for identity_providers table (psycopg)."""
+"""DAO for identity_providers table"""
 
 from __future__ import annotations
 

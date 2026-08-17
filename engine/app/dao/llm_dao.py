@@ -1,4 +1,4 @@
-"""DAO for llm_models (psycopg)."""
+"""DAO for llm_models"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DAO for tools and agent_tools (psycopg)."""
+"""DAO for tools and agent_tools"""
 
 from __future__ import annotations
 

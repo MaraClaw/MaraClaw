@@ -1,4 +1,4 @@
-"""DAO for notifications (psycopg)."""
+"""DAO for notifications"""
 
 from __future__ import annotations
 

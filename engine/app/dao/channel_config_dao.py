@@ -1,4 +1,4 @@
-"""DAO for channel_configs (psycopg)."""
+"""DAO for channel_configs"""
 
 from __future__ import annotations
 

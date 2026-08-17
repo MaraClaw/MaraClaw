@@ -1,4 +1,4 @@
-"""DAO for participants table (psycopg)."""
+"""DAO for participants table"""
 
 from __future__ import annotations
 

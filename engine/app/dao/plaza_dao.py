@@ -1,4 +1,4 @@
-"""DAO for plaza posts, comments, and likes (psycopg)."""
+"""DAO for plaza posts, comments, and likes"""
 
 from __future__ import annotations
 
