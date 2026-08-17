@@ -24,6 +24,34 @@ import { cn } from '@/lib/utils'
 
 type Line = ChatMessage & { pending?: boolean }
 
+const FORWARDED_INFO = /forwarded to openclaw|waiting for response/i
+
+function mergeServerHistory(server: Line[], local: Line[]): Line[] {
+  const pending = local.filter(
+    (row) =>
+      row.pending &&
+      row.role === 'user' &&
+      !server.some((saved) => saved.role === 'user' && saved.content === row.content),
+  )
+  return pending.length ? [...server, ...pending] : server
+}
+
+function ThinkingStatus() {
+  return (
+    <p
+      className="flex items-center gap-2 text-sm text-muted-foreground duration-200 ease-out animate-in fade-in motion-reduce:animate-none"
+      aria-live="polite"
+    >
+      <span className="inline-flex items-center gap-1" aria-hidden>
+        <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground" />
+        <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:160ms]" />
+        <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:320ms]" />
+      </span>
+      Thinking ...
+    </p>
+  )
+}
+
 export function AgentChatPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { sessionId } = useParams()
@@ -45,7 +73,10 @@ export function AgentChatPage() {
   const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
   const threadRef = useRef<HTMLDivElement | null>(null)
+  const linesRef = useRef<Line[]>([])
   const historyCountRef = useRef(0)
+  const historySessionRef = useRef<string | undefined>(undefined)
+  linesRef.current = lines
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', agent.id],
@@ -61,20 +92,23 @@ export function AgentChatPage() {
   })
 
   useEffect(() => {
-    if (historyQuery.data) setLines(historyQuery.data)
-    historyCountRef.current = historyQuery.data?.length ?? 0
-    const last = historyQuery.data?.[historyQuery.data.length - 1]
-    if (busy && last?.role === 'assistant') {
+    if (!historyQuery.data) return
+    const switched = historySessionRef.current !== activeId
+    historySessionRef.current = activeId
+    historyCountRef.current = historyQuery.data.length
+    const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
+    setLines(next)
+    if (!next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
     }
-  }, [historyQuery.data, busy])
+  }, [historyQuery.data, activeId])
 
   useEffect(() => {
     if (!busy || !activeId) return
     const timer = window.setInterval(() => {
       void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
-    }, 2500)
+    }, 5000)
     return () => window.clearInterval(timer)
   }, [busy, activeId, agent.id, queryClient])
 
@@ -83,8 +117,9 @@ export function AgentChatPage() {
     const sendFn = sendRef.current
     if (!queued || !sendFn || !activeId || historyQuery.isLoading) return
     queuedSendRef.current = null
-    setLines((prev) => [...prev, { role: 'user', content: queued }])
+    setLines((prev) => [...prev, { role: 'user', content: queued, pending: true }])
     setBusy(true)
+    setInfo(null)
     sendFn({ content: queued })
   }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady])
 
@@ -145,8 +180,17 @@ export function AgentChatPage() {
           setInfo(`Editing ${event.name ?? 'file'}…`)
           return
         }
+        if (event.type === 'status' && (event.content ?? '') === 'thinking') {
+          setBusy(true)
+          return
+        }
         if (event.type === 'info') {
-          setInfo(event.content ?? null)
+          const text = event.content ?? ''
+          if (FORWARDED_INFO.test(text)) {
+            setBusy(true)
+            return
+          }
+          setInfo(text || null)
           return
         }
         if (event.type === 'error') {
@@ -225,8 +269,9 @@ export function AgentChatPage() {
       return
     }
     setDraft('')
-    setLines((prev) => [...prev, { role: 'user', content: text }])
+    setLines((prev) => [...prev, { role: 'user', content: text, pending: true }])
     setBusy(true)
+    setInfo(null)
     sendRef.current({ content: text })
   }
 
@@ -234,13 +279,17 @@ export function AgentChatPage() {
     try {
       const uploaded = await uploadChatFile(file, agent.id)
       const extracted = uploaded.extracted_text || `[Uploaded ${uploaded.filename}]`
-      setLines((prev) => [...prev, { role: 'user', content: extracted, file_name: uploaded.filename }])
+      setLines((prev) => [
+        ...prev,
+        { role: 'user', content: extracted, file_name: uploaded.filename, pending: true },
+      ])
       sendRef.current?.({
         content: extracted,
         display_content: uploaded.filename,
         file_name: uploaded.filename,
       })
       setBusy(true)
+      setInfo(null)
     } catch (error) {
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Upload failed')
     }
@@ -357,6 +406,7 @@ export function AgentChatPage() {
               {busy ? 'Assistant is responding' : ''}
             </div>
           )}
+          {busy && !live ? <ThinkingStatus /> : null}
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
         </div>
         <form
