@@ -44,6 +44,23 @@ def cache_drop(key: str) -> None:
     _store.pop(key, None)
 
 
+def drop_model_caches() -> None:
+    """Drop ensured/bundle entries after a company model or subscription change."""
+    for key in list(_store):
+        if key.startswith("ensured:") or key.startswith("bundle:"):
+            _store.pop(key, None)
+
+
+def drop_cached_agent(agent_id: UUID) -> None:
+    """Drop API-key lookups for this agent (key rotate / disable)."""
+    for key, item in list(_store.items()):
+        if not key.startswith("ockey:"):
+            continue
+        value = item[1]
+        if isinstance(value, AgentRecord) and value.id == agent_id:
+            _store.pop(key, None)
+
+
 def reset() -> None:
     """Test helper."""
     _store.clear()

@@ -1057,6 +1057,9 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
         obj_in={"api_key_hash": key_hash},
     )
     write_gateway_api_key(agent, raw_key)
+    from app.services.openclaw_hot_cache import drop_cached_agent
+
+    drop_cached_agent(agent.id)
 
     return {"api_key": raw_key, "message": "Key configured successfully."}
 

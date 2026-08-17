@@ -158,6 +158,9 @@ def assert_distinct_model_slots(
 
 async def activate_pool_model_for_tenant(model: LLMModelRecord) -> None:
     """If the company has no primary, make this row the default and fill bare agents."""
+    from app.services.openclaw_hot_cache import drop_model_caches
+
+    drop_model_caches()
     if model.tenant_id is None or not model.enabled:
         return
     tenant = await tenant_dao.get(model.tenant_id)

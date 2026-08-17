@@ -38,3 +38,16 @@ def test_api_key_lookup_does_not_store_plaintext() -> None:
     openclaw_hot_cache.set_cached_agent_by_key("oc-secret", agent)
     assert openclaw_hot_cache.get_cached_agent_by_key("oc-secret") is agent
     assert all("oc-secret" not in key for key in openclaw_hot_cache._store)
+
+
+def test_drop_model_caches_and_agent_key() -> None:
+    agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="N", primary_model_id=uuid4())
+    openclaw_hot_cache.mark_ensured(agent)
+    openclaw_hot_cache.set_cached_bundle(agent, ModelBundle(primary=SimpleNamespace(id=agent.primary_model_id)))
+    openclaw_hot_cache.set_cached_agent_by_key("oc-secret", agent)
+    openclaw_hot_cache.drop_model_caches()
+    assert openclaw_hot_cache.recently_ensured(agent) is False
+    assert openclaw_hot_cache.get_cached_bundle(agent) is None
+    assert openclaw_hot_cache.get_cached_agent_by_key("oc-secret") is agent
+    openclaw_hot_cache.drop_cached_agent(agent.id)
+    assert openclaw_hot_cache.get_cached_agent_by_key("oc-secret") is None

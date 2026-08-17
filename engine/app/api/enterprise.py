@@ -455,6 +455,9 @@ async def update_llm_model(
 
     try:
         model = await llm_model_dao.update(db_obj=model, obj_in=updates)
+        from app.services.openclaw_hot_cache import drop_model_caches
+
+        drop_model_caches()
         default_model_id = None
         fallback_model_id = None
         secondary_model_id = None
