@@ -14,6 +14,15 @@ from app.dao.agent_dao import AGENT_DELETE_CLEANUP_SQL
 DELETE_AGENT_CLEANUP_SQL = AGENT_DELETE_CLEANUP_SQL
 
 
+def test_agent_delete_cleanup_uses_real_chat_message_and_gateway_sender_columns() -> None:
+    """chat_messages has no sender_agent_id; that FK lives on gateway_messages."""
+    assert not any("chat_messages SET sender_agent_id" in sql for sql in AGENT_DELETE_CLEANUP_SQL)
+    assert any("DELETE FROM chat_messages WHERE agent_id = %(aid)s" in sql for sql in AGENT_DELETE_CLEANUP_SQL)
+    assert any(
+        "DELETE FROM gateway_messages WHERE sender_agent_id = %(aid)s" in sql for sql in AGENT_DELETE_CLEANUP_SQL
+    )
+
+
 def make_user(**overrides):
     values = {
         "id": uuid.uuid4(),

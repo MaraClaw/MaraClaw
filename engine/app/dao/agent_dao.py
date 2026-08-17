@@ -899,7 +899,6 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM tasks WHERE agent_id = %(aid)s",
     "DELETE FROM chat_sessions WHERE peer_agent_id = %(aid)s",
     "DELETE FROM gateway_messages WHERE sender_agent_id = %(aid)s",
-    "UPDATE chat_messages SET sender_agent_id = NULL WHERE sender_agent_id = %(aid)s",
     "DELETE FROM agent_agent_relationships WHERE agent_id = %(aid)s OR target_agent_id = %(aid)s",
     "DELETE FROM plaza_posts WHERE author_id = %(aid)s",
     "DELETE FROM participants WHERE type = 'agent' AND ref_id = %(aid)s",
