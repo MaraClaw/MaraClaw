@@ -35,6 +35,16 @@ from app.services.storage_runtime.base import StorageBackend
 settings = get_settings()
 
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
+TENCENTDB_BOOTSTRAP_MARKER = ".bootstrap-tencentdb-version"
+
+
+def tencentdb_plugin_ready(agent_dir: Path) -> bool:
+    """True when guest bootstrap finished installing memory-tencentdb."""
+    marker = agent_dir / TENCENTDB_BOOTSTRAP_MARKER
+    try:
+        return marker.is_file() and bool(marker.read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
 
 
 def guest_provider_id(provider: str) -> str:
@@ -405,7 +415,9 @@ class AgentManager:
             },
         }
 
-        if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED:
+        # Pinning plugins.slots.memory before the guest has installed the
+        # package makes openclaw.json invalid (gateway never binds, CLI dies).
+        if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED and tencentdb_plugin_ready(agent_dir):
             config["plugins"] = {
                 "enabled": True,
                 "slots": {
@@ -499,6 +511,9 @@ class AgentManager:
                 "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
                 "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
                 "TENCENTDB_PLUGIN_VERSION": settings.TENCENTDB_PLUGIN_VERSION,
+                "OPENCLAW_MEMORY_TENCENTDB_ENABLED": (
+                    "true" if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED else "false"
+                ),
                 "MARACLAW_API_BASE": guest_engine_base_url(),
                 **gogcli_envs,
             }

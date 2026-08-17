@@ -38,7 +38,17 @@ if [ "$INSTALLED_VERSION" != "$PLUGIN_VERSION" ]; then
     fi
 
     echo "[openclaw-bootstrap] Installing memory-tencentdb plugin from $SOURCE" >&2
-    openclaw plugins install "$SOURCE" --pin
+    # A pre-written plugins.slots.memory makes the bind-mounted config invalid
+    # and `openclaw plugins install` refuses to run. Use a throwaway config.
+    INSTALL_CONFIG="$(mktemp "$STATE_DIR/.plugin-install-config.XXXXXX")"
+    printf '{}\n' > "$INSTALL_CONFIG"
+    if OPENCLAW_CONFIG_PATH="$INSTALL_CONFIG" openclaw plugins install "$SOURCE" --pin; then
+        rm -f "$INSTALL_CONFIG"
+    else
+        install_status=$?
+        rm -f "$INSTALL_CONFIG"
+        exit "$install_status"
+    fi
     printf '%s' "$PLUGIN_VERSION" > "$MARKER"
     echo "[openclaw-bootstrap] memory-tencentdb plugin bootstrap complete" >&2
 fi
