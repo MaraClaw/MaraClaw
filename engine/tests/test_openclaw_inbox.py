@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.services.openclaw_inbox import (
     guest_engine_base_url,
+    inbox_cli_argv,
     openclaw_container_name,
     wake_openclaw_inbox,
     wake_urls,
@@ -24,6 +25,9 @@ def test_write_skill_uses_engine_alias(tmp_path) -> None:
     assert "http://maraclaw-engine:8000/api/gateway/poll" in text
     assert "X-Api-Key" in text
     assert "try.maraclaw.ai" not in text
+    bootstrap = tmp_path / "workspace" / "BOOTSTRAP.md"
+    assert bootstrap.is_file()
+    assert "maraclaw-sync" in bootstrap.read_text(encoding="utf-8")
 
 
 def test_wake_urls_prefer_container_name() -> None:
@@ -60,3 +64,35 @@ async def test_wake_uses_docker_exec_on_loopback(tmp_path, monkeypatch) -> None:
     assert execute_calls[0][1][0] == "node"
     payload = (agent_dir / ".maraclaw-wake.json").read_text(encoding="utf-8")
     assert "Good morning!" in payload
+
+
+def test_inbox_cli_targets_default_agent_locally() -> None:
+    argv = inbox_cli_argv("Hello again.")
+    assert argv[:6] == ["openclaw", "agent", "--agent", "main", "--local", "--message"]
+    assert argv[6] == "Hello again."
+
+
+async def test_wake_falls_back_to_local_cli_when_hooks_fail(tmp_path, monkeypatch) -> None:
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    execute_calls: list[list[str]] = []
+
+    class FakeDocker:
+        def __init__(self) -> None:
+            self.container = self
+
+        def execute(self, container, argv, stream=False):
+            execute_calls.append(list(argv))
+            if argv and argv[0] == "node":
+                raise RuntimeError("hooks refused")
+            return ""
+
+    monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
+
+    woke = await wake_openclaw_inbox(agent, content="Hello.")
+    assert woke is True
+    assert execute_calls[0][0] == "node"
+    assert execute_calls[1][:6] == ["openclaw", "agent", "--agent", "main", "--local", "--message"]

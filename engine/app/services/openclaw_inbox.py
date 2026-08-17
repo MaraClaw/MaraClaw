@@ -89,8 +89,28 @@ def ensure_openclaw_tokens(agent_dir: Path) -> tuple[str, str]:
     return _token_file(agent_dir, GATEWAY_TOKEN_FILENAME), _token_file(agent_dir, HOOKS_TOKEN_FILENAME)
 
 
+_BOOTSTRAP_STUB = """# Bootstrap
+
+There is no extra founding ritual file for this agent.
+
+Use `SOUL.md`, `IDENTITY.md`, and the `maraclaw-sync` skill.
+On every wake, poll the MaraClaw inbox, answer, and report.
+"""
+
+
+def write_workspace_bootstrap_md(agent_dir: Path, content: str | None = None) -> Path:
+    """Ensure workspace/BOOTSTRAP.md exists so guest reads do not ENOENT."""
+    dest = agent_dir / "workspace" / "BOOTSTRAP.md"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if content is None and dest.is_file() and dest.stat().st_size > 0:
+        return dest
+    dest.write_text(((content or _BOOTSTRAP_STUB).rstrip() + "\n"), encoding="utf-8")
+    return dest
+
+
 def write_maraclaw_sync_skill(agent_dir: Path) -> Path:
     """Write the inbox skill into the bind-mounted workspace."""
+    write_workspace_bootstrap_md(agent_dir)
     dest = agent_dir / "workspace" / "skills" / SKILL_FOLDER / "SKILL.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(_SKILL_TEMPLATE.format(base_url=guest_engine_base_url()), encoding="utf-8")
@@ -129,6 +149,19 @@ def wake_urls(agent: AgentRecord) -> list[str]:
     if isinstance(published, int) and published > 0:
         urls.append(f"http://host.docker.internal:{published}/hooks/agent")
     return urls
+
+
+def inbox_cli_argv(message: str) -> list[str]:
+    """Embedded one-shot turn. ``--agent main`` is required; ``--local`` skips the gateway."""
+    return [
+        "openclaw",
+        "agent",
+        "--agent",
+        "main",
+        "--local",
+        "--message",
+        message[:2000],
+    ]
 
 
 def _wake_body(content: str) -> dict[str, str]:
@@ -174,10 +207,7 @@ def _exec_inbox_wake(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) 
     hook_error = _docker_execute(agent, ["node", f"/home/node/.openclaw/{WAKE_SCRIPT_FILENAME}"])
     if hook_error is None:
         return None
-    cli_error = _docker_execute(
-        agent,
-        ["openclaw", "agent", "--message", body["message"][:2000]],
-    )
+    cli_error = _docker_execute(agent, inbox_cli_argv(body["message"]))
     if cli_error is None:
         return None
     return f"hooks={hook_error}; cli={cli_error}"
