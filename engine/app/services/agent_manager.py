@@ -1,5 +1,6 @@
 """Agent lifecycle manager - Docker container management for OpenClaw Gateway instances."""
 
+import hashlib
 import json
 import secrets
 import shutil
@@ -449,10 +450,9 @@ class AgentManager:
         wrote_store = self._atomic_write_json(
             agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store
         )
-        if not wrote_legacy and not wrote_store:
-            return
         self._upsert_auth_profile_sqlite(agent_dir, store)
-        logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
+        if wrote_legacy or wrote_store:
+            logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
 
     def _guest_config_fingerprint(
         self,
@@ -461,13 +461,21 @@ class AgentManager:
         secondary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
         selected: LLMModelRecord | None,
+        agent_dir: Path | None = None,
     ) -> str:
         parts: list[str] = []
         for row in (selected, primary, secondary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
             kind = getattr(row, "auth_kind", "") if row is not None else ""
-            parts.append(f"{ref}:{kind}:{expires}")
+            secret = (
+                f"{getattr(row, 'api_key_encrypted', '') or ''}|"
+                f"{getattr(row, 'refresh_token_encrypted', '') or ''}"
+            )
+            digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
+            parts.append(f"{ref}:{kind}:{expires}:{digest}")
+        if agent_dir is not None:
+            parts.append(f"td:{int(tencentdb_plugin_ready(agent_dir))}")
         return "|".join(parts)
 
     def write_guest_config(
@@ -485,7 +493,11 @@ class AgentManager:
             logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
             return None
         fingerprint = self._guest_config_fingerprint(
-            primary=primary, secondary=secondary, fallback=fallback, selected=selected
+            primary=primary,
+            secondary=secondary,
+            fallback=fallback,
+            selected=selected,
+            agent_dir=agent_dir,
         )
         path = agent_dir / "openclaw.json"
         if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
@@ -620,6 +632,7 @@ class AgentManager:
         if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
             _ = await restore_gogcli_state(db, agent.id, agent_dir)
 
+        original = agent
         self._replace_existing_guest_container(agent)
 
         gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
@@ -663,6 +676,13 @@ class AgentManager:
         config_dir.mkdir(parents=True, exist_ok=True)
         self._atomic_write_json(agent_dir / "openclaw.json", config)
         self._sync_guest_xai_oauth(agent_dir, primary, secondary, fallback)
+        _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
+            primary=primary,
+            secondary=secondary,
+            fallback=fallback,
+            selected=primary,
+            agent_dir=agent_dir,
+        )
         self._ensure_openclaw_workspace_layout(agent_dir)
 
         # Assign a unique port
@@ -705,16 +725,19 @@ class AgentManager:
                 },
             )
 
-            agent.container_id = container.id
-            agent.container_port = container_port
-            agent.status = "running"
-            agent.last_active_at = datetime.now(UTC)
+            now = datetime.now(UTC)
+            for target in (original, agent):
+                target.container_id = container.id
+                target.container_port = container_port
+                target.status = "running"
+                target.last_active_at = now
 
             logger.info(f"Started container {container.id[:12]} for agent {agent.name} on port {container_port}")
             return container.id
 
         except (ClientNotFoundError, DockerException) as e:
             logger.error(f"Failed to start container for agent {agent.name}: {e}")
+            original.status = "error"
             agent.status = "error"
             return None
 
