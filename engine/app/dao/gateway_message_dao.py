@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import ClassVar, final
 from uuid import UUID
 
@@ -45,6 +46,17 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 {"agent_id": agent_id},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
+
+    async def mark_delivered(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
+        """Take a pending row off the poll queue after a successful wake."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
+                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' "
+                + f"RETURNING {self._select_list()}",
+                {"id": message_id, "agent_id": agent_id, "now": datetime.now(UTC)},
+            )
+            return GatewayMessageRecord.from_row(row) if row else None
 
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         async with self.session() as db:

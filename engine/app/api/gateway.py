@@ -126,9 +126,13 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
             )
         )
 
-    rel_items = []
+    # Inbox turns should answer first; relationship catalogs wait for empty polls.
+    rel_items = [] if out else await _poll_relationships(agent)
+    return GatewayPollResponse(messages=out, relationships=rel_items)
 
-    # Human relationships (with available channels)
+
+async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipItem]:
+    rel_items: list[GatewayRelationshipItem] = []
     for r in await agent_relationship_dao.list_for_agent_with_members(agent.id):
         status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
         if r.member and status_info["access_status"] == "active":
@@ -146,8 +150,6 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                     channels=channels,
                 )
             )
-
-    # Agent-to-agent relationships
     for r in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
         status_info = await evaluate_agent_relationship_status(None, r)
         if r.target_agent and status_info["access_status"] == "active":
@@ -160,8 +162,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
                     channels=["agent"],
                 )
             )
-
-    return GatewayPollResponse(messages=out, relationships=rel_items)
+    return rel_items
 
 
 # ─── Report results ─────────────────────────────────────
@@ -224,9 +225,15 @@ async def report_result(
                     "role": "assistant",
                     "content": body.result,
                 },
+                user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
+            )
+            logger.info(
+                "[Gateway] pushed reply to session {} agent={}",
+                msg.conversation_id,
+                agent.id,
             )
         except Exception as error:
-            logger.debug(f"[Gateway] Skipped done notification for disconnected user: {error}")
+            logger.warning("[Gateway] Skipped done notification for disconnected user: {}", error)
 
     if body.result and session is not None:
         from app.services.channels.outbound import deliver_session_reply

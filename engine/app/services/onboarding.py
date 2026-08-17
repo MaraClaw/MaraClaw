@@ -378,6 +378,26 @@ async def mark_onboarded(
     await mark_onboarding_phase(db, agent_id, user_id, PHASE_COMPLETED)
 
 
+async def try_begin_onboarding_greeting(
+    db: object | None,
+    agent_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Claim the hidden first-run greeting. False when it already ran."""
+    del db
+    async with connection_ctx() as conn:
+        row = await conn.fetchone(
+            """
+            INSERT INTO agent_user_onboardings (agent_id, user_id, phase)
+            VALUES (%(agent_id)s, %(user_id)s, %(phase)s)
+            ON CONFLICT (agent_id, user_id) DO NOTHING
+            RETURNING agent_id
+            """,
+            {"agent_id": agent_id, "user_id": user_id, "phase": PHASE_GREETED},
+        )
+    return row is not None
+
+
 async def is_onboarded(
     db: object | None,
     agent_id: uuid.UUID,

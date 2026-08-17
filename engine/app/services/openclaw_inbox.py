@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import httpx
 from anyio.to_thread import run_sync
 
 from app.config import get_settings
@@ -113,7 +116,10 @@ def write_maraclaw_sync_skill(agent_dir: Path) -> Path:
     write_workspace_bootstrap_md(agent_dir)
     dest = agent_dir / "workspace" / "skills" / SKILL_FOLDER / "SKILL.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_SKILL_TEMPLATE.format(base_url=guest_engine_base_url()), encoding="utf-8")
+    text = _SKILL_TEMPLATE.format(base_url=guest_engine_base_url())
+    if dest.is_file() and dest.read_text(encoding="utf-8") == text:
+        return dest
+    dest.write_text(text, encoding="utf-8")
     return dest
 
 
@@ -136,7 +142,7 @@ def inbox_config_block(hooks_token: str, gateway_token: str) -> dict[str, Any]:
 
 def heartbeat_block() -> dict[str, Any]:
     return {
-        "every": "1m",
+        "every": "30s",
         "prompt": "Check the MaraClaw inbox with the maraclaw-sync skill and process every pending message.",
     }
 
@@ -149,6 +155,15 @@ def wake_urls(agent: AgentRecord) -> list[str]:
     if isinstance(published, int) and published > 0:
         urls.append(f"http://host.docker.internal:{published}/hooks/agent")
     return urls
+
+
+_CLI_POLL_PROMPT = (
+    "A MaraClaw inbox item is waiting. Use the maraclaw-sync skill: poll, answer, and report."
+)
+_ENSURE_GATEWAY_SH = (
+    "pgrep -f '[o]penclaw gateway' >/dev/null 2>&1 || "
+    "nohup openclaw gateway >/tmp/maraclaw-gateway.log 2>&1 &"
+)
 
 
 def inbox_cli_argv(message: str) -> list[str]:
@@ -164,12 +179,21 @@ def inbox_cli_argv(message: str) -> list[str]:
     ]
 
 
-def _wake_body(content: str) -> dict[str, str]:
-    prompt = (
-        "A new MaraClaw inbox message is waiting. Use the maraclaw-sync skill immediately: "
-        + "poll, answer, and report. Latest user text:\n\n"
-        + content[:4000]
-    )
+def _wake_body(content: str, message_id: UUID | None = None) -> dict[str, str]:
+    if message_id is not None:
+        prompt = (
+            "Answer the MaraClaw user now. Then POST "
+            + f"{guest_engine_base_url()}/api/gateway/report "
+            + "header X-Api-Key=$MARACLAW_GATEWAY_API_KEY JSON "
+            + f'{{"message_id":"{message_id}","result":"<reply>"}}.\n\n'
+            + content[:4000]
+        )
+    else:
+        prompt = (
+            "A MaraClaw inbox item is waiting. Use the maraclaw-sync skill: "
+            + "poll, answer, and report.\n\n"
+            + content[:4000]
+        )
     return {"message": prompt, "wakeMode": "now", "name": "MaraClaw"}
 
 
@@ -200,20 +224,128 @@ def _docker_execute(agent: AgentRecord, argv: list[str]) -> str | None:
     return None
 
 
-def _exec_inbox_wake(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str | None:
-    """Wake from inside the guest: hooks first, then the OpenClaw CLI."""
-    agent_dir.joinpath(WAKE_SCRIPT_FILENAME).write_text(_WAKE_SCRIPT, encoding="utf-8")
+_HOOKS_DOWN_UNTIL: dict[UUID, float] = {}
+_HOOKS_DOWN_TTL_SECONDS = 30.0
+_HOOK_RETRY_ATTEMPTS = 2
+_HOOK_RETRY_SECONDS = 1.5
+
+
+def _hooks_recently_refused(agent_id: UUID) -> bool:
+    return time.monotonic() < _HOOKS_DOWN_UNTIL.get(agent_id, 0)
+
+
+def _hooks_unreachable(error: str) -> bool:
+    needle = error.lower()
+    return any(
+        token in needle
+        for token in (
+            "econnrefused",
+            "18789",
+            "connecterror",
+            "connect timeout",
+            "all connection attempts failed",
+            "name or service not known",
+            "nodename nor servname",
+            "temporary failure in name resolution",
+        )
+    )
+
+
+def _mark_hooks_down(agent_id: UUID, error: str) -> None:
+    if _hooks_unreachable(error):
+        _HOOKS_DOWN_UNTIL[agent_id] = time.monotonic() + _HOOKS_DOWN_TTL_SECONDS
+
+
+def _mark_hooks_up(agent_id: UUID) -> None:
+    _HOOKS_DOWN_UNTIL.pop(agent_id, None)
+
+
+_HTTP_WAKE_TIMEOUT = httpx.Timeout(1.5, connect=0.25)
+
+
+async def _http_hooks_wake(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str | None:
+    """POST the guest hooks endpoint from the engine. None means the gateway accepted."""
+    _gateway_token, hooks_token = ensure_openclaw_tokens(agent_dir)
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=_HTTP_WAKE_TIMEOUT) as client:
+        for url in wake_urls(agent):
+            try:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {hooks_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except httpx.HTTPError as exc:
+                errors.append(f"{url}: {exc}")
+                continue
+            if response.is_success:
+                return None
+            errors.append(f"{url}: HTTP {response.status_code}")
+    return "; ".join(errors) if errors else "no hook URLs"
+
+
+def _ensure_wake_script(agent_dir: Path) -> None:
+    dest = agent_dir / WAKE_SCRIPT_FILENAME
+    if dest.is_file() and dest.read_text(encoding="utf-8") == _WAKE_SCRIPT:
+        return
+    dest.write_text(_WAKE_SCRIPT, encoding="utf-8")
+
+
+def _session_taken_over(error: str) -> bool:
+    needle = error.lower()
+    return "embeddedattemptsessiontakeovererror" in needle or "session file changed" in needle
+
+
+def _cli_interrupted(error: str) -> bool:
+    needle = error.lower()
+    return (
+        _session_taken_over(error)
+        or "code 137" in needle
+        or "exit code 137" in needle
+        or "sigkill" in needle
+        or "signal: killed" in needle
+    )
+
+
+def _exec_in_guest_hooks(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str | None:
+    """POST hooks from inside the guest. None means the gateway accepted."""
+    _ensure_wake_script(agent_dir)
     agent_dir.joinpath(WAKE_PAYLOAD_FILENAME).write_text(json.dumps(body), encoding="utf-8")
-    hook_error = _docker_execute(agent, ["node", f"/home/node/.openclaw/{WAKE_SCRIPT_FILENAME}"])
-    if hook_error is None:
+    error = _docker_execute(agent, ["node", f"/home/node/.openclaw/{WAKE_SCRIPT_FILENAME}"])
+    if error is None:
+        _mark_hooks_up(agent.id)
         return None
-    cli_error = _docker_execute(agent, inbox_cli_argv(body["message"]))
-    if cli_error is None:
-        return None
-    return f"hooks={hook_error}; cli={cli_error}"
+    return error
 
 
-async def wake_openclaw_inbox(agent: AgentRecord, *, content: str) -> bool:
+def _ensure_guest_gateway(agent: AgentRecord) -> str | None:
+    """Start ``openclaw gateway`` in the guest when no process is listening."""
+    return _docker_execute(agent, ["sh", "-c", _ENSURE_GATEWAY_SH])
+
+
+def _exec_local_cli(agent: AgentRecord) -> str | None:
+    """Last-resort one-shot turn that polls the inbox without the gateway."""
+    return _docker_execute(agent, inbox_cli_argv(_CLI_POLL_PROMPT))
+
+
+async def _inbox_already_handled(agent: AgentRecord, message_id: UUID | None) -> bool:
+    if message_id is None:
+        return False
+    from app.dao.gateway_message_dao import gateway_message_dao
+
+    row = await gateway_message_dao.get_for_agent(message_id, agent.id)
+    return row is not None and (row.status or "") in {"delivered", "completed"}
+
+
+async def wake_openclaw_inbox(
+    agent: AgentRecord,
+    *,
+    content: str,
+    message_id: UUID | None = None,
+) -> bool:
     """Ask the running guest to process the MaraClaw inbox now."""
     from app.services.agent_manager import agent_manager
 
@@ -223,10 +355,62 @@ async def wake_openclaw_inbox(agent: AgentRecord, *, content: str) -> bool:
         return False
     _ = ensure_openclaw_tokens(agent_dir)
     write_maraclaw_sync_skill(agent_dir)
-    body = _wake_body(content)
-    exec_error = await run_sync(_exec_inbox_wake, agent, agent_dir, body)
-    if exec_error is None:
-        logger.info("[OpenClaw] woke inbox via docker exec for {}", agent.id)
+    body = _wake_body(content, message_id=message_id)
+    last_error: str | None = None
+    skip_hooks = _hooks_recently_refused(agent.id)
+    attempts = 1 if skip_hooks else _HOOK_RETRY_ATTEMPTS
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            if _HOOK_RETRY_SECONDS > 0:
+                await asyncio.sleep(_HOOK_RETRY_SECONDS)
+            if await _inbox_already_handled(agent, message_id):
+                logger.info("[OpenClaw] inbox reported while waiting for gateway {}", agent.id)
+                return True
+        http_error = await _http_hooks_wake(agent, agent_dir, body)
+        if http_error is None:
+            _mark_hooks_up(agent.id)
+            logger.info("[OpenClaw] woke inbox via HTTP hooks for {}", agent.id)
+            return True
+        last_error = http_error
+        if await _inbox_already_handled(agent, message_id):
+            logger.info("[OpenClaw] skip further wake; inbox already handled for {}", agent.id)
+            return True
+        if skip_hooks:
+            break
+        hook_error = await run_sync(_exec_in_guest_hooks, agent, agent_dir, body)
+        if hook_error is None:
+            logger.info("[OpenClaw] woke inbox via docker exec for {}", agent.id)
+            return True
+        last_error = hook_error
+        if not _hooks_unreachable(hook_error):
+            logger.warning("[OpenClaw] inbox wake failed for {}: {}", agent.id, hook_error)
+            return False
+    if last_error and _hooks_unreachable(last_error):
+        _mark_hooks_down(agent.id, last_error)
+        if not skip_hooks:
+            _ = await run_sync(_ensure_guest_gateway, agent)
+            if _HOOK_RETRY_SECONDS > 0:
+                await asyncio.sleep(_HOOK_RETRY_SECONDS)
+            http_error = await _http_hooks_wake(agent, agent_dir, body)
+            if http_error is None:
+                _mark_hooks_up(agent.id)
+                logger.info("[OpenClaw] woke inbox via HTTP hooks after starting gateway for {}", agent.id)
+                return True
+            hook_error = await run_sync(_exec_in_guest_hooks, agent, agent_dir, body)
+            if hook_error is None:
+                logger.info("[OpenClaw] woke inbox via docker exec after starting gateway for {}", agent.id)
+                return True
+            last_error = hook_error or http_error
+    if await _inbox_already_handled(agent, message_id):
         return True
-    logger.warning("[OpenClaw] inbox wake failed for {}: {}", agent.id, exec_error)
+    cli_error = await run_sync(_exec_local_cli, agent)
+    if cli_error is None:
+        logger.info("[OpenClaw] woke inbox via local CLI for {}", agent.id)
+        return True
+    if _cli_interrupted(cli_error):
+        if await _inbox_already_handled(agent, message_id):
+            return True
+        logger.info("[OpenClaw] local CLI interrupted for {}; inbox stays pending", agent.id)
+        return False
+    logger.warning("[OpenClaw] inbox wake failed for {}: hooks={}; cli={}", agent.id, last_error, cli_error)
     return False
