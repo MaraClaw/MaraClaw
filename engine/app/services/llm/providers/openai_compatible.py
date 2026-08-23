@@ -73,8 +73,10 @@ class OpenAICompatibleClient(LLMClient):
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
+        from app.services.llm.http_pool import acquire_httpx
+
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, proxy=None)
+            self._client = acquire_httpx(self.timeout)
         return self._client
 
     @override
@@ -539,6 +541,5 @@ class OpenAICompatibleClient(LLMClient):
 
     @override
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+        """Detach this wrapper. Shared HTTP transports stay open."""
+        self._client = None
