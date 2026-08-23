@@ -1,10 +1,12 @@
 """File management API routes for agent workspaces."""
 
+import asyncio
 import base64
 import csv
 import io
 import mimetypes
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +17,25 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.core.logging import logger
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.skill_dao import skill_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
 from app.records.user import UserRecord
+from app.services.document_parser import (
+    MAX_INPUT_BYTES,
+    PREVIEW_MAX_CHARS,
+    convert_document_isolated,
+    convert_document_isolated_async,
+    extract_xlsx_sheets_isolated_async,
+    format_parse_failure,
+    needs_extraction,
+    preview_kind,
+    read_bytes_limited,
+    sheets_preview_text,
+)
+from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
 from app.services.focus_service import is_focus_file_path
 from app.services.storage import (
     ensure_local_path,
@@ -27,7 +43,7 @@ from app.services.storage import (
     guess_content_type,
     normalize_storage_key,
 )
-from app.services.storage_runtime.base import StorageEntry
+from app.services.storage_runtime.base import StorageBackend, StorageEntry
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
@@ -305,14 +321,9 @@ def _file_kind(path: str) -> str:
         return "csv"
     if ext in {".html", ".htm"}:
         return "html"
-    if ext == ".pdf":
-        return "pdf"
-    if ext in {".xlsx", ".xls"}:
-        return "xlsx"
-    if ext in {".docx", ".doc"}:
-        return "docx"
-    if ext in {".pptx", ".ppt"}:
-        return "pptx"
+    office_kind = preview_kind(file_path.name)
+    if office_kind is not None:
+        return office_kind
     if ext in {".txt", ".log", ".json"} or ext in TEXT_PREVIEW_EXTENSIONS or name in TEXT_PREVIEW_FILENAMES:
         return "text"
     if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}:
@@ -321,51 +332,128 @@ def _file_kind(path: str) -> str:
 
 
 def _find_companion_text_preview(target: Path) -> Path | None:
-    for suffix in (".md", ".txt"):
-        candidate = target.with_suffix(suffix)
+    candidates = (
+        target.with_suffix(".md"),
+        target.with_suffix(".txt"),
+        Path(f"{target}.md"),
+    )
+    for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
 
 
-def _extract_document_text(target: Path, kind: str) -> str:
+def _extract_document_text(target: Path) -> str:
     """Best-effort rich document text extraction for lightweight previews."""
     try:
-        if kind == "xlsx":
-            from openpyxl import load_workbook
-
-            wb = load_workbook(target, read_only=True, data_only=True)
-            sheets: list[str] = []
-            for ws in wb.worksheets[:5]:
-                rows = [
-                    "\t".join("" if cell is None else str(cell) for cell in row)
-                    for row in ws.iter_rows(max_row=80, max_col=20, values_only=True)
-                ]
-                sheets.append(f"Sheet: {ws.title}\n" + "\n".join(rows))
-            return "\n\n".join(sheets)
-        if kind == "docx":
-            from docx import Document
-
-            doc = Document(str(target))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        if kind == "pptx":
-            from pptx import Presentation
-
-            prs = Presentation(str(target))
-            slides = []
-            for idx, slide in enumerate(prs.slides, start=1):
-                texts: list[str] = []
-                for shape in slide.shapes:
-                    raw_text = getattr(shape, "text", None)
-                    if isinstance(raw_text, str) and raw_text.strip():
-                        texts.append(raw_text.strip())
-                slides.append(f"Slide {idx}\n" + "\n".join(texts))
-            return "\n\n".join(slides)
-    except ImportError as exc:
-        return f"Missing preview dependency: {exc}"
-    except Exception as exc:
+        size = target.stat().st_size
+    except OSError as exc:
         return f"Preview extraction failed: {str(exc)[:200]}"
-    return ""
+    if size > MAX_INPUT_BYTES:
+        return f"Preview extraction failed: {format_parse_failure(DocumentTooLargeError('too large', size_bytes=size))}"
+    try:
+        return convert_document_isolated(
+            target.read_bytes(),
+            target.name,
+            max_output_chars=PREVIEW_MAX_CHARS,
+        )
+    except DocumentParseError as exc:
+        return f"Preview extraction failed: {format_parse_failure(exc)}"
+    except OSError as exc:
+        return f"Preview extraction failed: {str(exc)[:200]}"
+
+
+def _sidecar_rel_options(office_rel: str, filename: str) -> list[str]:
+    """Sidecar storage keys from the original filename, never a temp-file stem."""
+    parent = str(Path(office_rel).parent).replace("\\", "/")
+    if parent in {".", ""}:
+        parent = ""
+    names = (f"{Path(filename).stem}.md", f"{Path(filename).name}.md")
+    options: list[str] = []
+    for name in names:
+        rel = f"{parent}/{name}" if parent else name
+        if rel not in options:
+            options.append(rel)
+    return options
+
+
+def _companion_rel_candidates(path: str) -> list[str]:
+    file_path = Path(path)
+    return [
+        str(file_path.with_suffix(".md")).replace("\\", "/"),
+        str(file_path.with_suffix(".txt")).replace("\\", "/"),
+        f"{path}.md",
+    ]
+
+
+async def _extract_office_markdown(content: bytes, filename: str) -> str | None:
+    try:
+        text = await convert_document_isolated_async(content, filename)
+    except DocumentParseError:
+        return None
+    return text or None
+
+
+async def _persist_office_sidecar(
+    storage: StorageBackend,
+    make_key: Callable[[str], str],
+    office_rel: str,
+    filename: str,
+    content: bytes,
+) -> str | None:
+    """Parse in isolation and store `{stem}.md` under the real storage key.
+
+    Names come from ``filename``, not from ``ensure_local_path`` (S3 uses a
+    random NamedTemporaryFile stem).
+    """
+    text = await _extract_office_markdown(content, filename)
+    if not text:
+        return None
+    for rel in _sidecar_rel_options(office_rel, filename):
+        key = make_key(rel)
+        if await storage.is_file(key):
+            continue
+        await storage.write_bytes(key, text.encode("utf-8"), content_type="text/plain; charset=utf-8")
+        return rel
+    logger.info(f"[Files] Skip sidecar for {filename}: same-stem markdown already exists")
+    return None
+
+
+async def _read_storage_companion(
+    storage: StorageBackend,
+    make_key: Callable[[str], str],
+    path: str,
+) -> tuple[str | None, str | None]:
+    for rel in _companion_rel_candidates(path):
+        key = make_key(rel)
+        try:
+            if not await storage.is_file(key):
+                continue
+            content = await storage.read_text(key, encoding="utf-8", errors="replace")
+        except (OSError, UnicodeError, HTTPException):
+            continue
+        if content:
+            return content, rel
+    return None, None
+
+
+def _is_agent_workspace_upload_rel(rel: str) -> bool:
+    return rel in {"workspace", "skills"} or rel.startswith(("workspace/", "skills/"))
+
+
+def _preview_text(text: str) -> str:
+    if len(text) <= PREVIEW_MAX_CHARS:
+        return text
+    return text[:PREVIEW_MAX_CHARS] + f"\n\n...[truncated, {len(text)} chars total]"
+
+
+def _preview_companion_path(companion: Path | None, agent_id: uuid.UUID, path: str) -> str | None:
+    if companion is None or path.startswith("enterprise_info"):
+        return None
+    try:
+        return str(companion.resolve().relative_to(_agent_base_dir(agent_id).resolve()))
+    except ValueError:
+        return companion.name
 
 
 def _detect_csv_delimiter(text: str) -> str:
@@ -446,33 +534,59 @@ async def preview_file(
         try:
             target = await ensure_local_path(key)
             local_target = target
-            from openpyxl import load_workbook
-
-            wb = load_workbook(target, read_only=True, data_only=True)
-            sheets = []
-            for ws in wb.worksheets[:5]:
-                rows = []
-                for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
-                    values = ["" if cell is None else str(cell) for cell in row]
-                    while values and not str(values[-1] or "").strip():
-                        _ = values.pop()
-                    if any(value.strip() for value in values):
-                        rows.append(values)
-                sheets.append(
-                    {
-                        "title": ws.title,
-                        "rows": rows,
-                    }
-                )
-            wb.close()
-            return {
+            try:
+                size = target.stat().st_size
+            except OSError as exc:
+                return {
+                    "path": path,
+                    "kind": kind,
+                    "mime_type": mime_type,
+                    "text": f"Preview extraction failed: {str(exc)[:200]}",
+                    "download_url": download_url,
+                }
+            if size > MAX_INPUT_BYTES:
+                return {
+                    "path": path,
+                    "kind": kind,
+                    "mime_type": mime_type,
+                    "text": (
+                        "Preview extraction failed: "
+                        + format_parse_failure(DocumentTooLargeError("too large", size_bytes=size))
+                    ),
+                    "download_url": download_url,
+                }
+            data = target.read_bytes()
+            sheets: list[dict[str, object]] | None = None
+            sheets_error = ""
+            try:
+                sheets = await extract_xlsx_sheets_isolated_async(data, Path(path).name)
+            except DocumentParseError as exc:
+                sheets_error = f"Preview extraction failed: {format_parse_failure(exc)}"
+            companion_content, companion_rel = await _read_storage_companion(
+                storage,
+                lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
+                path,
+            )
+            if companion_content:
+                text = _preview_text(companion_content)
+            elif sheets:
+                text = sheets_preview_text(sheets, PREVIEW_MAX_CHARS)
+            else:
+                text = await asyncio.to_thread(_extract_document_text, target)
+                if text.startswith("Preview extraction failed") and sheets_error:
+                    text = sheets_error
+            payload: dict[str, Any] = {
                 "path": path,
                 "kind": kind,
                 "mime_type": mime_type,
-                "text": _extract_document_text(target, kind),
-                "sheets": sheets,
+                "text": text,
                 "download_url": download_url,
             }
+            if sheets is not None:
+                payload["sheets"] = sheets
+            if companion_rel is not None and not path.startswith("enterprise_info"):
+                payload["companion_path"] = companion_rel
+            return payload
         except Exception as exc:
             return {
                 "path": path,
@@ -482,19 +596,24 @@ async def preview_file(
                 "download_url": download_url,
             }
     if kind in {"docx", "pptx"}:
-        target = await ensure_local_path(key)
-        local_target = target
-        extracted_text = _extract_document_text(target, kind)
-        companion = _find_companion_text_preview(target)
-        companion_content = await read_text_if_exists(companion) if companion is not None else None
+        companion_content, companion_rel = await _read_storage_companion(
+            storage,
+            lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
+            path,
+        )
+        if companion_content:
+            extracted_text = _preview_text(companion_content)
+            local_target = None
+        else:
+            target = await ensure_local_path(key)
+            local_target = target
+            extracted_text = await asyncio.to_thread(_extract_document_text, target)
         return {
             "path": path,
             "kind": kind,
             "mime_type": mime_type,
-            "text": companion_content or extracted_text,
-            "companion_path": str(companion.resolve().relative_to(_agent_base_dir(agent_id).resolve()))
-            if companion is not None and not path.startswith("enterprise_info")
-            else None,
+            "text": extracted_text,
+            "companion_path": companion_rel if companion_rel and not path.startswith("enterprise_info") else None,
             "download_url": download_url,
         }
 
@@ -826,28 +945,35 @@ async def upload_file_to_workspace(
     filename = file.filename or "unnamed"
     # Sanitize filename
     filename = filename.replace("/", "_").replace("\\", "_")
+    rel = normalize_storage_key(f"{normalized_path}/{filename}")
+    if not _is_agent_workspace_upload_rel(rel):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload path must stay under workspace/ or skills/.",
+        )
     storage = get_storage_backend()
-    file_key = _agent_storage_key(agent_id, f"{normalized_path}/{filename}")
+    file_key = _agent_storage_key(agent_id, rel)
 
-    content = await file.read()
+    try:
+        content = await read_bytes_limited(file.read, MAX_INPUT_BYTES)
+    except DocumentTooLargeError as exc:
+        raise HTTPException(status_code=400, detail=format_parse_failure(exc)) from exc
     await storage.write_bytes(file_key, content, content_type=guess_content_type(filename))
 
-    # Auto-extract text from non-text files
     extracted_path = None
-    from app.services.text_extractor import needs_extraction, save_extracted_text
-
     if needs_extraction(filename):
-        save_path = await ensure_local_path(file_key)
-        txt_file = save_extracted_text(save_path, content, filename)
-        if txt_file:
-            extracted_path = f"{normalized_path}/{txt_file.name}"
-            extracted_key = _agent_storage_key(agent_id, extracted_path)
-            await storage.write_bytes(extracted_key, txt_file.read_bytes(), content_type="text/plain; charset=utf-8")
+        extracted_path = await _persist_office_sidecar(
+            storage,
+            lambda sidecar_rel: _agent_storage_key(agent_id, sidecar_rel),
+            rel,
+            filename,
+            content,
+        )
 
     return {
         "status": "ok",
-        "path": f"{normalized_path}/{filename}",
-        "url": f"/api/agents/{agent_id}/files/download?path={normalized_path}/{filename}",
+        "path": rel,
+        "url": f"/api/agents/{agent_id}/files/download?path={rel}",
         "filename": filename,
         "size": len(content),
         "extracted_text_path": extracted_path,
@@ -921,26 +1047,24 @@ async def upload_enterprise_kb_file(
     filename = file.filename or "unnamed"
     filename = filename.replace("/", "_").replace("\\", "_")
     storage = get_storage_backend()
-    rel_path = f"{sub_path}/{filename}" if sub_path else filename
+    rel_path = normalize_storage_key(f"{sub_path}/{filename}" if sub_path else filename)
     storage_key = _enterprise_storage_key(str(current_user.tenant_id), rel_path)
 
-    content = await file.read()
+    try:
+        content = await read_bytes_limited(file.read, MAX_INPUT_BYTES)
+    except DocumentTooLargeError as exc:
+        raise HTTPException(status_code=400, detail=format_parse_failure(exc)) from exc
     await storage.write_bytes(storage_key, content, content_type=guess_content_type(filename))
 
-    # Auto-extract text from non-text files
     extracted_path = None
-    from app.services.text_extractor import needs_extraction, save_extracted_text
-
     if needs_extraction(filename):
-        save_path = await ensure_local_path(storage_key)
-        txt_file = save_extracted_text(save_path, content, filename)
-        if txt_file:
-            extracted_path = f"{sub_path}/{txt_file.name}" if sub_path else txt_file.name
-            await storage.write_bytes(
-                _enterprise_storage_key(str(current_user.tenant_id), extracted_path),
-                txt_file.read_bytes(),
-                content_type="text/plain; charset=utf-8",
-            )
+        extracted_path = await _persist_office_sidecar(
+            storage,
+            lambda sidecar_rel: _enterprise_storage_key(str(current_user.tenant_id), sidecar_rel),
+            rel_path,
+            filename,
+            content,
+        )
     return {
         "status": "ok",
         "path": rel_path,

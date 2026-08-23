@@ -8,7 +8,6 @@ import pytest
 
 from app.api import feishu as feishu_api
 
-
 AGENT_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 

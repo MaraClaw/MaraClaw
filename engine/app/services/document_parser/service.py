@@ -1,0 +1,396 @@
+"""Normalize anydoc Markdown and map its typed failures for inbound callers."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Awaitable, Callable
+from io import BytesIO
+from pathlib import Path
+from typing import Final, Literal, NoReturn, Protocol, cast
+
+from app.core.logging import logger
+from app.services.document_parser.errors import (
+    DocumentParseError,
+    DocumentParseUnavailableError,
+    DocumentTooLargeError,
+    EncryptedDocumentError,
+    MalformedDocumentError,
+    MissingDocumentPartError,
+    ResourceLimitedDocumentError,
+    UnsupportedDocumentError,
+)
+
+AnydocFormat = Literal["doc", "docx", "odt", "pdf", "ppt", "pptx", "rtf", "epub", "xlsx", "ods", "odp", "csv"]
+
+
+class _AnydocModule(Protocol):
+    def to_markdown_bytes(self, data: bytes, format: AnydocFormat | None = None) -> str: ...
+
+    def format_from_bytes(self, data: bytes) -> AnydocFormat | None: ...
+
+    def format_from_extension(self, extension: str) -> AnydocFormat | None: ...
+
+
+# Ordinary text stays local. CSV is supported by anydoc but must not go through it here.
+TEXT_EXTENSIONS: Final[set[str]] = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".js",
+    ".ts",
+    ".html",
+    ".htm",
+    ".css",
+    ".sql",
+    ".sh",
+    ".log",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".env",
+    ".toml",
+}
+
+OFFICE_EXTENSIONS: Final[set[str]] = {
+    ".doc",
+    ".docx",
+    ".docm",
+    ".ppt",
+    ".pps",
+    ".pot",
+    ".pptx",
+    ".pptm",
+    ".ppsx",
+    ".ppsm",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".odt",
+    ".ods",
+    ".odp",
+    ".rtf",
+    ".epub",
+    ".pdf",
+}
+
+_READ_DOCUMENT_SUPPORTED = "PDF, DOCX, XLSX, PPTX, TXT, MD, CSV"
+_BLANK_LINE_RE = re.compile(r"\n{3,}")
+MAX_INPUT_BYTES: Final = 50 * 1024 * 1024
+MAX_OUTPUT_CHARS: Final = 2_000_000
+PREVIEW_MAX_CHARS: Final = 8_000
+IMAGE_UPLOAD_MAX_BYTES: Final = 10 * 1024 * 1024
+_INSTALL_HINT = "Install: pip install firecrawl-anydoc"
+_XLSX_PREVIEW_EXTENSIONS: Final[set[str]] = {".xlsx", ".xls", ".xlsm", ".xlsb"}
+_DOCX_PREVIEW_EXTENSIONS: Final[set[str]] = {".docx", ".doc", ".docm", ".odt", ".rtf", ".epub"}
+_PPTX_PREVIEW_EXTENSIONS: Final[set[str]] = {
+    ".pptx",
+    ".ppt",
+    ".pptm",
+    ".pps",
+    ".ppsx",
+    ".ppsm",
+    ".pot",
+    ".odp",
+}
+
+
+def needs_extraction(filename: str) -> bool:
+    """Return True when the filename is an inbound office document."""
+    return Path(filename).suffix.lower() in OFFICE_EXTENSIONS
+
+
+def is_plain_text_document(filename: str) -> bool:
+    """Return True when callers should decode the file as local text."""
+    return Path(filename).suffix.lower() in TEXT_EXTENSIONS
+
+
+def decode_text_bytes(content: bytes) -> str:
+    """Decode ordinary text without sending it through anydoc.
+
+    Strict UTF-8 first, then strict GBK. Only if both fail do we replace
+    invalid UTF-8 bytes. Never reinterpret a mostly-UTF-8 buffer as GBK.
+    """
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return content.decode("gbk")
+    except UnicodeDecodeError:
+        return content.decode("utf-8", errors="replace")
+
+
+async def read_bytes_limited(
+    read_chunk: Callable[..., Awaitable[bytes]],
+    max_bytes: int = MAX_INPUT_BYTES,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> bytes:
+    """Read an upload/stream with a hard byte ceiling.
+
+    Raises ``DocumentTooLargeError`` before the next chunk would exceed
+    ``max_bytes``. Accepts both ``read(n)`` and argument-free ``read()``
+    callables (test fakes).
+    """
+    try:
+        first = await read_chunk(chunk_size)
+    except TypeError:
+        data = await read_chunk()
+        if len(data) > max_bytes:
+            raise DocumentTooLargeError(
+                f"Document is too large to read safely ({len(data) / 1024 / 1024:.1f} MB).",
+                size_bytes=len(data),
+            ) from None
+        return data
+    chunks = [first]
+    total = len(first)
+    if total > max_bytes:
+        raise DocumentTooLargeError(
+            f"Document is too large to read safely ({total / 1024 / 1024:.1f} MB).",
+            size_bytes=total,
+        )
+    while True:
+        chunk = await read_chunk(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise DocumentTooLargeError(
+                f"Document is too large to read safely ({total / 1024 / 1024:.1f} MB).",
+                size_bytes=total,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def preview_kind(filename: str) -> str | None:
+    """Return the files-preview kind for an office suffix, or None."""
+    ext = Path(filename).suffix.lower()
+    if ext == ".pdf":
+        return "pdf"
+    if ext in _XLSX_PREVIEW_EXTENSIONS:
+        return "xlsx"
+    if ext in _DOCX_PREVIEW_EXTENSIONS:
+        return "docx"
+    if ext in _PPTX_PREVIEW_EXTENSIONS:
+        return "pptx"
+    if ext == ".ods":
+        return "docx"
+    return None
+
+
+def extract_xlsx_sheets(data: bytes) -> list[dict[str, object]]:
+    """Structured XLSX preview grid (title + row values). In-process helper."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
+    try:
+        sheets: list[dict[str, object]] = []
+        for ws in wb.worksheets[:5]:
+            rows: list[list[str]] = []
+            for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
+                values = ["" if cell is None else str(cell) for cell in row]
+                while values and not str(values[-1] or "").strip():
+                    _ = values.pop()
+                if any(value.strip() for value in values):
+                    rows.append(values)
+            sheets.append({"title": ws.title, "rows": rows})
+        return sheets
+    finally:
+        wb.close()
+
+
+def sheets_preview_text(sheets: list[dict[str, object]], max_chars: int | None = None) -> str:
+    """Compact text view of an openpyxl sheets payload for preview JSON."""
+    lines: list[str] = []
+    for sheet in sheets:
+        title = sheet.get("title")
+        if isinstance(title, str) and title:
+            lines.append(f"# {title}")
+        rows = sheet.get("rows")
+        if not isinstance(rows, list):
+            continue
+        lines.extend(
+            " | ".join("" if cell is None else str(cell) for cell in row) for row in rows if isinstance(row, list)
+        )
+    return _bound_output("\n".join(lines), max_chars or PREVIEW_MAX_CHARS)
+
+
+def normalize_markdown(text: str) -> str:
+    """Collapse anydoc Markdown into a stable UTF-8 string for every caller."""
+    if not text:
+        return ""
+    cleaned = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in cleaned.split("\n")]
+    collapsed = _BLANK_LINE_RE.sub("\n\n", "\n".join(lines))
+    return collapsed.strip()
+
+
+def format_parse_failure(exc: BaseException) -> str:
+    """Stable caller-facing message for a typed parse failure."""
+    if isinstance(exc, DocumentTooLargeError):
+        return (
+            f"Document is too large to read safely ({exc.size_bytes / 1024 / 1024:.1f} MB). "
+            + "Please split or convert it to a smaller text/Markdown excerpt first."
+        )
+    if isinstance(exc, EncryptedDocumentError):
+        return "Document is encrypted or password-protected."
+    if isinstance(exc, ResourceLimitedDocumentError):
+        limit = f" ({exc.limit})" if exc.limit else ""
+        return f"Document exceeded a parser safety limit{limit}."
+    if isinstance(exc, MissingDocumentPartError):
+        part = f" ({exc.part})" if exc.part else ""
+        return f"Document is missing a required part{part}."
+    if isinstance(exc, MalformedDocumentError):
+        return "Document is malformed and could not be converted."
+    if isinstance(exc, DocumentParseUnavailableError):
+        return f"Missing dependency: {exc}. {_INSTALL_HINT}"
+    if isinstance(exc, UnsupportedDocumentError):
+        detail = str(exc).lower()
+        if "scanned" in detail or "ocr" in detail:
+            return "This PDF looks scanned or image-only and needs OCR."
+        return f"Unsupported file format. Supported: {_READ_DOCUMENT_SUPPORTED}"
+    if isinstance(exc, DocumentParseError):
+        return f"Document read failed: {str(exc)[:200]}"
+    return f"Document read failed: {str(exc)[:200]}"
+
+
+def unsupported_read_document_message(extension: str) -> str:
+    return f"Unsupported file format: {extension}. Supported: {_READ_DOCUMENT_SUPPORTED}"
+
+
+def convert_document(data: bytes, filename: str, *, max_output_chars: int | None = None) -> str:
+    """Convert office-document bytes to normalized Markdown.
+
+    Raises a typed ``DocumentParseError`` subclass. Does not spawn a process.
+    """
+    if len(data) > MAX_INPUT_BYTES:
+        raise DocumentTooLargeError(
+            f"Document is too large to read safely ({len(data) / 1024 / 1024:.1f} MB).",
+            size_bytes=len(data),
+        )
+    anydoc = _import_anydoc()
+    fmt = _format_hint(anydoc, data, filename)
+    try:
+        raw = anydoc.to_markdown_bytes(data, fmt)
+    except Exception as exc:
+        _reraise_typed(exc)
+    markdown = normalize_markdown(raw)
+    return _bound_output(markdown, max_output_chars)
+
+
+def convert_document_path(path: Path, *, max_output_chars: int | None = None) -> str:
+    """Convert a local office document path to normalized Markdown."""
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise DocumentParseError(f"Could not read document: {exc}") from exc
+    return convert_document(data, path.name, max_output_chars=max_output_chars)
+
+
+def extract_document_text(data: bytes, filename: str) -> str | None:
+    """Best-effort inbound extract. Returns None when conversion is impossible."""
+    if not needs_extraction(filename):
+        return None
+    try:
+        markdown = convert_document(data, filename)
+    except DocumentParseError as exc:
+        logger.error(f"[DocumentParser] Failed to extract from {filename}: {exc}")
+        return None
+    return markdown or None
+
+
+def save_extracted_markdown(save_path: Path, data: bytes, filename: str) -> Path | None:
+    """Write a same-stem UTF-8 Markdown sidecar next to the original file."""
+    text = extract_document_text(data, filename)
+    if not text:
+        return None
+    md_path = save_path.parent / f"{save_path.stem}.md"
+    _ = md_path.write_text(text, encoding="utf-8")
+    logger.info(f"[DocumentParser] Extracted {len(text)} chars from {filename} -> {md_path.name}")
+    return md_path
+
+
+def reconstruct_parse_error(
+    type_name: str,
+    message: str,
+    *,
+    part: str | None = None,
+    limit: str | None = None,
+    size_bytes: int | None = None,
+) -> DocumentParseError:
+    """Rebuild a typed failure from an isolated worker payload."""
+    if type_name == EncryptedDocumentError.__name__:
+        return EncryptedDocumentError(message)
+    if type_name == MalformedDocumentError.__name__:
+        return MalformedDocumentError(message, part=part)
+    if type_name == MissingDocumentPartError.__name__:
+        return MissingDocumentPartError(message, part=part)
+    if type_name == ResourceLimitedDocumentError.__name__:
+        return ResourceLimitedDocumentError(message, limit=limit)
+    if type_name == UnsupportedDocumentError.__name__:
+        return UnsupportedDocumentError(message)
+    if type_name == DocumentTooLargeError.__name__:
+        return DocumentTooLargeError(message, size_bytes=size_bytes or 0)
+    if type_name == DocumentParseUnavailableError.__name__:
+        return DocumentParseUnavailableError(message)
+    if type_name == "DocumentParseTimeoutError":
+        from app.services.document_parser.errors import DocumentParseTimeoutError
+
+        return DocumentParseTimeoutError(message)
+    return DocumentParseError(message)
+
+
+def _import_anydoc() -> _AnydocModule:
+    try:
+        import anydoc
+    except ImportError as exc:
+        raise DocumentParseUnavailableError(str(exc)) from exc
+    return cast(_AnydocModule, anydoc)
+
+
+def _format_hint(anydoc: _AnydocModule, data: bytes, filename: str) -> AnydocFormat | None:
+    detected = anydoc.format_from_bytes(data)
+    hinted = anydoc.format_from_extension(Path(filename).suffix)
+    fmt = detected or hinted
+    if fmt == "csv":
+        raise UnsupportedDocumentError("CSV is decoded as local text, not via anydoc")
+    return fmt
+
+
+def _reraise_typed(exc: BaseException) -> NoReturn:
+    try:
+        import anydoc
+    except ImportError:
+        raise DocumentParseError(str(exc)) from exc
+    if isinstance(exc, anydoc.EncryptedError):
+        raise EncryptedDocumentError(str(exc)) from exc
+    if isinstance(exc, anydoc.MalformedError):
+        raise MalformedDocumentError(str(exc), part=exc.part) from exc
+    if isinstance(exc, anydoc.MissingPartError):
+        raise MissingDocumentPartError(str(exc), part=exc.part) from exc
+    if isinstance(exc, anydoc.ResourceLimitError):
+        raise ResourceLimitedDocumentError(str(exc), limit=exc.limit) from exc
+    if isinstance(exc, anydoc.UnsupportedError):
+        raise UnsupportedDocumentError(str(exc)) from exc
+    if isinstance(exc, anydoc.ConvertError):
+        raise DocumentParseError(str(exc)) from exc
+    if isinstance(exc, OSError):
+        raise DocumentParseError(f"Could not read document: {exc}") from exc
+    if isinstance(exc, ValueError):
+        raise UnsupportedDocumentError(str(exc)) from exc
+    raise DocumentParseError(str(exc)) from exc
+
+
+def _bound_output(markdown: str, max_output_chars: int | None) -> str:
+    limit = MAX_OUTPUT_CHARS if max_output_chars is None else max(1, int(max_output_chars))
+    if len(markdown) <= limit:
+        return markdown
+    return markdown[:limit] + f"\n\n...[truncated, {len(markdown)} chars total]"

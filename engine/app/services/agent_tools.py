@@ -605,20 +605,6 @@ def _read_file(ws: Path, rel_path: str, tenant_id: str | None = None, offset: in
     )
 
 
-_READ_DOCUMENT_MAX_FILE_BYTES = 50 * 1024 * 1024
-_READ_DOCUMENT_TIMEOUT_SECONDS = 25
-_READ_DOCUMENT_FALLBACK_TIMEOUT_SECONDS = 10
-_READ_DOCUMENT_MAX_CELL_CHARS = 500
-_READ_DOCUMENT_MAX_COLUMNS = 80
-_READ_DOCUMENT_MAX_XLSX_CELLS = 20000
-
-
-def _safe_document_cell_text(value: object) -> str:
-    from app.services.agent_tool_exec.document_reading import _safe_document_cell_text as safe_document_cell_text
-
-    return safe_document_cell_text(value)
-
-
 def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
     from app.services.agent_tool_exec.document_reading import _read_document_sync as read_document_sync
 
@@ -631,26 +617,6 @@ def _read_document_worker(
     from app.services.agent_tool_exec.documents import _read_document_worker as read_document_worker
 
     read_document_worker(out_queue, ws_str, rel_path, max_chars, tenant_id)
-
-
-def _read_pdf_fast_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
-    from app.services.agent_tool_exec.documents import _read_pdf_fast_sync as read_pdf_fast_sync
-
-    return read_pdf_fast_sync(ws, rel_path, max_chars=max_chars, tenant_id=tenant_id)
-
-
-def _read_pdf_fast_worker(
-    out_queue: mp.Queue[tuple[str, str]], ws_str: str, rel_path: str, max_chars: int, tenant_id: str | None
-) -> None:
-    from app.services.agent_tool_exec.documents import _read_pdf_fast_worker as read_pdf_fast_worker
-
-    read_pdf_fast_worker(out_queue, ws_str, rel_path, max_chars, tenant_id)
-
-
-def _read_pdf_fast_with_timeout(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
-    from app.services.agent_tool_exec.documents import _read_pdf_fast_with_timeout as read_pdf_fast_with_timeout
-
-    return read_pdf_fast_with_timeout(ws, rel_path, max_chars=max_chars, tenant_id=tenant_id)
 
 
 def _read_document_with_timeout(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:

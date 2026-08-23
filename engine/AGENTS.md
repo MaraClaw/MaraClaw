@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-16
-**Commit:** 9b09521
+**Generated:** 2026-08-23
+**Commit:** 4d53677
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
@@ -22,7 +22,7 @@ engine/
 │   ├── records/                 # dataclasses + from_row (not ORM)
 │   ├── schemas/                 # schemas.py grab-bag + agent_credential
 │   ├── scripts/                 # bootstrap_db + one-off modules
-│   └── services/                # mixed flat files + runtime packages
+│   └── services/                # mixed flat files + runtime packages (`document_parser/`, `document_conversion/`, …)
 ├── scripts/                     # schema_baseline.sql + freeze/lint helpers
 ├── docker/openclaw/             # OpenClaw guest-image helpers (not the API)
 ├── Dockerfile.openclaw          # Node 26.7.0 bookworm guest image (arm64)
@@ -53,6 +53,7 @@ No `alembic/`, no `app/models/`.
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs. `read_webpage` + `search_x` (xAI). Linkup skills for web search. Do not grow `agent_tools.py` |
+| Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.3`). Isolated spawn. Not `document_conversion/` |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
@@ -62,14 +63,14 @@ No `alembic/`, no `app/models/`.
 
 ## CODE MAP
 
-No `codegraph_*` in this harness. LSP document symbols + ripgrep centrality (2026-08-16).
+No `codegraph_*` in this harness. LSP document symbols + ripgrep file counts (2026-08-23).
 
 | Symbol | Type | Location | Refs | Role |
 |---|---|---|---:|---|
 | `app` | FastAPI | `app/main.py:429` | broad | App, middleware, mounts, health/version |
-| `lifespan` | function | `app/main.py:204` | startup | Pool → seed → realtime/worker/connector |
+| `lifespan` | function | `app/main.py:206` | startup | Pool → seed → realtime/worker/connector |
 | `_role_enabled` | function | `app/main.py:35` | startup | Gates `bootstrap`/`api`/`worker`/`connector` |
-| `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:229` | 113+ | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
+| `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:231` | 61+ | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
 | `ensure_platform_admin` | function | `app/services/platform_admin_seeder.py` | bootstrap | Genesis platform admin from env |
 | `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:80` | tenants/admin | Tenant + genesis `org_admin` |
 | `load_user_from_access_token` | function | `app/core/security.py:183` | WS/files | JWT → user + identity; force-change gate |
@@ -113,7 +114,7 @@ No `codegraph_*` in this harness. LSP document symbols + ripgrep centrality (202
 
 ## UNIQUE STYLES
 
-- Mixed services: flat legacy files + `storage_runtime` / `sandbox` / `trigger_runtime` / `realtime_runtime` / `llm` / `document_conversion`.
+- Mixed services: flat legacy files + `storage_runtime` / `sandbox` / `trigger_runtime` / `realtime_runtime` / `llm` / `document_conversion` / `document_parser` / `channels` / `linkup` / `org_sync`.
 - Some routers self-prefix `/api/...` and are included **without** `API_PREFIX` - double-prefix is a real bug class.
 - Tests: no `conftest.py`; local fakes; most “API” tests call handlers directly. CI has no Postgres.
 - `agent_template/` ≠ `agent_templates/`.
@@ -145,4 +146,4 @@ uv run python -m app.scripts.bootstrap_db
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
-- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `26.5.0-slim`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. No `AGENTS.md` under `clawsec_skill_files/` skill trees (AGPL).
+- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `node:26.7.0-slim`, frontend images `26.7.0-alpine`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).

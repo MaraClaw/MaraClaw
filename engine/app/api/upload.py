@@ -8,37 +8,25 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.records.user import UserRecord
+from app.services.document_parser import (
+    IMAGE_UPLOAD_MAX_BYTES,
+    MAX_INPUT_BYTES,
+    OFFICE_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    convert_document_isolated,
+    decode_text_bytes,
+    format_parse_failure,
+    needs_extraction,
+    read_bytes_limited,
+)
+from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
 from app.services.storage import ensure_local_path, get_storage_backend, guess_content_type, normalize_storage_key
-from app.services.text_extractor import extract_text as extract_binary_text
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Supported extensions and their text extraction method
-TEXT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".csv",
-    ".json",
-    ".xml",
-    ".yaml",
-    ".yml",
-    ".py",
-    ".js",
-    ".ts",
-    ".html",
-    ".css",
-    ".sql",
-    ".sh",
-    ".log",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".env",
-    ".toml",
-}
-OFFICE_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 EXTRACTABLE = TEXT_EXTENSIONS | OFFICE_EXTENSIONS
 
@@ -60,23 +48,32 @@ def validate_upload_filename(filename: str) -> str:
 
 
 def extract_text(content: bytes, filename: str, extension: str) -> str:
-    """Extract text from upload bytes without launching a shell or child interpreter."""
+    """Extract text from upload bytes. Ordinary text stays local; office files use anydoc."""
     if extension in TEXT_EXTENSIONS:
-        try:
-            return content.decode("utf-8", errors="replace")
-        except UnicodeDecodeError:
-            return content.decode("gbk", errors="replace")
+        return decode_text_bytes(content)
 
-    extracted = extract_binary_text(content, filename)
+    if not needs_extraction(filename):
+        return f"[Unsupported file format: {extension}]"
+
+    try:
+        extracted = convert_document_isolated(content, filename)
+    except DocumentParseError as exc:
+        return _upload_extract_failure(extension, exc)
     if extracted:
         return extracted
-    if extension == ".pdf":
-        return "[PDF text extraction failed]"
-    if extension == ".docx":
-        return "[DOCX text extraction failed]"
-    if extension in (".xlsx", ".xls"):
-        return "[Excel text extraction failed]"
+    return _upload_extract_failure(extension, None)
 
+
+def _upload_extract_failure(extension: str, exc: DocumentParseError | None) -> str:
+    detail = format_parse_failure(exc) if exc is not None else f"Unsupported file format: {extension}"
+    if extension == ".pdf":
+        return f"[PDF text extraction failed] {detail}" if exc is not None else "[PDF text extraction failed]"
+    if extension in {".docx", ".doc", ".docm"}:
+        return f"[DOCX text extraction failed] {detail}" if exc is not None else "[DOCX text extraction failed]"
+    if extension in {".xlsx", ".xls", ".xlsm", ".xlsb"}:
+        return f"[Excel text extraction failed] {detail}" if exc is not None else "[Excel text extraction failed]"
+    if exc is not None:
+        return f"[{detail}]"
     return f"[Unsupported file format: {extension}]"
 
 
@@ -96,12 +93,21 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     ext = os.path.splitext(filename)[1].lower()
-
-    content = await file.read()
+    is_image = ext in IMAGE_EXTENSIONS
+    max_bytes = IMAGE_UPLOAD_MAX_BYTES if is_image else MAX_INPUT_BYTES
+    try:
+        content = await read_bytes_limited(file.read, max_bytes)
+    except DocumentTooLargeError as exc:
+        raise HTTPException(status_code=400, detail=format_parse_failure(exc)) from exc
 
     # Determine save directory
     workspace_path = ""
     if agent_id:
+        try:
+            agent_uuid = uuid.UUID(agent_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid agent_id") from exc
+        _ = await check_agent_access(current_user, agent_uuid)
         storage = get_storage_backend()
         workspace_path = f"workspace/uploads/{filename}"
         key = normalize_storage_key(f"{agent_id}/{workspace_path}")
@@ -120,13 +126,8 @@ async def upload_file(
         file_id = str(uuid.uuid4())[:8]
         saved_filename = f"{file_id}_{filename}"
 
-    # Extract text (only for known formats)
-    is_image = ext in IMAGE_EXTENSIONS
     image_data_url = ""
     if is_image:
-        # For images: generate base64 data URL for vision models
-        if len(content) > 10 * 1024 * 1024:  # 10MB limit
-            raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
         mime = MIME_MAP.get(ext, "image/png")
         b64 = base64.b64encode(content).decode("ascii")
         image_data_url = f"data:{mime};base64,{b64}"

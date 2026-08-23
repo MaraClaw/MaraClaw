@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-16  
-**Commit:** 9b09521  
+**Generated:** 2026-08-23  
+**Commit:** 4d53677  
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
@@ -29,7 +29,7 @@ web-a/
 └── src/
     ├── main.tsx         # ThemeProvider → App
     ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
-    ├── routes/          # AppRouter, ProtectedRoute, PlatformAdminRoute
+    ├── routes/          # see routes/AGENTS.md — AppRouter, ProtectedRoute, PlatformAdminRoute
     ├── pages/           # see pages/AGENTS.md
     ├── components/
     │   ├── layout/      # AdminShell, AuthShell, NavIcon, SectionRail
@@ -56,7 +56,7 @@ web-a/
 | Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
 | Search analytics | `src/pages/search-engine-analytics.tsx` (`?tab=analytics`) |
 | Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
-| Route / PA guards | `src/routes/protected.tsx`, `platform-admin.tsx` |
+| Route / PA guards | `src/routes/` | Nested `routes/AGENTS.md` |
 | Nav / chrome | `src/components/layout/admin-shell.tsx` |
 | HTTP / API base | `src/lib/` |
 | Design tokens | `src/index.css` |

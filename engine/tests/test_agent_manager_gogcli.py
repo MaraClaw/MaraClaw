@@ -8,12 +8,21 @@ from app.services import agent_manager as agent_manager_module, gogcli_oauth, go
 from app.services.agent_manager import AgentManager
 
 
+class _RecordingContainerAPI:
+    def stop(self, _ref: str, time: int = 10) -> None:
+        del time
+
+    def remove(self, _refs: list[str]) -> None:
+        return None
+
+
 class RecordingDockerClient:
     def __init__(self) -> None:
         self.run_args = None
         self.run_kwargs = None
         self.execute_calls = []
         self.execute_output = "Open https://accounts.google.com/o/oauth2/v2/auth?client_id=public-client to continue"
+        self.container = _RecordingContainerAPI()
 
     def run(self, *args, **kwargs):
         self.run_args = args

@@ -1,7 +1,7 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-08-15  
-**Commit:** 04d89c0  
+**Generated:** 2026-08-23  
+**Commit:** 4d53677  
 **Branch:** main
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
@@ -53,6 +53,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
 | Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup is `linkup/` + `linkup_skill_files/` (not a function-calling tool) |
+| Inbound office parse (PDF/DOCX/XLSX/PPTX) | `engine` | `app/services/document_parser/` (`firecrawl-anydoc`). Not `document_conversion/` |
 | Landing copy / channels list | `web-l` | `web-l/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |

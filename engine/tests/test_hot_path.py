@@ -161,17 +161,19 @@ async def test_call_agent_llm_skips_dao_when_turn_preloaded(monkeypatch: pytest.
     monkeypatch.setattr(llm_model_dao, "get_many", boom_many)
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
+    tenant_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
         primary_model_id=uuid4(),
         fallback_model_id=uuid4(),
+        tenant_id=tenant_id,
         is_expired=False,
         expires_at=None,
     )
-    primary = SimpleNamespace(model="p", supports_vision=False)
-    fallback = SimpleNamespace(model="f", supports_vision=False)
+    primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    fallback = SimpleNamespace(model="f", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
         None,
         agent.id,
@@ -224,7 +226,7 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
 
     async def fake_get_many(ids):
         loaded_ids.append(list(ids))
-        return [SimpleNamespace(id=fallback_id, model="fb", supports_vision=False)]
+        return [SimpleNamespace(id=fallback_id, model="fb", enabled=True, tenant_id=tenant_id, supports_vision=False)]
 
     async def fake_failover(**kwargs: object) -> str:
         assert kwargs.get("fallback_model") is not None
@@ -235,16 +237,18 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(llm_model_dao, "get_many", fake_get_many)
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
+    tenant_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
         primary_model_id=uuid4(),
         fallback_model_id=fallback_id,
+        tenant_id=tenant_id,
         is_expired=False,
         expires_at=None,
     )
-    primary = SimpleNamespace(model="p", supports_vision=False)
+    primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
         None,
         agent.id,
@@ -269,8 +273,9 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
     monkeypatch.setattr(llm_model_dao, "get_many", AsyncMock(return_value=[]))
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
-    primary = SimpleNamespace(id=uuid4(), model="p", enabled=True, supports_vision=False)
-    secondary = SimpleNamespace(id=uuid4(), model="s", enabled=True, supports_vision=False)
+    tenant_id = uuid4()
+    primary = SimpleNamespace(id=uuid4(), model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    secondary = SimpleNamespace(id=uuid4(), model="s", enabled=True, tenant_id=tenant_id, supports_vision=False)
     agent = SimpleNamespace(
         id=uuid4(),
         name="Agent",
@@ -278,6 +283,7 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
         primary_model_id=primary.id,
         secondary_model_id=secondary.id,
         fallback_model_id=None,
+        tenant_id=tenant_id,
         is_expired=False,
         expires_at=None,
     )
