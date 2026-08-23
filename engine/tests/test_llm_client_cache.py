@@ -83,3 +83,14 @@ async def test_close_does_not_destroy_pooled_http_or_cached_wrapper():
     reused = await again._get_client()
     assert reused is http
     assert reused.is_closed is False
+
+
+def test_cache_expires_and_wipes_api_key(monkeypatch):
+    from app.services.llm import client_cache
+
+    monkeypatch.setattr(client_cache, "_TTL_SECONDS", 0)
+    first = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=8)
+    assert first.api_key == "sk-live"
+    second = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=8)
+    assert second is not first
+    assert first.api_key == ""

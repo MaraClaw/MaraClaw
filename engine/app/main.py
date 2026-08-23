@@ -424,6 +424,12 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[shutdown] psycopg pool close failed: {e}")
     await realtime_router.stop()
     await close_redis()
+    try:
+        from app.services.llm.client_cache import shutdown_llm_clients
+
+        await shutdown_llm_clients()
+    except Exception as e:
+        logger.warning(f"[shutdown] LLM HTTP pool close failed: {e}")
 
 
 app = FastAPI(
