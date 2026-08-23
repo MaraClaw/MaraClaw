@@ -43,9 +43,23 @@ async def _read_document_from_storage(
     tenant_id: str | None = None,
 ) -> str:
     from app.services import agent_tools
+    from app.services.document_parser import MAX_INPUT_BYTES, DocumentTooLargeError, format_parse_failure
+    from app.services.storage import get_storage_backend
 
-    temp_workspace = await agent_tools._prepare_temp_workspace(agent_id, tenant_id=tenant_id, paths=[rel_path])
-    try:
-        return await _read_document(temp_workspace.root, rel_path, max_chars=max_chars, tenant_id=None)
-    finally:
-        temp_workspace.cleanup()
+    storage_key, normalized, is_enterprise = agent_tools._tool_storage_key(agent_id, rel_path, tenant_id)
+    if is_enterprise and not tenant_id:
+        return f"File not found: {rel_path}"
+
+    storage = get_storage_backend()
+    if await storage.is_dir(storage_key):
+        return f"Path is a directory, not a document: {rel_path}"
+    if not await storage.is_file(storage_key):
+        return f"File not found: {rel_path}"
+
+    version = await storage.get_version(storage_key)
+    if version.size > MAX_INPUT_BYTES:
+        return format_parse_failure(DocumentTooLargeError("too large", size_bytes=version.size))
+
+    data = await storage.read_bytes(storage_key)
+    filename = Path(normalized).name or Path(rel_path).name
+    return await asyncio.to_thread(document_reading._read_document_from_bytes, data, filename, max_chars)
