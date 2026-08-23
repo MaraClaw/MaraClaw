@@ -8,8 +8,10 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import files as files_api, upload as upload_api
-from app.services.agent_tool_exec import document_reading
+from app.services.agent_tool_exec import document_reading, documents
 from app.services.agent_tool_exec._agent_tool_exec_storage import read_document
+from app.services.document_parser import MAX_INPUT_BYTES
+from app.services.storage_runtime.base import StorageVersion
 from app.services.storage_runtime.local import LocalStorageBackend
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "anydoc"
@@ -31,9 +33,16 @@ class MemoryUpload:
     def __init__(self, filename: str, data: bytes) -> None:
         self.filename = filename
         self._data = data
+        self._offset = 0
 
-    async def read(self) -> bytes:
-        return self._data
+    async def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            chunk = self._data[self._offset :]
+            self._offset = len(self._data)
+            return chunk
+        chunk = self._data[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
 
 
 def make_user(**overrides: object) -> SimpleNamespace:
@@ -109,6 +118,11 @@ async def test_chat_upload_when_storage_backed_then_retains_original(
     storage = LocalStorageBackend(str(tmp_path))
     agent_id = str(uuid.uuid4())
     _bind_storage(monkeypatch, storage, tmp_path)
+
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+        return make_agent(uuid.uuid4()), "manage"
+
+    monkeypatch.setattr(upload_api, "check_agent_access", fake_check_agent_access)
 
     result = await upload_api.upload_file(
         file=MemoryUpload("report.docx", _fixture("supported.docx")),
@@ -350,3 +364,238 @@ async def test_enterprise_upload_when_member_then_forbidden() -> None:
             current_user=user,
         )
     assert exc.value.status_code == 403
+
+
+async def test_enterprise_upload_when_supported_office_then_writes_sidecar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    user = make_user(role="org_admin")
+    storage = LocalStorageBackend(str(tmp_path))
+    _bind_storage(monkeypatch, storage, tmp_path)
+
+    result = await files_api.upload_enterprise_kb_file(
+        file=MemoryUpload("policy.docx", _fixture("supported.docx")),
+        sub_path="knowledge_base",
+        current_user=user,
+    )
+
+    assert result["path"] == "knowledge_base/policy.docx"
+    assert result["extracted_text_path"] == "knowledge_base/policy.md"
+    original = tmp_path / f"enterprise_info_{user.tenant_id}" / "knowledge_base" / "policy.docx"
+    sidecar = tmp_path / f"enterprise_info_{user.tenant_id}" / "knowledge_base" / "policy.md"
+    assert original.exists()
+    assert "Quarterly Report" in sidecar.read_text(encoding="utf-8")
+
+
+async def test_read_document_from_storage_when_enterprise_office_then_parses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tenant_id = str(uuid.uuid4())
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path))
+    await storage.write_bytes(
+        f"enterprise_info_{tenant_id}/knowledge_base/policy.docx",
+        _fixture("supported.docx"),
+    )
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
+
+    result = await documents._read_document_from_storage(
+        agent_id,
+        "enterprise_info/knowledge_base/policy.docx",
+        max_chars=20000,
+        tenant_id=tenant_id,
+    )
+    assert "Quarterly Report" in result
+    assert "File not found" not in result
+
+
+async def test_read_document_from_storage_when_between_materialize_and_parser_budget_then_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_id = uuid.uuid4()
+    payload = _fixture("supported.docx")
+
+    class MidSizeStorage:
+        async def is_dir(self, key: str) -> bool:
+            del key
+            return False
+
+        async def is_file(self, key: str) -> bool:
+            del key
+            return True
+
+        async def get_version(self, key: str) -> StorageVersion:
+            return StorageVersion(key=key, exists=True, is_dir=False, size=11 * 1024 * 1024)
+
+        async def read_bytes(self, key: str) -> bytes:
+            del key
+            return payload
+
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: MidSizeStorage())
+
+    result = await documents._read_document_from_storage(
+        agent_id,
+        "workspace/uploads/big.docx",
+        max_chars=20000,
+        tenant_id=None,
+    )
+    assert "Quarterly Report" in result
+    assert "File not found" not in result
+
+
+async def test_read_document_from_storage_when_over_parser_budget_then_too_large(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_id = uuid.uuid4()
+    reads: list[str] = []
+
+    class HugeStorage:
+        async def is_dir(self, key: str) -> bool:
+            del key
+            return False
+
+        async def is_file(self, key: str) -> bool:
+            del key
+            return True
+
+        async def get_version(self, key: str) -> StorageVersion:
+            return StorageVersion(key=key, exists=True, is_dir=False, size=MAX_INPUT_BYTES + 1)
+
+        async def read_bytes(self, key: str) -> bytes:
+            reads.append(key)
+            return b"should-not-read"
+
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: HugeStorage())
+
+    result = await documents._read_document_from_storage(
+        agent_id,
+        "workspace/uploads/huge.docx",
+        max_chars=20000,
+        tenant_id=None,
+    )
+    assert "too large to read safely" in result
+    assert reads == []
+
+
+async def test_agent_upload_when_markdown_exists_then_does_not_clobber(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    storage = LocalStorageBackend(str(tmp_path))
+    existing = tmp_path / str(agent.id) / "workspace" / "knowledge_base" / "brief.md"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("# hand written\n", encoding="utf-8")
+
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+        return agent, "manage"
+
+    _bind_storage(monkeypatch, storage, tmp_path)
+    monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
+
+    result = await files_api.upload_file_to_workspace(
+        agent_id=agent.id,
+        file=MemoryUpload("brief.docx", _fixture("supported.docx")),
+        path="workspace/knowledge_base",
+        current_user=user,
+    )
+
+    assert result["extracted_text_path"] == "workspace/knowledge_base/brief.docx.md"
+    assert existing.read_text(encoding="utf-8") == "# hand written\n"
+    alt = tmp_path / str(agent.id) / "workspace" / "knowledge_base" / "brief.docx.md"
+    assert "Quarterly Report" in alt.read_text(encoding="utf-8")
+
+
+async def test_preview_when_companion_exists_then_skips_anydoc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    storage = LocalStorageBackend(str(tmp_path))
+    rel = "workspace/brief.docx"
+    await storage.write_bytes(f"{agent.id}/{rel}", _fixture("supported.docx"))
+    companion = tmp_path / str(agent.id) / "workspace" / "brief.md"
+    companion.parent.mkdir(parents=True, exist_ok=True)
+    companion.write_text("sidecar only", encoding="utf-8")
+
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+        return agent, "manage"
+
+    def fail_convert(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("anydoc should not run when a companion exists")
+
+    _bind_storage(monkeypatch, storage, tmp_path)
+    monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
+    monkeypatch.setattr(files_api, "convert_document_isolated", fail_convert)
+
+    result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
+    assert result["text"] == "sidecar only"
+
+
+async def test_agent_upload_when_path_collapses_out_of_workspace_then_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+        return agent, "manage"
+
+    _bind_storage(monkeypatch, LocalStorageBackend(str(tmp_path)), tmp_path)
+    monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
+
+    with pytest.raises(HTTPException) as exc:
+        await files_api.upload_file_to_workspace(
+            agent_id=agent.id,
+            file=MemoryUpload("soul.docx", _fixture("supported.docx")),
+            path="workspace/..",
+            current_user=user,
+        )
+    assert exc.value.status_code == 400
+
+
+async def test_chat_upload_when_too_large_then_rejects_before_store() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await upload_api.upload_file(
+            file=MemoryUpload("huge.docx", b"x" * (MAX_INPUT_BYTES + 1)),
+            agent_id="",
+            current_user=make_user(),
+        )
+    assert exc.value.status_code == 400
+    assert "too large" in str(exc.value.detail).lower()
+
+
+async def test_chat_upload_when_encrypted_office_then_keeps_typed_reason() -> None:
+    result = await upload_api.upload_file(
+        file=MemoryUpload("secret.odt", _fixture("encrypted.odt")),
+        agent_id="",
+        current_user=make_user(),
+    )
+    assert "encrypted" in result["extracted_text"].lower()
+
+
+def test_sidecar_rel_options_when_named_then_ignores_temp_stem() -> None:
+    assert files_api._sidecar_rel_options("workspace/knowledge_base/brief.docx", "brief.docx") == [
+        "workspace/knowledge_base/brief.md",
+        "workspace/knowledge_base/brief.docx.md",
+    ]
+    assert files_api._sidecar_rel_options("policy.docx", "policy.docx") == ["policy.md", "policy.docx.md"]
+
+
+async def test_preview_when_xls_openpyxl_fails_then_still_returns_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    storage = LocalStorageBackend(str(tmp_path))
+    rel = "workspace/legacy.xls"
+    await storage.write_bytes(f"{agent.id}/{rel}", b"not-a-real-xls")
+
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+        return agent, "manage"
+
+    _bind_storage(monkeypatch, storage, tmp_path)
+    monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
+
+    result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
+    assert result["kind"] == "xlsx"
+    assert "sheets" not in result
+    assert "Preview extraction failed" in result["text"]
