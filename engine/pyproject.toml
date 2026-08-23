@@ -24,8 +24,7 @@ dependencies = [
     "lxml>=6.1.1",
     "lxml-html-clean>=0.4.5",
     "PyNaCl>=1.6.2",
-    "pdfplumber>=0.11.10",
-    "PyMuPDF>=1.28.2",
+    "firecrawl-anydoc==0.2.3",
     "python-docx>=1.2.0",
     "openpyxl>=3.1.5",
     "python-pptx>=1.0.2",
@@ -143,10 +142,8 @@ combine-as-imports = true
 "app/services/tool_config.py" = ["S608"]
 # Protocol methods/args must match third-party APIs (boto3, docx, pptx).
 "app/services/storage_runtime/s3.py" = ["N803"]
-"app/services/text_extractor.py" = ["N802"]
 "app/services/document_conversion/markdown.py" = ["N802"]
 "app/services/document_conversion/csv.py" = ["N802"]
-"app/services/agent_tool_exec/document_reading.py" = ["N802"]
 
 [tool.ruff.lint.extend-per-file-ignores]
 "app/api/**/*.py" = ["B008", "FAST002"]
