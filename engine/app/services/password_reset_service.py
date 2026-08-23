@@ -65,7 +65,7 @@ async def build_password_reset_url(raw_token: str, request: object | None = None
     """Build the user-facing reset URL.
 
     When ``request`` carries an Origin/Referer listed in CORS_ORIGINS, that
-    frontend wins so member reset links land on web-l and admin links on web-a.
+    frontend wins so end-user reset links land on web-e and admin links on web-a.
     """
     from fastapi import Request
 

@@ -16,7 +16,7 @@ JWT in `localStorage` (`maraclaw-admin-token`). `AuthProvider` bootstraps `GET /
 
 **Role split:** Companies + Search sit behind `PlatformAdminRoute` and `platformAdminOnly` nav. Users and Models are both roles. Org admin is own-tenant only. Only org/platform admins configure the company LLM pool; members never write keys.
 
-Does **not** own marketing or member auth (`web-l`). Does **not** implement APIs — clients call `engine`.
+Does **not** own the end-user landing or member auth (`web-e`). Does **not** implement APIs — clients call `engine`.
 
 ## STRUCTURE
 
@@ -34,7 +34,7 @@ web-a/
     ├── components/
     │   ├── layout/      # AdminShell, AuthShell, NavIcon, SectionRail
     │   ├── companies/   # create form + status icon
-    │   ├── brand/       # match web-l mark
+    │   ├── brand/       # match web-e mark
     │   └── ui/          # 8 primitives + password-field
     ├── hooks/           # use-auth; use-theme (maraclaw-admin-theme)
     └── lib/             # see lib/AGENTS.md
@@ -88,18 +88,18 @@ Boot: `index.html` (theme FOUC) → `main.tsx` → `ThemeProvider` → `App` →
 - TanStack Query in **pages only**. Forms: RHF + Zod. New screens: `pages/` + `routes/` + nav when ready.
 - Tenant: platform admin may pass `tenant_id`; org admin is own-tenant (client + UI).
 - Treat `403 { must_change_password: true }` as force-change, not logout.
-- Brand + chrome match `web-l`: `MaraClawLogo`, `public/maraclaw-mark.svg`, warm OKLCH, `bg-card/70` sidebar, footer email + theme + Sign out.
-- Theme key `maraclaw-admin-theme`. Token key `maraclaw-admin-token` (never web-l's `maraclaw-theme` / `maraclaw-enduser-token`).
+- Brand + chrome match `web-e`: `MaraClawLogo`, `public/maraclaw-mark.svg`, warm OKLCH, `bg-card/70` sidebar, footer email + theme + Sign out.
+- Theme key `maraclaw-admin-theme`. Token key `maraclaw-admin-token` (never web-e's `maraclaw-theme` / `maraclaw-enduser-token`).
 - Verify with `npm run build` (`tsc -b`). No test runner.
 
 ## ANTI-PATTERNS
 
-- Marketing pages or member chat here; admin UI in `web-l`.
+- Marketing pages or member chat here; admin UI in `web-e`.
 - REST handlers in Vite; `fetch` from components (add `src/lib/*-api.ts`).
 - Hardcoded API hosts; `VITE_API_BASE_URL=http://0.0.0.0:8000`.
 - Ignoring `must_change_password` after login.
 - Treating `VITE_AUTH_BYPASS` as implemented (README leftover; not in `.env.example` or code).
-- Sharing web-l storage keys.
+- Sharing web-e storage keys.
 - Hiding Disable/Enable when `can_disable` is false (MaraClaw + OpenClaw).
 
 ## COMMANDS

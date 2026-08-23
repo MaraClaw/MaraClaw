@@ -1,6 +1,6 @@
 # layout/ — workspace + marketing chrome
 
-**Generated:** 2026-08-23 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-23 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 

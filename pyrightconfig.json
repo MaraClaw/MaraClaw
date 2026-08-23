@@ -17,7 +17,7 @@
     "engine/**/linkup_skill_files/**",
     "engine/agent_template/**",
     "engine/agent_templates/**",
-    "web-l/**",
+    "web-e/**",
     "web-a/**"
   ]
 }

@@ -11,7 +11,7 @@ import {
 export type Theme = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
 
-/** Separate key from web-l so marketing and admin theme prefs do not clash. */
+/** Separate key from web-e so marketing and admin theme prefs do not clash. */
 const STORAGE_KEY = 'maraclaw-admin-theme'
 
 type ThemeContextValue = {

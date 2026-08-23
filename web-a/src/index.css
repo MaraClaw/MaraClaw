@@ -47,7 +47,7 @@
 :root {
   --radius: 0.75rem;
 
-  /* Warm paper light theme - aligned with web-l brand */
+  /* Warm paper light theme - aligned with web-e brand */
   --background: oklch(0.985 0.004 80);
   --foreground: oklch(0.2 0.02 45);
   --card: oklch(1 0 0);
