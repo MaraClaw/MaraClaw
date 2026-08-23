@@ -50,6 +50,10 @@ class DocumentTooLargeError(DocumentParseError):
 class DocumentParseTimeoutError(DocumentParseError):
     """The isolated parser did not finish within the time budget."""
 
+    def __init__(self, message: str, *, child_reaped: bool = True) -> None:
+        super().__init__(message)
+        self.child_reaped: bool = child_reaped
+
 
 class DocumentParseUnavailableError(DocumentParseError):
     """The local anydoc binding is not installed."""

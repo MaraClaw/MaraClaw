@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
+from io import BytesIO
 from pathlib import Path
 from typing import Final, Literal, NoReturn, Protocol, cast
 
@@ -82,7 +84,21 @@ _READ_DOCUMENT_SUPPORTED = "PDF, DOCX, XLSX, PPTX, TXT, MD, CSV"
 _BLANK_LINE_RE = re.compile(r"\n{3,}")
 MAX_INPUT_BYTES: Final = 50 * 1024 * 1024
 MAX_OUTPUT_CHARS: Final = 2_000_000
+PREVIEW_MAX_CHARS: Final = 8_000
+IMAGE_UPLOAD_MAX_BYTES: Final = 10 * 1024 * 1024
 _INSTALL_HINT = "Install: pip install firecrawl-anydoc"
+_XLSX_PREVIEW_EXTENSIONS: Final[set[str]] = {".xlsx", ".xls", ".xlsm", ".xlsb"}
+_DOCX_PREVIEW_EXTENSIONS: Final[set[str]] = {".docx", ".doc", ".docm", ".odt", ".rtf", ".epub"}
+_PPTX_PREVIEW_EXTENSIONS: Final[set[str]] = {
+    ".pptx",
+    ".ppt",
+    ".pptm",
+    ".pps",
+    ".ppsx",
+    ".ppsm",
+    ".pot",
+    ".odp",
+}
 
 
 def needs_extraction(filename: str) -> bool:
@@ -96,11 +112,115 @@ def is_plain_text_document(filename: str) -> bool:
 
 
 def decode_text_bytes(content: bytes) -> str:
-    """Decode ordinary text without sending it through anydoc."""
+    """Decode ordinary text without sending it through anydoc.
+
+    Strict UTF-8 first, then strict GBK. Only if both fail do we replace
+    invalid UTF-8 bytes. Never reinterpret a mostly-UTF-8 buffer as GBK.
+    """
     try:
         return content.decode("utf-8")
     except UnicodeDecodeError:
-        return content.decode("gbk", errors="replace")
+        pass
+    try:
+        return content.decode("gbk")
+    except UnicodeDecodeError:
+        return content.decode("utf-8", errors="replace")
+
+
+async def read_bytes_limited(
+    read_chunk: Callable[..., Awaitable[bytes]],
+    max_bytes: int = MAX_INPUT_BYTES,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> bytes:
+    """Read an upload/stream with a hard byte ceiling.
+
+    Raises ``DocumentTooLargeError`` before the next chunk would exceed
+    ``max_bytes``. Accepts both ``read(n)`` and argument-free ``read()``
+    callables (test fakes).
+    """
+    try:
+        first = await read_chunk(chunk_size)
+    except TypeError:
+        data = await read_chunk()
+        if len(data) > max_bytes:
+            raise DocumentTooLargeError(
+                f"Document is too large to read safely ({len(data) / 1024 / 1024:.1f} MB).",
+                size_bytes=len(data),
+            ) from None
+        return data
+    chunks = [first]
+    total = len(first)
+    if total > max_bytes:
+        raise DocumentTooLargeError(
+            f"Document is too large to read safely ({total / 1024 / 1024:.1f} MB).",
+            size_bytes=total,
+        )
+    while True:
+        chunk = await read_chunk(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise DocumentTooLargeError(
+                f"Document is too large to read safely ({total / 1024 / 1024:.1f} MB).",
+                size_bytes=total,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def preview_kind(filename: str) -> str | None:
+    """Return the files-preview kind for an office suffix, or None."""
+    ext = Path(filename).suffix.lower()
+    if ext == ".pdf":
+        return "pdf"
+    if ext in _XLSX_PREVIEW_EXTENSIONS:
+        return "xlsx"
+    if ext in _DOCX_PREVIEW_EXTENSIONS:
+        return "docx"
+    if ext in _PPTX_PREVIEW_EXTENSIONS:
+        return "pptx"
+    if ext == ".ods":
+        return "docx"
+    return None
+
+
+def extract_xlsx_sheets(data: bytes) -> list[dict[str, object]]:
+    """Structured XLSX preview grid (title + row values). In-process helper."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
+    try:
+        sheets: list[dict[str, object]] = []
+        for ws in wb.worksheets[:5]:
+            rows: list[list[str]] = []
+            for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
+                values = ["" if cell is None else str(cell) for cell in row]
+                while values and not str(values[-1] or "").strip():
+                    _ = values.pop()
+                if any(value.strip() for value in values):
+                    rows.append(values)
+            sheets.append({"title": ws.title, "rows": rows})
+        return sheets
+    finally:
+        wb.close()
+
+
+def sheets_preview_text(sheets: list[dict[str, object]], max_chars: int | None = None) -> str:
+    """Compact text view of an openpyxl sheets payload for preview JSON."""
+    lines: list[str] = []
+    for sheet in sheets:
+        title = sheet.get("title")
+        if isinstance(title, str) and title:
+            lines.append(f"# {title}")
+        rows = sheet.get("rows")
+        if not isinstance(rows, list):
+            continue
+        lines.extend(
+            " | ".join("" if cell is None else str(cell) for cell in row) for row in rows if isinstance(row, list)
+        )
+    return _bound_output("\n".join(lines), max_chars or PREVIEW_MAX_CHARS)
 
 
 def normalize_markdown(text: str) -> str:
