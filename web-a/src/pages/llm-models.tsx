@@ -20,18 +20,21 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
   deleteLlmModel,
+  getChatGPTSubscriptionStatus,
   getGrokSubscriptionStatus,
   listLlmModels,
   listLlmProviders,
   setDefaultLlmModel,
   setFallbackLlmModel,
   setSecondaryLlmModel,
+  startChatGPTSubscription,
   startGrokSubscription,
   testLlmModel,
   updateLlmModel,
   reasoningEffortLabel,
   reasoningEffortsFor,
   withKnownProviders,
+  type ChatGPTSubscriptionStart,
   type GrokSubscriptionStart,
   type LlmModel,
 } from '@/lib/llm-models-api'
@@ -264,6 +267,7 @@ export function LlmModelsPage() {
       ) : null}
 
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+      <ChatGPTSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
 
       <Card>
         <CardHeader>
@@ -518,6 +522,115 @@ function GrokSubscriptionCard({
   )
 }
 
+function ChatGPTSubscriptionCard({
+  tenantId,
+  platformAdmin,
+}: {
+  tenantId: string
+  platformAdmin: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [session, setSession] = useState<ChatGPTSubscriptionStart | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
+
+  const start = useMutation({
+    mutationFn: () => startChatGPTSubscription(platformAdmin ? tenantId : undefined),
+    onSuccess: (started) => {
+      setSession(started)
+      setStartError(null)
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) {
+        if (error.status === 403) {
+          setStartError('Only an organization admin can connect a ChatGPT subscription.')
+          return
+        }
+        setStartError(formatApiDetail(error.detail) ?? 'Could not start ChatGPT sign-in.')
+        return
+      }
+      setStartError('Could not start ChatGPT sign-in. Check your connection and try again.')
+    },
+  })
+
+  const status = useQuery({
+    queryKey: ['admin-chatgpt-subscription', session?.session_id],
+    queryFn: () => getChatGPTSubscriptionStatus(session!.session_id),
+    enabled: Boolean(session?.session_id),
+    refetchInterval: (query) => {
+      const current = query.state.data?.status
+      if (!current || current === 'pending') {
+        return Math.max((session?.interval ?? 5) * 1000, 2000)
+      }
+      return false
+    },
+  })
+
+  useEffect(() => {
+    if (status.data?.status !== 'authorized') return
+    void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
+    toast.success('ChatGPT subscription connected. Assign it as primary, secondary, or fallback.')
+    setSession(null)
+  }, [status.data?.status, queryClient])
+
+  const pending = session && (status.data?.status ?? 'pending') === 'pending'
+  const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect ChatGPT subscription</CardTitle>
+        <CardDescription>
+          Sign in with ChatGPT Plus, Pro, Team, or Enterprise. Enable device-code authorization in
+          ChatGPT → Settings → Security first. The verification code is shown here; access tokens stay
+          on the server and are stored encrypted for this company.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {pending && session ? (
+          <div className="grid gap-2 text-sm">
+            <p>
+              Open{' '}
+              <a
+                className="font-medium text-primary underline underline-offset-4"
+                href={session.verification_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {session.verification_url}
+              </a>
+            </p>
+            <p>
+              Enter code{' '}
+              <span className="font-mono text-base tracking-wide">{session.user_code}</span>
+            </p>
+            <p className="text-muted-foreground">Waiting for sign-in…</p>
+          </div>
+        ) : null}
+        {failed ? (
+          <p className="text-sm text-destructive" role="alert">
+            {status.data?.detail || 'ChatGPT sign-in did not complete. Start again.'}
+          </p>
+        ) : null}
+        {startError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {startError}
+          </p>
+        ) : null}
+        <div>
+          <Button
+            type="button"
+            disabled={start.isPending || !tenantId || Boolean(pending)}
+            onClick={() => start.mutate()}
+          >
+            {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {pending ? 'Waiting for ChatGPT' : 'Connect ChatGPT subscription'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const queryClient = useQueryClient()
   const formId = useId()
@@ -637,6 +750,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             {item.is_secondary ? <Badge variant="outline">Secondary</Badge> : null}
             {item.is_fallback ? <Badge variant="outline">Fallback</Badge> : null}
             {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">Grok subscription</Badge> : null}
+            {item.auth_kind === 'chatgpt_subscription' ? <Badge variant="soft">ChatGPT subscription</Badge> : null}
             <Badge variant="outline">{reasoningEffortLabel(item.reasoning_effort || 'none')}</Badge>
             {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
           </CardTitle>
