@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS llm_models (
 	auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key', 
 	refresh_token_encrypted TEXT, 
 	token_expires_at TIMESTAMP WITH TIME ZONE, 
+	oauth_account_id VARCHAR(128), 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id)
@@ -81,8 +82,11 @@ ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT;
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key';
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT;
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS oauth_account_id VARCHAR(128);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
 	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
+	ON llm_models (tenant_id) WHERE auth_kind = 'chatgpt_subscription';
 
 CREATE TABLE IF NOT EXISTS okr_alignments (
 	id UUID NOT NULL, 

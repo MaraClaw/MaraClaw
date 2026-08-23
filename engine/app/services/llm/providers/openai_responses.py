@@ -48,15 +48,21 @@ class OpenAIResponsesClient(LLMClient):
         model: str | None = None,
         timeout: float = 120.0,
         supports_tool_choice: bool = True,
+        extra_headers: dict[str, str] | None = None,
+        stateless: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
         self.supports_tool_choice: bool = supports_tool_choice
+        self.extra_headers: dict[str, str] = extra_headers or {}
+        self.stateless: bool = stateless
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
+        from app.services.llm.http_pool import acquire_httpx
+
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, proxy=None)
+            self._client = acquire_httpx(self.timeout)
         return self._client
 
     @override
@@ -64,6 +70,7 @@ class OpenAIResponsesClient(LLMClient):
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
+            **self.extra_headers,
         }
 
     def _normalize_base_url(self) -> str:
@@ -118,6 +125,12 @@ class OpenAIResponsesClient(LLMClient):
                     }
                 )
 
+            if msg.role == "assistant" and msg.provider_items:
+                for raw_item in msg.provider_items:
+                    item = dict(raw_item)
+                    if json_as_str(item.get("type")) == "reasoning" and not json_as_str(item.get("encrypted_content")):
+                        continue
+                    input_items.append(item)
             if msg.role == "assistant" and msg.tool_calls:
                 for tc in msg.tool_calls:
                     fn = tc.get("function", {})
@@ -235,11 +248,15 @@ class OpenAIResponsesClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self.model,
             "input": self._messages_to_input(messages),
-            "temperature": temperature,
             "stream": stream,
         }
+        if temperature is not None and not self.stateless:
+            payload["temperature"] = temperature
+        if self.stateless:
+            payload["store"] = False
+            payload["include"] = ["reasoning.encrypted_content"]
 
-        if max_tokens:
+        if max_tokens and not self.stateless:
             payload["max_output_tokens"] = max_tokens
 
         converted_tools = self._convert_tools(tools)
@@ -250,9 +267,12 @@ class OpenAIResponsesClient(LLMClient):
 
         from app.services.llm.reasoning import apply_reasoning_effort
 
+        provider = str(kwargs.pop("llm_provider", "") or "openai-response")
+        if self.stateless:
+            provider = "openai-response"
         apply_reasoning_effort(
             payload,
-            provider=str(kwargs.pop("llm_provider", "") or "openai-response"),
+            provider=provider,
             effort=kwargs.pop("reasoning_effort", None),
         )
         payload.update(kwargs)
@@ -263,11 +283,27 @@ class OpenAIResponsesClient(LLMClient):
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[LLMToolCall] = []
+        provider_items: list[dict[str, object]] = []
 
         for item_raw in object_list_from_row(data.get("output")):
             item = json_object_from(item_raw)
             item_type = json_as_str(item.get("type"))
-            if item_type == "message":
+            if item_type == "reasoning":
+                encrypted = json_as_str(item.get("encrypted_content")) or ""
+                if encrypted:
+                    replay: dict[str, object] = {"type": "reasoning", "encrypted_content": encrypted}
+                    rid = json_as_str(item.get("id"))
+                    if rid:
+                        replay["id"] = rid
+                    provider_items.append(replay)
+                summary = item.get("summary")
+                if isinstance(summary, list):
+                    for part_raw in summary:
+                        part = json_object_from(part_raw)
+                        reasoning_parts.append(json_as_str_or(part.get("text")))
+                else:
+                    reasoning_parts.append(json_as_str_or(summary))
+            elif item_type == "message":
                 for content_raw in object_list_from_row(item.get("content")):
                     content_item = json_object_from(content_raw)
                     c_type = json_as_str(content_item.get("type"))
@@ -306,6 +342,7 @@ class OpenAIResponsesClient(LLMClient):
             content="".join(content_parts),
             tool_calls=tool_calls,
             reasoning_content="".join(reasoning_parts) or None,
+            provider_items=provider_items or None,
             finish_reason=finish_reason,
             usage=_usage_from_json(data.get("usage")),
             model=json_as_str(data.get("model")),
@@ -423,6 +460,5 @@ class OpenAIResponsesClient(LLMClient):
 
     @override
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+        """Detach this wrapper. Shared HTTP transports stay open."""
+        self._client = None

@@ -32,5 +32,6 @@ Provider-specific LLM clients live here. They translate external protocols into 
 
 - Do not add provider parsing or protocol-specific retries to `llm/client.py`; it is compatibility glue.
 - Do not bypass the parent `finish` tool protocol or tool-call sanitization from provider code.
+- HTTP is acquired from `app.services.llm.http_pool`. Wrapper `close()` detaches only; do not `aclose()` the pooled transport.
 - Do not log API keys, request headers, raw credentials, or full prompt payloads in provider errors.
 - Do not require live provider credentials in unit tests. Use fake HTTP/stream clients and deterministic response fragments.

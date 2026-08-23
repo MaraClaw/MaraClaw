@@ -20,18 +20,21 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
   deleteLlmModel,
+  getChatGPTSubscriptionStatus,
   getGrokSubscriptionStatus,
   listLlmModels,
   listLlmProviders,
   setDefaultLlmModel,
   setFallbackLlmModel,
   setSecondaryLlmModel,
+  startChatGPTSubscription,
   startGrokSubscription,
   testLlmModel,
   updateLlmModel,
   reasoningEffortLabel,
   reasoningEffortsFor,
   withKnownProviders,
+  type ChatGPTSubscriptionStart,
   type GrokSubscriptionStart,
   type LlmModel,
 } from '@/lib/llm-models-api'
@@ -264,6 +267,10 @@ export function LlmModelsPage() {
       ) : null}
 
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+      <ChatGPTSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+      <p className="text-sm text-muted-foreground">
+        A company can connect both subscriptions. Tokens stay on the server for each one.
+      </p>
 
       <Card>
         <CardHeader>
@@ -456,7 +463,7 @@ function GrokSubscriptionCard({
   useEffect(() => {
     if (status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-    toast.success('Grok subscription connected. Assign it as primary, secondary, or fallback.')
+    toast.success('Grok subscription connected. It is in the company pool.')
     setSession(null)
   }, [status.data?.status, queryClient])
 
@@ -518,6 +525,116 @@ function GrokSubscriptionCard({
   )
 }
 
+function ChatGPTSubscriptionCard({
+  tenantId,
+  platformAdmin,
+}: {
+  tenantId: string
+  platformAdmin: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [session, setSession] = useState<ChatGPTSubscriptionStart | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
+
+  const start = useMutation({
+    mutationFn: () => startChatGPTSubscription(platformAdmin ? tenantId : undefined),
+    onSuccess: (started) => {
+      setSession(started)
+      setStartError(null)
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) {
+        if (error.status === 403) {
+          setStartError('Only an organization admin can connect a ChatGPT subscription.')
+          return
+        }
+        setStartError(formatApiDetail(error.detail) ?? 'Could not start ChatGPT sign-in.')
+        return
+      }
+      setStartError('Could not start ChatGPT sign-in. Check your connection and try again.')
+    },
+  })
+
+  const status = useQuery({
+    queryKey: ['admin-chatgpt-subscription', session?.session_id],
+    queryFn: () => getChatGPTSubscriptionStatus(session!.session_id),
+    enabled: Boolean(session?.session_id),
+    refetchInterval: (query) => {
+      const current = query.state.data?.status
+      if (!current || current === 'pending') {
+        return Math.max((session?.interval ?? 5) * 1000, 2000)
+      }
+      return false
+    },
+  })
+
+  useEffect(() => {
+    if (status.data?.status !== 'authorized') return
+    void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
+    toast.success('ChatGPT subscription connected. It is in the company pool.')
+    setSession(null)
+  }, [status.data?.status, queryClient])
+
+  const pending = session && (status.data?.status ?? 'pending') === 'pending'
+  const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect ChatGPT subscription</CardTitle>
+        <CardDescription>
+          Sign in with ChatGPT Plus, Pro, or Team. Enable device-code authorization in ChatGPT →
+          Settings → Security first. Team and workspace admins turn it on in ChatGPT workspace
+          Security. The verification code is shown here; access tokens stay on the server and are
+          stored encrypted for this company.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {pending && session ? (
+          <div className="grid gap-2 text-sm">
+            <p>
+              Open{' '}
+              <a
+                className="font-medium text-primary underline underline-offset-4"
+                href={session.verification_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {session.verification_url}
+              </a>
+            </p>
+            <p>
+              Enter code{' '}
+              <span className="font-mono text-base tracking-wide">{session.user_code}</span>
+            </p>
+            <p className="text-muted-foreground">Waiting for sign-in…</p>
+          </div>
+        ) : null}
+        {failed ? (
+          <p className="text-sm text-destructive" role="alert">
+            {status.data?.detail || 'ChatGPT sign-in did not complete. Start again.'}
+          </p>
+        ) : null}
+        {startError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {startError}
+          </p>
+        ) : null}
+        <div>
+          <Button
+            type="button"
+            disabled={start.isPending || !tenantId || Boolean(pending)}
+            onClick={() => start.mutate()}
+          >
+            {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {pending ? 'Waiting for ChatGPT' : 'Connect ChatGPT subscription'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const queryClient = useQueryClient()
   const formId = useId()
@@ -532,14 +649,20 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const [pendingRemove, setPendingRemove] = useState(false)
   const [forceRemove, setForceRemove] = useState(false)
   const [removeHint, setRemoveHint] = useState<string | null>(null)
+  const subscription =
+    item.auth_kind === 'chatgpt_subscription' || item.auth_kind === 'grok_subscription'
 
   const save = useMutation({
     mutationFn: () =>
       updateLlmModel(item.id, {
         label: label.trim(),
         model: modelName.trim(),
-        base_url: baseUrl.trim() || null,
-        api_key: apiKey.trim() || undefined,
+        ...(subscription
+          ? {}
+          : {
+              base_url: baseUrl.trim() || null,
+              api_key: apiKey.trim() || undefined,
+            }),
         enabled,
         supports_vision: supportsVision,
         reasoning_effort: effort || 'none',
@@ -637,12 +760,21 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             {item.is_secondary ? <Badge variant="outline">Secondary</Badge> : null}
             {item.is_fallback ? <Badge variant="outline">Fallback</Badge> : null}
             {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">Grok subscription</Badge> : null}
+            {item.auth_kind === 'chatgpt_subscription' ? <Badge variant="soft">ChatGPT subscription</Badge> : null}
             <Badge variant="outline">{reasoningEffortLabel(item.reasoning_effort || 'none')}</Badge>
             {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
           </CardTitle>
           <CardDescription>
-            {item.provider} / {item.model}
-            {item.api_key_masked ? ` · key ${item.api_key_masked}` : ''}
+            {item.auth_kind === 'chatgpt_subscription'
+              ? `ChatGPT subscription · ${item.model}`
+              : item.auth_kind === 'grok_subscription'
+                ? `Grok subscription · ${item.model}`
+                : `${item.provider} / ${item.model}`}
+            {item.auth_kind !== 'chatgpt_subscription' &&
+            item.auth_kind !== 'grok_subscription' &&
+            item.api_key_masked
+              ? ` · key ${item.api_key_masked}`
+              : ''}
           </CardDescription>
         </div>
       </CardHeader>
@@ -661,10 +793,12 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 onChange={(event) => setModelName(event.target.value)}
               />
             </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor={`${formId}-base`}>Base URL</Label>
-              <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-            </div>
+            {subscription ? null : (
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor={`${formId}-base`}>Base URL</Label>
+                <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
               <Select
@@ -682,17 +816,19 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
               </p>
             </div>
-            <div className="sm:col-span-2">
-              <PasswordField
-                id={`${formId}-key`}
-                label="New API key (optional)"
-                autoComplete="off"
-                hideLeadingIcon
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="Leave blank to keep the current key"
-              />
-            </div>
+            {subscription ? null : (
+              <div className="sm:col-span-2">
+                <PasswordField
+                  id={`${formId}-key`}
+                  label="New API key (optional)"
+                  autoComplete="off"
+                  hideLeadingIcon
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="Leave blank to keep the current key"
+                />
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -716,7 +852,11 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
           <p className="text-sm text-muted-foreground">
             Reasoning effort: {reasoningEffortLabel(item.reasoning_effort || 'none')}.
             {item.supports_vision ? ' Vision enabled.' : ''}
-            {item.base_url ? ` Endpoint ${item.base_url}` : ' Provider default endpoint'}
+            {subscription
+              ? ''
+              : item.base_url
+                ? ` Endpoint ${item.base_url}`
+                : ' Provider default endpoint'}
           </p>
         )}
 

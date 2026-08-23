@@ -106,7 +106,9 @@ def test_patches_add_grok_subscription_columns() -> None:
     assert "ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT" in joined
     assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key'" in joined
     assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT" in joined
+    assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS oauth_account_id VARCHAR(128)" in joined
     assert "ux_llm_models_tenant_grok_subscription" in joined
+    assert "ux_llm_models_tenant_chatgpt_subscription" in joined
     sql = BASELINE.read_text(encoding="utf-8")
     start = sql.find("CREATE TABLE IF NOT EXISTS llm_models")
     end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
@@ -114,7 +116,9 @@ def test_patches_add_grok_subscription_columns() -> None:
     assert "api_key_encrypted TEXT NOT NULL" in block
     assert "auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key'" in block
     assert "refresh_token_encrypted TEXT" in block
+    assert "oauth_account_id VARCHAR(128)" in block
     assert "ux_llm_models_tenant_grok_subscription" in sql
+    assert "ux_llm_models_tenant_chatgpt_subscription" in sql
 
 
 def test_patches_add_secondary_model_columns() -> None:

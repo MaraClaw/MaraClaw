@@ -28,6 +28,7 @@ _LLM_COLUMNS = (
     "auth_kind",
     "refresh_token_encrypted",
     "token_expires_at",
+    "oauth_account_id",
     "created_at",
     "updated_at",
 )
@@ -84,7 +85,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
     async def get_subscription_for_tenant(
         self, tenant_id: UUID, *, auth_kind: str = "grok_subscription"
     ) -> LLMModelRecord | None:
-        """Return the company Grok subscription row when one exists."""
+        """Return the company subscription row for ``auth_kind`` when one exists."""
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM llm_models "

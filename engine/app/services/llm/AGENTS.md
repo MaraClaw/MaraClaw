@@ -7,7 +7,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - `base.py` defines the abstract `LLMClient`, callback types, and `LLMError`.
 - `types.py` defines shared message/response/stream/tool-call shapes and provider-format conversion helpers.
 - `registry.py` owns `ProviderSpec`, aliases, provider manifests, protocol/client mappings, base URLs, and token-limit helpers.
-- `factory.py` owns `create_llm_client(...)`, `chat_complete(...)`, and `chat_stream(...)`.
+- `factory.py` owns `create_llm_client(...)`, `chat_complete(...)`, and `chat_stream(...)`. Identical configs reuse a cached wrapper (`client_cache.py`, key hashes secrets). HTTP is pooled by timeout in `http_pool.py`; wrapper `close()` detaches and does not tear down the pool.
 - `providers/` contains provider/protocol clients. Read `providers/AGENTS.md` before changing protocol parsing or streaming normalization.
 - `client.py` is now a compatibility/public-contract surface around the split modules; do not move large new provider logic back into it.
 - `caller.py` is the agent orchestration layer. Agent/chat/trigger/websocket flows should enter through `call_agent_llm`, `call_agent_llm_with_tools`, `call_llm`, or `call_llm_with_failover`.
@@ -27,6 +27,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - Preserve streaming normalization for tool-call ids, partial JSON deltas, usage chunks, reasoning/thinking fields, and provider-native message shapes.
 - New providers should be added through `ProviderSpec`/registry plus a provider client class or explicit OpenAI-compatible mapping.
 - Grok (xAI) is registered as `grok` (`xai` / `x-ai` / `x_ai` aliases) on the OpenAI-compatible protocol at `https://api.x.ai/v1`.
+- ChatGPT subscription rows stay on provider `openai` with `auth_kind=chatgpt_subscription`. Tokens are Codex OAuth, not Platform API keys. Engine calls go through `create_fresh_llm_client_from_model` → Codex `/responses` with `chatgpt-account-id`. Stateless tool rounds replay `provider_items` (encrypted reasoning).
 - `ProviderSpec.default_model` is the current flagship API id for the admin Models form (e.g. `grok-4.6`, `gpt-5.6`). Local runtimes may leave it unset.
 
 ## Tool Loop

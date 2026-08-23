@@ -94,6 +94,7 @@ class LLMMessage:
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
     dynamic_content: str | None = None
+    provider_items: list[dict[str, object]] | None = None
 
     def to_openai_format(self) -> OpenAIMessage:
         """Convert to OpenAI format."""
@@ -230,6 +231,7 @@ class LLMResponse:
     tool_calls: list[LLMToolCall] = field(default_factory=list[LLMToolCall])
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
+    provider_items: list[dict[str, object]] | None = None
     finish_reason: str | None = None
     usage: LLMUsage | None = None
     model: str | None = None

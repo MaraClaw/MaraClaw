@@ -22,10 +22,15 @@ from app.core.security import decrypt_data
 from app.dao import llm_model_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
+from app.services.chatgpt_oauth import OPENAI_OAUTH_CLIENT_ID, account_id_from_jwt
+from app.services.chatgpt_subscription import (
+    AUTH_KIND_CHATGPT_SUBSCRIPTION,
+    ensure_fresh_access_token as ensure_chatgpt_token,
+)
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
-from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token
+from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.openclaw_inbox import (
@@ -43,6 +48,7 @@ settings = get_settings()
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 TENCENTDB_BOOTSTRAP_MARKER = ".bootstrap-tencentdb-version"
 XAI_OAUTH_PROFILE_ID = "xai:default"
+OPENAI_OAUTH_PROFILE_ID = "openai:default"
 _guest_config_fingerprints: dict[str, str] = {}
 
 
@@ -102,6 +108,17 @@ def is_grok_subscription(model: LLMModelRecord | None) -> bool:
     return (getattr(model, "auth_kind", None) or "") == AUTH_KIND_GROK_SUBSCRIPTION
 
 
+def is_chatgpt_subscription(model: LLMModelRecord | None) -> bool:
+    return (getattr(model, "auth_kind", None) or "") == AUTH_KIND_CHATGPT_SUBSCRIPTION
+
+
+async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
+    """Refresh a Grok or ChatGPT subscription token when it is about to expire."""
+    if is_chatgpt_subscription(model):
+        return await ensure_chatgpt_token(model)
+    return await ensure_grok_token(model)
+
+
 def _decrypt_model_secret(raw: object) -> str:
     text = str(raw or "").strip()
     if not text:
@@ -139,6 +156,28 @@ def xai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
         "expires": _token_expires_ms(model),
         "clientId": XAI_OAUTH_CLIENT_ID,
     }
+
+
+def openai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
+    """OpenClaw auth-profile payload for a ChatGPT subscription row."""
+    if model is None or not is_chatgpt_subscription(model):
+        return None
+    access = get_model_api_key(model).strip()
+    if not access:
+        return None
+    refresh = _decrypt_model_secret(getattr(model, "refresh_token_encrypted", None))
+    account_id = (getattr(model, "oauth_account_id", None) or "").strip() or account_id_from_jwt(access)
+    payload: JsonObject = {
+        "type": "oauth",
+        "provider": "openai",
+        "access": access,
+        "refresh": refresh,
+        "expires": _token_expires_ms(model),
+        "clientId": OPENAI_OAUTH_CLIENT_ID,
+    }
+    if account_id:
+        payload["accountId"] = account_id
+    return payload
 
 
 class ContainerStatus(TypedDict):
@@ -375,7 +414,7 @@ class AgentManager:
             key_name = guest_provider_env_key(provider)
             if not key_name or key_name in env or not getattr(row, "api_key_encrypted", None):
                 continue
-            if is_grok_subscription(row):
+            if is_grok_subscription(row) or is_chatgpt_subscription(row):
                 continue
             secret = get_model_api_key(row)
             if not secret:
@@ -423,27 +462,39 @@ class AgentManager:
         except sqlite3.Error as exc:
             logger.warning("[OpenClaw] could not write guest auth sqlite for {}: {}", agent_dir.name, exc)
 
-    def _sync_guest_xai_oauth(
+    def _sync_guest_oauth(
         self,
         agent_dir: Path,
         *models: LLMModelRecord | None,
     ) -> None:
-        credential: JsonObject | None = None
+        profiles: JsonObject = {}
+        legacy: JsonObject = {}
         for row in models:
-            credential = xai_oauth_credential(row)
-            if credential is not None:
-                break
-        if credential is None:
+            xai = xai_oauth_credential(row)
+            if xai is not None and XAI_OAUTH_PROFILE_ID not in profiles:
+                profiles[XAI_OAUTH_PROFILE_ID] = xai
+                legacy["xai"] = {
+                    "access": xai["access"],
+                    "refresh": xai["refresh"],
+                    "expires": xai["expires"],
+                    "clientId": xai["clientId"],
+                }
+            openai = openai_oauth_credential(row)
+            if openai is not None and OPENAI_OAUTH_PROFILE_ID not in profiles:
+                profiles[OPENAI_OAUTH_PROFILE_ID] = openai
+                openai_legacy: JsonObject = {
+                    "access": openai["access"],
+                    "refresh": openai["refresh"],
+                    "expires": openai["expires"],
+                    "clientId": openai["clientId"],
+                }
+                account_id = openai.get("accountId")
+                if account_id:
+                    openai_legacy["accountId"] = account_id
+                legacy["openai"] = openai_legacy
+        if not profiles:
             return
-        store: JsonObject = {"version": 1, "profiles": {XAI_OAUTH_PROFILE_ID: credential}}
-        legacy = {
-            "xai": {
-                "access": credential["access"],
-                "refresh": credential["refresh"],
-                "expires": credential["expires"],
-                "clientId": credential["clientId"],
-            }
-        }
+        store: JsonObject = {"version": 1, "profiles": profiles}
         wrote_legacy = self._atomic_write_json(
             agent_dir / "credentials" / "oauth.json", json_object_from(legacy)
         )
@@ -452,7 +503,15 @@ class AgentManager:
         )
         self._upsert_auth_profile_sqlite(agent_dir, store)
         if wrote_legacy or wrote_store:
-            logger.info("[OpenClaw] wrote xAI OAuth profile for guest {}", agent_dir.name)
+            logger.info("[OpenClaw] wrote OAuth profiles for guest {}", agent_dir.name)
+
+    def _sync_guest_xai_oauth(
+        self,
+        agent_dir: Path,
+        *models: LLMModelRecord | None,
+    ) -> None:
+        """Compatibility alias. Writes Grok and ChatGPT OAuth profiles."""
+        self._sync_guest_oauth(agent_dir, *models)
 
     def _guest_config_fingerprint(
         self,
@@ -557,11 +616,16 @@ class AgentManager:
         env = self._collect_provider_env(model, secondary, fallback)
         env["MARACLAW_API_BASE"] = guest_engine_base_url()
         config["env"] = {"vars": env}
+        auth_profiles: JsonObject = {}
+        auth_order: JsonObject = {}
         if any(is_grok_subscription(row) for row in (selected, model, secondary, fallback)):
-            config["auth"] = {
-                "profiles": {XAI_OAUTH_PROFILE_ID: {"provider": "xai", "mode": "oauth"}},
-                "order": {"xai": [XAI_OAUTH_PROFILE_ID]},
-            }
+            auth_profiles[XAI_OAUTH_PROFILE_ID] = {"provider": "xai", "mode": "oauth"}
+            auth_order["xai"] = [XAI_OAUTH_PROFILE_ID]
+        if any(is_chatgpt_subscription(row) for row in (selected, model, secondary, fallback)):
+            auth_profiles[OPENAI_OAUTH_PROFILE_ID] = {"provider": "openai", "mode": "oauth"}
+            auth_order["openai"] = [OPENAI_OAUTH_PROFILE_ID]
+        if auth_profiles:
+            config["auth"] = {"profiles": auth_profiles, "order": auth_order}
 
         linkup_skill_env: JsonObject = {}
         if linkup_proxy:

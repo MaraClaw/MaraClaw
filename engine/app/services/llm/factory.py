@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 
 from app.services.llm.base import ChunkCallback, LLMClient, ThinkingCallback, ToolDefinition
+from app.services.llm.client_cache import cache_get, cache_put, fingerprint_secret
 from app.services.llm.providers import AnthropicClient, GeminiClient, OpenAICompatibleClient, OpenAIResponsesClient
 from app.services.llm.registry import (
     PROVIDER_CLIENTS,
@@ -48,40 +49,53 @@ def create_llm_client(
     base_url: str | None = None,
     timeout: float = 120.0,
 ) -> LLMClient:
-    """Create an LLM client for the given provider."""
+    """Create an LLM client for the given provider.
+
+    Wrappers with the same provider, model, endpoint, timeout, and key are
+    reused. HTTP connections live in a process-wide pool, so ``close()`` on a
+    wrapper does not drop TLS reuse for the next caller.
+    """
     normalized_provider = normalize_provider(provider)
     spec = get_provider_spec(normalized_provider)
     final_base_url = get_provider_base_url(normalized_provider, base_url)
+    cache_key = (
+        "factory",
+        normalized_provider,
+        model,
+        final_base_url or "",
+        timeout,
+        fingerprint_secret(api_key),
+    )
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     if spec and spec.protocol == "anthropic":
-        return AnthropicClient(
+        built: LLMClient = AnthropicClient(
             api_key=api_key,
             base_url=final_base_url,
             model=model,
             timeout=timeout,
         )
-
-    if spec and spec.protocol == "openai_responses":
-        return OpenAIResponsesClient(
-            api_key=api_key,
-            base_url=final_base_url,
-            model=model,
-            timeout=timeout,
-            supports_tool_choice=spec.supports_tool_choice,
-        )
-
-    if spec and spec.protocol == "gemini":
-        return GeminiClient(
+    elif spec and spec.protocol == "openai_responses":
+        built = OpenAIResponsesClient(
             api_key=api_key,
             base_url=final_base_url,
             model=model,
             timeout=timeout,
             supports_tool_choice=spec.supports_tool_choice,
         )
-
-    if normalized_provider in PROVIDER_CLIENTS:
+    elif spec and spec.protocol == "gemini":
+        built = GeminiClient(
+            api_key=api_key,
+            base_url=final_base_url,
+            model=model,
+            timeout=timeout,
+            supports_tool_choice=spec.supports_tool_choice,
+        )
+    elif normalized_provider in PROVIDER_CLIENTS:
         supports_tool_choice = normalized_provider in TOOL_CHOICE_PROVIDERS
-        return OpenAICompatibleClient(
+        built = OpenAICompatibleClient(
             api_key=api_key,
             base_url=final_base_url,
             model=model,
@@ -89,15 +103,16 @@ def create_llm_client(
             supports_tool_choice=supports_tool_choice,
             supports_cache_control=normalized_provider == "qwen",
         )
-
-    return OpenAICompatibleClient(
-        api_key=api_key,
-        base_url=final_base_url or PROVIDER_URLS["openai"],
-        model=model,
-        timeout=timeout,
-        supports_tool_choice=True,
-        supports_cache_control=False,
-    )
+    else:
+        built = OpenAICompatibleClient(
+            api_key=api_key,
+            base_url=final_base_url or PROVIDER_URLS["openai"],
+            model=model,
+            timeout=timeout,
+            supports_tool_choice=True,
+            supports_cache_control=False,
+        )
+    return cache_put(cache_key, built)
 
 
 async def chat_complete(

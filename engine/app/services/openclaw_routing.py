@@ -101,7 +101,7 @@ async def enqueue_openclaw_message(
         bundle = await load_agent_model_bundle(agent)
     if not _bundle_usable(bundle):
         raise NoCompanyModelError(
-            "This company has no model assigned. Connect a Grok subscription or add a model in Admin → Models, "
+            "This company has no model assigned. Connect a Grok or ChatGPT subscription or add a model in Admin → Models, "
             + "then set it as primary."
         )
     mark_ensured(agent)

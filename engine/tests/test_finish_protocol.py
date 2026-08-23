@@ -177,7 +177,10 @@ async def test_call_llm_requires_finish_tool_to_stop(monkeypatch):
             ]
         ),
     )
-    monkeypatch.setattr(caller, "create_llm_client", lambda **_kwargs: fake_client)
+    async def _fresh_client(model, **_kwargs):
+        return model, fake_client
+
+    monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", _fresh_client)
     monkeypatch.setattr(caller, "record_token_usage", lambda *_args, **_kwargs: _async_return(None))
 
     chunks = []
@@ -235,7 +238,10 @@ async def test_invalid_finish_does_not_stop_and_is_returned_as_tool_error(monkey
             ]
         ),
     )
-    monkeypatch.setattr(caller, "create_llm_client", lambda **_kwargs: fake_client)
+    async def _fresh_client(model, **_kwargs):
+        return model, fake_client
+
+    monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", _fresh_client)
     monkeypatch.setattr(caller, "record_token_usage", lambda *_args, **_kwargs: _async_return(None))
 
     result = await caller.call_llm(
@@ -267,7 +273,10 @@ async def test_skip_tools_still_exposes_finish(monkeypatch):
         "app.services.agent_context.build_agent_context",
         lambda *_args, **_kwargs: _async_return(("static", "dynamic")),
     )
-    monkeypatch.setattr(caller, "create_llm_client", lambda **_kwargs: fake_client)
+    async def _fresh_client(model, **_kwargs):
+        return model, fake_client
+
+    monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", _fresh_client)
     monkeypatch.setattr(caller, "record_token_usage", lambda *_args, **_kwargs: _async_return(None))
 
     result = await caller.call_llm(
@@ -349,7 +358,10 @@ async def test_mid_loop_token_limit_checking(monkeypatch):
         ),
     )
     monkeypatch.setattr(caller, "execute_tool", lambda *_args, **_kwargs: _async_return("Success"))
-    monkeypatch.setattr(caller, "create_llm_client", lambda **_kwargs: fake_client)
+    async def _fresh_client(model, **_kwargs):
+        return model, fake_client
+
+    monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", _fresh_client)
 
     token_records = []
 

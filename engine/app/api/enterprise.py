@@ -51,6 +51,15 @@ from app.schemas.schemas import (
     UserInviteRequest,
 )
 from app.services.autonomy_service import autonomy_service
+from app.services.chatgpt_subscription import (
+    AUTH_KIND_CHATGPT_SUBSCRIPTION,
+    ChatGPTSubscriptionRefreshOut,
+    ChatGPTSubscriptionStartOut,
+    ChatGPTSubscriptionStatusOut,
+    chatgpt_subscription_status,
+    refresh_chatgpt_subscription_for_admin,
+    start_chatgpt_subscription_handoff,
+)
 from app.services.enterprise_llm import (
     assert_can_manage_model,
     assert_llm_pool_admin,
@@ -68,7 +77,13 @@ from app.services.grok_subscription import (
     refresh_grok_subscription_for_admin,
     start_grok_subscription_handoff,
 )
-from app.services.llm import LLMMessage, create_llm_client, get_model_api_key, get_provider_manifest
+from app.services.llm import (
+    LLMMessage,
+    create_fresh_llm_client_from_model,
+    create_llm_client,
+    get_model_api_key,
+    get_provider_manifest,
+)
 from app.services.org_sync_adapter import derive_member_department_paths
 from app.services.platform_service import platform_service
 from app.services.sso_service import sso_service
@@ -133,6 +148,7 @@ async def probe_llm_model(
     import time
 
     assert_llm_pool_admin(current_user)
+    existing = None
     if data.model_id:
         try:
             existing = await llm_model_dao.get(uuid.UUID(data.model_id))
@@ -140,23 +156,34 @@ async def probe_llm_model(
             existing = None
         if existing:
             assert_can_manage_model(current_user, existing)
+            from app.services.chatgpt_subscription import (
+                ensure_fresh_access_token as ensure_chatgpt_token,
+            )
             from app.services.grok_subscription import ensure_fresh_access_token
 
-            _ = await ensure_fresh_access_token(existing)
+            if getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+                existing = await ensure_chatgpt_token(existing)
+            else:
+                existing = await ensure_fresh_access_token(existing)
     api_key = data.api_key if data.api_key and not data.api_key.startswith("****") else None
-    if not api_key and data.model_id:
+    if not api_key and existing is not None:
+        api_key = get_model_api_key(existing)
+    elif not api_key and data.model_id:
         api_key = await _load_llm_test_api_key(data.model_id)
     if not api_key:
         return {"success": False, "latency_ms": 0, "error": "API Key is required"}
 
     start = time.time()
     try:
-        client = create_llm_client(
-            provider=data.provider,
-            model=data.model,
-            api_key=api_key,
-            base_url=data.base_url or None,
-        )
+        if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+            existing, client = await create_fresh_llm_client_from_model(existing)
+        else:
+            client = create_llm_client(
+                provider=data.provider,
+                model=data.model,
+                api_key=api_key,
+                base_url=data.base_url or None,
+            )
         response = await client.complete(
             messages=[LLMMessage(role="user", content="Say 'ok' and nothing else.")],
             max_tokens=16,
@@ -189,11 +216,34 @@ async def get_grok_subscription_status(
     return await grok_subscription_status(current_user, session_id)
 
 
+@router.post("/llm-models/chatgpt-subscription/start", response_model=ChatGPTSubscriptionStartOut)
+async def start_chatgpt_subscription(
+    tenant_id: str | None = None,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> ChatGPTSubscriptionStartOut:
+    """Start a ChatGPT Plus / Pro / Team device-code handoff. Tokens never leave the server."""
+    assert_llm_pool_admin(current_user)
+    return await start_chatgpt_subscription_handoff(current_user, tenant_id)
+
+
+@router.get("/llm-models/chatgpt-subscription/status", response_model=ChatGPTSubscriptionStatusOut)
+async def get_chatgpt_subscription_status(
+    session_id: str,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> ChatGPTSubscriptionStatusOut:
+    """Poll a pending ChatGPT subscription handoff. Response never includes tokens."""
+    assert_llm_pool_admin(current_user)
+    return await chatgpt_subscription_status(current_user, session_id)
+
+
 @router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)
 async def refresh_grok_subscription(
     model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)
-) -> GrokSubscriptionRefreshOut:
-    """Refresh a stored Grok subscription without a new browser login."""
+) -> GrokSubscriptionRefreshOut | ChatGPTSubscriptionRefreshOut:
+    """Refresh a stored Grok or ChatGPT subscription without a new browser login."""
+    model = await llm_model_dao.get(model_id)
+    if model is not None and getattr(model, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+        return await refresh_chatgpt_subscription_for_admin(current_user, model_id)
     return await refresh_grok_subscription_for_admin(current_user, model_id)
 
 
@@ -434,9 +484,15 @@ async def update_llm_model(
         updates["model"] = data.model
     if data.label is not None:
         updates["label"] = data.label
-    if hasattr(data, "base_url") and data.base_url is not None:
+    subscription = getattr(model, "auth_kind", "api_key") in {"grok_subscription", "chatgpt_subscription"}
+    if hasattr(data, "base_url") and data.base_url is not None and not subscription:
         updates["base_url"] = data.base_url
-    if data.api_key and data.api_key.strip() and not data.api_key.startswith("****"):
+    if (
+        not subscription
+        and data.api_key
+        and data.api_key.strip()
+        and not data.api_key.startswith("****")
+    ):
         updates["api_key_encrypted"] = encrypt_data(data.api_key.strip(), settings.SECRET_KEY)
     if data.temperature is not None:
         updates["temperature"] = data.temperature
