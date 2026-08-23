@@ -391,13 +391,15 @@ async def _classify_with_llm(
     history: list[OpenAIMessage] | None,
     agent_id: uuid.UUID | None,
 ) -> tuple[Complexity | None, int, int]:
-    from app.services.llm.utils import create_llm_client_from_model
+    from app.services.llm.utils import create_fresh_llm_client_from_model
     from app.services.token_tracker import extract_token_usage, record_token_usage
 
     started = time.perf_counter()
     tokens = 0
     try:
-        client = create_llm_client_from_model(secondary, timeout=CLASSIFIER_TIMEOUT_SECONDS)
+        _, client = await create_fresh_llm_client_from_model(
+            secondary, timeout=CLASSIFIER_TIMEOUT_SECONDS
+        )
     except Exception as exc:
         logger.warning("[LLM route] classifier client failed: {}", exc)
         return None, int((time.perf_counter() - started) * 1000), 0

@@ -68,6 +68,28 @@ def get_model_api_key(model: _EncryptedModel) -> str:
         return raw
 
 
+async def ensure_fresh_pool_model(model: _EncryptedModel) -> _EncryptedModel:
+    """Refresh a Grok or ChatGPT subscription row when the access token is stale."""
+    kind = getattr(model, "auth_kind", "") or ""
+    if kind == "chatgpt_subscription":
+        from app.services.chatgpt_subscription import ensure_fresh_access_token
+
+        return await ensure_fresh_access_token(model)  # type: ignore[arg-type]
+    if kind == "grok_subscription":
+        from app.services.grok_subscription import ensure_fresh_access_token
+
+        return await ensure_fresh_access_token(model)  # type: ignore[arg-type]
+    return model
+
+
+async def create_fresh_llm_client_from_model(
+    model: _EncryptedModel, *, timeout: float | None = None  # noqa: ASYNC109
+) -> tuple[_EncryptedModel, LLMClient]:
+    """Refresh subscription tokens, then build (or reuse) a client."""
+    fresh = await ensure_fresh_pool_model(model)
+    return fresh, create_llm_client_from_model(fresh, timeout=timeout)
+
+
 def create_llm_client_from_model(model: _EncryptedModel, *, timeout: float | None = None) -> LLMClient:
     """Build a client from a pool row. ChatGPT subscription uses Codex Responses."""
     from app.services.llm.client_cache import cache_get, cache_put, fingerprint_secret
@@ -312,6 +334,8 @@ __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "LLMError",
     "create_llm_client",
     "create_llm_client_from_model",
+    "create_fresh_llm_client_from_model",
+    "ensure_fresh_pool_model",
     "chat_complete",
     "chat_stream",
     "ProviderSpec",

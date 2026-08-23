@@ -328,31 +328,39 @@ async def test_refresh_rejects_member_and_foreign_tenant(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_probe_uses_codex_responses_client(monkeypatch):
-    existing = _model(api_key_encrypted="enc-sub-secret", oauth_account_id="acct-live")
+    existing = _model(api_key_encrypted=_ACCESS, oauth_account_id="acct-live")
     monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=existing))
-    monkeypatch.setattr(enterprise_api, "get_model_api_key", lambda _model: _ACCESS)
     monkeypatch.setattr(
         "app.services.chatgpt_subscription.ensure_fresh_access_token",
         AsyncMock(return_value=existing),
     )
-
     captured: dict[str, Any] = {}
 
-    class FakeClient:
-        async def complete(self, messages, max_tokens=16):
-            _ = messages, max_tokens
-            return SimpleNamespace(content="ok")
+    class FakeResponse:
+        status_code = 200
+        text = ""
 
-        async def close(self):
-            return None
+        def json(self):
+            return {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "output_text": "ok",
+            }
 
-    def fake_from_model(model, *, timeout=None):
-        captured["auth_kind"] = getattr(model, "auth_kind", None)
-        captured["timeout"] = timeout
-        return FakeClient()
+    class FakeHttpx:
+        is_closed = False
 
-    monkeypatch.setattr(enterprise_api, "create_llm_client_from_model", fake_from_model)
-    monkeypatch.setattr(enterprise_api, "create_llm_client", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not use chat-completions")))
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.llm.http_pool.acquire_httpx", lambda _timeout: FakeHttpx())
+    monkeypatch.setattr(
+        enterprise_api,
+        "create_llm_client",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not use chat-completions")),
+    )
 
     result = await enterprise_api.probe_llm_model(
         enterprise_api.LLMTestRequest(
@@ -364,7 +372,12 @@ async def test_probe_uses_codex_responses_client(monkeypatch):
     )
     assert result["success"] is True
     assert result["reply"] == "ok"
-    assert captured["auth_kind"] == "chatgpt_subscription"
+    assert str(captured["url"]).endswith("/responses")
+    assert "codex" in str(captured["url"])
+    assert captured["json"]["store"] is False
+    assert "temperature" not in captured["json"]
+    assert "max_output_tokens" not in captured["json"]
+    assert captured["headers"]["chatgpt-account-id"] == "acct-live"
 
 
 @pytest.mark.asyncio
@@ -505,3 +518,85 @@ def test_create_llm_client_from_model_uses_codex_responses():
     payload = client._build_payload([], None, None, 16)
     assert payload["store"] is False
     assert "max_output_tokens" not in payload
+    assert "temperature" not in payload
+    effort_payload = client._build_payload(
+        [], None, None, 16, llm_provider="openai", reasoning_effort="high"
+    )
+    assert effort_payload.get("reasoning") == {"effort": "high"}
+    assert "reasoning_effort" not in effort_payload
+
+    parsed = client._parse_response_data(
+        {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "encrypted_content": "enc-reason",
+                    "summary": [{"type": "summary_text", "text": "think"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "search",
+                    "arguments": "{}",
+                },
+            ]
+        }
+    )
+    from app.services.llm.types import LLMMessage
+
+    follow = client._build_payload(
+        [
+            LLMMessage(
+                role="assistant",
+                tool_calls=parsed.tool_calls,
+                provider_items=parsed.provider_items,
+            ),
+            LLMMessage(role="tool", tool_call_id="call_1", content="ok"),
+        ],
+        None,
+        None,
+        16,
+    )
+    assert follow["input"][0]["type"] == "reasoning"
+    assert follow["input"][0]["encrypted_content"] == "enc-reason"
+    assert follow["input"][1]["type"] == "function_call"
+    assert follow["input"][2]["type"] == "function_call_output"
+
+
+@pytest.mark.asyncio
+async def test_create_fresh_refreshes_expired_chatgpt_row(monkeypatch):
+    expired = _model(token_expires_at=_NOW - timedelta(minutes=1))
+    refreshed = _model(api_key_encrypted="enc-new", oauth_account_id="acct-live")
+    ensure = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr("app.services.chatgpt_subscription.ensure_fresh_access_token", ensure)
+    from app.services.llm.utils import create_fresh_llm_client_from_model
+
+    model, client = await create_fresh_llm_client_from_model(expired, timeout=9)
+    ensure.assert_awaited_once()
+    assert model is refreshed
+    assert type(client).__name__ == "OpenAIResponsesClient"
+
+
+@pytest.mark.asyncio
+async def test_update_ignores_api_key_on_chatgpt_subscription(monkeypatch):
+    existing = _model()
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=existing))
+    captured: dict[str, Any] = {}
+
+    async def persist(*, db_obj, obj_in):
+        captured.update(obj_in)
+        return existing
+
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "update", persist)
+    monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=None))
+    from app.schemas.schemas import LLMModelUpdate
+
+    await enterprise_api.update_llm_model(
+        existing.id,
+        LLMModelUpdate(label="ChatGPT Plus", api_key="sk-should-not-write", base_url="https://evil.example"),
+        current_user=_user(),
+    )
+    assert "api_key_encrypted" not in captured
+    assert "base_url" not in captured
+    assert captured["label"] == "ChatGPT Plus"

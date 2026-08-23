@@ -36,7 +36,7 @@ from .failover import FailoverErrorType, classify_error
 from .finish import FINISH_PROTOCOL_REMINDER, FINISH_TOOL_DEFINITION, find_finish_call, parse_tool_arguments
 from .turn import TurnContext
 from .types import LLMContentPart, LLMResponse, LLMToolCall, OpenAIMessage, ToolPayload
-from .utils import LLMMessage, create_llm_client_from_model, get_max_tokens
+from .utils import LLMMessage, create_fresh_llm_client_from_model, get_max_tokens
 
 # NOTE: agent_tools imports are deferred to function bodies to avoid circular
 # import: agent_tools → llm.finish → llm/__init__ → caller → agent_tools
@@ -570,7 +570,7 @@ async def call_llm(
 
     # Create the unified LLM client
     try:
-        client = create_llm_client_from_model(model, timeout=_get_model_timeout(model))
+        model, client = await create_fresh_llm_client_from_model(model, timeout=_get_model_timeout(model))
     except Exception as e:
         return f"[Error] Failed to create LLM client: {e}"
 
@@ -678,6 +678,7 @@ async def call_llm(
                     content=response.content or None,
                     tool_calls=sanitized_tool_calls,
                     reasoning_content=response.reasoning_content,
+                    provider_items=response.provider_items,
                 )
             )
             api_messages.append(
@@ -696,6 +697,7 @@ async def call_llm(
                 content=response.content or None,
                 tool_calls=sanitized_tool_calls,
                 reasoning_content=response.reasoning_content,
+                provider_items=response.provider_items,
             )
         )
 
@@ -1022,7 +1024,9 @@ async def call_agent_llm_with_tools(
         _unsaved_usage = TokenUsage()
         tool_executed = False
         try:
-            client = create_llm_client_from_model(model, timeout=_get_model_timeout(model))
+            model, client = await create_fresh_llm_client_from_model(
+                model, timeout=_get_model_timeout(model)
+            )
 
             max_tokens = get_max_tokens(model.provider, model.model, getattr(model, "max_output_tokens", None))
 
@@ -1085,6 +1089,7 @@ async def call_agent_llm_with_tools(
                             content=response.content or None,
                             tool_calls=sanitized_tool_calls,
                             reasoning_content=response.reasoning_content,
+                            provider_items=response.provider_items,
                         )
                     )
                     api_messages.append(
@@ -1102,6 +1107,7 @@ async def call_agent_llm_with_tools(
                         content=response.content or None,
                         tool_calls=sanitized_tool_calls,
                         reasoning_content=response.reasoning_content,
+                        provider_items=response.provider_items,
                     )
                 )
 

@@ -79,8 +79,8 @@ from app.services.grok_subscription import (
 )
 from app.services.llm import (
     LLMMessage,
+    create_fresh_llm_client_from_model,
     create_llm_client,
-    create_llm_client_from_model,
     get_model_api_key,
     get_provider_manifest,
 )
@@ -176,7 +176,7 @@ async def probe_llm_model(
     start = time.time()
     try:
         if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
-            client = create_llm_client_from_model(existing)
+            existing, client = await create_fresh_llm_client_from_model(existing)
         else:
             client = create_llm_client(
                 provider=data.provider,

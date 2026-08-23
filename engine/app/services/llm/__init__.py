@@ -32,8 +32,10 @@ from .caller import (
 from .client import LLMClient, LLMError, LLMMessage, LLMResponse
 from .failover import FailoverErrorType, classify_error
 from .utils import (
+    create_fresh_llm_client_from_model,
     create_llm_client,
     create_llm_client_from_model,
+    ensure_fresh_pool_model,
     get_max_tokens,
     get_model_api_key,
     get_provider_base_url,
@@ -55,6 +57,8 @@ __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "LLMMessage",
     "create_llm_client",
     "create_llm_client_from_model",
+    "create_fresh_llm_client_from_model",
+    "ensure_fresh_pool_model",
     "get_max_tokens",
     "get_model_api_key",
     "get_provider_base_url",

@@ -291,10 +291,10 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 
         # Call LLM with tools using unified client
         from app.services.agent_tools import execute_tool, get_agent_tools_for_llm
-        from app.services.llm import LLMError, LLMMessage, create_llm_client_from_model, get_max_tokens
+        from app.services.llm import LLMError, LLMMessage, create_fresh_llm_client_from_model, get_max_tokens
 
         try:
-            client = create_llm_client_from_model(
+            model, client = await create_fresh_llm_client_from_model(
                 model, timeout=float(model_request_timeout or 120.0)
             )
         except Exception as e:
@@ -381,6 +381,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                             for tool_call_id, _, function in tool_call_parts
                         ],
                         reasoning_content=response.reasoning_content,
+                        provider_items=response.provider_items,
                     )
                 )
 
@@ -668,7 +669,7 @@ async def run_agent_oneshot(
         from app.services.llm import (
             LLMError,
             LLMMessage,
-            create_llm_client_from_model,
+            create_fresh_llm_client_from_model,
             get_max_tokens,
         )
         from app.services.token_tracker import (
@@ -679,7 +680,7 @@ async def run_agent_oneshot(
         )
 
         try:
-            client = create_llm_client_from_model(
+            model, client = await create_fresh_llm_client_from_model(
                 model, timeout=float(model_request_timeout or 120.0)
             )
         except Exception as e:
@@ -767,6 +768,7 @@ async def run_agent_oneshot(
                             for tool_call_id, _, function in tool_call_parts
                         ],
                         reasoning_content=response.reasoning_content,
+                        provider_items=response.provider_items,
                     )
                 )
 
