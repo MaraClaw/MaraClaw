@@ -10,16 +10,17 @@ Inbound office-document parsing. One local `anydoc` (`firecrawl-anydoc`) integra
 - `decode_text_bytes` / `is_plain_text_document` / `normalize_markdown` / `format_parse_failure` — local text + typed messages
 - `needs_extraction` / `OFFICE_EXTENSIONS` — office only (not CSV/HTML/Markdown)
 
-Do not import `anydoc` from routes or tool handlers. Catch `DocumentParseError` subclasses. Prove the wheel with `scripts/verify_anydoc.py`.
+Do not import `anydoc` from routes or tool handlers. Catch `DocumentParseError` subclasses. Prove the wheel with `scripts/verify_anydoc.py` (also run during the production image build).
 
 ## Callers
 
-- Chat upload: `app/api/upload.py` (`convert_document_isolated`)
-- Agent + enterprise sidecars: `app/api/files.py` `_write_office_sidecar` (isolated). DOCX/PPTX preview text via isolated convert. XLSX `sheets` stay `openpyxl`.
-- `read_document`: `agent_tool_exec/document_reading.py` + `documents.py`
+- Chat upload: `app/api/upload.py` (`convert_document_isolated`). Bounded read. Typed extract failures.
+- Agent + enterprise sidecars: `app/api/files.py` `_persist_office_sidecar` (isolated). Names the `.md` from the original filename, not `ensure_local_path` (S3 temp stems). Does not overwrite an existing `{stem}.md`. Preview reads companions from storage, not from the materialized temp path.
+- Preview: companion `.md` first (no parser slot). DOCX/PPTX live text via isolated convert, capped. XLSX `sheets` via isolated `openpyxl`; `text` comes from sheets or companion, not a second anydoc pass.
+- `read_document`: storage bytes + isolated convert. Does **not** go through the 10 MiB temp-workspace materialize. Enterprise `enterprise_info/` uses `enterprise_info_{tenant_id}`.
 
-Outbound CSV/HTML/Markdown generation stays in `document_conversion/`. XLSX preview `sheets` stay on `openpyxl`. PDF preview stays a download URL.
+Outbound CSV/HTML/Markdown generation stays in `document_conversion/`. PDF preview stays a download URL.
 
 ## Bounds
 
-50 MiB input, 2M-char output (callers may request less; `read_document` caps at 20_000), 25s timeout, 2 concurrent workers. Child process is killed on timeout; temp files are always removed.
+50 MiB input (uploads and `read_document`), 2M-char parser output (callers may request less; `read_document` caps at 20_000; preview caps at 8_000), 5s slot wait + 25s parse, 2 concurrent workers. Child is process-group killed on timeout; permit is released only after the child is reaped. Temp files are always removed. Isolation is crash/timeout containment, not a jail.

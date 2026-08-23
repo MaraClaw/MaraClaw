@@ -80,6 +80,9 @@ COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 # Copy application code
 COPY --chown=maraclaw:maraclaw . .
 
+# Prove firecrawl-anydoc imports and converts in this image (not host-only).
+RUN python /app/scripts/verify_anydoc.py
+
 # SetUID on bwrap for hosts without unprivileged user namespaces (older kernels,
 # user.max_user_namespaces=0). Guest image is Debian 13, but the *host kernel*
 # still governs namespace support. Pair with --unshare-user-try in code.

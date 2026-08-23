@@ -4,7 +4,7 @@ Root-level `test_*.py` (~160 files). No shared `conftest.py`. Shared helper: `ag
 
 Pytest has no `testpaths`, so it also collects `app/scripts/test_cleanup_duplicate_feishu_users.py`. Repo-root `test_sandbox_config.py` is a print script, not a pytest module. OpenClaw node-pin tests need **host** Node `v26.7.0`; this checkout has no CI Node service. Guest image is `node:26.7.0-bookworm-slim`; sandbox docker is `node:26.7.0-slim`. `openclaw_officecli_smoke_probe.py` asserts container `v26.7.0`. The 90% coverage fail-under gate is in `scripts/test.sh`, not default `addopts`.
 
-Inbound office parse: `test_document_parser.py` + `test_document_parser_routes.py` + binary fixtures in `fixtures/anydoc/` (supported / malformed / encrypted / resource-limited / scanned). Do not mock `anydoc` for those cases.
+Inbound office parse: `test_document_parser.py` + `test_document_parser_routes.py` + binary fixtures in `fixtures/anydoc/` (supported / malformed / encrypted / resource-limited / scanned). Do not mock `anydoc` for those cases. Storage-backed `read_document` (enterprise + 10–50 MiB) is covered in the route file.
 
 ## Commands
 
