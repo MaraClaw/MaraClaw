@@ -102,6 +102,9 @@ def serialize_llm_model(
     out.is_fallback = fallback_model_id is not None and model.id == fallback_model_id
     out.is_secondary = secondary_model_id is not None and model.id == secondary_model_id
     if is_admin:
+        if is_subscription_row(model):
+            out.api_key_masked = ""
+            return out
         key = get_model_api_key(model)
         out.api_key_masked = f"****{key[-4:]}" if len(key) > 4 else "****"
         return out

@@ -183,7 +183,7 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
 
     with patch.object(pool, "get_model_api_key", return_value="xai-access-LIVE"):
         admin = pool.serialize_llm_model(created, is_admin=True, default_model_id=None)
-    assert admin.api_key_masked == "****LIVE"
+    assert admin.api_key_masked == ""
     assert admin.auth_kind == "grok_subscription"
     member = pool.serialize_llm_model(created, is_admin=False, default_model_id=None)
     assert member.api_key_masked == ""

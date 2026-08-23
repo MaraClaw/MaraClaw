@@ -177,7 +177,6 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         from app.dao.agent_dao import agent_dao
         from app.dao.llm_dao import llm_model_dao
         from app.dao.notification_dao import notification_dao
-        from app.services.llm import get_model_api_key
 
         # ── Phase 1: Read all context from DB (short transactions via DAOs) ──
         agent_name = ""
@@ -185,9 +184,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         agent_creator_id = None
         agent_is_private = False
         model_provider = ""
-        model_api_key = ""
         model_model = ""
-        model_base_url = None
         model_temperature = None
         model_max_output_tokens = None
         model_request_timeout = None
@@ -216,9 +213,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         agent_creator_id = agent.creator_id
         agent_is_private = (getattr(agent, "access_mode", None) or "company") != "company"
         model_provider = model.provider
-        model_api_key = get_model_api_key(model)
         model_model = model.model
-        model_base_url = model.base_url
         model_temperature = model.temperature
         model_max_output_tokens = getattr(model, "max_output_tokens", None)
         model_request_timeout = getattr(model, "request_timeout", None)
@@ -296,15 +291,11 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 
         # Call LLM with tools using unified client
         from app.services.agent_tools import execute_tool, get_agent_tools_for_llm
-        from app.services.llm import LLMError, LLMMessage, create_llm_client, get_max_tokens, get_model_api_key
+        from app.services.llm import LLMError, LLMMessage, create_llm_client_from_model, get_max_tokens
 
         try:
-            client = create_llm_client(
-                provider=model_provider,
-                api_key=model_api_key,
-                model=model_model,
-                base_url=model_base_url,
-                timeout=float(model_request_timeout or 120.0),
+            client = create_llm_client_from_model(
+                model, timeout=float(model_request_timeout or 120.0)
             )
         except Exception as e:
             logger.error(f"Failed to create LLM client: {e}")
@@ -629,16 +620,13 @@ async def run_agent_oneshot(
     try:
         from app.dao.agent_dao import agent_dao
         from app.dao.llm_dao import llm_model_dao
-        from app.services.llm import get_model_api_key
 
         # ── Phase 1: Read agent + model config ─────────────────────────────────
         agent_name = ""
         agent_role = ""
         agent_creator_id = None
         model_provider = ""
-        model_api_key = ""
         model_model = ""
-        model_base_url = None
         model_temperature = None
         model_max_output_tokens = None
         model_request_timeout = None
@@ -666,9 +654,7 @@ async def run_agent_oneshot(
         agent_role = agent.role_description or ""
         agent_creator_id = agent.creator_id
         model_provider = model.provider
-        model_api_key = get_model_api_key(model)
         model_model = model.model
-        model_base_url = model.base_url
         model_temperature = model.temperature
         model_max_output_tokens = getattr(model, "max_output_tokens", None)
         model_request_timeout = getattr(model, "request_timeout", None)
@@ -682,7 +668,7 @@ async def run_agent_oneshot(
         from app.services.llm import (
             LLMError,
             LLMMessage,
-            create_llm_client,
+            create_llm_client_from_model,
             get_max_tokens,
         )
         from app.services.token_tracker import (
@@ -693,12 +679,8 @@ async def run_agent_oneshot(
         )
 
         try:
-            client = create_llm_client(
-                provider=model_provider,
-                api_key=model_api_key,
-                model=model_model,
-                base_url=model_base_url,
-                timeout=float(model_request_timeout or 120.0),
+            client = create_llm_client_from_model(
+                model, timeout=float(model_request_timeout or 120.0)
             )
         except Exception as e:
             msg = f"Failed to initialise the LLM client: {e}"

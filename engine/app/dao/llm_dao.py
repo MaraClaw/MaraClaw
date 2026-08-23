@@ -28,6 +28,7 @@ _LLM_COLUMNS = (
     "auth_kind",
     "refresh_token_encrypted",
     "token_expires_at",
+    "oauth_account_id",
     "created_at",
     "updated_at",
 )

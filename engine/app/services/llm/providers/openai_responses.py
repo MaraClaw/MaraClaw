@@ -48,15 +48,21 @@ class OpenAIResponsesClient(LLMClient):
         model: str | None = None,
         timeout: float = 120.0,
         supports_tool_choice: bool = True,
+        extra_headers: dict[str, str] | None = None,
+        stateless: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
         self.supports_tool_choice: bool = supports_tool_choice
+        self.extra_headers: dict[str, str] = extra_headers or {}
+        self.stateless: bool = stateless
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
+        from app.services.llm.http_pool import acquire_httpx
+
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, proxy=None)
+            self._client = acquire_httpx(self.timeout)
         return self._client
 
     @override
@@ -64,6 +70,7 @@ class OpenAIResponsesClient(LLMClient):
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
+            **self.extra_headers,
         }
 
     def _normalize_base_url(self) -> str:
@@ -238,8 +245,11 @@ class OpenAIResponsesClient(LLMClient):
             "temperature": temperature,
             "stream": stream,
         }
+        if self.stateless:
+            payload["store"] = False
+            payload["include"] = ["reasoning.encrypted_content"]
 
-        if max_tokens:
+        if max_tokens and not self.stateless:
             payload["max_output_tokens"] = max_tokens
 
         converted_tools = self._convert_tools(tools)
@@ -423,6 +433,5 @@ class OpenAIResponsesClient(LLMClient):
 
     @override
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+        """Detach this wrapper. Shared HTTP transports stay open."""
+        self._client = None

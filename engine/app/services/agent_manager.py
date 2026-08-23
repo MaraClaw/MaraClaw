@@ -166,7 +166,7 @@ def openai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
     if not access:
         return None
     refresh = _decrypt_model_secret(getattr(model, "refresh_token_encrypted", None))
-    account_id = account_id_from_jwt(access)
+    account_id = (getattr(model, "oauth_account_id", None) or "").strip() or account_id_from_jwt(access)
     payload: JsonObject = {
         "type": "oauth",
         "provider": "openai",

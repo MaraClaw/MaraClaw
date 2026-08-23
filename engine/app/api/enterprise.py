@@ -57,7 +57,6 @@ from app.services.chatgpt_subscription import (
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
     chatgpt_subscription_status,
-    probe_chatgpt_subscription,
     refresh_chatgpt_subscription_for_admin,
     start_chatgpt_subscription_handoff,
 )
@@ -78,7 +77,13 @@ from app.services.grok_subscription import (
     refresh_grok_subscription_for_admin,
     start_grok_subscription_handoff,
 )
-from app.services.llm import LLMMessage, create_llm_client, get_model_api_key, get_provider_manifest
+from app.services.llm import (
+    LLMMessage,
+    create_llm_client,
+    create_llm_client_from_model,
+    get_model_api_key,
+    get_provider_manifest,
+)
 from app.services.org_sync_adapter import derive_member_department_paths
 from app.services.platform_service import platform_service
 from app.services.sso_service import sso_service
@@ -171,15 +176,14 @@ async def probe_llm_model(
     start = time.time()
     try:
         if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
-            reply = await probe_chatgpt_subscription(api_key)
-            latency_ms = int((time.time() - start) * 1000)
-            return {"success": True, "latency_ms": latency_ms, "reply": reply}
-        client = create_llm_client(
-            provider=data.provider,
-            model=data.model,
-            api_key=api_key,
-            base_url=data.base_url or None,
-        )
+            client = create_llm_client_from_model(existing)
+        else:
+            client = create_llm_client(
+                provider=data.provider,
+                model=data.model,
+                api_key=api_key,
+                base_url=data.base_url or None,
+            )
         response = await client.complete(
             messages=[LLMMessage(role="user", content="Say 'ok' and nothing else.")],
             max_tokens=16,
@@ -480,9 +484,15 @@ async def update_llm_model(
         updates["model"] = data.model
     if data.label is not None:
         updates["label"] = data.label
-    if hasattr(data, "base_url") and data.base_url is not None:
+    subscription = getattr(model, "auth_kind", "api_key") in {"grok_subscription", "chatgpt_subscription"}
+    if hasattr(data, "base_url") and data.base_url is not None and not subscription:
         updates["base_url"] = data.base_url
-    if data.api_key and data.api_key.strip() and not data.api_key.startswith("****"):
+    if (
+        not subscription
+        and data.api_key
+        and data.api_key.strip()
+        and not data.api_key.startswith("****")
+    ):
         updates["api_key_encrypted"] = encrypt_data(data.api_key.strip(), settings.SECRET_KEY)
     if data.temperature is not None:
         updates["temperature"] = data.temperature

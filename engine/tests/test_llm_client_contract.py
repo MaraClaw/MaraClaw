@@ -15,6 +15,7 @@ PACKAGE_EXPORTS: Final = (
     "LLMError",
     "LLMMessage",
     "create_llm_client",
+    "create_llm_client_from_model",
     "get_max_tokens",
     "get_model_api_key",
     "get_provider_base_url",
@@ -38,6 +39,7 @@ UTILS_EXPORTS: Final = (
     "LLMStreamChunk",
     "LLMError",
     "create_llm_client",
+    "create_llm_client_from_model",
     "chat_complete",
     "chat_stream",
     "ProviderSpec",
@@ -116,6 +118,7 @@ def test_package_facade_exports_current_public_symbols():
 
     for name in (
         "create_llm_client",
+        "create_llm_client_from_model",
         "get_max_tokens",
         "get_model_api_key",
         "get_provider_base_url",

@@ -18,9 +18,11 @@ from app.records.llm import LLMModelRecord
 from app.services import chatgpt_oauth, chatgpt_subscription as handoff, enterprise_llm as pool
 from app.services.chatgpt_oauth import (
     OPENAI_DEVICE_POLL_URL,
+    OPENAI_DEVICE_REDIRECT_URI,
     OPENAI_TOKEN_URL,
     OPENAI_USERCODE_URL,
     OPENAI_USERINFO_URL,
+    interpret_device_poll,
     set_chatgpt_oauth_transport,
 )
 
@@ -77,8 +79,7 @@ class FakeChatGPTTransport:
         self.usercode_body = {
             "device_auth_id": "dev-secret-must-not-leak",
             "user_code": "ABCD-EFGH",
-            "interval": "5",
-            "expires_in": 900,
+            "interval": "10",
         }
         self.poll_status = 200
         self.poll_body: dict[str, Any] = {
@@ -105,7 +106,7 @@ class FakeChatGPTTransport:
         if url == OPENAI_DEVICE_POLL_URL:
             if self.pending_polls > 0:
                 self.pending_polls -= 1
-                return 403, {"error": "authorization_pending"}
+                return 403, {}
             return self.poll_status, self.poll_body
         return 404, {"error": "not_found"}
 
@@ -167,7 +168,8 @@ async def test_start_returns_verification_url_and_user_code_without_tokens():
     assert out.verification_url == "https://auth.openai.com/codex/device"
     assert out.user_code == "ABCD-EFGH"
     assert out.session_id
-    assert out.interval == 5
+    assert out.interval == 10
+    assert out.expires_in >= 870
     _assert_no_secrets(out.model_dump())
     assert transport.calls, "start must invoke the shipped Codex usercode client"
     assert transport.calls[0][0] == OPENAI_USERCODE_URL
@@ -225,10 +227,21 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     assert obj_in["tenant_id"] == _TENANT
     assert obj_in["provider"] == "openai"
     assert obj_in["model"] == "gpt-5.4"
+    assert obj_in["base_url"] == "https://chatgpt.com/backend-api/codex"
+    assert obj_in["oauth_account_id"] == "acct-live"
+    poll_json = poll_calls[0][2]
+    assert poll_json == {"device_auth_id": "dev-secret-must-not-leak", "user_code": "ABCD-EFGH"}
+    assert exchange_calls[0][2] == {
+        "grant_type": "authorization_code",
+        "code": "auth-code-LIVE",
+        "redirect_uri": OPENAI_DEVICE_REDIRECT_URI,
+        "client_id": chatgpt_oauth.OPENAI_OAUTH_CLIENT_ID,
+        "code_verifier": "verifier-LIVE",
+    }
 
     with patch.object(pool, "get_model_api_key", return_value=_ACCESS):
         admin = pool.serialize_llm_model(created, is_admin=True, default_model_id=None)
-    assert admin.api_key_masked.endswith(_ACCESS[-4:])
+    assert admin.api_key_masked == ""
     assert admin.auth_kind == "chatgpt_subscription"
     member = pool.serialize_llm_model(created, is_admin=False, default_model_id=None)
     assert member.api_key_masked == ""
@@ -290,6 +303,9 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     persist.assert_awaited_once()
     obj_in = persist.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == f"enc:{_REFRESHED}"
+    assert "model" not in obj_in
+    assert "base_url" not in obj_in
+    assert "provider" not in obj_in
     refresh_calls = [
         call
         for call in transport.calls
@@ -311,16 +327,32 @@ async def test_refresh_rejects_member_and_foreign_tenant(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_probe_uses_stored_subscription_secret(monkeypatch):
-    existing = _model(api_key_encrypted="enc-sub-secret")
+async def test_probe_uses_codex_responses_client(monkeypatch):
+    existing = _model(api_key_encrypted="enc-sub-secret", oauth_account_id="acct-live")
     monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=existing))
     monkeypatch.setattr(enterprise_api, "get_model_api_key", lambda _model: _ACCESS)
     monkeypatch.setattr(
         "app.services.chatgpt_subscription.ensure_fresh_access_token",
         AsyncMock(return_value=existing),
     )
-    transport = FakeChatGPTTransport()
-    set_chatgpt_oauth_transport(transport)
+
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        async def complete(self, messages, max_tokens=16):
+            _ = messages, max_tokens
+            return SimpleNamespace(content="ok")
+
+        async def close(self):
+            return None
+
+    def fake_from_model(model, *, timeout=None):
+        captured["auth_kind"] = getattr(model, "auth_kind", None)
+        captured["timeout"] = timeout
+        return FakeClient()
+
+    monkeypatch.setattr(enterprise_api, "create_llm_client_from_model", fake_from_model)
+    monkeypatch.setattr(enterprise_api, "create_llm_client", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not use chat-completions")))
 
     result = await enterprise_api.probe_llm_model(
         enterprise_api.LLMTestRequest(
@@ -332,8 +364,7 @@ async def test_probe_uses_stored_subscription_secret(monkeypatch):
     )
     assert result["success"] is True
     assert result["reply"] == "ok"
-    userinfo_calls = [call for call in transport.calls if call[0] == OPENAI_USERINFO_URL]
-    assert userinfo_calls, "probe must hit ChatGPT userinfo, not api.openai.com"
+    assert captured["auth_kind"] == "chatgpt_subscription"
 
 
 @pytest.mark.asyncio
@@ -428,3 +459,49 @@ async def test_ensure_agent_prefers_subscription_over_openai_api_key(monkeypatch
     out = await pool.ensure_agent_company_models(agent)
     assert out.primary_model_id == chatgpt.id
     assert update.await_args.kwargs["obj_in"]["primary_model_id"] == chatgpt.id
+
+
+def test_interpret_device_poll_uses_http_status_not_rfc_error_string():
+    assert interpret_device_poll(403, {}).status == "pending"
+    assert interpret_device_poll(404, {}).status == "pending"
+    assert interpret_device_poll(400, {"error": "authorization_pending"}).status == "error"
+
+
+@pytest.mark.asyncio
+async def test_activate_chatgpt_leaves_grok_primary(monkeypatch):
+    created = _model()
+    grok_id = uuid.uuid4()
+    grok = _model(
+        id=grok_id,
+        provider="grok",
+        model="grok-4.6",
+        auth_kind="grok_subscription",
+        label="Grok SuperGrok",
+        base_url="https://api.x.ai/v1",
+    )
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=grok_id, default_fallback_model_id=None)
+    monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(pool.llm_model_dao, "get", AsyncMock(return_value=grok))
+    tenant_update = AsyncMock(return_value=tenant)
+    monkeypatch.setattr(pool.tenant_dao, "update", tenant_update)
+    monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", AsyncMock(return_value=0))
+    await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args.kwargs["obj_in"]["default_fallback_model_id"] == created.id
+    assert tenant.default_model_id == grok_id
+
+
+def test_create_llm_client_from_model_uses_codex_responses():
+    from app.services.llm.providers.openai_responses import OpenAIResponsesClient
+    from app.services.llm.utils import create_llm_client_from_model
+
+    row = _model(api_key_encrypted=_ACCESS, oauth_account_id="acct-stored")
+    client = create_llm_client_from_model(row, timeout=9)
+    assert type(client) is OpenAIResponsesClient
+    assert client.stateless is True
+    assert client.base_url == "https://chatgpt.com/backend-api/codex"
+    headers = client._get_headers()
+    assert headers["chatgpt-account-id"] == "acct-stored"
+    assert headers["originator"] == "codex_cli_rs"
+    payload = client._build_payload([], None, None, 16)
+    assert payload["store"] is False
+    assert "max_output_tokens" not in payload

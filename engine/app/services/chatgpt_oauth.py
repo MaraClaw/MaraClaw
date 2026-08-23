@@ -29,6 +29,20 @@ OPENAI_USERINFO_URL = f"{OPENAI_OAUTH_ISSUER}/api/accounts/oauth/userinfo"
 OPENAI_VERIFICATION_URL = f"{OPENAI_OAUTH_ISSUER}/codex/device"
 OPENAI_DEVICE_REDIRECT_URI = f"{OPENAI_OAUTH_ISSUER}/deviceauth/callback"
 OPENAI_DEVICE_EXPIRES_IN = 900
+CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_CLIENT_VERSION = "0.145.0"
+
+
+def codex_request_headers(account_id: str) -> dict[str, str]:
+    """Headers the Codex Responses backend requires in addition to Bearer."""
+    headers = {
+        "originator": "codex_cli_rs",
+        "OpenAI-Beta": "responses=experimental",
+        "client_version": CODEX_CLIENT_VERSION,
+    }
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+    return headers
 
 
 class ChatGPTOAuthTransport(Protocol):

@@ -181,7 +181,7 @@ async def test_classify_timeout_fail_closes_to_primary(monkeypatch: pytest.Monke
 
     from app.services.llm import utils as llm_utils
 
-    monkeypatch.setattr(llm_utils, "create_llm_client", lambda **_kwargs: _FakeClient())
+    monkeypatch.setattr(llm_utils, "create_llm_client_from_model", lambda *_a, **_k: _FakeClient())
     monkeypatch.setattr(llm_utils, "get_model_api_key", lambda _model: "sk-test")
     choice = await router.select_turn_model(
         ModelBundle(primary=primary, secondary=secondary),

@@ -21,7 +21,6 @@ from app.records.llm import LLMModelRecord
 from app.services.chatgpt_oauth import (
     ChatGPTOAuthTokens,
     DeviceCodeChallenge,
-    fetch_userinfo,
     poll_device_authorization,
     refresh_access_token,
     request_device_code,
@@ -210,12 +209,11 @@ async def persist_subscription_tokens(
         "token_expires_at": expires_at,
         "auth_kind": AUTH_KIND_CHATGPT_SUBSCRIPTION,
         "enabled": True,
-        "provider": CHATGPT_SUBSCRIPTION_PROVIDER,
-        "model": CHATGPT_SUBSCRIPTION_MODEL,
-        "base_url": CHATGPT_SUBSCRIPTION_BASE_URL,
     }
     if tokens.refresh_token:
         updates["refresh_token_encrypted"] = _encrypt(tokens.refresh_token)
+    if tokens.account_id:
+        updates["oauth_account_id"] = tokens.account_id
     row = existing or await llm_model_dao.get_subscription_for_tenant(
         tenant_id, auth_kind=AUTH_KIND_CHATGPT_SUBSCRIPTION
     )
@@ -225,6 +223,9 @@ async def persist_subscription_tokens(
         saved = await llm_model_dao.create(
             obj_in={
                 **updates,
+                "provider": CHATGPT_SUBSCRIPTION_PROVIDER,
+                "model": CHATGPT_SUBSCRIPTION_MODEL,
+                "base_url": CHATGPT_SUBSCRIPTION_BASE_URL,
                 "label": CHATGPT_SUBSCRIPTION_LABEL,
                 "tenant_id": tenant_id,
                 "supports_vision": True,
@@ -344,9 +345,3 @@ async def refresh_chatgpt_subscription_for_admin(user: Any, model_id: uuid.UUID)
     return out
 
 
-async def probe_chatgpt_subscription(access_token: str) -> str:
-    """Hit ChatGPT userinfo with the stored access token. Returns a short reply."""
-    poll = await fetch_userinfo(access_token)
-    if poll.status != "authorized":
-        raise ValueError(poll.error or "ChatGPT subscription probe failed")
-    return "ok"

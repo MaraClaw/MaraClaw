@@ -177,7 +177,7 @@ Default admin gate: `get_current_admin` unless noted.
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/enterprise/llm-providers` | admin | - | Provider registry manifest. Members **403**. |
-| `POST` | `/api/enterprise/llm-test` | admin | `provider`, `model`, `api_key?`, `base_url?`, `model_id?` | `{ success, latency_ms, reply? \| error? }`. `model_id` must be in the caller’s company. |
+| `POST` | `/api/enterprise/llm-test` | admin | `provider`, `model`, `api_key?`, `base_url?`, `model_id?` | `{ success, latency_ms, reply? \| error? }`. `model_id` must be in the caller’s company. ChatGPT subscription rows call Codex `/responses`, not `/chat/completions`. |
 | `GET` | `/api/enterprise/llm-models` | auth | Query: `tenant_id?` | Members: enabled catalog only; **no** key / base URL. Admin: full pool + masked key. `is_default` = company primary, `is_secondary` = cheap/routine lane, `is_fallback` = failover. Non-platform cannot other tenants. Untenanted members get `[]`. |
 | `POST` | `/api/enterprise/llm-models` | admin | `LLMModelCreate` + Query `tenant_id?` | **201** `LLMModelOut`. Org admin locked to own tenant. Platform admin must pick a company. |
 | `POST` | `/api/enterprise/llm-models/grok-subscription/start` | admin | Query `tenant_id?` | Device-code start. `{ session_id, verification_url, user_code, expires_in, interval }`. **Never** returns tokens, cookies, or `device_code`. |

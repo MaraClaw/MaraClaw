@@ -31,7 +31,14 @@ from .caller import (
 )
 from .client import LLMClient, LLMError, LLMMessage, LLMResponse
 from .failover import FailoverErrorType, classify_error
-from .utils import create_llm_client, get_max_tokens, get_model_api_key, get_provider_base_url, get_provider_manifest
+from .utils import (
+    create_llm_client,
+    create_llm_client_from_model,
+    get_max_tokens,
+    get_model_api_key,
+    get_provider_base_url,
+    get_provider_manifest,
+)
 
 __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "call_llm",
@@ -47,6 +54,7 @@ __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "LLMError",
     "LLMMessage",
     "create_llm_client",
+    "create_llm_client_from_model",
     "get_max_tokens",
     "get_model_api_key",
     "get_provider_base_url",

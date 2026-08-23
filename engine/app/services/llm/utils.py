@@ -68,6 +68,57 @@ def get_model_api_key(model: _EncryptedModel) -> str:
         return raw
 
 
+def create_llm_client_from_model(model: _EncryptedModel, *, timeout: float | None = None) -> LLMClient:
+    """Build a client from a pool row. ChatGPT subscription uses Codex Responses."""
+    from app.services.llm.client_cache import cache_get, cache_put, fingerprint_secret
+
+    resolved_timeout = timeout
+    if resolved_timeout is None:
+        raw_timeout = getattr(model, "request_timeout", None)
+        resolved_timeout = float(raw_timeout) if raw_timeout else 120.0
+    enc = getattr(model, "api_key_encrypted", None) or ""
+    cache_key = (
+        "from_model",
+        str(getattr(model, "id", "") or ""),
+        getattr(model, "auth_kind", "") or "api_key",
+        fingerprint_secret(enc),
+        getattr(model, "oauth_account_id", None) or "",
+        getattr(model, "provider", "") or "",
+        getattr(model, "model", None) or "",
+        getattr(model, "base_url", None) or "",
+        resolved_timeout,
+    )
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    if getattr(model, "auth_kind", "") == "chatgpt_subscription":
+        from app.services.chatgpt_oauth import (
+            CHATGPT_CODEX_BASE_URL,
+            account_id_from_jwt,
+            codex_request_headers,
+        )
+
+        access = get_model_api_key(model)
+        account_id = (getattr(model, "oauth_account_id", None) or "").strip() or account_id_from_jwt(access)
+        built = OpenAIResponsesClient(
+            api_key=access,
+            base_url=getattr(model, "base_url", None) or CHATGPT_CODEX_BASE_URL,
+            model=getattr(model, "model", None),
+            timeout=resolved_timeout,
+            extra_headers=codex_request_headers(account_id),
+            stateless=True,
+        )
+        return cache_put(cache_key, built)
+    built = create_llm_client(
+        provider=getattr(model, "provider", "") or "",
+        api_key=get_model_api_key(model),
+        model=getattr(model, "model", None) or "",
+        base_url=getattr(model, "base_url", None),
+        timeout=resolved_timeout,
+    )
+    return cache_put(cache_key, built)
+
+
 def get_tool_params(provider: str) -> ToolPayload:
     """Return provider-specific tool calling parameters.
 
@@ -260,6 +311,7 @@ __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "LLMStreamChunk",
     "LLMError",
     "create_llm_client",
+    "create_llm_client_from_model",
     "chat_complete",
     "chat_stream",
     "ProviderSpec",

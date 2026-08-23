@@ -294,6 +294,7 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
         token_expires_at=expires,
         auth_kind="chatgpt_subscription",
         label="ChatGPT",
+        oauth_account_id="acct-from-row",
     )
 
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
@@ -308,11 +309,11 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     assert cred["provider"] == "openai"
     assert cred["access"] == access
     assert cred["refresh"] == "oa-sub-refresh-token"
-    assert cred["accountId"] == "acct-live"
+    assert cred["accountId"] == "acct-from-row"
     assert cred["expires"] == int(expires.timestamp() * 1000)
     legacy = json.loads((agent_dir / "credentials" / "oauth.json").read_text(encoding="utf-8"))
     assert legacy["openai"]["access"] == access
-    assert legacy["openai"]["accountId"] == "acct-live"
+    assert legacy["openai"]["accountId"] == "acct-from-row"
 
 
 def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):

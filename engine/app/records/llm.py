@@ -38,6 +38,7 @@ class LLMModelRecord:
     auth_kind: str = "api_key"
     refresh_token_encrypted: str | None = None
     token_expires_at: datetime | None = None
+    oauth_account_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -65,6 +66,7 @@ class LLMModelRecord:
             auth_kind=str_from_row(row.get("auth_kind")) or "api_key",
             refresh_token_encrypted=str_from_row(row.get("refresh_token_encrypted")) or None,
             token_expires_at=datetime_from_row(row.get("token_expires_at")),
+            oauth_account_id=str_from_row(row.get("oauth_account_id")) or None,
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
         )

@@ -86,7 +86,7 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     monkeypatch.setattr("app.services.agent_context.build_agent_context", build_context)
     monkeypatch.setattr("app.services.agent_tools.get_agent_tools_for_llm", get_tools)
     monkeypatch.setattr("app.services.llm.get_model_api_key", lambda model: "key")
-    monkeypatch.setattr("app.services.llm.create_llm_client", lambda **kwargs: client)
+    monkeypatch.setattr("app.services.llm.create_llm_client_from_model", lambda *_a, **_k: client)
     monkeypatch.setattr(heartbeat.logger, "info", record_info)
     monkeypatch.setattr(heartbeat.logger, "exception", record_exception)
 
