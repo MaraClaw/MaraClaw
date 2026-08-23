@@ -1,5 +1,6 @@
 """File management API routes for agent workspaces."""
 
+import asyncio
 import base64
 import csv
 import io
@@ -20,6 +21,13 @@ from app.core.security import get_current_user
 from app.dao.skill_dao import skill_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
 from app.records.user import UserRecord
+from app.services.document_parser import (
+    convert_document_isolated,
+    convert_document_isolated_async,
+    format_parse_failure,
+    needs_extraction,
+)
+from app.services.document_parser.errors import DocumentParseError
 from app.services.focus_service import is_focus_file_path
 from app.services.storage import (
     ensure_local_path,
@@ -330,42 +338,45 @@ def _find_companion_text_preview(target: Path) -> Path | None:
 
 def _extract_document_text(target: Path, kind: str) -> str:
     """Best-effort rich document text extraction for lightweight previews."""
+    del kind
     try:
-        if kind == "xlsx":
-            from openpyxl import load_workbook
-
-            wb = load_workbook(target, read_only=True, data_only=True)
-            sheets: list[str] = []
-            for ws in wb.worksheets[:5]:
-                rows = [
-                    "\t".join("" if cell is None else str(cell) for cell in row)
-                    for row in ws.iter_rows(max_row=80, max_col=20, values_only=True)
-                ]
-                sheets.append(f"Sheet: {ws.title}\n" + "\n".join(rows))
-            return "\n\n".join(sheets)
-        if kind == "docx":
-            from docx import Document
-
-            doc = Document(str(target))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        if kind == "pptx":
-            from pptx import Presentation
-
-            prs = Presentation(str(target))
-            slides = []
-            for idx, slide in enumerate(prs.slides, start=1):
-                texts: list[str] = []
-                for shape in slide.shapes:
-                    raw_text = getattr(shape, "text", None)
-                    if isinstance(raw_text, str) and raw_text.strip():
-                        texts.append(raw_text.strip())
-                slides.append(f"Slide {idx}\n" + "\n".join(texts))
-            return "\n\n".join(slides)
-    except ImportError as exc:
-        return f"Missing preview dependency: {exc}"
-    except Exception as exc:
+        return convert_document_isolated(target.read_bytes(), target.name)
+    except DocumentParseError as exc:
+        return f"Preview extraction failed: {format_parse_failure(exc)}"
+    except OSError as exc:
         return f"Preview extraction failed: {str(exc)[:200]}"
-    return ""
+
+
+async def _write_office_sidecar(save_path: Path, content: bytes, filename: str) -> Path | None:
+    """Write a same-stem UTF-8 Markdown sidecar through the isolated parser."""
+    try:
+        text = await convert_document_isolated_async(content, filename)
+    except DocumentParseError:
+        return None
+    if not text:
+        return None
+    md_path = save_path.parent / f"{save_path.stem}.md"
+    _ = md_path.write_text(text, encoding="utf-8")
+    return md_path
+
+
+def _extract_xlsx_sheets(target: Path) -> list[dict[str, object]]:
+    """Preserve the structured XLSX preview payload (title + row grid)."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(target, read_only=True, data_only=True)
+    sheets: list[dict[str, object]] = []
+    for ws in wb.worksheets[:5]:
+        rows: list[list[str]] = []
+        for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
+            values = ["" if cell is None else str(cell) for cell in row]
+            while values and not str(values[-1] or "").strip():
+                _ = values.pop()
+            if any(value.strip() for value in values):
+                rows.append(values)
+        sheets.append({"title": ws.title, "rows": rows})
+    wb.close()
+    return sheets
 
 
 def _detect_csv_delimiter(text: str) -> str:
@@ -446,30 +457,13 @@ async def preview_file(
         try:
             target = await ensure_local_path(key)
             local_target = target
-            from openpyxl import load_workbook
-
-            wb = load_workbook(target, read_only=True, data_only=True)
-            sheets = []
-            for ws in wb.worksheets[:5]:
-                rows = []
-                for row in ws.iter_rows(max_row=120, max_col=30, values_only=True):
-                    values = ["" if cell is None else str(cell) for cell in row]
-                    while values and not str(values[-1] or "").strip():
-                        _ = values.pop()
-                    if any(value.strip() for value in values):
-                        rows.append(values)
-                sheets.append(
-                    {
-                        "title": ws.title,
-                        "rows": rows,
-                    }
-                )
-            wb.close()
+            sheets = await asyncio.to_thread(_extract_xlsx_sheets, target)
+            text = await asyncio.to_thread(_extract_document_text, target, kind)
             return {
                 "path": path,
                 "kind": kind,
                 "mime_type": mime_type,
-                "text": _extract_document_text(target, kind),
+                "text": text,
                 "sheets": sheets,
                 "download_url": download_url,
             }
@@ -484,7 +478,7 @@ async def preview_file(
     if kind in {"docx", "pptx"}:
         target = await ensure_local_path(key)
         local_target = target
-        extracted_text = _extract_document_text(target, kind)
+        extracted_text = await asyncio.to_thread(_extract_document_text, target, kind)
         companion = _find_companion_text_preview(target)
         companion_content = await read_text_if_exists(companion) if companion is not None else None
         return {
@@ -834,11 +828,9 @@ async def upload_file_to_workspace(
 
     # Auto-extract text from non-text files
     extracted_path = None
-    from app.services.text_extractor import needs_extraction, save_extracted_text
-
     if needs_extraction(filename):
         save_path = await ensure_local_path(file_key)
-        txt_file = save_extracted_text(save_path, content, filename)
+        txt_file = await _write_office_sidecar(save_path, content, filename)
         if txt_file:
             extracted_path = f"{normalized_path}/{txt_file.name}"
             extracted_key = _agent_storage_key(agent_id, extracted_path)
@@ -929,11 +921,9 @@ async def upload_enterprise_kb_file(
 
     # Auto-extract text from non-text files
     extracted_path = None
-    from app.services.text_extractor import needs_extraction, save_extracted_text
-
     if needs_extraction(filename):
         save_path = await ensure_local_path(storage_key)
-        txt_file = save_extracted_text(save_path, content, filename)
+        txt_file = await _write_office_sidecar(save_path, content, filename)
         if txt_file:
             extracted_path = f"{sub_path}/{txt_file.name}" if sub_path else txt_file.name
             await storage.write_bytes(

@@ -10,35 +10,19 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.security import get_current_user
 from app.records.user import UserRecord
+from app.services.document_parser import (
+    OFFICE_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    convert_document_isolated,
+    decode_text_bytes,
+    format_parse_failure,
+    needs_extraction,
+)
+from app.services.document_parser.errors import DocumentParseError
 from app.services.storage import ensure_local_path, get_storage_backend, guess_content_type, normalize_storage_key
-from app.services.text_extractor import extract_text as extract_binary_text
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Supported extensions and their text extraction method
-TEXT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".csv",
-    ".json",
-    ".xml",
-    ".yaml",
-    ".yml",
-    ".py",
-    ".js",
-    ".ts",
-    ".html",
-    ".css",
-    ".sql",
-    ".sh",
-    ".log",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".env",
-    ".toml",
-}
-OFFICE_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 EXTRACTABLE = TEXT_EXTENSIONS | OFFICE_EXTENSIONS
 
@@ -60,23 +44,33 @@ def validate_upload_filename(filename: str) -> str:
 
 
 def extract_text(content: bytes, filename: str, extension: str) -> str:
-    """Extract text from upload bytes without launching a shell or child interpreter."""
+    """Extract text from upload bytes. Ordinary text stays local; office files use anydoc."""
     if extension in TEXT_EXTENSIONS:
-        try:
-            return content.decode("utf-8", errors="replace")
-        except UnicodeDecodeError:
-            return content.decode("gbk", errors="replace")
+        return decode_text_bytes(content)
 
-    extracted = extract_binary_text(content, filename)
+    if not needs_extraction(filename):
+        return f"[Unsupported file format: {extension}]"
+
+    try:
+        extracted = convert_document_isolated(content, filename)
+    except DocumentParseError as exc:
+        return _upload_extract_failure(extension, exc)
     if extracted:
         return extracted
-    if extension == ".pdf":
-        return "[PDF text extraction failed]"
-    if extension == ".docx":
-        return "[DOCX text extraction failed]"
-    if extension in (".xlsx", ".xls"):
-        return "[Excel text extraction failed]"
+    return _upload_extract_failure(extension, None)
 
+
+def _upload_extract_failure(extension: str, exc: DocumentParseError | None) -> str:
+    if extension == ".pdf":
+        if exc is not None and "scanned" in str(exc).lower():
+            return f"[PDF text extraction failed] {format_parse_failure(exc)}"
+        return "[PDF text extraction failed]"
+    if extension in {".docx", ".doc", ".docm"}:
+        return "[DOCX text extraction failed]"
+    if extension in {".xlsx", ".xls", ".xlsm", ".xlsb"}:
+        return "[Excel text extraction failed]"
+    if exc is not None:
+        return f"[{format_parse_failure(exc)}]"
     return f"[Unsupported file format: {extension}]"
 
 
