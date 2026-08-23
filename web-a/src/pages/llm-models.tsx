@@ -584,8 +584,9 @@ function ChatGPTSubscriptionCard({
         <CardTitle>Connect ChatGPT subscription</CardTitle>
         <CardDescription>
           Sign in with ChatGPT Plus, Pro, or Team. Enable device-code authorization in ChatGPT →
-          Settings → Security (personal) or in workspace permissions (Team). The verification code is
-          shown here; access tokens stay on the server and are stored encrypted for this company.
+          Settings → Security first. Team and workspace admins turn it on in ChatGPT workspace
+          Security. The verification code is shown here; access tokens stay on the server and are
+          stored encrypted for this company.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -851,7 +852,11 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
           <p className="text-sm text-muted-foreground">
             Reasoning effort: {reasoningEffortLabel(item.reasoning_effort || 'none')}.
             {item.supports_vision ? ' Vision enabled.' : ''}
-            {item.base_url ? ` Endpoint ${item.base_url}` : ' Provider default endpoint'}
+            {subscription
+              ? ''
+              : item.base_url
+                ? ` Endpoint ${item.base_url}`
+                : ' Provider default endpoint'}
           </p>
         )}
 
