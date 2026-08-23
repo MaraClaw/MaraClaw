@@ -47,7 +47,7 @@ def cache_drop(key: str) -> None:
 def drop_model_caches() -> None:
     """Drop ensured/bundle entries after a company model or subscription change."""
     for key in list(_store):
-        if key.startswith("ensured:") or key.startswith("bundle:"):
+        if key.startswith(("ensured:", "bundle:")):
             _store.pop(key, None)
 
 
