@@ -289,6 +289,10 @@ PATCHES = [
     CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
     ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription'
     """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
+    ON llm_models (tenant_id) WHERE auth_kind = 'chatgpt_subscription'
+    """,
 ]
 
 

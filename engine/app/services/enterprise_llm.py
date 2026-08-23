@@ -130,9 +130,19 @@ def owned_model_or_none(model: LLMModelRecord | None, tenant_id: uuid.UUID | Non
     return model
 
 
+_GROK_FAMILY = frozenset({"grok", "xai", "x-ai", "x_ai"})
+_OPENAI_FAMILY = frozenset({"openai", "openai-response", "openai_response"})
+_SUBSCRIPTION_KINDS = frozenset({"grok_subscription", "chatgpt_subscription"})
+
+
 def is_grok_family(model: LLMModelRecord | None) -> bool:
     provider = (getattr(model, "provider", None) or "").strip().lower()
-    return provider in {"grok", "xai", "x-ai", "x_ai"}
+    return provider in _GROK_FAMILY
+
+
+def is_openai_family(model: LLMModelRecord | None) -> bool:
+    provider = (getattr(model, "provider", None) or "").strip().lower()
+    return provider in _OPENAI_FAMILY
 
 
 def is_grok_api_key_row(model: LLMModelRecord | None) -> bool:
@@ -140,6 +150,31 @@ def is_grok_api_key_row(model: LLMModelRecord | None) -> bool:
     if model is None or not is_grok_family(model):
         return False
     return (getattr(model, "auth_kind", None) or "api_key") != "grok_subscription"
+
+
+def is_openai_api_key_row(model: LLMModelRecord | None) -> bool:
+    """True for a company OpenAI console-key row (not ChatGPT OAuth)."""
+    if model is None or not is_openai_family(model):
+        return False
+    return (getattr(model, "auth_kind", None) or "api_key") != "chatgpt_subscription"
+
+
+def is_subscription_row(model: LLMModelRecord | None) -> bool:
+    return (getattr(model, "auth_kind", None) or "") in _SUBSCRIPTION_KINDS
+
+
+def subscription_replaces_api_key(subscription: LLMModelRecord, current: LLMModelRecord | None) -> bool:
+    """True when a just-connected subscription should take over this API-key default."""
+    kind = getattr(subscription, "auth_kind", "") or ""
+    if kind == "grok_subscription":
+        return current is None or is_grok_api_key_row(current)
+    if kind == "chatgpt_subscription":
+        return current is None or is_openai_api_key_row(current)
+    return False
+
+
+def is_replaceable_api_key_row(model: LLMModelRecord | None) -> bool:
+    return is_grok_api_key_row(model) or is_openai_api_key_row(model)
 
 
 def assert_distinct_model_slots(
@@ -171,12 +206,13 @@ async def activate_pool_model_for_tenant(model: LLMModelRecord) -> None:
         _ = await agent_dao.assign_primary_where_null(tenant_id=model.tenant_id, model_id=model.id)
         return
     current_default = await llm_model_dao.get(tenant.default_model_id)
-    if getattr(model, "auth_kind", "") == "grok_subscription" and (
-        current_default is None or is_grok_api_key_row(current_default)
-    ):
+    if is_subscription_row(model) and subscription_replaces_api_key(model, current_default):
         _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
         for row in await llm_model_dao.list_for_tenant(model.tenant_id):
-            if row.id != model.id and is_grok_api_key_row(row):
+            if row.id != model.id and (
+                (getattr(model, "auth_kind", "") == "grok_subscription" and is_grok_api_key_row(row))
+                or (getattr(model, "auth_kind", "") == "chatgpt_subscription" and is_openai_api_key_row(row))
+            ):
                 _ = await agent_dao.migrate_primary_model(
                     tenant_id=model.tenant_id, old_model_id=row.id, new_model_id=model.id
                 )
@@ -193,7 +229,7 @@ async def _first_usable_tenant_model(tenant_id: uuid.UUID) -> LLMModelRecord | N
     if not owned:
         return None
     for row in owned:
-        if getattr(row, "auth_kind", "") == "grok_subscription":
+        if is_subscription_row(row):
             return row
     return owned[0]
 
@@ -240,16 +276,24 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
         return owned_model_or_none(loaded.get(mid) if mid else None, tenant_id)
 
     tenant_primary = owned(tenant.default_model_id)
-    subscription = None
-    if tenant_primary is None or is_grok_api_key_row(tenant_primary):
-        subscription = await llm_model_dao.get_subscription_for_tenant(tenant_id)
-        if subscription is not None and model_usable_in_tenant(subscription, tenant_id):
-            loaded[subscription.id] = subscription
-            if tenant_primary is None or is_grok_api_key_row(tenant_primary):
-                tenant_primary = subscription
-                if tenant.default_model_id != subscription.id:
-                    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": subscription.id})
-                    _ = await agent_dao.assign_primary_where_null(tenant_id=tenant_id, model_id=subscription.id)
+    if tenant_primary is None or is_replaceable_api_key_row(tenant_primary):
+        grok_sub = await llm_model_dao.get_subscription_for_tenant(tenant_id, auth_kind="grok_subscription")
+        chatgpt_sub = await llm_model_dao.get_subscription_for_tenant(
+            tenant_id, auth_kind="chatgpt_subscription"
+        )
+        picked = None
+        if is_grok_api_key_row(tenant_primary) and grok_sub is not None:
+            picked = grok_sub
+        elif is_openai_api_key_row(tenant_primary) and chatgpt_sub is not None:
+            picked = chatgpt_sub
+        elif tenant_primary is None:
+            picked = grok_sub or chatgpt_sub
+        if picked is not None and model_usable_in_tenant(picked, tenant_id):
+            loaded[picked.id] = picked
+            tenant_primary = picked
+            if tenant.default_model_id != picked.id:
+                _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": picked.id})
+                _ = await agent_dao.assign_primary_where_null(tenant_id=tenant_id, model_id=picked.id)
     if tenant_primary is None:
         picked = await _first_usable_tenant_model(tenant_id)
         if picked is not None:
@@ -264,9 +308,10 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
     updates: dict[str, uuid.UUID | None] = {}
     agent_primary = owned(agent.primary_model_id)
     if (
-        is_grok_api_key_row(agent_primary)
+        is_replaceable_api_key_row(agent_primary)
         and tenant_primary is not None
-        and getattr(tenant_primary, "auth_kind", "") == "grok_subscription"
+        and is_subscription_row(tenant_primary)
+        and subscription_replaces_api_key(tenant_primary, agent_primary)
     ):
         updates["primary_model_id"] = tenant_primary.id
     else:

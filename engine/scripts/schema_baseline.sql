@@ -83,6 +83,8 @@ ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT;
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
 	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
+	ON llm_models (tenant_id) WHERE auth_kind = 'chatgpt_subscription';
 
 CREATE TABLE IF NOT EXISTS okr_alignments (
 	id UUID NOT NULL, 

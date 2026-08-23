@@ -51,6 +51,16 @@ from app.schemas.schemas import (
     UserInviteRequest,
 )
 from app.services.autonomy_service import autonomy_service
+from app.services.chatgpt_subscription import (
+    AUTH_KIND_CHATGPT_SUBSCRIPTION,
+    ChatGPTSubscriptionRefreshOut,
+    ChatGPTSubscriptionStartOut,
+    ChatGPTSubscriptionStatusOut,
+    chatgpt_subscription_status,
+    probe_chatgpt_subscription,
+    refresh_chatgpt_subscription_for_admin,
+    start_chatgpt_subscription_handoff,
+)
 from app.services.enterprise_llm import (
     assert_can_manage_model,
     assert_llm_pool_admin,
@@ -133,6 +143,7 @@ async def probe_llm_model(
     import time
 
     assert_llm_pool_admin(current_user)
+    existing = None
     if data.model_id:
         try:
             existing = await llm_model_dao.get(uuid.UUID(data.model_id))
@@ -140,17 +151,29 @@ async def probe_llm_model(
             existing = None
         if existing:
             assert_can_manage_model(current_user, existing)
+            from app.services.chatgpt_subscription import (
+                ensure_fresh_access_token as ensure_chatgpt_token,
+            )
             from app.services.grok_subscription import ensure_fresh_access_token
 
-            _ = await ensure_fresh_access_token(existing)
+            if getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+                existing = await ensure_chatgpt_token(existing)
+            else:
+                existing = await ensure_fresh_access_token(existing)
     api_key = data.api_key if data.api_key and not data.api_key.startswith("****") else None
-    if not api_key and data.model_id:
+    if not api_key and existing is not None:
+        api_key = get_model_api_key(existing)
+    elif not api_key and data.model_id:
         api_key = await _load_llm_test_api_key(data.model_id)
     if not api_key:
         return {"success": False, "latency_ms": 0, "error": "API Key is required"}
 
     start = time.time()
     try:
+        if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+            reply = await probe_chatgpt_subscription(api_key)
+            latency_ms = int((time.time() - start) * 1000)
+            return {"success": True, "latency_ms": latency_ms, "reply": reply}
         client = create_llm_client(
             provider=data.provider,
             model=data.model,
@@ -189,11 +212,34 @@ async def get_grok_subscription_status(
     return await grok_subscription_status(current_user, session_id)
 
 
+@router.post("/llm-models/chatgpt-subscription/start", response_model=ChatGPTSubscriptionStartOut)
+async def start_chatgpt_subscription(
+    tenant_id: str | None = None,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> ChatGPTSubscriptionStartOut:
+    """Start a ChatGPT Plus / Pro / Team device-code handoff. Tokens never leave the server."""
+    assert_llm_pool_admin(current_user)
+    return await start_chatgpt_subscription_handoff(current_user, tenant_id)
+
+
+@router.get("/llm-models/chatgpt-subscription/status", response_model=ChatGPTSubscriptionStatusOut)
+async def get_chatgpt_subscription_status(
+    session_id: str,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> ChatGPTSubscriptionStatusOut:
+    """Poll a pending ChatGPT subscription handoff. Response never includes tokens."""
+    assert_llm_pool_admin(current_user)
+    return await chatgpt_subscription_status(current_user, session_id)
+
+
 @router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)
 async def refresh_grok_subscription(
     model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)
-) -> GrokSubscriptionRefreshOut:
-    """Refresh a stored Grok subscription without a new browser login."""
+) -> GrokSubscriptionRefreshOut | ChatGPTSubscriptionRefreshOut:
+    """Refresh a stored Grok or ChatGPT subscription without a new browser login."""
+    model = await llm_model_dao.get(model_id)
+    if model is not None and getattr(model, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+        return await refresh_chatgpt_subscription_for_admin(current_user, model_id)
     return await refresh_grok_subscription_for_admin(current_user, model_id)
 
 

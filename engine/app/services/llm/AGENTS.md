@@ -27,6 +27,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - Preserve streaming normalization for tool-call ids, partial JSON deltas, usage chunks, reasoning/thinking fields, and provider-native message shapes.
 - New providers should be added through `ProviderSpec`/registry plus a provider client class or explicit OpenAI-compatible mapping.
 - Grok (xAI) is registered as `grok` (`xai` / `x-ai` / `x_ai` aliases) on the OpenAI-compatible protocol at `https://api.x.ai/v1`.
+- ChatGPT subscription rows stay on provider `openai` with `auth_kind=chatgpt_subscription`. Tokens are Codex OAuth, not Platform API keys.
 - `ProviderSpec.default_model` is the current flagship API id for the admin Models form (e.g. `grok-4.6`, `gpt-5.6`). Local runtimes may leave it unset.
 
 ## Tool Loop
