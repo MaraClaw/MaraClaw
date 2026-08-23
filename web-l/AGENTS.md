@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-16  
-**Commit:** 9b09521  
+**Generated:** 2026-08-23  
+**Commit:** 4d53677  
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
@@ -26,10 +26,10 @@ web-l/
     ├── App.tsx             # error boundary + AuthProvider + AppRouter + Toaster
     ├── routes/index.tsx    # all routes (there is no src/routes.tsx)
     ├── routes/protected.tsx
-    ├── pages/              # landing + auth; workspace in pages/app/
+    ├── pages/              # landing + auth — see pages/AGENTS.md; workspace in pages/app/
     ├── hooks/              # use-theme, use-auth (rejects platform_admin)
     ├── lib/                # engine clients — see lib/AGENTS.md
-    └── components/         # ui / sections / layout / auth / brand / chat
+    └── components/         # ui / sections / layout (see layout/AGENTS.md) / auth / brand / chat
 ```
 
 ## WHERE TO LOOK
@@ -38,11 +38,11 @@ web-l/
 |------|----------|-------|
 | Route table | `src/routes/index.tsx` | Public auth + nested `/app` |
 | Auth / org / force-password gates | `routes/protected.tsx`, `hooks/use-auth.tsx` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` → `/app/account` |
-| Landing composition | `pages/landing.tsx` | Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta |
+| Landing + public auth | `pages/` | Nested `pages/AGENTS.md`. Landing composer: `landing.tsx` |
 | Login / register / SSO | `pages/login.tsx`, `register.tsx`, `sso-callback.tsx` | Chrome: `components/auth/auth-shell.tsx` |
 | Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |
 | Workspace screens | `pages/app/*` | Nested `pages/app/AGENTS.md` |
-| Workspace chrome + Query | `layout/app-shell.tsx` | **Only** `QueryClientProvider` (not App/main) |
+| Workspace chrome + Query | `layout/app-shell.tsx` | **Only** `QueryClientProvider` (not App/main). Nested `layout/AGENTS.md` |
 | Agent tabs + outlet `agent` | `layout/agent-layout.tsx` | Icon submenu (smaller than workspace rail); Start/stop when `access_level === 'manage'` |
 | First-run redirect | `layout/onboarding-gate.tsx` | Skip key `maraclaw-onboarding-skipped` |
 | Engine HTTP / WS clients | `src/lib/*` | Nested `lib/AGENTS.md` |
