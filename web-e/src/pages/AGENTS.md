@@ -1,6 +1,6 @@
 # pages/ — public + org-funnel
 
-**Generated:** 2026-08-23 · Parent: `web-l/AGENTS.md`
+**Generated:** 2026-08-23 · Parent: `web-e/AGENTS.md`
 
 This folder is **public + org-funnel only**. Workspace screens live in `pages/app/` (nested `AGENTS.md`). Do not add `/app` pages here.
 

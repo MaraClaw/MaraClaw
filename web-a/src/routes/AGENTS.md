@@ -36,13 +36,13 @@ Nav chrome: `../components/layout/admin-shell.tsx` (`platformAdminOnly`, force-p
 
 - JWT `maraclaw-admin-token` via `useAuth`. Guards read context, not `localStorage`.
 - `403 { must_change_password: true }` is force-change, not logout. Keep the token.
-- Non-admin after login → `/login`. Members never see this app (`web-l`).
+- Non-admin after login → `/login`. Members never see this app (`web-e`).
 - New live screen: page + route here + nav. Query-string tabs stay query-string.
 - Catch-all is inside the shell, not a second public `*`.
 
 ## ANTI-PATTERNS
 
-- `/app` or other member routes (that is `web-l`).
+- `/app` or other member routes (that is `web-e`).
 - Implementing APIs or `fetch` in this folder.
 - A `/search-engine/analytics` path (keep `?tab=analytics`).
 - Metrics or Enterprise-settings routes until engine + page exist. Overview cards are teasers (no `href`).

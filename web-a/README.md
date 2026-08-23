@@ -19,7 +19,7 @@ Talks to the FastAPI backend in `../engine` - see [`engine/docs/admin-apis.md`](
 | Toasts | `sonner` |
 | Dates | `date-fns` |
 
-Brand tokens and mark align with `web-l` (shared warm OKLCH palette + `public/maraclaw-mark.svg`).
+Brand tokens and mark align with `web-e` (shared warm OKLCH palette + `public/maraclaw-mark.svg`).
 
 ## Develop
 
@@ -109,4 +109,4 @@ Shell + **login/session** shipped. Feature screens remain placeholders wired to 
 | Package | Role |
 |---------|------|
 | `engine/` | Backend API source of truth |
-| `web-l/` | Public marketing landing + member auth |
+| `web-e/` | End-user UI: public landing + member workspace |

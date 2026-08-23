@@ -11,7 +11,7 @@ type MaraClawLogoProps = {
 
 /**
  * MaraClaw brand mark: geometric claw gripping an AI spark-node.
- * Shared visual language with web-l.
+ * Shared visual language with web-e.
  */
 export function MaraClawLogo({
   className,

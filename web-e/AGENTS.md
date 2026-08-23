@@ -8,12 +8,12 @@
 
 ## OVERVIEW
 
-Two surfaces, one SPA: public marketing (`/`) plus member workspace (`/app/*`). React 19 + Vite 8 + Tailwind v4 + RR + TanStack Query (workspace only) + RHF/Zod + shadcn-style UI. JWT **`maraclaw-enduser-token`**. Admin console is `web-a`.
+End-user web UI, including the public landing page: marketing (`/`) plus member workspace (`/app/*`). React 19 + Vite 8 + Tailwind v4 + RR + TanStack Query (workspace only) + RHF/Zod + shadcn-style UI. JWT **`maraclaw-enduser-token`**. Admin console is `web-a`.
 
 ## STRUCTURE
 
 ```
-web-l/
+web-e/
 ├── index.html              # SPA shell + FOUC theme (`maraclaw-theme`)
 ├── vite.config.ts          # @ alias, :5173, proxy /api /ws /p → engine
 ├── components.json         # shadcn new-york / zinc / CSS vars / rsc:false
@@ -112,7 +112,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 ## COMMANDS
 
 ```bash
-cd web-l
+cd web-e
 npm install
 npm run dev       # Vite :5173, host true
 npm run lint      # oxlint
@@ -120,8 +120,8 @@ npm run build     # tsc -b && vite build → dist/
 npm run preview
 npm run test:e2e  # Playwright landing smoke (needs `npx playwright install chromium`)
 
-docker build -t maraclaw-web-l .
-docker run --rm -p 8080:8080 maraclaw-web-l
+docker build -t maraclaw-web-e .
+docker run --rm -p 8080:8080 maraclaw-web-e
 # http://localhost:8080  ·  /healthz
 ```
 

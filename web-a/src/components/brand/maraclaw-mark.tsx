@@ -5,7 +5,7 @@ type MaraClawMarkProps = {
   title?: string
 }
 
-/** Brand mark asset shared with web-l (`public/maraclaw-mark.svg`). */
+/** Brand mark asset shared with web-e (`public/maraclaw-mark.svg`). */
 export function MaraClawMark({ className, title = 'MaraClaw' }: MaraClawMarkProps) {
   return (
     <img

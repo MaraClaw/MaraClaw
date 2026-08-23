@@ -1,6 +1,6 @@
-# MaraClaw Landing (`web-l`)
+# MaraClaw End-user UI (`web-e`)
 
-🦞 Marketing landing and member auth for **MaraClaw** - OpenClaw agents for teams & companies.
+🦞 End-user web for **MaraClaw** — public landing plus member workspace. OpenClaw agents for teams & companies.
 
 - `/` marketing
 - `/register`, `/login`, `/join`, `/transfer` member account flows
@@ -17,7 +17,7 @@
 ## Develop
 
 ```bash
-cd web-l
+cd web-e
 npm install
 npm run dev
 ```
@@ -34,8 +34,8 @@ npm run preview
 Multi-stage image: **Node.js 26** builds the Vite SPA; **nginx (unprivileged)** serves `dist` on port **8080**.
 
 ```bash
-docker build -t maraclaw-web-l .
-docker run --rm -p 8080:8080 maraclaw-web-l
+docker build -t maraclaw-web-e .
+docker run --rm -p 8080:8080 maraclaw-web-e
 # open http://localhost:8080
 # health: http://localhost:8080/healthz
 ```

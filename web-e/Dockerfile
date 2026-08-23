@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
-# ─── MaraClaw landing (web-l) ───────────────────────────────────────────────
+# ─── MaraClaw end-user UI (web-e) ───────────────────────────────────────────
 # Multi-stage production image:
 #   1) deps    - install lockfile deps on Node 26 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
 #   3) runtime - unprivileged nginx serves static dist
 #
-# Build:  docker build -t maraclaw-web-l .
-#         docker build -t maraclaw-web-l --build-arg VITE_API_BASE_URL=https://api.example.com .
-# Run:    docker run --rm -p 8080:8080 maraclaw-web-l
+# Build:  docker build -t maraclaw-web-e .
+#         docker build -t maraclaw-web-e --build-arg VITE_API_BASE_URL=https://api.example.com .
+# Run:    docker run --rm -p 8080:8080 maraclaw-web-e
 
 ARG NODE_VERSION=26.7.0
 
@@ -51,8 +51,8 @@ RUN npm run build \
 # nginx-unprivileged: non-root by default, listens on 8080.
 FROM nginxinc/nginx-unprivileged:1.30.4-alpine AS runtime
 
-LABEL org.opencontainers.image.title="MaraClaw web-l" \
-      org.opencontainers.image.description="MaraClaw landing and member auth" \
+LABEL org.opencontainers.image.title="MaraClaw web-e" \
+      org.opencontainers.image.description="MaraClaw end-user UI: landing and member workspace" \
       org.opencontainers.image.vendor="MaraClaw"
 
 # Replace the default site with our SPA config (port 8080, security headers).
