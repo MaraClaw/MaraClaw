@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.services import agent_manager as agent_manager_module
-from app.services.agent_manager import TENCENTDB_BOOTSTRAP_MARKER, XAI_OAUTH_PROFILE_ID, AgentManager
+from app.services.agent_manager import (
+    OPENAI_OAUTH_PROFILE_ID,
+    TENCENTDB_BOOTSTRAP_MARKER,
+    XAI_OAUTH_PROFILE_ID,
+    AgentManager,
+)
 
 
 class RecordingContainerApi:
@@ -227,6 +232,87 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
     assert cred["expires"] == int(expires.timestamp() * 1000)
     legacy = json.loads((agent_dir / "credentials" / "oauth.json").read_text(encoding="utf-8"))
     assert legacy["xai"]["access"] == "xai-sub-access-token"
+
+
+def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monkeypatch):
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    manager = AgentManager.__new__(AgentManager)
+    agent = SimpleNamespace(id=uuid.uuid4(), name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="openai",
+        model="gpt-5.4",
+        api_key_encrypted="sk-not-used",
+        auth_kind="chatgpt_subscription",
+        label="ChatGPT",
+    )
+    fallback = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="openai",
+        model="gpt-5.6",
+        api_key_encrypted="sk-openai-key",
+        auth_kind="api_key",
+        label="GPT API",
+    )
+
+    config = manager._generate_openclaw_config(agent, primary, fallback=fallback, selected=primary)
+
+    assert config["agents"]["defaults"]["model"]["primary"] == "openai/gpt-5.4"
+    assert config["env"]["vars"]["OPENAI_API_KEY"] == "sk-openai-key"
+    assert config["auth"]["profiles"][OPENAI_OAUTH_PROFILE_ID] == {"provider": "openai", "mode": "oauth"}
+    assert config["auth"]["order"]["openai"] == [OPENAI_OAUTH_PROFILE_ID]
+
+
+def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -> None:
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
+    manager = AgentManager.__new__(AgentManager)
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    agent = SimpleNamespace(id=agent_id, name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    expires = datetime.now(UTC) + timedelta(hours=2)
+    access = (
+        "eyJhbGciOiJub25lIn0."
+        "eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWxpdmUifQ."
+        "sig"
+    )
+    primary = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="openai",
+        model="gpt-5.4",
+        api_key_encrypted=access,
+        refresh_token_encrypted="oa-sub-refresh-token",
+        token_expires_at=expires,
+        auth_kind="chatgpt_subscription",
+        label="ChatGPT",
+    )
+
+    path = manager.write_guest_config(agent, primary=primary, selected=primary)
+
+    assert path == agent_dir / "openclaw.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert "OPENAI_API_KEY" not in config["env"]["vars"]
+    assert config["auth"]["profiles"][OPENAI_OAUTH_PROFILE_ID]["mode"] == "oauth"
+    profiles = json.loads((agent_dir / "agents" / "main" / "agent" / "auth-profiles.json").read_text(encoding="utf-8"))
+    cred = profiles["profiles"][OPENAI_OAUTH_PROFILE_ID]
+    assert cred["type"] == "oauth"
+    assert cred["provider"] == "openai"
+    assert cred["access"] == access
+    assert cred["refresh"] == "oa-sub-refresh-token"
+    assert cred["accountId"] == "acct-live"
+    assert cred["expires"] == int(expires.timestamp() * 1000)
+    legacy = json.loads((agent_dir / "credentials" / "oauth.json").read_text(encoding="utf-8"))
+    assert legacy["openai"]["access"] == access
+    assert legacy["openai"]["accountId"] == "acct-live"
 
 
 def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):
