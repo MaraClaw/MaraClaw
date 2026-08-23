@@ -268,6 +268,9 @@ export function LlmModelsPage() {
 
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
       <ChatGPTSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+      <p className="text-sm text-muted-foreground">
+        A company can connect both subscriptions. Tokens stay on the server for each one.
+      </p>
 
       <Card>
         <CardHeader>
@@ -460,7 +463,7 @@ function GrokSubscriptionCard({
   useEffect(() => {
     if (status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-    toast.success('Grok subscription connected. Assign it as primary, secondary, or fallback.')
+    toast.success('Grok subscription connected. It is in the company pool.')
     setSession(null)
   }, [status.data?.status, queryClient])
 
@@ -568,7 +571,7 @@ function ChatGPTSubscriptionCard({
   useEffect(() => {
     if (status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-    toast.success('ChatGPT subscription connected. Assign it as primary, secondary, or fallback.')
+    toast.success('ChatGPT subscription connected. It is in the company pool.')
     setSession(null)
   }, [status.data?.status, queryClient])
 
@@ -580,9 +583,9 @@ function ChatGPTSubscriptionCard({
       <CardHeader>
         <CardTitle>Connect ChatGPT subscription</CardTitle>
         <CardDescription>
-          Sign in with ChatGPT Plus, Pro, Team, or Enterprise. Enable device-code authorization in
-          ChatGPT → Settings → Security first. The verification code is shown here; access tokens stay
-          on the server and are stored encrypted for this company.
+          Sign in with ChatGPT Plus, Pro, or Team. Enable device-code authorization in ChatGPT →
+          Settings → Security (personal) or in workspace permissions (Team). The verification code is
+          shown here; access tokens stay on the server and are stored encrypted for this company.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -645,14 +648,20 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const [pendingRemove, setPendingRemove] = useState(false)
   const [forceRemove, setForceRemove] = useState(false)
   const [removeHint, setRemoveHint] = useState<string | null>(null)
+  const subscription =
+    item.auth_kind === 'chatgpt_subscription' || item.auth_kind === 'grok_subscription'
 
   const save = useMutation({
     mutationFn: () =>
       updateLlmModel(item.id, {
         label: label.trim(),
         model: modelName.trim(),
-        base_url: baseUrl.trim() || null,
-        api_key: apiKey.trim() || undefined,
+        ...(subscription
+          ? {}
+          : {
+              base_url: baseUrl.trim() || null,
+              api_key: apiKey.trim() || undefined,
+            }),
         enabled,
         supports_vision: supportsVision,
         reasoning_effort: effort || 'none',
@@ -755,8 +764,16 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
           </CardTitle>
           <CardDescription>
-            {item.provider} / {item.model}
-            {item.api_key_masked ? ` · key ${item.api_key_masked}` : ''}
+            {item.auth_kind === 'chatgpt_subscription'
+              ? `ChatGPT subscription · ${item.model}`
+              : item.auth_kind === 'grok_subscription'
+                ? `Grok subscription · ${item.model}`
+                : `${item.provider} / ${item.model}`}
+            {item.auth_kind !== 'chatgpt_subscription' &&
+            item.auth_kind !== 'grok_subscription' &&
+            item.api_key_masked
+              ? ` · key ${item.api_key_masked}`
+              : ''}
           </CardDescription>
         </div>
       </CardHeader>
@@ -775,10 +792,12 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 onChange={(event) => setModelName(event.target.value)}
               />
             </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor={`${formId}-base`}>Base URL</Label>
-              <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-            </div>
+            {subscription ? null : (
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor={`${formId}-base`}>Base URL</Label>
+                <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
               <Select
@@ -796,17 +815,19 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
               </p>
             </div>
-            <div className="sm:col-span-2">
-              <PasswordField
-                id={`${formId}-key`}
-                label="New API key (optional)"
-                autoComplete="off"
-                hideLeadingIcon
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="Leave blank to keep the current key"
-              />
-            </div>
+            {subscription ? null : (
+              <div className="sm:col-span-2">
+                <PasswordField
+                  id={`${formId}-key`}
+                  label="New API key (optional)"
+                  autoComplete="off"
+                  hideLeadingIcon
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="Leave blank to keep the current key"
+                />
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
