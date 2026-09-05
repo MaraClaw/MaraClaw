@@ -5,7 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_SCRIPT = REPO_ROOT / "publish-openclaw-local-dockerfile.sh"
-OPENCLAW_VERSION = "2026.7.1-2"
+OPENCLAW_VERSION = "2026.9.1"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
