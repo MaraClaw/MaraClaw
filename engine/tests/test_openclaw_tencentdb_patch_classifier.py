@@ -56,19 +56,31 @@ process.stdout.write(`${process.version}\\n${acorn.version}:${ast.type}:${ast.bo
 def test_classifier_classifies_has_hooks_if_block_with_run_after_tool_call(
     tmp_path: Path,
 ) -> None:
-    # Given - OpenClaw 2026.7.1-2 ships this gated after_tool_call shape
+    # Given - OpenClaw 2026.9.1 ships this gated after_tool_call shape
     target = _write_target(
         tmp_path,
         "selection-hook.js",
-        """const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+        """const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
 if (hookRunnerAfter?.hasHooks("after_tool_call")) {
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : void 0;
   const hookEvent = {
     toolName,
+    params: startArgs,
+    runId,
+    toolCallId,
+    result: sanitizedResult,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : void 0,
     durationMs
   };
-  hookRunnerAfter.runAfterToolCall(hookEvent, { toolName }).catch((err) => {
-    ctx.log.warn(String(err));
+  hookRunnerAfter.runAfterToolCall(hookEvent, {
+    toolName,
+    agentId: ctx.params.agentId,
+    sessionKey: ctx.params.sessionKey,
+    sessionId: ctx.params.sessionId,
+    runId,
+    toolCallId
+  }).catch((err) => {
+    ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
   });
 }
 """,
