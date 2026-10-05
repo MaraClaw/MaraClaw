@@ -464,6 +464,7 @@ from app.api.agents import router as agents_router
 from app.api.atlassian import router as atlassian_router
 from app.api.auth import router as auth_router
 from app.api.chat_sessions import router as chat_sessions_router
+from app.api.departments import router as departments_router
 from app.api.dingtalk import router as dingtalk_router
 from app.api.discord_bot import router as discord_router
 from app.api.enterprise import router as enterprise_router
@@ -507,6 +508,7 @@ _CRUD_DB = [Depends(bind_crud_connection)]
 
 app.include_router(auth_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
