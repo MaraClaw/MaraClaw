@@ -206,7 +206,20 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: str) ->
         raise DefaultOrgUnavailableError("Organization is disabled")
     previous_tenant_id = user.tenant_id
     try:
-        async with connection_ctx():
+        async with connection_ctx() as db:
+            if db is not None:
+                from app.core.acl_locks import lock_tenants, lock_user
+
+                await lock_tenants(db, (previous_tenant_id, tenant.id))
+                await lock_user(db, user.id, previous_tenant_id)
+                current_user = await user_dao.get(user.id)
+                current_tenant = await tenant_dao.get(tenant.id)
+                if current_user is None or not current_user.is_active or _is_protected_admin(current_user):
+                    raise AlreadyInOrgError("Membership cannot be transferred")
+                if current_tenant is None or not current_tenant.is_active:
+                    raise DefaultOrgUnavailableError("Organization is disabled")
+                user = current_user
+                tenant = current_tenant
             if previous_tenant_id is not None and previous_tenant_id != tenant.id:
                 await org_member_dao.unbind_user_from_tenant(user.id, previous_tenant_id)
             updated = await user_dao.update(
