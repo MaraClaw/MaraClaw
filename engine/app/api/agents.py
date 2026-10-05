@@ -16,6 +16,7 @@ from python_on_whales import ClientNotFoundError
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
+from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.json_types import int_from_row, json_as_int, object_mapping_from, uuid_from_row
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator, list_visible_agents
@@ -23,13 +24,14 @@ from app.core.security import get_current_user
 from app.dao import agent_dao, agent_permission_dao, agent_template_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.local_department_dao import local_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.skill_dao import skill_dao
 from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
-from app.db.session import connection_ctx, flush_request_transaction
+from app.db.session import connection_ctx, flush_request_transaction, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
@@ -67,6 +69,7 @@ class AgentPermissionUpdate(BaseModel):
     scope_ids: list[uuid.UUID] = Field(default_factory=list[uuid.UUID])
     user_access: list[AgentPermissionUserAccess] = Field(default_factory=list[AgentPermissionUserAccess])
     access_level: str = "use"
+    department_ids: list[uuid.UUID] | None = None
 
 
 class AgentApprovalResolveRequest(BaseModel):
@@ -418,9 +421,7 @@ async def create_agent(
         effective_secondary_model_id,
         effective_fallback_model_id,
     )
-    assert_distinct_model_slots(
-        effective_primary_model_id, effective_secondary_model_id, effective_fallback_model_id
-    )
+    assert_distinct_model_slots(effective_primary_model_id, effective_secondary_model_id, effective_fallback_model_id)
     expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours) if ttl_hours and ttl_hours > 0 else None
 
     access_level = data.permission_access_level if data.permission_access_level in ("use", "manage") else "use"
@@ -580,8 +581,19 @@ async def get_agent_permissions(
     is_owner = is_agent_creator(current_user, agent)
     access_mode = agent.access_mode or "company"
 
+    department_ids = {p.scope_id for p in perms if p.scope_type == "department" and p.scope_id}
+    departments = await local_department_dao.get_many(list(department_ids)) if department_ids else []
+    department_access = [
+        {"id": str(d.id), "name": d.name, "access_level": "use"} for d in departments if d.tenant_id == agent.tenant_id
+    ]
+    department_fields = {
+        "department_ids": [item["id"] for item in department_access],
+        "department_access": department_access,
+    }
+
     if not perms:
         return {
+            **department_fields,
             "scope_type": access_mode,
             "scope_ids": [],
             "user_access": [],
@@ -647,6 +659,7 @@ async def get_agent_permissions(
             user_access.append(item)
 
     return {
+        **department_fields,
         "scope_type": scope_type,
         "scope_ids": scope_ids,
         "scope_names": scope_names,
@@ -663,6 +676,24 @@ async def get_agent_permissions(
 async def update_agent_permissions(
     agent_id: uuid.UUID, data: AgentPermissionUpdate, current_user: UserRecord = Depends(get_current_user)
 ):
+    async with optional_connection_ctx() as db:
+        agent, _ = await check_agent_access(current_user, agent_id)
+        if db is not None:
+            await lock_tenants(db, (agent.tenant_id, current_user.tenant_id))
+            await lock_user(db, current_user.id, current_user.tenant_id)
+            await lock_agent(db, agent_id, agent.tenant_id)
+            actor = await user_dao.get_with_identity(current_user.id, fresh=True)
+            if actor is None or not actor.is_active:
+                raise HTTPException(403, "User is inactive")
+            from app.core.security import raise_if_password_change_required
+
+            raise_if_password_change_required(actor)
+        else:
+            actor = current_user
+        return await _update_agent_permissions_locked(agent_id, data, actor)
+
+
+async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermissionUpdate, current_user: UserRecord):
     """Update agent permission scope (owner or platform_admin only)."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
@@ -678,6 +709,27 @@ async def update_agent_permissions(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported scope_type")
     if scope_type == "user":
         scope_type = "private"
+
+    supplied_departments = data.department_ids
+    if scope_type != "custom" and supplied_departments:
+        raise HTTPException(422, "Department grants require custom sharing")
+    department_ids: set[uuid.UUID] = set()
+    if scope_type == "custom":
+        if supplied_departments is None:
+            department_ids = {
+                p.scope_id
+                for p in await agent_permission_dao.list_for_agent(agent_id)
+                if p.scope_type == "department" and p.scope_id is not None
+            }
+        else:
+            department_ids = set(supplied_departments)
+        departments = await local_department_dao.get_many(list(department_ids)) if department_ids else []
+        if len(departments) != len(department_ids) or any(d.tenant_id != agent.tenant_id for d in departments):
+            raise HTTPException(422, "Invalid department for this organization")
+        direct_ids = set(scope_ids) | {uid for item in user_access if (uid := item.id or item.user_id) is not None}
+        direct_users = await user_dao.get_many(list(direct_ids)) if direct_ids else []
+        if len(direct_users) != len(direct_ids) or any(u.tenant_id != agent.tenant_id for u in direct_users):
+            raise HTTPException(422, "Invalid user for this organization")
 
     await agent_permission_dao.delete_for_agent(agent_id)
 
@@ -743,6 +795,11 @@ async def update_agent_permissions(
                     obj_in={"agent_id": agent_id, "scope_type": "user", "scope_id": uid, "access_level": "manage"}
                 )
 
+    for department_id in sorted(department_ids):
+        await agent_permission_dao.create(
+            obj_in={"agent_id": agent_id, "scope_type": "department", "scope_id": department_id, "access_level": "use"}
+        )
+
     relationships_changed = await ensure_access_granted_platform_relationships(
         None,
         agent,
@@ -754,6 +811,17 @@ async def update_agent_permissions(
         await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}
+
+
+@router.get("/{agent_id}/permissions/departments")
+async def get_agent_permission_departments(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, object]:
+    agent, level = await check_agent_access(current_user, agent_id)
+    if level != "manage":
+        raise HTTPException(403, "Only manager can list sharing departments")
+    departments = await local_department_dao.list_for_tenant(agent.tenant_id) if agent.tenant_id else []
+    return {"departments": [{"id": str(d.id), "name": d.name} for d in departments]}
 
 
 @router.get("/{agent_id}/permissions/candidates")
@@ -823,11 +891,7 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
-    if (
-        "primary_model_id" in update_data
-        or "fallback_model_id" in update_data
-        or "secondary_model_id" in update_data
-    ):
+    if "primary_model_id" in update_data or "fallback_model_id" in update_data or "secondary_model_id" in update_data:
         if not is_llm_pool_admin(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
