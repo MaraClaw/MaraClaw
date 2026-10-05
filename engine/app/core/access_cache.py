@@ -84,7 +84,7 @@ def _tenant_token(user: _UserLike) -> str:
 
 async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
     """Return a cached manage/use level, or None on miss / Redis disabled / error."""
-    if _ttl_seconds() <= 0:
+    if _ttl_seconds() <= 0 or has_pending_acl_writes():
         return None
     user_id = user.id
     try:
@@ -142,7 +142,7 @@ async def set_cached_level(
     *,
     observed_ver: str | None = None,
 ) -> None:
-    if _ttl_seconds() <= 0 or level not in {"manage", "use"}:
+    if _ttl_seconds() <= 0 or level not in {"manage", "use"} or has_pending_acl_writes():
         return
     user_id = user.id
     try:
@@ -160,12 +160,26 @@ async def set_cached_level(
                 "ver": current,
             }
         )
-        _ = await asyncio.wait_for(
-            client.set(_dec_key(agent_id, user_id), payload, ex=_ttl_seconds()),
+        await asyncio.wait_for(
+            client.eval(
+                "if (redis.call('GET', KEYS[1]) or '0') ~= ARGV[1] then return 0 end "
+                "redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3]); return 1",
+                2,
+                _ver_key(agent_id),
+                _dec_key(agent_id, user_id),
+                current,
+                payload,
+                str(_ttl_seconds()),
+            ),
             timeout=_redis_wait_seconds(),
         )
     except Exception as exc:
         logger.debug("access_cache set skipped: {}", type(exc).__name__)
+
+
+def has_pending_acl_writes() -> bool:
+    pending = _deferred_acl.get()
+    return pending is not None and bool(pending.bumps or pending.drops)
 
 
 def begin_deferred_acl() -> Token[_DeferredAcl | None]:
@@ -198,16 +212,20 @@ async def bump_agent_acl_version(agent_id: uuid.UUID | None) -> None:
     that scope commits so concurrent readers cannot cache a grant under the
     new version while the revoke is still uncommitted.
     """
-    if agent_id is None or _ttl_seconds() <= 0:
+    clear_request_memo()
+    if agent_id is None:
         return
     pending = _deferred_acl.get()
     if pending is not None:
         pending.bumps.add(agent_id)
         return
+    if _ttl_seconds() <= 0:
+        return
     await _incr_acl_version_now(agent_id)
 
 
 async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
+    clear_request_memo()
     if agent_id is None:
         return
     pending = _deferred_acl.get()
