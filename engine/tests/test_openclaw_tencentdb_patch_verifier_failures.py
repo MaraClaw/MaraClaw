@@ -51,6 +51,23 @@ def test_verifier_emits_one_redacted_allowlisted_failure(
     assert_redacted_failure(result, expected, str(root), "target-a.js", "target-b.js")
 
 
+def test_verifier_scans_mjs_but_rejects_dist_with_only_mjs_decoy_as_no_target(tmp_path: Path) -> None:
+    # Given
+    root = _root_with_dist(tmp_path)
+    decoy = _write_target(root, "package-helper-decoy.mjs", decoy_source())
+    original_decoy = decoy.read_bytes()
+    asset = tmp_path / "patch.sh"
+    write_patch_asset(asset)
+
+    # When
+    result = run_verifier(root, asset)
+
+    # Then
+    assert_redacted_failure(result, "stage=candidate code=no-target", str(root), decoy.name)
+    assert decoy.read_bytes() == original_decoy
+    assert not backup_path(decoy).exists()
+
+
 @pytest.mark.parametrize("backup_kind", ["symlink", "directory"])
 def test_verifier_rejects_unsafe_preexisting_backup(tmp_path: Path, backup_kind: str) -> None:
     # Given

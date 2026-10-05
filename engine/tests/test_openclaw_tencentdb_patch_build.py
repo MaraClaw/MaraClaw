@@ -1,12 +1,16 @@
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 from openclaw_tencentdb_patch_verifier_fixtures import (
     CLASSIFIER_BIN,
     ProbeConfig,
     classifier_decoy_source,
     classifier_verifier_source,
+    require_command,
     run_classifier_probe,
 )
 
@@ -18,6 +22,15 @@ VERIFIER_ASSET: Final = "docker/openclaw/verify-tencentdb-openclaw-patch.sh"
 VERIFIER_BIN: Final = "/usr/local/bin/verify-tencentdb-openclaw-patch.sh"
 CLASSIFIER_ASSET: Final = "docker/openclaw/classify-tencentdb-openclaw-hook.cjs"
 PATCH_ASSET: Final = "/opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh"
+ADAPTER: Final = REPO_ROOT / "docker" / "openclaw" / "adapt-tencentdb-patch-discovery.sh"
+ADAPTER_ASSET: Final = "docker/openclaw/adapt-tencentdb-patch-discovery.sh"
+ADAPTER_BIN: Final = "/usr/local/bin/adapt-tencentdb-patch-discovery.sh"
+ADAPTER_COPY: Final = ("--chown=root:root", ADAPTER_ASSET, ADAPTER_BIN)
+ADAPTER_RUN: Final = f"{ADAPTER_BIN} {PATCH_ASSET}"
+UPSTREAM_DISCOVERY: Final = (
+    "mapfile -t CANDIDATE_FILES < <(grep -rl 'after_tool_call' \"$DIST_DIR\" --include='*.js' 2>/dev/null || true)"
+)
+ADAPTED_DISCOVERY: Final = UPSTREAM_DISCOVERY.replace("--include='*.js'", "--include='*.js' --include='*.mjs'", 1)
 VERIFIER_COPY: Final = ("--chown=root:root", VERIFIER_ASSET, VERIFIER_BIN)
 CLASSIFIER_COPY: Final = ("--chown=root:root", CLASSIFIER_ASSET, CLASSIFIER_BIN)
 DYNAMIC_ROOT: Final = 'OPENCLAW_ROOT="$(npm root --global)/openclaw"'
@@ -68,6 +81,10 @@ def _static_contract_errors(dockerfile_source: str, bootstrap_source: str) -> tu
     errors: list[str] = []
     if VERIFIER_COPY not in copies or CLASSIFIER_COPY not in copies:
         errors.append("missing root-owned co-located classifier COPY")
+    if ADAPTER_COPY not in copies:
+        errors.append("missing root-owned patch adaptation COPY")
+    if ADAPTER_RUN not in runs or ROOT_RUN not in runs or runs.index(ADAPTER_RUN) > runs.index(ROOT_RUN):
+        errors.append("missing guarded patch discovery adaptation before root verification")
     if f"chmod 0755 {VERIFIER_BIN}" not in runs or ROOT_RUN not in runs:
         errors.append("missing root verification RUN semantics")
     if any("|| true" in body for body in runs):
@@ -143,6 +160,15 @@ def test_tencentdb_patch_build_contract_rejects_weakened_invariants(tmp_path: Pa
         (compliant.replace(DYNAMIC_ROOT, 'OPENCLAW_ROOT="/static"', 1), "root verification RUN semantics"),
         (compliant.replace(f"&& {VERIFIER_BIN}", f"&& {VERIFIER_BIN} || true", 1), "must not suppress failures"),
         (
+            compliant.replace(f"COPY --chown=root:root {ADAPTER_ASSET}", f"COPY --chown=node:node {ADAPTER_ASSET}", 1),
+            "patch adaptation COPY",
+        ),
+        (compliant.replace(f"RUN {ADAPTER_RUN}\n", "", 1), "guarded patch discovery adaptation"),
+        (
+            compliant.replace(f"RUN {ADAPTER_RUN}\n", "", 1).replace(root_run, f"{root_run}\nRUN {ADAPTER_RUN}", 1),
+            "guarded patch discovery adaptation",
+        ),
+        (
             compliant.replace("\nUSER node\n", "\nRUN hook-helpers-generated.js\nUSER node\n", 2),
             "hard-code dist bundle names",
         ),
@@ -150,3 +176,54 @@ def test_tencentdb_patch_build_contract_rejects_weakened_invariants(tmp_path: Pa
     )
     for candidate, expected in mutations:
         assert expected in "\n".join(_static_contract_errors(candidate, bootstrap))
+
+
+def _run_adapter(script: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - controlled repository helper and temporary fixture.
+        [require_command("bash"), str(ADAPTER), str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_patch_discovery_adapter_rewrites_exact_upstream_line_to_include_mjs(tmp_path: Path) -> None:
+    # Given
+    script = tmp_path / "patch.sh"
+    prefix = "#!/usr/bin/env bash\nset -euo pipefail\n"
+    suffix = 'info "found ${#CANDIDATE_FILES[@]}"\n'
+    script.write_text(f"{prefix}{UPSTREAM_DISCOVERY}\n{suffix}", encoding="utf-8")
+
+    # When
+    result = _run_adapter(script)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert script.read_text(encoding="utf-8") == f"{prefix}{ADAPTED_DISCOVERY}\n{suffix}"
+
+
+@pytest.mark.parametrize(
+    ("name", "discovery_lines"),
+    [
+        ("absent", ""),
+        ("duplicated", f"{UPSTREAM_DISCOVERY}\n{UPSTREAM_DISCOVERY}\n"),
+        ("already-adapted", f"{ADAPTED_DISCOVERY}\n"),
+        ("indented", f"    {UPSTREAM_DISCOVERY}\n"),
+    ],
+)
+def test_patch_discovery_adapter_fails_closed_on_upstream_source_drift(
+    tmp_path: Path, name: str, discovery_lines: str
+) -> None:
+    # Given
+    script = tmp_path / f"{name}.sh"
+    script.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{discovery_lines}", encoding="utf-8")
+    original = script.read_bytes()
+
+    # When
+    result = _run_adapter(script)
+
+    # Then
+    assert result.returncode == 1
+    assert result.stderr.startswith("[tencentdb-patch-adapt] ")
+    assert script.read_bytes() == original

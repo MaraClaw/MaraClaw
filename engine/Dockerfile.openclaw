@@ -2,16 +2,16 @@ ARG OPENCLAW_BASE_IMAGE=node:26.7.0-bookworm-slim
 FROM ${OPENCLAW_BASE_IMAGE}
 
 ARG TENCENTDB_PLUGIN_VERSION=1.0.1
-ARG OPENCLAW_VERSION=2026.9.1
-ARG OPENCLAW_SHA256=sha256:1bfcac877d53f1e41b69d15c24e081895b2f07d6ff2ffdfe0bf8a7336ab00e59
+ARG OPENCLAW_VERSION=2026.9.8
+ARG OPENCLAW_SHA256=sha256:317e0a58db32b386e01187fe9c5c4de541f4ce6d815657bf79a102609b81752a
 ARG TINI_VERSION=0.19.0-1+b3
 ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
 ARG CURL_VERSION=7.88.1-10+deb12u15
 ARG LIBCURL4_VERSION=7.88.1-10+deb12u15
 ARG BASH_VERSION=5.2.15-2+b13
 ARG LIBICU72_VERSION=72.1-3+deb12u1
-ARG GOGCLI_VERSION=0.39.0
-ARG GOGCLI_SHA256=sha256:040984e38291da2f23ddeefbd67371c5bf32de6be3177d4f5a816f7fe51bacb7
+ARG GOGCLI_VERSION=0.43.0
+ARG GOGCLI_SHA256=sha256:f66e3c9ab7664b7633d57d2d5303e0db75deb4045e1b32c3493c0d8ba68a70f7
 
 USER root
 RUN apt-get update \
@@ -63,11 +63,14 @@ COPY --chown=node:node docker/openclaw/bootstrap-memory-tencentdb.sh /usr/local/
 COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh
 COPY --chown=root:root docker/openclaw/verify-tencentdb-openclaw-patch.sh /usr/local/bin/verify-tencentdb-openclaw-patch.sh
 COPY --chown=root:root docker/openclaw/classify-tencentdb-openclaw-hook.cjs /usr/local/bin/classify-tencentdb-openclaw-hook.cjs
+COPY --chown=root:root docker/openclaw/adapt-tencentdb-patch-discovery.sh /usr/local/bin/adapt-tencentdb-patch-discovery.sh
 RUN chmod 0755 /usr/local/bin/bootstrap-officecli.sh \
     && chmod 0755 /usr/local/bin/bootstrap-memory-tencentdb.sh \
     && chmod 0755 /usr/local/bin/validate-gogcli.sh \
     && chmod 0755 /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh
 RUN chmod 0755 /usr/local/bin/verify-tencentdb-openclaw-patch.sh
+RUN chmod 0755 /usr/local/bin/adapt-tencentdb-patch-discovery.sh
+RUN /usr/local/bin/adapt-tencentdb-patch-discovery.sh /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh
 RUN OPENCLAW_ROOT="$(npm root --global)/openclaw" \
     && /usr/local/bin/verify-tencentdb-openclaw-patch.sh \
         "$OPENCLAW_ROOT" \
