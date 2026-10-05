@@ -203,6 +203,7 @@ class WebSocketChatHandler:
     user: UserRecord
     agent: AgentRecord
     conv_id: str
+    access_level: str
 
     def __init__(
         self,
@@ -395,6 +396,21 @@ class WebSocketChatHandler:
             if not content and not is_onboarding_trigger:
                 continue
 
+            try:
+                self.user = await load_user_from_access_token(
+                    self.token, require_active=True, enforce_password_change=True, fresh=True
+                )
+            except HTTPException as exc:
+                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await self.websocket.close(code=4001)
+                return
+            try:
+                self.agent, self.access_level = await check_agent_access(self.user, self.agent_id, fresh=True)
+            except HTTPException as exc:
+                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await self.websocket.close(code=4003)
+                return
+
             if is_onboarding_trigger:
                 if await self._handle_onboarding_trigger_guard():
                     continue
@@ -509,4 +525,3 @@ class WebSocketChatHandler:
             await self.websocket.send_json({"type": "error", "content": str(exc)})
             return
         logger.info("[WS] OpenClaw: message queued for gateway poll")
-

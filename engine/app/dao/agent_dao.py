@@ -98,6 +98,22 @@ class AgentDAO(BaseDAO[AgentRecord]):
     columns: ClassVar[tuple[str, ...]] = _AGENT_COLUMNS
     record_factory = staticmethod(AgentRecord.from_row)
 
+    async def create(self, *, obj_in: Mapping[str, object]) -> AgentRecord:
+        from app.core.acl_locks import lock_tenants, lock_user
+        from app.db.session import connection_ctx
+
+        creator_id = uuid_from_row(obj_in["creator_id"])
+        target = obj_in.get("tenant_id")
+        target_id = uuid_from_row(target) if target is not None else None
+        async with connection_ctx() as db:
+            row = await db.fetchone("SELECT tenant_id FROM users WHERE id = %(id)s", {"id": creator_id})
+            creator_tenant = uuid_from_row(row["tenant_id"]) if row and row["tenant_id"] is not None else None
+            # Take ACL mutexes before INSERT acquires tenant/creator FK KEY SHARE locks.
+            # Joining the caller's transaction retains them through initial grants.
+            await lock_tenants(db, (target_id, creator_tenant))
+            await lock_user(db, creator_id, creator_tenant)
+            return await super().create(obj_in=obj_in)
+
     async def get(self, id: UUID) -> AgentRecord | None:
         cached = memo_get("agent", id)
         if isinstance(cached, AgentRecord):
@@ -107,19 +123,36 @@ class AgentDAO(BaseDAO[AgentRecord]):
             memo_set("agent", agent.id, agent)
         return agent
 
-    async def update(self, *, db_obj: AgentRecord, obj_in: Mapping[str, Any]) -> AgentRecord:
-        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
-        memo_set("agent", updated.id, updated)
-        if _AGENT_POLICY_COLUMNS.intersection(obj_in):
-            await bump_agent_acl_version(updated.id)
-        return updated
+    async def update(self, *, db_obj: AgentRecord, obj_in: Mapping[str, object]) -> AgentRecord:
+        from app.core.acl_locks import lock_agent, lock_tenants
+        from app.db.session import optional_connection_ctx
+
+        if not _AGENT_POLICY_COLUMNS.intersection(obj_in):
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            memo_set("agent", updated.id, updated)
+            return updated
+
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                target: object = obj_in.get("tenant_id", db_obj.tenant_id)
+                target_id = uuid_from_row(target) if target is not None else None
+                await lock_tenants(db, (db_obj.tenant_id, target_id))
+                await lock_agent(db, db_obj.id, db_obj.tenant_id)
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            memo_set("agent", updated.id, updated)
+            if _AGENT_POLICY_COLUMNS.intersection(obj_in):
+                await bump_agent_acl_version(updated.id)
+            return updated
 
     async def delete(self, *, id: UUID) -> AgentRecord | None:
-        deleted = await super().delete(id=id)
-        if deleted is not None:
-            memo_drop("agent", deleted.id)
-            await drop_agent_acl_version(deleted.id)
-        return deleted
+        from app.core.acl_locks import agent_acl_mutation
+
+        async with agent_acl_mutation(id):
+            deleted = await super().delete(id=id)
+            if deleted is not None:
+                memo_drop("agent", deleted.id)
+                await drop_agent_acl_version(deleted.id)
+            return deleted
 
     async def get_by_name(self, name: str) -> AgentRecord | None:
         async with self.session() as db:
@@ -200,25 +233,30 @@ class AgentDAO(BaseDAO[AgentRecord]):
             limit_sql = " LIMIT %(limit)s"
             params["limit"] = limit
 
-        if role in ("platform_admin", "org_admin"):
-            sql = (
-                f"SELECT {self._select_list('a')} FROM agents a "
-                + "WHERE a.tenant_id = %(tenant_id)s "
-                + "AND (a.creator_id = %(user_id)s OR a.access_mode <> 'private')"
-                + f"{exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
-            )
-        else:
-            sql = (
-                f"SELECT {self._select_list('a')} FROM agents a "
-                + "WHERE a.tenant_id = %(tenant_id)s AND ("
-                + " a.creator_id = %(user_id)s"
-                + " OR a.access_mode = 'company'"
-                + " OR a.id IN ("
-                + "   SELECT ap.agent_id FROM agent_permissions ap"
-                + "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
-                + " )"
-                + f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
-            )
+        del role  # Authorization uses the current SQL membership, not the caller's snapshot.
+        sql = (
+            f"SELECT {self._select_list('a')} FROM agents a "
+            + "WHERE a.tenant_id = %(tenant_id)s AND EXISTS ("
+            + " SELECT 1 FROM users cu WHERE cu.id = %(user_id)s"
+            + " AND cu.is_active IS TRUE AND (cu.tenant_id = a.tenant_id OR cu.role = 'platform_admin')) AND ("
+            + " a.creator_id = %(user_id)s"
+            + " OR (a.access_mode <> 'private' AND EXISTS (SELECT 1 FROM users cu"
+            + " WHERE cu.id = %(user_id)s AND cu.role IN ('platform_admin', 'org_admin')))"
+            + " OR a.access_mode = 'company'"
+            + " OR a.id IN ("
+            + "   SELECT ap.agent_id FROM agent_permissions ap"
+            + "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
+            + "   AND a.access_mode = 'custom'"
+            + " ) OR (a.access_mode = 'custom' AND EXISTS ("
+            + "   SELECT 1 FROM users u JOIN local_department_memberships m"
+            + "   ON m.user_id = u.id AND m.tenant_id = u.tenant_id"
+            + "   JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id"
+            + "   JOIN agent_permissions ap ON ap.scope_type = 'department' AND ap.scope_id = d.id"
+            + "   WHERE u.id = %(user_id)s AND u.is_active IS TRUE"
+            + "   AND u.tenant_id = a.tenant_id AND ap.agent_id = a.id AND ap.access_level = 'use'"
+            + " ))"
+            + f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
+        )
 
         async with self.session() as db:
             rows = await db.fetchall(sql, params)
@@ -230,16 +268,14 @@ class AgentDAO(BaseDAO[AgentRecord]):
 
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s LIMIT 1",
+                f"SELECT {self._select_list()} FROM agents " + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": api_key},
             )
             if row:
                 return AgentRecord.from_row(row)
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM agents "
-                + "WHERE api_key_hash = %(key)s LIMIT 1",
+                f"SELECT {self._select_list()} FROM agents " + "WHERE api_key_hash = %(key)s LIMIT 1",
                 {"key": key_hash},
             )
             return AgentRecord.from_row(row) if row else None
@@ -913,21 +949,35 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
     columns: ClassVar[tuple[str, ...]] = _PERM_COLUMNS
     record_factory = staticmethod(AgentPermissionRecord.from_row)
 
-    async def create(self, *, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
-        created = await super().create(obj_in=obj_in)
-        await bump_agent_acl_version(created.agent_id)
-        return created
+    async def create(self, *, obj_in: Mapping[str, object]) -> AgentPermissionRecord:
+        from app.core.acl_locks import agent_acl_mutation
+
+        async with agent_acl_mutation(uuid_from_row(obj_in["agent_id"])):
+            created = await super().create(obj_in=obj_in)
+            await bump_agent_acl_version(created.agent_id)
+            return created
 
     async def update(self, *, db_obj: AgentPermissionRecord, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
-        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
-        await bump_agent_acl_version(updated.agent_id)
-        return updated
+        from app.core.acl_locks import agent_acl_mutation
+
+        async with agent_acl_mutation(db_obj.agent_id):
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            await bump_agent_acl_version(updated.agent_id)
+            return updated
 
     async def delete(self, *, id: UUID) -> AgentPermissionRecord | None:
-        deleted = await super().delete(id=id)
-        if deleted is not None:
-            await bump_agent_acl_version(deleted.agent_id)
-        return deleted
+        from app.core.acl_locks import agent_acl_mutation
+        from app.db.session import optional_connection_ctx
+
+        async with optional_connection_ctx():
+            permission = await self.get(id)
+            if permission is None:
+                return None
+            async with agent_acl_mutation(permission.agent_id):
+                deleted = await super().delete(id=id)
+                if deleted is not None:
+                    await bump_agent_acl_version(deleted.agent_id)
+                return deleted
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[AgentPermissionRecord]:
         async with self.session() as db:
@@ -947,12 +997,15 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
             return [uuid_from_row(row["scope_id"]) for row in rows if row.get("scope_id") is not None]
 
     async def delete_for_agent(self, agent_id: UUID) -> None:
-        async with self.session() as db:
-            await db.execute(
-                "DELETE FROM agent_permissions WHERE agent_id = %(agent_id)s",
-                {"agent_id": agent_id},
-            )
-        await bump_agent_acl_version(agent_id)
+        from app.core.acl_locks import agent_acl_mutation
+
+        async with agent_acl_mutation(agent_id):
+            async with self.session() as db:
+                await db.execute(
+                    "DELETE FROM agent_permissions WHERE agent_id = %(agent_id)s",
+                    {"agent_id": agent_id},
+                )
+            await bump_agent_acl_version(agent_id)
 
 
 agent_dao = AgentDAO()

@@ -179,6 +179,10 @@ async def test_check_agent_access_blocks_expired_use_but_allows_manage(monkeypat
         status="ready",
     )
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=expired))
+    member.is_active = creator.is_active = True
+    monkeypatch.setattr(
+        permissions.user_dao, "get", AsyncMock(side_effect=lambda uid: member if uid == member.id else creator)
+    )
     monkeypatch.setattr(permissions.access_cache, "get_cached_level", AsyncMock(return_value=None))
     monkeypatch.setattr(permissions.access_cache, "read_acl_version", AsyncMock(return_value=0))
     monkeypatch.setattr(permissions.access_cache, "set_cached_level", AsyncMock())

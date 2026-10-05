@@ -185,6 +185,7 @@ async def load_user_from_access_token(
     *,
     require_active: bool = True,
     enforce_password_change: bool = True,
+    fresh: bool = False,
 ) -> UserRecord:
     """Resolve a JWT to a user with identity loaded (shared by REST deps, WS, file download)."""
     payload = decode_access_token(token)
@@ -197,11 +198,13 @@ async def load_user_from_access_token(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
-    user = await user_dao.get_with_identity(uid)
+    user = await user_dao.get_with_identity(uid, fresh=True) if fresh else await user_dao.get_with_identity(uid)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     if require_active and not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    if fresh and user.identity is not None and not user.identity.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity is inactive")
     if enforce_password_change:
         raise_if_password_change_required(user)
     return user

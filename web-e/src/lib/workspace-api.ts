@@ -546,7 +546,10 @@ export type AgentPermissions = {
   access_level?: string
   effective_access_level?: string
   scope_type?: string
-  user_access?: Array<{ id: string; name?: string; email?: string; access_level?: string }>
+  scope_ids?: string[]
+  user_access?: Array<{ id: string; name?: string; email?: string; access_level: 'use' | 'manage' }>
+  readonly department_ids: readonly string[]
+  readonly department_access: readonly { readonly id: string; readonly name: string; readonly access_level: 'use' }[]
 }
 
 export async function getAgentPermissions(agentId: string): Promise<AgentPermissions> {
@@ -560,6 +563,7 @@ export async function updateAgentPermissions(
     access_level?: string
     scope_ids?: string[]
     user_access?: Array<{ id: string; access_level: string }>
+    readonly department_ids?: readonly string[]
   },
 ): Promise<void> {
   await apiRequest(`/api/agents/${agentId}/permissions`, { method: 'PUT', body })

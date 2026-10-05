@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
 from app.core import access_cache, permissions
 from app.core.access_cache import bump_agent_acl_version
+from app.records.agent import AgentPermissionRecord, AgentRecord
+from app.records.user import UserRecord
 
 
 class _FakePipeline:
@@ -55,9 +59,18 @@ class FakeRedis:
     async def delete(self, key: str) -> None:
         self.store.pop(key, None)
 
+    async def eval(self, script, key_count, version_key, decision_key, expected, payload, ttl):
+        del script, key_count, ttl
+        if self.fail:
+            raise RuntimeError("redis down")
+        if self.store.get(version_key, "0") != expected:
+            return 0
+        self.store[decision_key] = payload
+        return 1
+
 
 @pytest.fixture(autouse=True)
-def _reset_memo_and_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_memo_and_ttl(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     access_cache.clear_request_memo()
     access_cache._deferred_acl.set(None)
     monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
@@ -74,20 +87,21 @@ def _user(**overrides):
         "is_active": True,
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    return UserRecord(**values)
 
 
 def _agent(**overrides):
     tenant = overrides.pop("tenant_id", uuid.uuid4())
     values = {
         "id": uuid.uuid4(),
+        "name": "Test agent",
         "creator_id": uuid.uuid4(),
         "tenant_id": tenant,
         "access_mode": "company",
         "company_access_level": "use",
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    return AgentRecord(**values)
 
 
 def test_decide_creator_and_admin_and_custom() -> None:
@@ -101,7 +115,11 @@ def test_decide_creator_and_admin_and_custom() -> None:
     assert permissions.decide_agent_access(admin, public) == "manage"
 
     other = _user(tenant_id=tenant)
-    perms = [SimpleNamespace(scope_type="user", scope_id=other.id, access_level="manage")]
+    perms = [
+        AgentPermissionRecord(
+            id=uuid.uuid4(), agent_id=agent.id, scope_type="user", scope_id=other.id, access_level="manage"
+        )
+    ]
     custom = _agent(tenant_id=tenant, access_mode="custom", company_access_level=None)
     assert permissions.decide_agent_access(other, custom, perms) == "manage"
     assert permissions.decide_agent_access(other, custom, []) is None
@@ -120,6 +138,7 @@ async def test_request_memo_loads_agent_once(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
 
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     first = await permissions.check_agent_access(user, agent.id)
     second = await permissions.check_agent_access(user, agent.id)
     assert first == second
@@ -146,6 +165,7 @@ async def test_redis_hit_skips_permission_list(monkeypatch: pytest.MonkeyPatch) 
         return fake
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
 
@@ -172,6 +192,7 @@ async def test_role_change_misses_cache(monkeypatch: pytest.MonkeyPatch) -> None
         return fake
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
 
     await permissions.check_agent_access(user, agent.id)
@@ -199,6 +220,7 @@ async def test_version_bump_invalidates_decision(monkeypatch: pytest.MonkeyPatch
         return fake
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
 
@@ -223,6 +245,7 @@ async def test_redis_failure_falls_open(monkeypatch: pytest.MonkeyPatch) -> None
         return fake
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
 
     agent_row, level = await permissions.check_agent_access(user, agent.id)
@@ -255,7 +278,12 @@ async def test_denied_access_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> N
     async def get_redis():
         return fake
 
+    async def has_department_access(_user_id, _agent_id):
+        return False
+
+    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", has_department_access)
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
 
@@ -345,6 +373,120 @@ class _SessionRaw:
         return None
 
 
+@pytest.mark.asyncio
+async def test_permission_rollback_never_publishes_acl_version(monkeypatch):
+    from app.dao.agent_dao import agent_permission_dao
+    from app.db import session as session_module
+
+    agent_id = uuid.uuid4()
+    fake = FakeRedis()
+    raw = _SessionRaw()
+
+    async def redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(session_module, "get_pool", lambda: _SessionPool(raw))
+    token = session_module._conn_ctx.set(None)
+
+    async def abort_mutation():
+        async with session_module.connection_ctx():
+            await agent_permission_dao.delete_for_agent(agent_id)
+            raise ValueError("abort mutation")
+
+    try:
+        with pytest.raises(ValueError):
+            await abort_mutation()
+        assert fake.store == {}
+        assert raw.commits == 0
+    finally:
+        session_module._conn_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_dirty_acl_inputs_are_never_cached(monkeypatch):
+    fake = FakeRedis()
+    agent_id = uuid.uuid4()
+    user = _user()
+
+    async def redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_redis", redis)
+    await access_cache.set_cached_level(user, agent_id, "use", observed_ver="0")
+    assert await access_cache.get_cached_level(user, agent_id) == "use"
+    token = access_cache.begin_deferred_acl()
+    try:
+        await access_cache.bump_agent_acl_version(agent_id)
+        assert await access_cache.get_cached_level(user, agent_id) is None
+        await access_cache.set_cached_level(user, agent_id, "manage", observed_ver="0")
+    finally:
+        access_cache.end_deferred_acl(token)
+    assert await access_cache.get_cached_level(user, agent_id) == "use"
+
+
+@pytest.mark.asyncio
+async def test_version_change_between_validation_and_write_rejects_stale_fill(monkeypatch):
+    agent_id = uuid.uuid4()
+
+    class ConcurrentRedis(FakeRedis):
+        async def eval(self, script, key_count, version_key, decision_key, expected, payload, ttl):
+            self.store[version_key] = "1"
+            return await super().eval(script, key_count, version_key, decision_key, expected, payload, ttl)
+
+    fake = ConcurrentRedis()
+
+    async def redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_redis", redis)
+    await access_cache.set_cached_level(_user(), agent_id, "use", observed_ver="0")
+    assert not any(key.startswith("acl:v1:") for key in fake.store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("helper", ["request", "user_id"])
+async def test_access_helpers_observe_version_before_decision_inputs(monkeypatch, helper):
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id)
+    fake = FakeRedis()
+
+    async def redis():
+        return fake
+
+    async def agent_input(_id):
+        fake.store[f"aclver:{agent.id}"] = "1"
+        return agent
+
+    async def user_input(_id):
+        if helper == "user_id":
+            fake.store[f"aclver:{agent.id}"] = "1"
+        return user
+
+    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(permissions.agent_dao, "get", agent_input)
+    monkeypatch.setattr(permissions.user_dao, "get", user_input)
+    if helper == "request":
+        result = (await permissions.check_agent_access(user, agent.id))[1]
+    else:
+        result = await permissions.get_agent_access_level_for_user_id(None, user.id, agent)
+    assert result == "use"
+    assert not any(key.startswith("acl:v1:") for key in fake.store)
+
+
+@pytest.mark.asyncio
+async def test_inactive_user_id_helper_rejects_even_a_request_memo(monkeypatch):
+    user = _user(is_active=False)
+    agent = _agent(tenant_id=user.tenant_id)
+
+    async def user_input(_id):
+        return user
+
+    monkeypatch.setattr(permissions.user_dao, "get", user_input)
+    access_cache.memo_set(user.id, agent.id, agent, "manage")
+    assert await permissions.get_agent_access_level_for_user_id(None, user.id, agent) is None
+
+
 class _SessionPoolCM:
     def __init__(self, raw: _SessionRaw) -> None:
         self._raw = raw
@@ -362,3 +504,42 @@ class _SessionPool:
 
     def connection(self) -> _SessionPoolCM:
         return _SessionPoolCM(self._raw)
+
+
+@pytest.mark.asyncio
+async def test_promotion_rollback_does_not_publish_session_or_acl_versions(monkeypatch):
+    from dataclasses import replace
+
+    from app.core import acl_locks
+    from app.dao.base import BaseDAO
+    from app.db import session
+
+    user = _user()
+    agent_id = uuid.uuid4()
+    raw = _SessionRaw()
+    fake = FakeRedis()
+    monkeypatch.setattr(session, "get_pool", lambda: _SessionPool(raw))
+    monkeypatch.setattr(access_cache, "get_redis", AsyncMock(return_value=fake))
+    monkeypatch.setattr(acl_locks, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(acl_locks, "lock_user", AsyncMock())
+    monkeypatch.setattr(BaseDAO, "update", AsyncMock(return_value=replace(user, role="org_admin")))
+
+    async def invalidate(_db, _tenant):
+        await bump_agent_acl_version(agent_id)
+
+    monkeypatch.setattr(acl_locks, "invalidate_tenant_agents", invalidate)
+
+    async def abort():
+        async with session.connection_ctx():
+            await permissions.user_dao.update(db_obj=user, obj_in={"role": "org_admin"})
+            raise ValueError("rollback promotion")
+
+    token = session._conn_ctx.set(None)
+    try:
+        with pytest.raises(ValueError):
+            await abort()
+        assert any("DELETE FROM local_department_memberships" in sql for sql in raw.executed)
+        assert raw.commits == 0
+        assert fake.store == {}
+    finally:
+        session._conn_ctx.reset(token)

@@ -15,6 +15,7 @@ from psycopg import errors as pg_errors
 from app.db.errors import DbError, UniqueViolationError
 from app.db.pool import close_pool, init_pool
 from app.db.session import connection_ctx
+from app.scripts.department_schema import DEPARTMENT_SCHEMA
 
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
 _TX_WRAPPERS = frozenset({"BEGIN", "COMMIT", "BEGIN TRANSACTION", "COMMIT TRANSACTION"})
@@ -31,6 +32,7 @@ SCHEMA_BASELINE = ROOT / "scripts" / "schema_baseline.sql"
 
 # Best-effort additive patches for older DBs that predate the baseline file.
 PATCHES = [
+    DEPARTMENT_SCHEMA,
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_message_limit INTEGER DEFAULT 50",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_message_period VARCHAR(20) DEFAULT 'permanent'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_messages_used INTEGER DEFAULT 0",

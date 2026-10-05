@@ -178,13 +178,13 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return UserRecord.from_row(row) if row else None
 
-    async def get_with_identity(self, user_id: UUID) -> UserRecord | None:
+    async def get_with_identity(self, user_id: UUID, *, fresh: bool = False) -> UserRecord | None:
         try:
             uid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
         except TypeError, ValueError:
             uid = None
         observed_user_ver = "0"
-        if uid is not None:
+        if uid is not None and not fresh:
             cached = await get_cached_user(uid)
             if cached is not None:
                 return cached
@@ -197,7 +197,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 {"user_id": user_id},
             )
             user = _user_from_joined_row(row) if row else None
-            if user is not None:
+            if user is not None and not fresh:
                 observed_ident_ver = await peek_identity_version(user.identity_id)
                 await set_cached_user(
                     user,
@@ -206,16 +206,49 @@ class UserDAO(BaseDAO[UserRecord]):
                 )
             return user
 
-    async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, Any]) -> UserRecord:
-        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
-        await bump_user_session(updated.id)
-        return updated
+    async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:
+        if not {"tenant_id", "role", "is_active"}.intersection(obj_in):
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            await bump_user_session(updated.id)
+            return updated
+        from app.core.acl_locks import invalidate_tenant_agents, lock_tenants, lock_user
+        from app.db.session import optional_connection_ctx
+
+        async with optional_connection_ctx() as db:
+            target: object = obj_in.get("tenant_id", db_obj.tenant_id)
+            target_tenant = uuid_from_row(target) if target is not None else None
+            if db is not None:
+                await lock_tenants(db, (db_obj.tenant_id, target_tenant))
+                await lock_user(db, db_obj.id, db_obj.tenant_id)
+                if target_tenant != db_obj.tenant_id or (
+                    "role" in obj_in and obj_in["role"] not in ("member", "agent_admin")
+                ):
+                    await db.execute(
+                        "DELETE FROM local_department_memberships WHERE user_id = %(id)s", {"id": db_obj.id}
+                    )
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            await bump_user_session(updated.id)
+            if db is not None and {"tenant_id", "role", "is_active"}.intersection(obj_in):
+                for tenant_id in {db_obj.tenant_id, updated.tenant_id}:
+                    await invalidate_tenant_agents(db, tenant_id)
+            return updated
 
     async def delete(self, *, id: UUID) -> UserRecord | None:
-        deleted = await super().delete(id=id)
-        if deleted is not None:
-            await bump_user_session(deleted.id)
-        return deleted
+        from app.core.acl_locks import invalidate_tenant_agents, lock_tenants, lock_user
+        from app.db.session import optional_connection_ctx
+
+        async with optional_connection_ctx() as db:
+            user = await self.get(id)
+            if user is None:
+                return None
+            if db is not None:
+                await lock_tenants(db, (user.tenant_id,))
+                await lock_user(db, id, user.tenant_id)
+                await invalidate_tenant_agents(db, user.tenant_id)
+            deleted = await super().delete(id=id)
+            if deleted is not None:
+                await bump_user_session(deleted.id)
+            return deleted
 
     async def get_representative_user_for_identity(self, identity_id: UUID) -> UserRecord | None:
         async with self.session() as db:
@@ -238,24 +271,32 @@ class UserDAO(BaseDAO[UserRecord]):
     async def deactivate_for_tenant(self, tenant_id: UUID) -> int:
         """Deactivate org members. Does not flip ``identities.is_active``."""
         async with self.session() as db:
+            from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
+
+            await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
                 "UPDATE users SET is_active = FALSE, updated_at = now() "
                 + "WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
                 + "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
+            await invalidate_tenant_agents(db, tenant_id)
             await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
 
     async def reactivate_for_tenant(self, tenant_id: UUID) -> int:
         """Restore members deactivated with the tenant. Does not touch platform admins."""
         async with self.session() as db:
+            from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
+
+            await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
                 "UPDATE users SET is_active = TRUE, updated_at = now() "
                 + "WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
                 + "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
+            await invalidate_tenant_agents(db, tenant_id)
             await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
 
@@ -399,6 +440,13 @@ class UserDAO(BaseDAO[UserRecord]):
             tenant_sql = " AND tenant_id = %(tenant_id)s"
             params["tenant_id"] = tenant_id
         async with self.session() as db:
+            from app.core.acl_locks import invalidate_tenant_agents, lock_tenants, lock_user
+
+            subject = await self.get(user_id)
+            if subject is None:
+                return None
+            await lock_tenants(db, (subject.tenant_id,))
+            await lock_user(db, user_id, subject.tenant_id)
             row = await db.fetchone(
                 "UPDATE users SET is_active = FALSE, updated_at = now() "
                 + "WHERE id = %(user_id)s AND is_active IS TRUE AND ("
@@ -409,6 +457,7 @@ class UserDAO(BaseDAO[UserRecord]):
             user = UserRecord.from_row(row) if row else None
             if user is not None:
                 await bump_user_session(user.id)
+                await invalidate_tenant_agents(db, user.tenant_id)
             return user
 
     async def list_identity_ids_for_tenant(self, tenant_id: UUID) -> list[Any]:

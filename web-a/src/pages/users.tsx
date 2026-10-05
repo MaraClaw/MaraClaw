@@ -1,14 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
-import { useEffect, useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useId, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { UserCard } from '@/components/users/user-card'
 import { useAuth } from '@/hooks/use-auth'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
@@ -18,12 +16,12 @@ import {
   isEndUserRole,
   listPlatformAdmins,
   listUsers,
-  roleLabel,
   setOrgAdminActive,
   setPlatformAdminActive,
   setUserActive,
   type AdminUser,
 } from '@/lib/users-api'
+import { TenantUsers } from '@/pages/users-departments'
 
 export function UsersPage() {
   const { user } = useAuth()
@@ -33,8 +31,10 @@ export function UsersPage() {
   const [params, setParams] = useSearchParams()
   const search = params.get('q') ?? ''
   const companyId = params.get('company') ?? ''
+  const tenantId = platformAdmin ? companyId : user?.tenant_id
+  const filterId = useId()
 
-  function updateListState(patch: { q?: string; company?: string }, replace = true) {
+  const updateListState = useCallback((patch: { q?: string; company?: string }, replace = true) => {
     setParams(
       (current) => {
         const next = new URLSearchParams(current)
@@ -50,7 +50,7 @@ export function UsersPage() {
       },
       { replace },
     )
-  }
+  }, [setParams])
 
   const companies = useQuery({
     queryKey: ['admin-companies'],
@@ -62,7 +62,7 @@ export function UsersPage() {
     if (!platformAdmin || companyId || !companies.data?.length) return
     const own = companies.data.find((company) => company.id === user?.tenant_id)
     updateListState({ company: own?.id ?? companies.data[0].id })
-  }, [platformAdmin, companyId, companies.data, user?.tenant_id])
+  }, [platformAdmin, companyId, companies.data, user?.tenant_id, updateListState])
 
   useEffect(() => {
     const stored = sessionStorage.getItem('web-a:users-scroll')
@@ -73,7 +73,7 @@ export function UsersPage() {
   }, [])
 
   const users = useQuery({
-    queryKey: ['admin-users', platformAdmin ? companyId : user?.tenant_id],
+    queryKey: ['admin-users', tenantId],
     queryFn: () => listUsers(platformAdmin ? companyId || undefined : undefined),
     enabled: !platformAdmin || Boolean(companyId),
   })
@@ -84,16 +84,14 @@ export function UsersPage() {
     enabled: platformAdmin,
   })
 
-  const companyRows = useMemo(() => users.data ?? [], [users.data])
-
   const platformRows = useMemo(
     () => (platformAdmins.data ?? []).map((admin) => asAdminUser(admin)),
     [platformAdmins.data],
   )
 
   const visibleCompany = useMemo(
-    () => sortAdminsFirst(filterUsers(companyRows, search)),
-    [companyRows, search],
+    () => [...filterUsers(users.data ?? [], search)].sort((a, b) => Number(isEndUserRole(a.role)) - Number(isEndUserRole(b.role))),
+    [users.data, search],
   )
   const visiblePlatform = useMemo(() => filterUsers(platformRows, search), [platformRows, search])
 
@@ -138,15 +136,16 @@ export function UsersPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">Users</h1>
         <p className="mt-2 text-muted-foreground">
-          Activate or deactivate people in this company. Platform admins are listed separately.
+          Activate or deactivate people and manage their departments. Platform admins are listed separately.
         </p>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         {platformAdmin ? (
-          <label className="grid w-auto gap-1.5 text-sm">
+          <label htmlFor={`${filterId}-company`} className="grid w-auto gap-1.5 text-sm">
             <span className="text-muted-foreground">Company</span>
             <Select
+              id={`${filterId}-company`}
               fit
               value={companyId}
               onChange={(event) => updateListState({ company: event.target.value })}
@@ -159,7 +158,7 @@ export function UsersPage() {
             </Select>
           </label>
         ) : null}
-        <label className="grid min-w-0 flex-1 gap-1.5 text-sm">
+        <label htmlFor={`${filterId}-search`} className="grid min-w-0 flex-1 gap-1.5 text-sm">
           <span className="text-muted-foreground">Search</span>
           <span className="relative">
             <Search
@@ -167,6 +166,7 @@ export function UsersPage() {
               aria-hidden
             />
             <Input
+              id={`${filterId}-search`}
               type="search"
               value={search}
               onChange={(event) => updateListState({ q: event.target.value })}
@@ -238,23 +238,22 @@ export function UsersPage() {
           </p>
         ) : null}
 
-        {!users.isLoading && !users.error && companyId && visibleCompany.length === 0 ? (
+        {!users.isLoading && !users.error && tenantId && visibleCompany.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {search.trim() ? `No users match “${search.trim()}”.` : 'No users in this company.'}
           </p>
         ) : null}
 
-        <div className="grid gap-4">
-          {visibleCompany.map((row) => (
-            <UserCard
-              key={row.id}
-              row={row}
-              canToggle={canToggle(row)}
-              pending={toggle.isPending}
-              onToggle={() => toggle.mutate({ row, isActive: !row.is_active })}
-            />
-          ))}
-        </div>
+        {tenantId ? (
+          <TenantUsers
+            key={tenantId}
+            tenantId={tenantId}
+            rows={visibleCompany}
+            canToggle={canToggle}
+            pending={toggle.isPending}
+            onToggle={(row) => toggle.mutate({ row, isActive: !row.is_active })}
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -267,58 +266,4 @@ function filterUsers(rows: AdminUser[], search: string): AdminUser[] {
     const haystack = `${row.display_name ?? ''} ${row.email ?? ''} ${row.username ?? ''}`.toLowerCase()
     return haystack.includes(needle)
   })
-}
-
-function sortAdminsFirst(rows: AdminUser[]): AdminUser[] {
-  return [...rows].sort((a, b) => Number(isEndUserRole(a.role)) - Number(isEndUserRole(b.role)))
-}
-
-function UserCard({
-  row,
-  canToggle,
-  pending,
-  onToggle,
-}: {
-  row: AdminUser
-  canToggle: boolean
-  pending: boolean
-  onToggle: () => void
-}) {
-  return (
-    <Card className="relative transition-colors hover:bg-muted/40">
-      <Link
-        to={`/users/${row.id}`}
-        aria-label={`Open ${row.display_name || row.email || 'user'}`}
-        className="absolute inset-0 z-10 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        onClick={() => sessionStorage.setItem('web-a:users-scroll', String(window.scrollY))}
-      />
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div>
-          <CardTitle>{row.display_name || row.email || 'User'}</CardTitle>
-          <CardDescription>{row.email || row.username}</CardDescription>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{roleLabel(row.role)}</Badge>
-          {row.is_genesis ? <Badge variant="soft">Genesis</Badge> : null}
-          <Badge variant={row.is_active ? 'success' : 'destructive'}>
-            {row.is_active ? 'Active' : 'Inactive'}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-wrap items-center gap-3">
-        <span className="text-sm text-muted-foreground">{row.agents_count} agents</span>
-        {canToggle ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="relative z-20"
-            disabled={pending}
-            onClick={onToggle}
-          >
-            {row.is_active ? 'Deactivate' : 'Activate'}
-          </Button>
-        ) : null}
-      </CardContent>
-    </Card>
-  )
 }

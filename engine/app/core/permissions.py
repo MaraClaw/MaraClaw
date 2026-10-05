@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 
 from app.core import access_cache
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
+from app.dao.local_department_dao import local_department_dao
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
@@ -128,7 +129,12 @@ async def _compute_access_level(user: _UserLike, agent: _AgentLike) -> str | Non
     early = _access_without_permissions(user, agent)
     if isinstance(early, _NeedPerms):
         permissions = await agent_permission_dao.list_for_agent(agent.id)
-        return _access_from_permissions(user, agent, permissions)
+        direct = _access_from_permissions(user, agent, permissions)
+        if direct is not None:
+            return direct
+        if agent.access_mode == "custom" and await local_department_dao.has_agent_access(user.id, agent.id):
+            return "use"
+        return None
     return early
 
 
@@ -145,10 +151,7 @@ async def get_agent_access_level_for_user_id(
     if not user_id:
         return None
 
-    memo = access_cache.memo_get(user_id, agent.id)
-    if memo is not None:
-        return memo[1]
-
+    observed_ver = await access_cache.read_acl_version(agent.id)
     user = await user_dao.get(user_id)
     if not user or not user.is_active:
         return None
@@ -157,9 +160,15 @@ async def get_agent_access_level_for_user_id(
     if cached is not None:
         return cached
 
-    level = await _compute_access_level(user, agent)
+    from app.core.row_memo import memo_drop
+
+    memo_drop("agent", agent.id)
+    current_agent = await agent_dao.get(agent.id)
+    if current_agent is None:
+        return None
+    level = await _compute_access_level(user, current_agent)
     if level in {"manage", "use"}:
-        await access_cache.set_cached_level(user, agent.id, level)
+        await access_cache.set_cached_level(user, agent.id, level, observed_ver=observed_ver)
     return level
 
 
@@ -175,6 +184,9 @@ async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -
     """Return platform users who can access an agent under current policy."""
     del db
     access_mode = agent.access_mode or "company"
+    if agent.tenant_id is None:
+        return set()
+    active_ids = set(await user_dao.list_active_ids_for_tenant(agent.tenant_id))
     ids: set[uuid.UUID] = set()
     if agent.creator_id:
         ids.add(agent.creator_id)
@@ -182,14 +194,15 @@ async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -
     if access_mode == "company":
         if agent.tenant_id is not None:
             ids.update(await user_dao.list_active_ids_for_tenant(agent.tenant_id))
-        return ids
+        return ids & active_ids
 
     if access_mode == "custom":
         ids.update(await agent_permission_dao.list_user_scope_ids(agent.id))
+        ids.update(await local_department_dao.accessible_user_ids(agent.id))
         if agent.tenant_id is not None:
             ids.update(await user_dao.list_active_admin_ids_for_tenant(agent.tenant_id))
 
-    return ids
+    return ids & active_ids
 
 
 def _agent_available(agent: AgentRecord | None) -> tuple[bool, str | None]:
@@ -333,37 +346,54 @@ async def evaluate_human_relationship_status(
     }
 
 
-async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, db: object | None = None) -> tuple[AgentRecord, str]:
+async def check_agent_access(
+    user: _UserLike, agent_id: uuid.UUID, db: object | None = None, *, fresh: bool = False
+) -> tuple[AgentRecord, str]:
     """Check if a user has access to a specific agent.
 
     Returns (agent, access_level) where access_level is 'manage' or 'use'.
     ``db`` is optional and ignored (legacy dual-stack parameter).
     """
     del db
+    if not getattr(user, "is_active", True):
+        raise HTTPException(403, "User is inactive")
+    if fresh:
+        access_cache.clear_request_memo()
+        from app.core.row_memo import clear_entity_memo
+
+        clear_entity_memo()
     user_id = user.id
     memo = access_cache.memo_get(user_id, agent_id)
     if memo is not None:
         _reject_expired_use(memo[0], memo[1])
         return memo
 
+    observed_ver = await access_cache.read_acl_version(agent_id)
+    current_user = await user_dao.get(user_id)
+    if current_user is None or not current_user.is_active:
+        raise HTTPException(403, "User is inactive")
+    user = current_user
+    from app.core.row_memo import memo_drop
+
+    memo_drop("agent", agent_id)
     agent = await agent_dao.get(agent_id)
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    cached = await access_cache.get_cached_level(user, agent_id)
+    cached = None if fresh else await access_cache.get_cached_level(user, agent_id)
     if cached is not None:
         _reject_expired_use(agent, cached)
         access_cache.memo_set(user_id, agent_id, agent, cached)
         return agent, cached
 
-    observed_ver = await access_cache.read_acl_version(agent_id)
     level = await _compute_access_level(user, agent)
     if level not in {"manage", "use"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
     _reject_expired_use(agent, level)
 
-    await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed_ver)
-    access_cache.memo_set(user_id, agent_id, agent, level)
+    if not fresh:
+        await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed_ver)
+        access_cache.memo_set(user_id, agent_id, agent, level)
     return agent, level
 
 
