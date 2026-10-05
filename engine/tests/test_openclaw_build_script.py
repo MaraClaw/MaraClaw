@@ -7,10 +7,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = REPO_ROOT / "build-openclaw-local-dockerfile.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-OPENCLAW_VERSION = "2026.9.1"
-OPENCLAW_SHA256 = "sha256:1bfcac877d53f1e41b69d15c24e081895b2f07d6ff2ffdfe0bf8a7336ab00e59"
-GOGCLI_VERSION = "0.39.0"
-GOGCLI_SHA256 = "sha256:040984e38291da2f23ddeefbd67371c5bf32de6be3177d4f5a816f7fe51bacb7"
+OPENCLAW_VERSION = "2026.9.8"
+OPENCLAW_SHA256 = "sha256:317e0a58db32b386e01187fe9c5c4de541f4ce6d815657bf79a102609b81752a"
+GOGCLI_VERSION = "0.43.0"
+GOGCLI_SHA256 = "sha256:f66e3c9ab7664b7633d57d2d5303e0db75deb4045e1b32c3493c0d8ba68a70f7"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
