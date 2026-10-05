@@ -75,6 +75,7 @@ __all__ = [
     "linkup_api_key_dao",
     "linkup_async_job_dao",
     "llm_model_dao",
+    "local_department_dao",
     "member_daily_report_dao",
     "notification_dao",
     "okr_key_result_dao",
@@ -105,3 +106,4 @@ __all__ = [
     "workspace_edit_lock_dao",
     "workspace_file_revision_dao",
 ]
+from app.dao.local_department_dao import local_department_dao
