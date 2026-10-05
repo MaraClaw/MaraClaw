@@ -27,6 +27,10 @@ class _FakeCursor:
     async def execute(self, query: str, params: Any = None) -> None:
         self._parent.executed.append((query, params))
 
+    async def fetchone(self) -> dict[str, object]:
+        _query, params = self._parent.executed[-1]
+        return {"id": params["id"]}
+
     async def fetchall(self) -> list[dict[str, Any]]:
         return [{"id": uuid4()}]
 
@@ -77,7 +81,11 @@ async def test_deactivate_for_tenant_skips_platform_admin(monkeypatch):
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
     tenant_id = uuid4()
     await user_dao.deactivate_for_tenant(tenant_id)
-    query, params = raw.executed[0]
+    lock_query, lock_params = raw.executed[0]
+    assert "FROM tenants" in lock_query
+    assert "FOR UPDATE" in lock_query
+    assert lock_params["id"] == tenant_id
+    query, params = next((query, params) for query, params in raw.executed if query.lstrip().startswith("UPDATE users"))
     assert "role <> %(platform_admin)s" in query
     assert params["tenant_id"] == tenant_id
     assert params["platform_admin"] == "platform_admin"

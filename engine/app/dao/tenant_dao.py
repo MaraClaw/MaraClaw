@@ -86,17 +86,32 @@ class TenantDAO(BaseDAO[TenantRecord]):
         return tenant
 
     async def update(self, *, db_obj: TenantRecord, obj_in: Mapping[str, Any]) -> TenantRecord:
-        updated = await super().update(db_obj=db_obj, obj_in=obj_in)
-        memo_set("tenant", updated.id, updated)
-        await bump_tenant_cache(updated.id)
-        return updated
+        from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
+        from app.db.session import optional_connection_ctx
+
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                await lock_tenants(db, (db_obj.id,))
+                if "is_active" in obj_in:
+                    await invalidate_tenant_agents(db, db_obj.id)
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            memo_set("tenant", updated.id, updated)
+            await bump_tenant_cache(updated.id)
+            return updated
 
     async def delete(self, *, id: UUID) -> TenantRecord | None:
-        deleted = await super().delete(id=id)
-        if deleted is not None:
-            memo_drop("tenant", deleted.id)
-            await bump_tenant_cache(deleted.id)
-        return deleted
+        from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
+        from app.db.session import optional_connection_ctx
+
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                await lock_tenants(db, (id,))
+                await invalidate_tenant_agents(db, id)
+            deleted = await super().delete(id=id)
+            if deleted is not None:
+                memo_drop("tenant", deleted.id)
+                await bump_tenant_cache(deleted.id)
+            return deleted
 
     async def get_default_end_user_org(self) -> TenantRecord | None:
         async with self.session() as db:
@@ -293,6 +308,11 @@ class TenantDAO(BaseDAO[TenantRecord]):
             "DELETE FROM tenants WHERE id = %(tid)s",
         ]
         async with self.session() as db:
+            from app.core.access_cache import drop_agent_acl_version
+            from app.core.acl_locks import lock_tenants
+            from app.core.session_cache import bump_user_sessions
+
+            await lock_tenants(db, (tenant_id,))
             user_rows = await db.fetchall(
                 "SELECT id FROM users WHERE tenant_id = %(tid)s",
                 params,
@@ -305,20 +325,12 @@ class TenantDAO(BaseDAO[TenantRecord]):
             agent_ids = [uuid_from_row(row["id"]) for row in agent_rows]
             for sql in statements:
                 await db.execute(sql, params)
-        from app.core.access_cache import drop_agent_acl_version
-        from app.core.session_cache import bump_user_sessions
-
-        await bump_user_sessions(user_ids)
-        for agent_id in agent_ids:
-            memo_drop("agent", agent_id)
-            await drop_agent_acl_version(agent_id)
-        memo_drop("tenant", tenant_id)
-        try:
-            tid = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
-        except TypeError, ValueError:
-            tid = None
-        if tid is not None:
-            await bump_tenant_cache(tid)
+            await bump_user_sessions(user_ids)
+            for agent_id in agent_ids:
+                memo_drop("agent", agent_id)
+                await drop_agent_acl_version(agent_id)
+            memo_drop("tenant", tenant_id)
+            await bump_tenant_cache(tenant_id)
 
 
 tenant_dao = TenantDAO()
