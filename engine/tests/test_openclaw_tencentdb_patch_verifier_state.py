@@ -5,9 +5,41 @@ from openclaw_tencentdb_patch_verifier_fixtures import (
     assert_node_syntax,
     backup_path,
     create_mixed_patch_scenario,
+    decoy_source,
     run_verifier,
+    selected_hook_source,
     write_patch_asset,
 )
+
+
+def test_mjs_candidates_are_discovered_transformed_and_mjs_decoys_preserved(tmp_path: Path) -> None:
+    # Given
+    root = tmp_path / "openclaw"
+    dist = root / "dist"
+    dist.mkdir(parents=True)
+    target = dist / "builtin-openclaw-bundle.mjs"
+    target.write_text(selected_hook_source(), encoding="utf-8")
+    original_target = target.read_bytes()
+    decoy = dist / "package-helper-decoy.mjs"
+    decoy.write_text(decoy_source(), encoding="utf-8")
+    original_decoy = decoy.read_bytes()
+    asset = tmp_path / "patch.sh"
+    write_patch_asset(asset)
+
+    # When
+    result = run_verifier(root, asset)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert target.read_bytes() != original_target
+    assert EXACT_MESSAGES_PROPERTY in target.read_text(encoding="utf-8")
+    backup = backup_path(target)
+    assert backup.is_file()
+    assert not backup.is_symlink()
+    assert backup.read_bytes() == original_target
+    assert decoy.read_bytes() == original_decoy
+    assert not backup_path(decoy).exists()
+    assert_node_syntax(target, decoy)
 
 
 def test_mixed_selected_states_preserve_prepatched_and_transform_unpatched(tmp_path: Path) -> None:

@@ -63,7 +63,7 @@ if [ -f "$runs_path" ]; then
 fi
 runs=$((runs + 1))
 printf '%s\\n' "$runs" > "$runs_path"
-for target in "$root"/dist/*.js; do
+for target in "$root"/dist/*.js "$root"/dist/*.mjs; do
     [ -f "$target" ] || continue
     if perl -0777 -ne 'exit 0 if /hookEvent\\s*=\\s*\\{[\\s\\S]{0,500}?messages\\s*:\\s*ctx\\.params\\.session\\?\\s*\\.messages[\\s\\S]{0,100}?durationMs/; exit 1' "$target"; then
         continue

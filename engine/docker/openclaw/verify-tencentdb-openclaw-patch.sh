@@ -107,7 +107,7 @@ while IFS= read -r -d "" candidate; do
         non_targets+=("$candidate")
         non_target_digests+=("$(sha256 "$candidate")")
     fi
-done < <(find "$DIST_DIR" -type f -name "*.js" -print0 2>/dev/null)
+done < <(find "$DIST_DIR" -type f \( -name "*.js" -o -name "*.mjs" \) -print0 2>/dev/null)
 
 if (( ${#targets[@]} == 0 )); then
     fail candidate no-target
