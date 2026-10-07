@@ -1,7 +1,7 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-08-23  
-**Commit:** 4d53677  
+**Generated:** 2026-10-07  
+**Commit:** f722496  
 **Branch:** main
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
@@ -19,9 +19,9 @@ Loose sibling checkout (no root workspace / turbo / compose / CI). Three package
 
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
-| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python ≥3.14.5 (pin 3.14.7) | Mature |
+| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.8 | Mature |
 | **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, Take Control) |
-| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Linkup keys + search analytics |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (local departments), models, Linkup keys + search analytics |
 
 **Rule:** one concern → one package. No admin screens in `web-e`, no marketing in `web-a`, no HTML marketing in `engine`.
 
@@ -42,7 +42,7 @@ One/
 |-------------------|------------|---------|
 | Public marketing, SEO, brand, CTA | **`web-e/`** | `web-a`, `engine` |
 | Tenant/platform admin UI | **`web-a/`** | `web-e` |
-| Member product (auth, join, future chat) | **`web-e/`** | `web-a` |
+| Member product (auth, join, workspace chat) | **`web-e/`** | `web-a` |
 | HTTP/WS, auth, DB, LLM, tools, sandboxes, IM, schema | **`engine/`** | frontends (except clients) |
 | Shared env / secrets template | Root **`.env.example`** and/or `engine/.env.example` | Hardcoded in UI |
 
@@ -59,6 +59,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
+| Local department directory | `engine` | `app/api/departments.py`. Not org-sync departments. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 
 ---
@@ -74,7 +75,7 @@ cd engine && uv run --extra dev pytest
 
 **`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`), companies + claimed email domains, Users (activate members and additional admins), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, local departments), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 
@@ -87,7 +88,7 @@ cd engine && uv run --extra dev pytest
 | Session / JWT / SSO | implement | `maraclaw-admin-token` | `maraclaw-enduser-token` |
 | Tenant isolation | enforce | select/manage | operate in membership |
 | Platform admin | genesis + RBAC | surface | hide (not a member login) |
-| First-login password change | `must_change_password` | force `/account` | not surfaced yet |
+| First-login password change | `must_change_password` | force `/account`; `/settings` stays open | force `/app/account`; `/app/settings` stays open |
 
 Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed on empty DB). Open registration never becomes `platform_admin`. Genesis OA: platform admin via `POST /api/admin/companies` (or `POST /api/tenants/`). JWT may issue before password change; privileged REST/WS/files 403 until cleared. Details: `engine/docs/admin-apis.md`.
 

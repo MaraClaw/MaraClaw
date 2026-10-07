@@ -1,14 +1,14 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-23
-**Commit:** 4d53677
+**Generated:** 2026-10-07
+**Commit:** f722496
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
 
 ## OVERVIEW
 
-FastAPI backend for a multi-tenant digital-employee platform: Postgres via **pure psycopg3**, Redis Pub/Sub, agent workspaces, tool execution, LLM orchestration, optional IM/identity connectors. Package name `maraclaw` 2.1.1.
+FastAPI backend for a multi-tenant digital-employee platform: Postgres via **pure psycopg3**, Redis Pub/Sub, agent workspaces, tool execution, LLM orchestration, optional IM/identity connectors. Distribution `maraclaw` **2.2.0** (`pyproject.toml`). Runtime `APP_VERSION` reads `VERSION` (**2.1.1**). Keep the two numbers distinct.
 
 ## STRUCTURE
 
@@ -25,7 +25,7 @@ engine/
 │   └── services/                # mixed flat files + runtime packages (`document_parser/`, `document_conversion/`, …)
 ├── scripts/                     # schema_baseline.sql + freeze/lint helpers
 ├── docker/openclaw/             # OpenClaw guest-image helpers (not the API)
-├── Dockerfile.openclaw          # Node 26.7.0 bookworm guest image (arm64)
+├── Dockerfile.openclaw          # Node 26.10.0 bookworm guest image (arm64)
 ├── build-openclaw-local-dockerfile.sh / publish-openclaw-local-dockerfile.sh
 ├── start-from-docker.sh         # builds/runs maraclaw-engine:local
 ├── agent_template/              # runtime workspace scaffold (copied)
@@ -44,6 +44,7 @@ No `alembic/`, no `app/models/`.
 | Settings | `app/config.py`, `.env.example` | Case-sensitive; sandbox proxy is `SANDBOX_*_PROXY` only; genesis `PLATFORM_ADMIN_*` |
 | Genesis platform admin | `app/services/platform_admin_seeder.py` | Env seed at bootstrap; fail-closed if empty DB |
 | Tenant + genesis org admin | `app/services/tenant_provisioning.py` | `POST /api/tenants/` and `POST /api/admin/companies` |
+| Local departments | `app/api/departments.py`, `services/local_departments.py` | Flat tenant directory. Not `org_sync`. Contract: `app/api/AGENTS.md` |
 | Additional admins / trail | `admin_provisioning.py`, `admin_audit.py` | Genesis-only mint; `admin_audit_logs` |
 | Admin APIs / RBAC inventory | `docs/admin-apis.md` | Platform vs org admin; genesis + `must_change_password` |
 | Auth deps | `app/core/security.py` | JWT, bcrypt, `get_current_user` / force-change gate |
@@ -53,39 +54,39 @@ No `alembic/`, no `app/models/`.
 | Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs. `read_webpage` + `search_x` (xAI). Linkup skills for web search. Do not grow `agent_tools.py` |
-| Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.3`). Isolated spawn. Not `document_conversion/` |
+| Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.4`). Isolated spawn. Not `document_conversion/` |
 | LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
-| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.7 / gogcli 0.43 / OpenClaw 2026.9.8; Hub publish is `publish-openclaw-local-dockerfile.sh` |
+| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.10.0 / gogcli 0.43 / OpenClaw 2026.9.8; Hub publish is `publish-openclaw-local-dockerfile.sh` |
 
 ## CODE MAP
 
-No `codegraph_*` in this harness. LSP document symbols + ripgrep file counts (2026-08-23).
+No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, not a fresh count. Line numbers checked 2026-10-07.
 
 | Symbol | Type | Location | Refs | Role |
 |---|---|---|---:|---|
-| `app` | FastAPI | `app/main.py:429` | broad | App, middleware, mounts, health/version |
-| `lifespan` | function | `app/main.py:206` | startup | Pool → seed → realtime/worker/connector |
-| `_role_enabled` | function | `app/main.py:35` | startup | Gates `bootstrap`/`api`/`worker`/`connector` |
+| `app` | FastAPI | `app/main.py:435` | broad | App, middleware, mounts, health/version |
+| `lifespan` | function | `app/main.py:205` | startup | Pool → seed → realtime/worker/connector |
 | `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:231` | 61+ | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
 | `ensure_platform_admin` | function | `app/services/platform_admin_seeder.py` | bootstrap | Genesis platform admin from env |
-| `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:80` | tenants/admin | Tenant + genesis `org_admin` |
+| `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:91` | tenants/admin | Tenant + genesis `org_admin` |
 | `load_user_from_access_token` | function | `app/core/security.py:183` | WS/files | JWT → user + identity; force-change gate |
 | `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
 | `connection_ctx` | cm | `app/db/session.py:26` | 130+ | Commit on success; join if nested |
 | `BaseDAO` | class | `app/dao/base.py` | 43 | CRUD + record dataclass defaults |
-| `check_agent_access` | function | `app/core/permissions.py:337` | 39 | `(user, agent_id)` - leftover `db` ignored |
+| `check_agent_access` | function | `app/core/permissions.py:349` | 39 | `(user, agent_id)` - leftover `db` ignored |
 | `logger` | import | `app/core/logging` | 146 | Queued process logger |
 | `TOOL_HANDLERS` | registry | `app/services/agent_tool_exec/registry.py` | tools | `@register` dispatch |
 | `get_sandbox_backend` | function | `app/services/sandbox/registry.py` | tools | Backend factory |
 | `get_org_sync_adapter` | function | `app/services/org_sync/factory.py` | identity | Sync adapters ≠ auth providers |
+| `local_department_dao` | DAO | `app/dao/local_department_dao.py` | — | Local directory. Not provider departments |
 
 ## CONVENTIONS
 
-- Start via `./start-from-docker.sh`. Requires **≥3.14.5** (`pyproject`); pin/runtime **3.14.7** (`.python-version`, Docker `python:3.14.7-slim-trixie`). Ruff `py314`, line 120, double quotes, LF. `uv run --extra dev …`.
+- Start via `./start-from-docker.sh`. Requires **≥3.14.8** (`.python-version`, image `python:3.14.8-slim-trixie`). Ruff `py314`, line 120, double quotes, LF.
 - Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
 - Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
 - New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
@@ -146,4 +147,4 @@ uv run python -m app.scripts.bootstrap_db
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
-- Three Node pins: guest `26.7.0-bookworm-slim`, sandbox docker `node:26.7.0-slim`, frontend images `26.7.0-alpine`, smoke expects host/guest `v26.7.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).
+- Node **26.10.0** on every image: guest `node:26.10.0-bookworm-slim`, sandbox `node:26.10.0-slim`, frontends `node:26.10.0-alpine`. Smoke expects host and guest `v26.10.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).

@@ -2,7 +2,7 @@
 
 # ─── MaraClaw end-user UI (web-e) ───────────────────────────────────────────
 # Multi-stage production image:
-#   1) deps    - install lockfile deps on Node 26 (cache-friendly layer)
+#   1) deps    - install lockfile deps on Node 26.10.0 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
 #   3) runtime - unprivileged nginx serves static dist
 #
@@ -10,7 +10,7 @@
 #         docker build -t maraclaw-web-e --build-arg VITE_API_BASE_URL=https://api.example.com .
 # Run:    docker run --rm -p 8080:8080 maraclaw-web-e
 
-ARG NODE_VERSION=26.7.0
+ARG NODE_VERSION=26.10.0
 
 # ─── Dependencies ───────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine AS deps

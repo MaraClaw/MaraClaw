@@ -2,7 +2,7 @@
 name = "maraclaw"
 version = "2.2.0"
 description = "Backend workspace for the MaraClaw enterprise digital employee platform."
-requires-python = ">=3.14.5"
+requires-python = ">=3.14.8"
 dependencies = [
     "alibabacloud-credentials>=1.0.12",
     "fastapi[standard]>=0.142.2",

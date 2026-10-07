@@ -20,6 +20,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - `_log_bwrap_startup_status()` is warn-only.
 - Guest sandbox proxy: `SANDBOX_*_PROXY` only. See `services/sandbox/AGENTS.md`.
 - Inbound office parse: `services/document_parser/` (anydoc). Outbound HTML/MD/CSV: `services/document_conversion/`.
+- Local departments: `services/local_departments.py` + `api/departments.py`. Not `org_sync`, not `templates/`.
 - Background work: `app.core.logging.new_trace_id()` before related logs.
 - Multi-write paths: `async with connection_ctx():` so DAOs share one commit. CRUD HTTP routers already bind `bind_crud_connection`.
 - Connector managers: lifespan `start_all` after the pool. Do not call `start_all` from routes.

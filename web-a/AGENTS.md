@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-23  
-**Commit:** 4d53677  
+**Generated:** 2026-10-07  
+**Commit:** f722496  
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
@@ -22,7 +22,7 @@ Does **not** own the end-user landing or member auth (`web-e`). Does **not** imp
 
 ```
 web-a/
-├── Dockerfile           # Node 26.7.0 → nginx-unprivileged :8080
+├── Dockerfile           # Node 26.10.0 → nginx-unprivileged :8080
 ├── docker/nginx.conf    # SPA fallback, /healthz, CSP; no /api proxy
 ├── vite.config.ts       # :5174, @ → src, /api → VITE_DEV_API_PROXY || :8000
 ├── .env.example         # VITE_API_BASE_URL (empty = same-origin)
@@ -34,8 +34,9 @@ web-a/
     ├── components/
     │   ├── layout/      # AdminShell, AuthShell, NavIcon, SectionRail
     │   ├── companies/   # create form + status icon
+    │   ├── users/       # user-card
     │   ├── brand/       # match web-e mark
-    │   └── ui/          # 8 primitives + password-field
+    │   └── ui/          # web-e subset (no accordion/sheet/textarea). Keep Button `destructive`, Badge `success|warning|destructive`, PasswordField `hideLeadingIcon`
     ├── hooks/           # use-auth; use-theme (maraclaw-admin-theme)
     └── lib/             # see lib/AGENTS.md
 ```
@@ -51,7 +52,7 @@ web-a/
 | Overview + 7-day search snapshot | `src/pages/overview.tsx` |
 | Companies / claimed domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
 | Create company + genesis OA | `src/components/companies/create-company-form.tsx` |
-| Users / activate | `src/pages/users.tsx`, `user-detail.tsx`, `src/lib/users-api.ts` |
+| Users / activate / local departments | `src/pages/users.tsx`, `user-detail.tsx`, `users-departments.tsx`, `src/lib/users-api.ts`, `departments-api.ts` |
 | LLM models / providers | `src/pages/llm-models.tsx`, `src/lib/llm-models-api.ts` |
 | Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
 | Search analytics | `src/pages/search-engine-analytics.tsx` (`?tab=analytics`) |
@@ -101,6 +102,7 @@ Boot: `index.html` (theme FOUC) → `main.tsx` → `ThemeProvider` → `App` →
 - Treating `VITE_AUTH_BYPASS` as implemented (README leftover; not in `.env.example` or code).
 - Sharing web-e storage keys.
 - Hiding Disable/Enable when `can_disable` is false (MaraClaw + OpenClaw).
+- Treating Users local departments as the provider directory (`org_sync`; web-e Directory shows that sync).
 
 ## COMMANDS
 
@@ -113,7 +115,7 @@ docker build -t maraclaw-web-a .
 docker run --rm -p 8080:8080 maraclaw-web-a
 ```
 
-Prod image: Node **26.7.0** → nginx-unprivileged **8080**. Optional `--build-arg VITE_API_BASE_URL=...`. Container does **not** proxy `/api`.
+Prod image: Node **26.10.0** → nginx-unprivileged **8080**. Optional `--build-arg VITE_API_BASE_URL=...`. Container does **not** proxy `/api`.
 
 ## NOTES
 

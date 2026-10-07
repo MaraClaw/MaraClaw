@@ -1,6 +1,6 @@
 # pages/app/ — member workspace screens
 
-**Generated:** 2026-08-16 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-10-07 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -17,7 +17,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
-| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail; `?tab=` `?q=` |
+| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail; `?tab=` `?q=`. Those departments are provider sync, not the local directory |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
 | `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user`; always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
@@ -35,6 +35,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 - New control RPC: `control-api.ts`, not workspace-api.
 - Chat events: `ChatInbound` + `onEvent` switch in `agent-chat.tsx`.
 - Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`. Company Grok and ChatGPT subscriptions are connected in web-a; members inherit them through the company pool. If chat fails with no model, the engine message points admins at Models.
+- Permissions tab department grants: `components/agent-department-access.tsx` + `lib/agent-departments-api.ts` (query `['permission-departments', agentId]`). Custom list only; level is `use`, not `manage`. Saving Private or Whole company clears them. Admins create the departments on web-a Users.
 - Forms: most tabs are useState + sonner, not RHF. Motion wrappers are marketing-only.
 - Query keys invented in pages (`['agent', id]`, `['sessions', agent.id]`, `['plaza', …]`) — keep consistent when sharing.
 
