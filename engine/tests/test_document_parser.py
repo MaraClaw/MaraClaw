@@ -216,5 +216,5 @@ def test_pyproject_pins_published_firecrawl_anydoc() -> None:
     dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
     assert "firecrawl-anydoc==0.2.3" in pyproject.read_text(encoding="utf-8")
     dockerfile_text = dockerfile.read_text(encoding="utf-8")
-    assert "FROM python:3.14.7-slim-trixie AS production" in dockerfile_text
+    assert "FROM python:3.14.8-slim-trixie AS production" in dockerfile_text
     assert "python /app/scripts/verify_anydoc.py" in dockerfile_text

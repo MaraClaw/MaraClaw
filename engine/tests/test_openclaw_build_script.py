@@ -175,7 +175,7 @@ def test_dockerfile_pins_node_26_7_0_base_image() -> None:
     ]
 
     # Then
-    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.7.0-bookworm-slim"]
+    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.10.0-bookworm-slim"]
 
 
 def test_openclaw_dockerfile_pins_bookworm_packages_without_hadolint_ignore() -> None:
