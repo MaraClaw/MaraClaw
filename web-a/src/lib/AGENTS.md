@@ -16,6 +16,7 @@ Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 | `auth-api.ts` | login, `/me`, forgot/reset/change. Public calls pass `token: null`. `signal` only exists here. |
 | `companies-api.ts` | list/create/toggle + email-domain CRUD. `listCompanies(q)` prefix FTS. `getTenant` **pads** a `CompanyStats` (SSO/counts empty). |
 | `users-api.ts` | list/detail/activate members + OA + PA. `asAdminUser` / `setOrgAdminActive` flatten into `AdminUser` + `source`. |
+| `departments-api.ts` | `GET/POST /api/departments`, `PUT /api/users/{id}/department`. Always sends `tenant_id`. Not `/api/enterprise/org/departments`. |
 | `linkup-keys-api.ts` | PA list/add/remove Linkup keys. Response is fingerprint, never plaintext. |
 | `llm-models-api.ts` | Org/platform admin LLM pool. Keys only on write; list returns `api_key_masked`. `withKnownProviders` always includes Grok. Grok and ChatGPT subscription start/status never accept or return tokens. |
 | `search-analytics-api.ts` | PA summary / timeseries / orgs / trending / export. |

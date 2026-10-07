@@ -28,7 +28,8 @@
 
 - `permissions.py` is the shared source of truth for agent visibility, access levels, and relationship access.
 - Prefer `list_visible_agents(...)` (DAO). There is no SQLAlchemy visibility query.
-- Use `check_agent_access(...)` at HTTP endpoint boundaries.
+- Use `check_agent_access(...)` at HTTP endpoint boundaries. Custom-mode department `use` grants count via `local_department_dao.has_agent_access`.
+- `acl_locks.py`: `lock_tenants`, then `lock_user` / `lock_agent`, are `SELECT … FOR UPDATE` inside the caller's `connection_ctx`. Take them before `bump_agent_acl_version`. Order is tenant, subject, agent.
 - Access *decisions* (not agent rows) may be cached in Redis via `access_cache.py`. TTL `AGENT_ACCESS_CACHE_TTL_SECONDS` (0 disables). Policy writes bump `aclver:{agent_id}` **after** the top-level `connection_ctx` commit. `set_cached_level` is skipped if `aclver` changed since compute. Redis errors fail open to DAOs. Do not cache 403/404.
 - Auth snapshots (`session_cache.py`, `USER_SESSION_CACHE_TTL_SECONDS`) cache `get_with_identity` **without** `password_hash` or quota counters. User/identity writes bump `sessver:*` after commit and drop request memo. Sets carry `observed_ver`. Password verify/change/transfer must use `load_identity_for_password` (SQL), never the snapshot hash. Redis **read** errors fall back to SQL; version INCR/DELETE are not skipped by the fail-open circuit.
 - Tenant rows may be cached (`tenant_cache.py`). Agent PK reads use request-local `row_memo` only (full agent rows include `api_key_hash` and counters).

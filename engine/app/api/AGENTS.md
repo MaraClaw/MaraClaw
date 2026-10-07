@@ -9,6 +9,14 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
 - `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. No proactive outbound sender yet. `background_tasks.py` is a helper, not a router.
+- `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/department`).
+
+## Local departments
+
+- `GET/POST /departments`: `org_admin` is own-tenant; `platform_admin` must pass `tenant_id`. Duplicate name → 409. Create locks in the router and does not bump ACL.
+- `PUT /users/{id}/department`: `local_departments.assign_department`. End users only. Locks tenant, user, then affected agents, then bumps `aclver`.
+- Not `org_sync`, and not `GET /enterprise/org/departments`.
+- `agents.py` stores `scope_type=department` at `access_level=use` only, and only for custom scope (other scopes with `department_ids` → 422). Saving private or company deletes every permission row, so those grants disappear. DB check: `ck_department_permission_use`. `GET /{agent_id}/permissions/departments` is managers-only.
 
 ## Dependencies
 

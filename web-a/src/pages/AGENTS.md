@@ -14,20 +14,21 @@ Each page owns Query/mutations + layout. Extract a component only when reused.
 | Forgot / reset | `forgot-password.tsx`, `reset-password.tsx` | Use `AuthShell`. |
 | Overview | `overview.tsx` | PA gets `SearchAnalyticsSnapshot`. |
 | Account | `account.tsx` | After password change: `refreshUser()`. |
+| Settings | `settings.tsx` | Sign out and theme. |
 | Companies | `companies.tsx` | Debounced server `?q=`. 403 + `tenant_id` → `getTenant` fallback. |
 | Company domains | `company-detail.tsx` | Loads full `listCompanies()` then `.find`. |
-| Users | `users.tsx`, `user-detail.tsx` | URL `?q=` `?company=`. Client-side filter. Scroll key `web-a:users-scroll`. |
+| Users | `users.tsx`, `user-detail.tsx`, `users-departments.tsx`, `users-department-queries.ts` | URL `?q=` `?company=`. Client-side filter. Scroll key `web-a:users-scroll`. Local departments are this screen, not a route. End users only. |
 | Models | `llm-models.tsx` | Org + platform admin. PA uses `?company=`. Writes `/api/enterprise/llm-models`. Set primary (`/set-default`), secondary (`/set-secondary`), and fallback (`/set-fallback`). Connect Grok or ChatGPT subscription starts/polls device-code (no token fields). |
 | Search keys | `search-engine.tsx` | Keys/Analytics icon rail. `?tab=analytics` mounts analytics. Leaving the tab drops `tab`/`company`/`range`. |
 | Analytics | `search-engine-analytics.tsx` | Not a route. `?company=` `?range=`. Dual system+scoped summary is intentional. |
 | Tools | `placeholder.tsx` | Still a stub. |
 
-Hotspots: `search-engine-analytics.tsx` (~710), `login.tsx` (~590).
+Hotspots: `llm-models.tsx` (~977, live Models screen), `search-engine-analytics.tsx` (~710), `login.tsx` (~590).
 
 ## CONVENTIONS
 
 - Chrome: `mx-auto max-w-{2xl|3xl|5xl|6xl} flex-col gap-6`; title `font-display text-2xl`.
-- Query keys: `['admin-companies']`, `['admin-users', tenant]`, `['admin-platform-admins']`, `['admin-user', id]`, `['admin-linkup-keys']`, `['admin-llm-models', tenant]`, `['admin-llm-providers']`, `['email-domains', id]`, `['admin-search-analytics-*', scope]`. Shared `['admin-companies']` — invalidate after company/user mutations.
+- Query keys: `['admin-companies']`, `['admin-users', tenant]`, `['admin-departments', tenant]`, `['admin-platform-admins']`, `['admin-user', id]`, `['admin-linkup-keys']`, `['admin-llm-models', tenant]`, `['admin-llm-providers']`, `['email-domains', id]`, `['admin-search-analytics-*', scope]`. Shared `['admin-companies']` — invalidate after company/user mutations.
 - Errors: `error instanceof ApiError ? error.message : 'Failed to load …'`. Toasts on mutate. Special-case 409 (dup) / 403 (role).
 - Forms: RHF + Zod, `noValidate`, `useId()`. Emails `.trim().toLowerCase()`. Passwords min 6.
 - List cards: overlay `<Link className="absolute inset-0 z-10">`; actions `relative z-20`.

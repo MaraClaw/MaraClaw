@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-23  
-**Commit:** 4d53677  
+**Generated:** 2026-10-07  
+**Commit:** f722496  
 **Branch:** main
 
 > Monorepo router: `../AGENTS.md`. This file is package implementation truth.
@@ -17,7 +17,7 @@ web-e/
 ├── index.html              # SPA shell + FOUC theme (`maraclaw-theme`)
 ├── vite.config.ts          # @ alias, :5173, proxy /api /ws /p → engine
 ├── components.json         # shadcn new-york / zinc / CSS vars / rsc:false
-├── Dockerfile              # Node 26.7 → nginx-unprivileged :8080
+├── Dockerfile              # Node 26.10.0 → nginx-unprivileged :8080
 ├── docker/nginx.conf       # SPA fallback, /healthz, engine proxy, CSP
 ├── e2e/landing.spec.ts     # Playwright smoke (preview :4173)
 ├── public/                 # brand marks + nav-icons/ (workspace rail)
@@ -29,7 +29,7 @@ web-e/
     ├── pages/              # landing + auth — see pages/AGENTS.md; workspace in pages/app/
     ├── hooks/              # use-theme, use-auth (rejects platform_admin)
     ├── lib/                # engine clients — see lib/AGENTS.md
-    └── components/         # ui / sections / layout (see layout/AGENTS.md) / auth / brand / chat
+    └── components/         # ui / sections / layout (see layout/AGENTS.md) / auth / brand / chat; root also has agent-department-access, motion, theme-toggle
 ```
 
 ## WHERE TO LOOK
@@ -37,7 +37,7 @@ web-e/
 | Task | Location | Notes |
 |------|----------|-------|
 | Route table | `src/routes/index.tsx` | Public auth + nested `/app` |
-| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/use-auth.tsx` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` → `/app/account` |
+| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/use-auth.tsx` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` allows only `/app/account` and `/app/settings` |
 | Landing + public auth | `pages/` | Nested `pages/AGENTS.md`. Landing composer: `landing.tsx` |
 | Login / register / SSO | `pages/login.tsx`, `register.tsx`, `sso-callback.tsx` | Chrome: `components/auth/auth-shell.tsx` |
 | Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |
@@ -46,6 +46,7 @@ web-e/
 | Agent tabs + outlet `agent` | `layout/agent-layout.tsx` | Icon submenu (smaller than workspace rail); Start/stop when `access_level === 'manage'` |
 | First-run redirect | `layout/onboarding-gate.tsx` | Skip key `maraclaw-onboarding-skipped` |
 | Engine HTTP / WS clients | `src/lib/*` | Nested `lib/AGENTS.md` |
+| Agent department grants | `components/agent-department-access.tsx`, `lib/agent-departments-api.ts` | Permissions tab. Custom list only. `use`, not `manage`. Local departments, not the provider directory |
 | Marketing copy | `components/sections/*` | Nested `sections/AGENTS.md` |
 | UI primitives | `components/ui/*` | Nested `ui/AGENTS.md` |
 | Theme tokens | `src/index.css` | OKLCH; `container-page` max 72rem |
@@ -107,7 +108,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 - Custom utilities: `container-page`, `text-gradient`, `glow-orb`, `section-band`, `shadow-card`, `shadow-elevated`.
 - FOUC-safe theme: inline `index.html` script mirrors React theme (`maraclaw-theme`).
 - Button polish: `rounded-xl`, `active:scale-[0.96]`; Badge has extra `soft` variant.
-- Docker: Node **26** multi-stage → `nginxinc/nginx-unprivileged`; health `GET /healthz`.
+- Docker: Node **26.10.0** multi-stage → `nginxinc/nginx-unprivileged`; health `GET /healthz`.
 
 ## COMMANDS
 
@@ -131,7 +132,7 @@ docker run --rm -p 8080:8080 maraclaw-web-e
 - Public `VITE_*` only. Empty `VITE_API_BASE_URL` = same-origin. Never set it to `http://0.0.0.0:8000`.
 - JWT is `maraclaw-enduser-token`, never `maraclaw-admin-token`. Logout is local (no logout API).
 - Password reset / verify emails use request Origin if it is in engine `CORS_ORIGINS`.
-- `src/assets/` empty. `public/icons.svg` unused. `@radix-ui/react-navigation-menu` unused — do not add `navigation-menu.tsx` for it.
+- No `src/assets/`. `public/icons.svg` unused. `@radix-ui/react-navigation-menu` unused — do not add `navigation-menu.tsx` for it.
 - Prod CSP `font-src 'self' data:` — Google Fonts in `index.html` fail in the Docker image. External APIs need `connect-src` edits.
 - `joinWithInvite` in `auth-api` is unused. `needs_company_setup` is typed, unused.
 - Header hash nav omits `#enterprise` (footer has it). Legal footer links all go to `#contact`.

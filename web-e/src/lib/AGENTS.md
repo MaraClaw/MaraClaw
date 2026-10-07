@@ -1,6 +1,6 @@
 # lib/ - engine clients
 
-**Generated:** 2026-08-16 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-10-07 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -21,7 +21,8 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
 | `plaza-api.ts` | `/api/plaza/*` |
 | `okr-api.ts` | `/api/okr/*` |
-| `directory-api.ts` | `/api/org/users`, `/api/enterprise/org/{members,departments}` |
+| `directory-api.ts` | Provider directory: `/api/org/users`, `/api/enterprise/org/{members,departments}`. Not local departments. |
+| `agent-departments-api.ts` | `GET /api/agents/:id/permissions/departments` for the permissions tab. |
 | `chat/ws-client.ts` | `connectAgentChat` → `WS /ws/chat/{agentId}?token=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. Token in query string (engine contract). |
 | `utils.ts` | `cn()` |
 | `motion.ts` | Landing tokens only (`easeOut`, `fadeUp`, …). `springSnappy` unused. `/app` does not import this. |
@@ -39,6 +40,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | Agents / files / channels / onboarding | `workspace-api.ts` |
 | Take Control, vault, published pages | `control-api.ts` |
 | Plaza / OKR / directory | `plaza-api.ts` / `okr-api.ts` / `directory-api.ts` |
+| Agent department picker | `agent-departments-api.ts` |
 | Chat socket | `chat/ws-client.ts` |
 | Landing motion presets | `motion.ts` |
 
@@ -53,7 +55,8 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 
 ## ANTI-PATTERNS
 
-- Adding a new domain into `workspace-api.ts` (Plaza/OKR/control/directory already split).
+- Adding a new domain into `workspace-api.ts` (Plaza/OKR/control/directory/agent-departments already split).
+- Using `directory-api.ts` for local department grants, or `agent-departments-api.ts` for the provider directory.
 - `fetch()` in pages; wrapping chat WS in Query.
 - Using `apiUrl` for `fileDownloadUrl`.
 - Importing `motion.ts` from `/app`.

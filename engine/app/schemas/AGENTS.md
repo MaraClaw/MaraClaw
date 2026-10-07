@@ -11,6 +11,7 @@ Pydantic request/response models live here. This repo currently has a large shar
 ## Placement
 
 - OKR HTTP models live in `okr.py` (imported by `app/api/okr.py`).
+- Local department HTTP models live in `department.py`. Provider org-sync shapes stay out of that module. Do not add either group to `schemas.py`.
 - `schemas.py` is already a cross-domain grab bag. Do not add unrelated schemas to it by default.
 - Prefer a domain module when adding a coherent new group of schemas, then re-export only if an existing import surface needs it.
 - Endpoint-only request models may remain local to the route module when they are not reused.
