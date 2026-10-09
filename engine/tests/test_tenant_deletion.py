@@ -1,7 +1,6 @@
 import inspect
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -72,8 +71,14 @@ async def test_delete_tenant_cascade_and_fallback(monkeypatch) -> None:
     async def fake_get(_id):
         return SimpleNamespace(id=_id, name="Acme")
 
+    calls: list[str] = []
+
     async def fake_delete(_id):
+        calls.append("delete")
         deleted.append(_id)
+
+    async def fake_audit(**_kwargs):
+        calls.append("audit")
 
     async def fake_fallback(identity_id, *, exclude_tenant_id):
         assert exclude_tenant_id == tenant_id
@@ -81,11 +86,12 @@ async def test_delete_tenant_cascade_and_fallback(monkeypatch) -> None:
 
     monkeypatch.setattr(tenants_api.tenant_dao, "get", fake_get)
     monkeypatch.setattr(tenants_api, "delete_tenant_and_release_identities", fake_delete)
-    monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
+    monkeypatch.setattr(tenants_api, "write_admin_audit", fake_audit)
     monkeypatch.setattr(tenants_api.user_dao, "fallback_tenant_for_identity", fake_fallback)
 
     response = await tenants_api.delete_tenant(tenant_id, make_user(tenant_id))
 
+    assert calls == ["audit", "delete"]
     assert deleted == [tenant_id]
     assert response == {"status": "deleted", "fallback_tenant_id": str(fallback_tenant_id)}
 
@@ -95,7 +101,7 @@ async def test_delete_tenant_does_not_fallback_when_cleanup_fails(monkeypatch) -
     tenant_id = uuid.uuid4()
 
     async def fake_get(_id):
-        return SimpleNamespace(id=_id)
+        return SimpleNamespace(id=_id, name="Acme")
 
     async def fake_delete(_id):
         raise RuntimeError("cleanup failed")
@@ -112,3 +118,12 @@ def test_delete_cascade_sql_is_static() -> None:
     assert "DELETE FROM" in source
     assert 'f"DELETE' not in source
     assert "f'DELETE" not in source
+    skill_files = source.index("DELETE FROM skill_files")
+    skills = source.index("DELETE FROM skills WHERE")
+    clear_created_by = source.index("UPDATE agent_templates SET created_by = NULL")
+    clear_updated_by = source.index("UPDATE enterprise_info SET updated_by = NULL")
+    users = source.index("DELETE FROM users WHERE tenant_id")
+    assert skill_files < skills < users
+    assert clear_created_by < users
+    assert clear_updated_by < users
+    assert "tenant_id = %(tid)s" in source
