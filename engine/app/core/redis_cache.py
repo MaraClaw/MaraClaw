@@ -17,6 +17,11 @@ from app.core.logging import logger
 _COOLDOWN_SECONDS = 2.0
 _cache_dead_until = 0.0
 _deferred_incrs: ContextVar[set[str] | None] = ContextVar("redis_cache_deferred", default=None)
+_deferred_deletes: ContextVar[set[str] | None] = ContextVar("redis_cache_deferred_deletes", default=None)
+_delete_tokens: ContextVar[tuple[Token[set[str] | None], ...]] = ContextVar(
+    "redis_cache_deferred_delete_tokens",
+    default=(),
+)
 
 
 def cache_prefix() -> str:
@@ -110,6 +115,27 @@ async def cache_delete(*keys: str) -> None:
         logger.debug("redis_cache delete skipped: {}", type(exc).__name__)
 
 
+async def defer_cache_delete(*keys: str) -> None:
+    """Delete cache keys now, or after the open request transaction commits.
+
+    Session and tenant payload keys are not version checks by themselves.
+    Dropping them before commit would publish an invalidation that a rolled
+    back delete cannot take back. Callers in the same request should use
+    ``deletion_is_pending`` so they do not keep reading the stale payload.
+    """
+    pending = _deferred_deletes.get()
+    if pending is None:
+        await cache_delete(*keys)
+        return
+    pending.update(key for key in keys if key)
+
+
+def deletion_is_pending(key: str) -> bool:
+    """Return whether ``key`` is waiting for the request transaction to commit."""
+    pending = _deferred_deletes.get()
+    return pending is not None and key in pending
+
+
 async def cache_get_json(key: str) -> object | None:
     raw = await cache_get(key)
     if raw is None:
@@ -169,18 +195,31 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
 
 def begin_deferred_versions() -> Token[set[str] | None]:
     pending: set[str] = set()
+    delete_token = _deferred_deletes.set(set())
+    _delete_tokens.set((*_delete_tokens.get(), delete_token))
     return _deferred_incrs.set(pending)
 
 
 def end_deferred_versions(token: Token[set[str] | None]) -> None:
     _deferred_incrs.reset(token)
+    tokens = _delete_tokens.get()
+    if not tokens:
+        return
+    _delete_tokens.set(tokens[:-1])
+    _deferred_deletes.reset(tokens[-1])
 
 
 async def flush_deferred_versions() -> None:
     pending = _deferred_incrs.get()
-    if not pending:
+    if pending:
+        keys = list(pending)
+        pending.clear()
+        for key in keys:
+            await _incr_version_now(key)
+    deletes = _deferred_deletes.get()
+    if not deletes:
         return
-    keys = list(pending)
-    pending.clear()
-    for key in keys:
-        await _incr_version_now(key)
+    delete_keys = list(deletes)
+    deletes.clear()
+    if delete_keys:
+        await cache_delete(*delete_keys)

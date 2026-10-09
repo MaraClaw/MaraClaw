@@ -15,7 +15,15 @@ from app.core.json_types import (
     json_object_from,
     mapping_from_row,
 )
-from app.core.redis_cache import bump_version, cache_delete, cache_get_json, cache_key, cache_set_json, read_version
+from app.core.redis_cache import (
+    bump_version,
+    cache_get_json,
+    cache_key,
+    cache_set_json,
+    defer_cache_delete,
+    deletion_is_pending,
+    read_version,
+)
 from app.records.tenant import TenantRecord
 
 
@@ -128,7 +136,7 @@ def _load(data: object) -> TenantRecord | None:
 
 
 async def get_cached_tenant(tenant_id: UUID) -> TenantRecord | None:
-    if _ttl() <= 0:
+    if _ttl() <= 0 or deletion_is_pending(_row_key(tenant_id)):
         return None
     cached: object = await cache_get_json(_row_key(tenant_id))
     if not is_json_object(cached):
@@ -158,4 +166,4 @@ async def bump_tenant_cache(tenant_id: UUID | None) -> None:
     if tenant_id is None or _ttl() <= 0:
         return
     await bump_version(_ver_key(tenant_id), ttl=_ttl() * 20)
-    await cache_delete(_row_key(tenant_id))
+    await defer_cache_delete(_row_key(tenant_id))

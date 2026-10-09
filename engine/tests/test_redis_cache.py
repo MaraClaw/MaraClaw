@@ -116,10 +116,14 @@ async def test_cache_rejects_oversized(fake_cache: FakeRedis, monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_deferred_version_flush(fake_cache: FakeRedis) -> None:
     token = redis_cache.begin_deferred_versions()
+    fake_cache.store["sess"] = "old"
     await redis_cache.bump_version("ver")
+    await redis_cache.defer_cache_delete("sess")
     assert "ver" not in fake_cache.store
+    assert fake_cache.store["sess"] == "old"
     await redis_cache.flush_deferred_versions()
     assert fake_cache.store["ver"] == "1"
+    assert "sess" not in fake_cache.store
     redis_cache.end_deferred_versions(token)
 
 

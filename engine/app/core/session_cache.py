@@ -22,10 +22,11 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
-    cache_delete,
     cache_get_json,
     cache_key,
     cache_set_json,
+    defer_cache_delete,
+    deletion_is_pending,
     read_version,
 )
 from app.core.row_memo import memo_drop, memo_drop_kind, memo_get, memo_set
@@ -180,7 +181,7 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
     memo = memo_get(_MEMO_KIND, user_id)
     if isinstance(memo, UserRecord):
         return memo
-    if _ttl() <= 0:
+    if _ttl() <= 0 or deletion_is_pending(_sess_key(user_id)):
         return None
     cached: object = await cache_get_json(_sess_key(user_id))
     if not is_json_object(cached):
@@ -235,7 +236,7 @@ async def bump_user_session(user_id: UUID | None) -> None:
     if _ttl() <= 0:
         return
     await bump_version(user_version_key(user_id), ttl=_ttl() * 40)
-    await cache_delete(_sess_key(user_id))
+    await defer_cache_delete(_sess_key(user_id))
 
 
 async def bump_identity_session(identity_id: UUID | None) -> None:
@@ -254,7 +255,7 @@ async def bump_identity_session(identity_id: UUID | None) -> None:
         members = []
     for member in members:
         memo_drop(_MEMO_KIND, member.id)
-        await cache_delete(_sess_key(member.id))
+        await defer_cache_delete(_sess_key(member.id))
 
 
 async def bump_user_sessions(user_ids: Sequence[object]) -> None:

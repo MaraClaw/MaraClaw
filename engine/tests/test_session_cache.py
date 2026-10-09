@@ -74,6 +74,24 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
 
 
 @pytest.mark.asyncio
+async def test_session_cache_bump_waits_until_commit_flush(fake_cache: FakeRedis) -> None:
+    user = _user()
+    await session_cache.set_cached_user(user)
+    before = dict(fake_cache.store)
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await session_cache.bump_user_session(user.id)
+        assert fake_cache.store == before
+        clear_row_memo()
+        assert await session_cache.get_cached_user(user.id) is None
+        await redis_cache.flush_deferred_versions()
+        clear_row_memo()
+        assert await session_cache.get_cached_user(user.id) is None
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
 async def test_session_cache_bump_user_invalidates(fake_cache: FakeRedis) -> None:
     user = _user()
     await session_cache.set_cached_user(user)

@@ -56,6 +56,22 @@ async def test_tenant_cache_roundtrip(fake_cache: FakeRedis) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tenant_cache_bump_waits_until_commit_flush(fake_cache: FakeRedis) -> None:
+    tenant = _tenant()
+    await tenant_cache.set_cached_tenant(tenant)
+    before = dict(fake_cache.store)
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await tenant_cache.bump_tenant_cache(tenant.id)
+        assert fake_cache.store == before
+        assert await tenant_cache.get_cached_tenant(tenant.id) is None
+        await redis_cache.flush_deferred_versions()
+        assert await tenant_cache.get_cached_tenant(tenant.id) is None
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
 async def test_tenant_cache_bump_invalidates(fake_cache: FakeRedis) -> None:
     tenant = _tenant()
     await tenant_cache.set_cached_tenant(tenant)
