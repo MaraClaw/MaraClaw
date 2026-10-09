@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from psycopg.pq import TransactionStatus
 
 from app.api import admin as admin_api, tenants as tenants_api, users as users_api
 from app.services import admin_provisioning as provisioning
@@ -279,6 +280,90 @@ async def test_set_peer_admin_active_rejects_genesis_org_target(monkeypatch):
     assert exc.value.status_code == 403
 
 
+class _AuditTransaction:
+    def __init__(self) -> None:
+        self.exc_type: type[BaseException] | None = None
+
+    async def __aenter__(self) -> _AuditTransaction:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        del exc, tb
+        self.exc_type = exc_type
+        return False
+
+
+class _AuditRaw:
+    def __init__(self, connection: _AuditConnection, status: object) -> None:
+        self.connection = connection
+        self.status = status
+        self.transaction_cm = _AuditTransaction()
+
+    @property
+    def info(self) -> _AuditRaw:
+        return self
+
+    @property
+    def transaction_status(self) -> object:
+        return self.status
+
+    def transaction(self) -> _AuditTransaction:
+        self.connection.events.append("savepoint")
+        return self.transaction_cm
+
+
+class _AuditConnection:
+    def __init__(self, status: object) -> None:
+        self.raw = _AuditRaw(self, status)
+        self.events: list[str] = []
+
+    async def execute(self, query: str, params: object = None) -> None:
+        del params
+        self.events.append(query)
+        self.raw.status = TransactionStatus.INTRANS
+
+
+@pytest.mark.asyncio
+async def test_write_admin_audit_savepoint_rolls_back_before_logging(monkeypatch):
+    from app.db import session as session_module
+    from app.services import admin_audit
+
+    connection = _AuditConnection(TransactionStatus.INTRANS)
+    token = session_module._conn_ctx.set(connection)  # type: ignore[arg-type]
+    create = AsyncMock(side_effect=RuntimeError("audit insert failed"))
+    monkeypatch.setattr(admin_audit.admin_audit_log_dao, "create", create)
+    try:
+        await admin_audit.write_admin_audit(actor=_user(role="org_admin"), action="tenant_delete", target_type="tenant")
+    finally:
+        session_module._conn_ctx.reset(token)
+    create.assert_awaited_once()
+    assert connection.events == ["savepoint"]
+    assert connection.raw.transaction_cm.exc_type is RuntimeError
+
+
+@pytest.mark.asyncio
+async def test_write_admin_audit_savepoint_starts_transaction_before_nested_insert(monkeypatch):
+    from app.db import session as session_module
+    from app.services import admin_audit
+
+    connection = _AuditConnection(TransactionStatus.IDLE)
+    token = session_module._conn_ctx.set(connection)  # type: ignore[arg-type]
+    create = AsyncMock()
+    monkeypatch.setattr(admin_audit.admin_audit_log_dao, "create", create)
+    try:
+        await admin_audit.write_admin_audit(actor=_user(role="org_admin"), action="tenant_delete", target_type="tenant")
+    finally:
+        session_module._conn_ctx.reset(token)
+    assert connection.events == ["SELECT 1", "savepoint"]
+    assert connection.raw.transaction_cm.exc_type is None
+    create.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_write_admin_audit_persists_actor_and_changes(monkeypatch):
     from app.services import admin_audit
@@ -474,7 +559,9 @@ async def test_set_end_user_active_platform_admin_cross_tenant(monkeypatch):
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
-        AsyncMock(return_value=_user(role="agent_admin", tenant_id=target.tenant_id, is_active=False, user_id=target.id)),
+        AsyncMock(
+            return_value=_user(role="agent_admin", tenant_id=target.tenant_id, is_active=False, user_id=target.id)
+        ),
     )
     monkeypatch.setattr(provisioning.agent_dao, "disable_for_creator", AsyncMock(return_value=[]))
     monkeypatch.setattr(provisioning.agent_trigger_dao, "disable_for_creator", AsyncMock(return_value=0))
