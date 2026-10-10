@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import multiprocessing as mp
+import resource
 from pathlib import Path
 
 import pytest
@@ -106,7 +108,7 @@ def test_convert_document_when_resource_limited_then_raises_typed_error() -> Non
 def test_convert_document_when_scanned_pdf_then_raises_unsupported() -> None:
     with pytest.raises(UnsupportedDocumentError) as exc:
         convert_document(_fixture("scanned.pdf"), "scanned.pdf")
-    assert "scanned" in str(exc.value).lower()
+    assert "ocr" in str(exc.value).lower()
     assert "OCR" in format_parse_failure(exc.value)
 
 
@@ -147,6 +149,19 @@ def test_convert_document_when_too_large_then_rejects_before_anydoc(monkeypatch:
 def test_convert_document_isolated_when_supported_then_matches_in_process() -> None:
     data = _fixture("supported.xlsx")
     assert convert_document_isolated(data, "supported.xlsx") == convert_document(data, "supported.xlsx")
+
+
+def test_convert_document_isolated_when_scanned_pdf_then_preserves_unsupported_error() -> None:
+    # Given
+    data = _fixture("scanned.pdf")
+
+    # When
+    with pytest.raises(UnsupportedDocumentError) as exc:
+        convert_document_isolated(data, "scanned.pdf")
+
+    # Then
+    assert "ocr" in str(exc.value).lower()
+    assert "OCR" in format_parse_failure(exc.value)
 
 
 def test_convert_document_isolated_when_worker_hangs_then_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,13 +213,35 @@ def test_error_from_payload_when_invalid_json_then_typed_parse_error() -> None:
 
 
 def test_convert_worker_when_parse_fails_then_writes_typed_payload(tmp_path: Path) -> None:
+    # Given: hardening belongs to the worker, never to the pytest parent.
+    resources = (resource.RLIMIT_CPU, resource.RLIMIT_AS, resource.RLIMIT_FSIZE, resource.RLIMIT_CORE)
+    parent_limits = {kind: resource.getrlimit(kind) for kind in resources}
     src = tmp_path / "in.bin"
     out = tmp_path / "out.md"
     err = tmp_path / "err.json"
     src.write_bytes(_fixture("encrypted.odt"))
-    convert_worker(str(src), "encrypted.odt", str(out), str(err), None)
+    # When
+    process = mp.get_context("spawn").Process(
+        target=convert_worker,
+        args=(str(src), "encrypted.odt", str(out), str(err), None),
+        daemon=True,
+    )
+    process.start()
+    try:
+        process.join(30)
+        assert not process.is_alive(), "parser worker did not finish"
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join()
+        process.close()
+    # Then
+    assert {kind: resource.getrlimit(kind) for kind in resources} == parent_limits
     assert not out.exists()
-    assert "EncryptedDocumentError" in err.read_text(encoding="utf-8")
+    payload = err.read_text(encoding="utf-8")
+    assert "EncryptedDocumentError" in payload
+    assert isinstance(_error_from_payload(payload), EncryptedDocumentError)
 
 
 def test_max_input_budget_matches_read_document_ceiling() -> None:
@@ -214,7 +251,7 @@ def test_max_input_budget_matches_read_document_ceiling() -> None:
 def test_pyproject_pins_published_firecrawl_anydoc() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
-    assert "firecrawl-anydoc==0.2.3" in pyproject.read_text(encoding="utf-8")
+    assert "firecrawl-anydoc==0.2.4" in pyproject.read_text(encoding="utf-8")
     dockerfile_text = dockerfile.read_text(encoding="utf-8")
     assert "FROM python:3.14.8-slim-trixie AS production" in dockerfile_text
     assert "python /app/scripts/verify_anydoc.py" in dockerfile_text

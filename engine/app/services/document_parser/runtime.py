@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import BoundedSemaphore
 from typing import Final, Protocol, cast
 
-from app.core.json_types import json_loads_object
+from app.core.json_types import json_loads_object, json_loads_value, object_mapping_from
 from app.core.logging import logger
 from app.services.document_parser.errors import (
     DocumentParseError,
@@ -112,12 +112,12 @@ def extract_xlsx_sheets_isolated(
         slot_wait_seconds=slot_wait_seconds,
     )
     try:
-        payload = json.loads(raw)
+        payload = json_loads_value(raw)
     except json.JSONDecodeError as exc:
         raise DocumentParseError("Document read failed: extractor returned unreadable sheets") from exc
     if not isinstance(payload, list):
         raise DocumentParseError("Document read failed: extractor returned unreadable sheets")
-    return [item for item in payload if isinstance(item, dict)]
+    return [object_mapping_from(item) for item in list[object](payload) if isinstance(item, dict)]
 
 
 async def extract_xlsx_sheets_isolated_async(

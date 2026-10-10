@@ -378,7 +378,7 @@ def _reraise_typed(exc: BaseException) -> NoReturn:
         raise MissingDocumentPartError(str(exc), part=exc.part) from exc
     if isinstance(exc, anydoc.ResourceLimitError):
         raise ResourceLimitedDocumentError(str(exc), limit=exc.limit) from exc
-    if isinstance(exc, anydoc.UnsupportedError):
+    if isinstance(exc, (anydoc.UnsupportedError, anydoc.NeedsOcrError)):
         raise UnsupportedDocumentError(str(exc)) from exc
     if isinstance(exc, anydoc.ConvertError):
         raise DocumentParseError(str(exc)) from exc
