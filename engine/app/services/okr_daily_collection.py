@@ -7,7 +7,6 @@ the OKR Agent, which then records the report through the standard tool path.
 
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import date
 from typing import TypedDict
@@ -17,13 +16,10 @@ from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.chat_dao import chat_session_dao
 from app.dao.okr_settings_dao import okr_settings_dao
-from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 from app.services.agent_tool_exec.channel_messaging import _send_channel_message
 from app.services.agent_tool_exec.platform_messaging import _send_platform_message
-
-_LEGACY_WAIT_DAILY_REPLY = re.compile(r"^wait_.*daily_reply$")
 
 
 class DailyCollectionResult(TypedDict):
@@ -57,21 +53,6 @@ def _agent_request_message(target_name: str, report_day: date) -> str:
     )
 
 
-def _is_legacy_daily_reply_trigger(name: str) -> bool:
-    """Match legacy daily_reply_* and wait_%daily_reply trigger names."""
-    return name.startswith("daily_reply_") or bool(_LEGACY_WAIT_DAILY_REPLY.fullmatch(name))
-
-
-async def _cleanup_legacy_daily_reply_triggers(okr_agent_id: uuid.UUID) -> None:
-    """Disable legacy daily reply triggers from previous implementations."""
-    triggers = await agent_trigger_dao.list_for_agent(okr_agent_id)
-    for trigger in triggers:
-        if not trigger.is_enabled:
-            continue
-        if _is_legacy_daily_reply_trigger(trigger.name):
-            _ = await agent_trigger_dao.update(db_obj=trigger, obj_in={"is_enabled": False})
-
-
 async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyCollectionResult:
     """Send daily collection requests to tracked relationships."""
     settings = await okr_settings_dao.get_by_tenant(tenant_id)
@@ -85,8 +66,6 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
     okr_agent = await agent_dao.get(settings.okr_agent_id)
     if not okr_agent:
         raise ValueError("OKR Agent not found for this tenant")
-
-    await _cleanup_legacy_daily_reply_triggers(okr_agent.id)
 
     rel_rows = await agent_relationship_dao.list_for_agent_with_members(okr_agent.id, active_only=True)
     tracked_agents = await agent_agent_relationship_dao.list_target_agents(
