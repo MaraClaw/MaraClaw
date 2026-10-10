@@ -193,9 +193,7 @@ _wake_running: set[UUID] = set()
 _wake_again: dict[UUID, tuple[str, UUID | None]] = {}
 
 
-def _schedule_inbox_wake(
-    agent: AgentRecord, content: str, message_id: UUID | None = None
-) -> None:
+def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
     """Start inbox wake without blocking the chat socket."""
     try:
         loop = asyncio.get_running_loop()

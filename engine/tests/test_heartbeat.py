@@ -86,6 +86,7 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     monkeypatch.setattr("app.services.agent_context.build_agent_context", build_context)
     monkeypatch.setattr("app.services.agent_tools.get_agent_tools_for_llm", get_tools)
     monkeypatch.setattr("app.services.llm.get_model_api_key", lambda model: "key")
+
     async def _fresh_client(model, **_kwargs):
         return model, client
 

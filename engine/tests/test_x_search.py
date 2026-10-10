@@ -238,10 +238,7 @@ async def test_search_x_rejects_invalid_handles_dates_and_empty_output(monkeypat
         await x_search._search_x(uuid.uuid4(), {"query": "xAI", "from_date": "08-01-2026"})
         == "❌ from_date must be YYYY-MM-DD"
     )
-    assert (
-        await x_search._search_x(uuid.uuid4(), {"query": "x" * 2001})
-        == "❌ query must be at most 2000 characters"
-    )
+    assert await x_search._search_x(uuid.uuid4(), {"query": "x" * 2001}) == "❌ query must be at most 2000 characters"
 
     install_fake_httpx(monkeypatch, [FakeResponse(200, {"output": []})])
     assert await x_search._search_x(uuid.uuid4(), {"query": "xAI"}) == (
@@ -260,6 +257,4 @@ async def test_search_x_sends_video_understanding_flag(monkeypatch):
     result = await x_search._search_x(uuid.uuid4(), {"query": "xAI", "enable_video_understanding": True})
 
     assert result == "video"
-    assert fake_httpx.calls[0][3]["json"]["tools"] == [
-        {"type": "x_search", "enable_video_understanding": True}
-    ]
+    assert fake_httpx.calls[0][3]["json"]["tools"] == [{"type": "x_search", "enable_video_understanding": True}]

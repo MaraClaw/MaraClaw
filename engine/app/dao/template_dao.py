@@ -68,8 +68,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
         """
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE agents SET template_id = NULL "
-                + "WHERE template_id = %(template_id)s RETURNING id",
+                "UPDATE agents SET template_id = NULL " + "WHERE template_id = %(template_id)s RETURNING id",
                 {"template_id": template_id},
             )
             return len(rows)

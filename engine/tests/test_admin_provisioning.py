@@ -474,7 +474,9 @@ async def test_set_end_user_active_platform_admin_cross_tenant(monkeypatch):
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
-        AsyncMock(return_value=_user(role="agent_admin", tenant_id=target.tenant_id, is_active=False, user_id=target.id)),
+        AsyncMock(
+            return_value=_user(role="agent_admin", tenant_id=target.tenant_id, is_active=False, user_id=target.id)
+        ),
     )
     monkeypatch.setattr(provisioning.agent_dao, "disable_for_creator", AsyncMock(return_value=[]))
     monkeypatch.setattr(provisioning.agent_trigger_dao, "disable_for_creator", AsyncMock(return_value=0))

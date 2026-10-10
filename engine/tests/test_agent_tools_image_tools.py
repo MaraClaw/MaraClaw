@@ -249,9 +249,7 @@ def test_grok_size_maps_to_imagine_aspect_ratio_and_resolution():
 
 
 @pytest.mark.asyncio
-async def test_generate_image_grok_uses_default_model_and_rejects_untrusted_base(
-    monkeypatch, tmp_path
-):
+async def test_generate_image_grok_uses_default_model_and_rejects_untrusted_base(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from app.services.agent_tool_exec import images

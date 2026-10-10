@@ -60,7 +60,7 @@ class LocalStorageBackend(StorageBackend):
                 continue
             try:
                 rel = str(entry.resolve().relative_to(self.root.resolve()))
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 continue
             entries.append(
                 StorageEntry(

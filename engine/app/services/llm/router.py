@@ -397,9 +397,7 @@ async def _classify_with_llm(
     started = time.perf_counter()
     tokens = 0
     try:
-        _, client = await create_fresh_llm_client_from_model(
-            secondary, timeout=CLASSIFIER_TIMEOUT_SECONDS
-        )
+        _, client = await create_fresh_llm_client_from_model(secondary, timeout=CLASSIFIER_TIMEOUT_SECONDS)
     except Exception as exc:
         logger.warning("[LLM route] classifier client failed: {}", exc)
         return None, int((time.perf_counter() - started) * 1000), 0

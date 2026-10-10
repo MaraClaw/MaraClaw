@@ -178,8 +178,7 @@ async def _search_x(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     except httpx.TimeoutException:
         logger.error("[SearchX] Timeout: request took longer than %s seconds", _X_SEARCH_TIMEOUT_SECONDS)
         return (
-            f"❌ X search timed out after {_X_SEARCH_TIMEOUT_SECONDS} seconds. "
-            + "Try a narrower query or date range."
+            f"❌ X search timed out after {_X_SEARCH_TIMEOUT_SECONDS} seconds. " + "Try a narrower query or date range."
         )
     except Exception as error:
         err_msg = str(error) or type(error).__name__

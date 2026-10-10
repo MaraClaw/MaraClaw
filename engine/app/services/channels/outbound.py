@@ -136,7 +136,9 @@ async def _deliver_wecom(agent: AgentRecord, external: str, content: str) -> Non
     extra = json_object_from(config.extra_config)
     wecom_agent_id = json_as_str(extra.get("wecom_agent_id")) or ""
     user_id = (
-        _split_conv(external, "wecom_group_") if external.startswith("wecom_group_") else _split_conv(external, "wecom_p2p_")
+        _split_conv(external, "wecom_group_")
+        if external.startswith("wecom_group_")
+        else _split_conv(external, "wecom_p2p_")
     )
     result = await send_wecom_message(
         corp_id=config.app_id,
