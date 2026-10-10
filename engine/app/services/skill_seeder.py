@@ -1016,8 +1016,7 @@ async def seed_skills():
 async def push_default_skills_to_existing_agents():
     """Deploy all is_default skills into the workspace of every existing agent that is missing them.
 
-    Called at startup after seed_skills() so existing agents automatically receive new default skills
-    like mcp-installer without requiring manual re-creation.
+    Called at startup after seed_skills() so existing agents automatically receive new default skills.
     """
     import hashlib
 
@@ -1043,19 +1042,9 @@ async def push_default_skills_to_existing_agents():
 
         agent_ids = await agent_dao.list_all_ids()
         pushed = 0
-        removed_legacy = 0
         storage = get_storage_backend()
         for agent_id in agent_ids:
             agent_prefix = agent_manager._agent_storage_prefix(agent_id)
-            legacy_key = f"{agent_prefix}/skills/MCP_INSTALLER.md"
-            if await storage.is_file(legacy_key):
-                try:
-                    await storage.delete(legacy_key)
-                    removed_legacy += 1
-                except Exception as exc:
-                    logger.warning(
-                        f"[SkillSeeder] Failed to remove legacy MCP_INSTALLER.md for agent {agent_id}: {exc}"
-                    )
             for skill in default_skills:
                 if not skill.files:
                     continue
@@ -1074,10 +1063,7 @@ async def push_default_skills_to_existing_agents():
         else:
             _ = await system_setting_dao.create(obj_in={"key": "default_skills_sync_hash", "value": sync_hash_value})
 
-        if pushed or removed_legacy:
-            logger.info(
-                f"[SkillSeeder] Pushed {pushed} new skill files "
-                + f"to existing agents; removed {removed_legacy} legacy MCP installer files"
-            )
+        if pushed:
+            logger.info(f"[SkillSeeder] Pushed {pushed} new skill files to existing agents")
         else:
             logger.info("[SkillSeeder] All existing agents already have all default skills")
