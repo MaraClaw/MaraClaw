@@ -17,7 +17,7 @@ class OrgSyncService:
         if not provider:
             return {"error": f"Identity provider {provider_id} not found"}
 
-        from app.services.org_sync_adapter import get_org_sync_adapter
+        from app.services.org_sync import get_org_sync_adapter
 
         adapter = await get_org_sync_adapter(provider.provider_type, provider_id=pid)
         if not adapter:

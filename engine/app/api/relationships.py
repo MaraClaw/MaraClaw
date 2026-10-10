@@ -20,7 +20,7 @@ from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
-from app.services.org_sync_adapter import derive_member_department_paths
+from app.services.org_sync import derive_member_department_paths
 
 router = APIRouter(prefix="/agents/{agent_id}/relationships", tags=["relationships"])
 

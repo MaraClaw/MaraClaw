@@ -84,7 +84,7 @@ from app.services.llm import (
     get_model_api_key,
     get_provider_manifest,
 )
-from app.services.org_sync_adapter import derive_member_department_paths
+from app.services.org_sync import derive_member_department_paths
 from app.services.platform_service import platform_service
 from app.services.sso_service import sso_service
 

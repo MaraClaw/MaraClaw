@@ -1,13 +1,14 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from importlib import import_module
 from types import SimpleNamespace
 from typing import override
 
 import pytest
 
 from app.records.identity import AuthProviderType
-from app.services.org_sync_adapter import (
+from app.services.org_sync import (
     SYNC_ADAPTER_CLASSES,
     BaseOrgSyncAdapter,
     ExternalDepartment,
@@ -15,6 +16,18 @@ from app.services.org_sync_adapter import (
     GoogleWorkspaceOrgSyncAdapter,
     build_department_path_map,
 )
+
+
+def test_retired_org_sync_adapter_module_import_fails() -> None:
+    # Given: the compatibility module has been retired.
+    module_name = "app.services.org_sync_adapter"
+
+    # When: a consumer tries to import the retired module.
+    with pytest.raises(ModuleNotFoundError) as error:
+        import_module(module_name)
+
+    # Then: the missing module is the facade, not one of its dependencies.
+    assert error.value.name == module_name
 
 
 class _DummyAdapter(BaseOrgSyncAdapter):
