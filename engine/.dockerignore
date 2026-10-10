@@ -1,0 +1,10 @@
+# Secrets, local workspaces, and generated caches at any depth.
+**/.env
+**/.env.*
+**/.venv
+**/.docker-data
+**/.coverage
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
+**/*.egg-info

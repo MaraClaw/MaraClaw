@@ -24,16 +24,16 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         pango1.0-tools=1.56.3-1 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 ARG MARACLAW_PIP_INDEX_URL
 ARG MARACLAW_PIP_TRUSTED_HOST
-RUN if [ -n "$MARACLAW_PIP_INDEX_URL" ] && [ -n "$MARACLAW_PIP_TRUSTED_HOST" ]; then \
-    pip install --no-cache-dir --index-url "$MARACLAW_PIP_INDEX_URL" --trusted-host "$MARACLAW_PIP_TRUSTED_HOST" . uv; \
-    elif [ -n "$MARACLAW_PIP_INDEX_URL" ]; then \
-    pip install --no-cache-dir --index-url "$MARACLAW_PIP_INDEX_URL" . uv; \
-    else \
-    pip install --no-cache-dir . uv; \
-    fi
+RUN set -eu; set --; \
+    if [ -n "${MARACLAW_PIP_INDEX_URL:-}" ]; then set -- "$@" --index-url "$MARACLAW_PIP_INDEX_URL"; fi; \
+    if [ -n "${MARACLAW_PIP_TRUSTED_HOST:-}" ]; then set -- "$@" --trusted-host "$MARACLAW_PIP_TRUSTED_HOST"; fi; \
+    pip install --no-cache-dir "$@" uv==0.12.23 && \
+    uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file /tmp/requirements.txt && \
+    uv pip install --system --no-cache --require-hashes "$@" -r /tmp/requirements.txt && \
+    rm -f /tmp/requirements.txt
 
 # ─── Production ─────────────────────────────────────────
 FROM python:3.14.8-slim-trixie AS production
