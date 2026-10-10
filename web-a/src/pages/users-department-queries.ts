@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import {
   createDepartment,
   listDepartments,
