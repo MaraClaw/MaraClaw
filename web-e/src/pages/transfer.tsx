@@ -41,7 +41,7 @@ const highlights = [
 ]
 
 export function TransferPage() {
-  const { status, user, applySession } = useAuth()
+  const { status, user, refreshUser } = useAuth()
   const navigate = useNavigate()
   const formId = useId()
   const [match, setMatch] = useState<SuggestedOrg | null>(null)
@@ -83,7 +83,7 @@ export function TransferPage() {
   async function runTransfer(body: { password: string; invitation_code?: string; tenant_id?: string }) {
     setFormError(null)
     const result = await transferOrg(body)
-    applySession(result)
+    if (!await refreshUser(result.access_token)) return
     toast.success('Organization updated')
     navigate('/app', { replace: true })
   }

@@ -1,12 +1,13 @@
 import { apiRequest } from '@/lib/http'
+import { joinOrgResponseSchema } from '@/lib/types/auth'
 import type {
   AuthProvider,
   ChangePasswordResponse,
   EmailLookupResponse,
+  JoinOrgResponse,
   LoginRequest,
   MultiTenantResponse,
   OkMessageResponse,
-  SuggestedOrg,
   TenantChoice,
   TenantSwitchResponse,
   TokenResponse,
@@ -65,35 +66,28 @@ export async function lookupOrgByEmail(email: string): Promise<EmailLookupRespon
   )
 }
 
-export async function joinSuggestedOrg(tenantId: string): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/tenants/join-suggested', {
+export async function joinSuggestedOrg(tenantId: string): Promise<JoinOrgResponse> {
+  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-suggested', {
     method: 'POST',
     body: { tenant_id: tenantId },
-  })
+  }))
 }
 
-export async function joinDefaultOrg(): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/tenants/join-default', {
+export async function joinDefaultOrg(): Promise<JoinOrgResponse> {
+  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-default', {
     method: 'POST',
-  })
+  }))
 }
 
 export async function transferOrg(body: {
   password: string
   invitation_code?: string
   tenant_id?: string
-}): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/tenants/transfer', {
+}): Promise<JoinOrgResponse> {
+  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/transfer', {
     method: 'POST',
     body,
-  })
-}
-
-export async function joinWithInvite(invitationCode: string): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/tenants/join', {
-    method: 'POST',
-    body: { invitation_code: invitationCode },
-  })
+  }))
 }
 
 export async function forgotPasswordRequest(email: string, signal?: AbortSignal): Promise<OkMessageResponse> {
@@ -219,5 +213,3 @@ export async function fetchMyTenant(): Promise<{
 }> {
   return apiRequest('/api/tenants/me')
 }
-
-export type { SuggestedOrg }

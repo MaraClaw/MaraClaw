@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -34,7 +35,7 @@ type AuthContextValue = {
   login: (input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
   applySession: (session: TokenResponse) => void
   logout: () => void
-  refreshUser: () => Promise<void>
+  refreshUser: (replacementToken?: string | null) => Promise<boolean>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -43,15 +44,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [user, setUser] = useState<UserOut | null>(null)
   const [token, setToken] = useState<string | null>(() => getStoredToken())
+  const refreshRequest = useRef<AbortController | null>(null)
+
+  const cancelRefresh = useCallback(() => {
+    refreshRequest.current?.abort()
+    refreshRequest.current = null
+  }, [])
 
   const clearSession = useCallback(() => {
+    cancelRefresh()
     clearStoredToken()
     setToken(null)
     setUser(null)
     setStatus('anonymous')
-  }, [])
+  }, [cancelRefresh])
 
   const applySession = useCallback((session: TokenResponse) => {
+    cancelRefresh()
     if (isPlatformAdminUser(session.user)) {
       clearStoredToken()
       setToken(null)
@@ -70,31 +79,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(session.access_token)
     setUser(nextUser)
     setStatus('authenticated')
-  }, [])
+  }, [cancelRefresh])
 
-  const refreshUser = useCallback(async () => {
-    const stored = getStoredToken()
+  const refreshUser = useCallback(async (replacementToken?: string | null) => {
+    if (replacementToken === null || replacementToken === '') {
+      throw new ApiError(500, 'Unexpected organization response')
+    }
+    cancelRefresh()
+    const stored = replacementToken ?? getStoredToken()
     if (!stored) {
       clearSession()
-      return
+      return false
+    }
+    const controller = new AbortController()
+    refreshRequest.current = controller
+    if (replacementToken !== undefined) {
+      setStoredToken(stored)
+      setToken(stored)
+      setUser(null)
+      setStatus('loading')
     }
     try {
-      const me = await fetchCurrentUser(stored)
+      const me = await fetchCurrentUser(stored, controller.signal)
+      if (controller.signal.aborted || refreshRequest.current !== controller || getStoredToken() !== stored) {
+        return false
+      }
       if (isPlatformAdminUser(me)) {
         clearSession()
-        return
+        return false
       }
       setToken(stored)
       setUser(me)
       setStatus('authenticated')
+      return true
     } catch {
+      if (controller.signal.aborted || refreshRequest.current !== controller) return false
+      const currentToken = getStoredToken()
+      if (currentToken !== null && currentToken !== stored) return false
       clearSession()
+      return false
+    } finally {
+      if (refreshRequest.current === controller) refreshRequest.current = null
     }
-  }, [clearSession])
+  }, [cancelRefresh, clearSession])
 
   useEffect(() => {
     void refreshUser()
-  }, [refreshUser])
+    return cancelRefresh
+  }, [cancelRefresh, refreshUser])
 
   const login = useCallback(
     async (input: LoginRequest) => {

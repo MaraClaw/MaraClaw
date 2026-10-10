@@ -31,7 +31,7 @@ const highlights = [
 ]
 
 export function JoinOrgPage() {
-  const { status, user, applySession, refreshUser } = useAuth()
+  const { status, user, refreshUser } = useAuth()
   const navigate = useNavigate()
   const fromState = (useLocation().state as JoinState | null)?.suggested ?? null
   const formId = useId()
@@ -86,8 +86,7 @@ export function JoinOrgPage() {
         kind === 'suggested' && suggested
           ? await joinSuggestedOrg(suggested.id)
           : await joinDefaultOrg()
-      applySession(result)
-      await refreshUser()
+      if (!await refreshUser(result.access_token)) return
       toast.success('Organization joined')
       navigate('/app', { replace: true })
     } catch (err) {

@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export type UserRole = 'platform_admin' | 'org_admin' | 'agent_admin' | 'member' | string
 
 export type SuggestedOrg = {
@@ -5,6 +7,14 @@ export type SuggestedOrg = {
   name: string
   slug: string
 }
+
+export const joinOrgResponseSchema = z.object({
+  tenant: z.object({ id: z.uuid(), name: z.string(), slug: z.string() }).readonly(),
+  role: z.string(),
+  access_token: z.string().nullable(),
+}).readonly()
+
+export type JoinOrgResponse = z.infer<typeof joinOrgResponseSchema>
 
 export type IdentityOut = {
   id: string
@@ -33,7 +43,6 @@ export type TokenResponse = {
   token_type?: string
   user: UserOut
   identity?: IdentityOut | null
-  needs_company_setup?: boolean
   needs_org_confirm?: boolean
   suggested_org?: SuggestedOrg | null
   must_change_password?: boolean
@@ -68,11 +77,6 @@ export type EmailLookupResponse = {
 export type NeedsVerificationDetail = {
   needs_verification: true
   email?: string
-  message?: string
-}
-
-export type MustChangePasswordDetail = {
-  must_change_password: true
   message?: string
 }
 
@@ -126,15 +130,6 @@ export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
 
 export function userMustChangePassword(user: UserOut | null | undefined): boolean {
   return user?.must_change_password === true
-}
-
-export function isMustChangePasswordDetail(value: unknown): value is MustChangePasswordDetail {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'must_change_password' in value &&
-    (value as MustChangePasswordDetail).must_change_password === true
-  )
 }
 
 export function isNeedsVerificationDetail(value: unknown): value is NeedsVerificationDetail {

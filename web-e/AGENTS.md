@@ -134,6 +134,5 @@ docker run --rm -p 8080:8080 maraclaw-web-e
 - Password reset / verify emails use request Origin if it is in engine `CORS_ORIGINS`.
 - No `src/assets/`. `public/icons.svg` unused. `@radix-ui/react-navigation-menu` unused — do not add `navigation-menu.tsx` for it.
 - Prod CSP `font-src 'self' data:` — Google Fonts in `index.html` fail in the Docker image. External APIs need `connect-src` edits.
-- `joinWithInvite` in `auth-api` is unused. `needs_company_setup` is typed, unused.
 - Header hash nav omits `#enterprise` (footer has it). Legal footer links all go to `#contact`.
 - No CI / Makefile in this checkout.
