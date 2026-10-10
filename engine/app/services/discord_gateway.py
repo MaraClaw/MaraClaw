@@ -24,6 +24,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.user_dao import user_dao
+from app.runtime.tasks import EventTasks, cancel_tasks
 
 
 class _DiscordUserLike(Protocol):
@@ -107,6 +108,7 @@ class DiscordGatewayManager:
     def __init__(self):
         self._clients: dict[uuid.UUID, _DiscordClientLike] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+        self._event_tasks: EventTasks = EventTasks()
 
     async def start_client(
         self,
@@ -152,6 +154,7 @@ class DiscordGatewayManager:
             return
         client = client_obj
         self._clients[agent_id] = client
+        self._event_tasks.closing = False
 
         @client.event
         async def on_ready():
@@ -163,6 +166,7 @@ class DiscordGatewayManager:
             )
 
         @client.event
+        @self._event_tasks.wrap
         async def on_message(message: _DiscordMessageLike):
             # Ignore own messages
             if message.author == client.user:
@@ -332,11 +336,9 @@ class DiscordGatewayManager:
 
     async def stop_client(self, agent_id: uuid.UUID):
         """Stop a running Discord Gateway client."""
-        if agent_id in self._tasks:
-            task = self._tasks.pop(agent_id)
-            if not task.done():
-                _ = task.cancel()
-                logger.info(f"[Discord GW] Cancelled task for agent {agent_id}")
+        task = self._tasks.pop(agent_id, None)
+        if task:
+            await cancel_tasks((task,))
         if agent_id in self._clients:
             client = self._clients.pop(agent_id)
             try:
@@ -344,6 +346,17 @@ class DiscordGatewayManager:
                     await client.close()
             except Exception as e:
                 logger.error(f"[Discord GW] Error closing client for {agent_id}: {e}")
+
+    async def stop_all(self) -> None:
+        self._event_tasks.closing = True
+        results = await asyncio.gather(
+            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("[Discord GW] Client cleanup failed: {}", result)
+        await self._event_tasks.stop()
 
     async def start_all(self):
         """Start Gateway clients for all configured Discord agents."""
