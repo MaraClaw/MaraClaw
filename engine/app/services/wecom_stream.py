@@ -440,12 +440,12 @@ async def _process_wecom_stream_message(
     """Process a WeCom message through the LLM pipeline and return the reply text."""
     from datetime import datetime
 
-    from app.api.feishu import _load_agent_and_model
     from app.dao import agent_dao
     from app.dao.chat_dao import chat_message_dao, chat_session_dao
     from app.services.channel_session import find_or_create_channel_session
     from app.services.channel_user_service import channel_user_service
     from app.services.channels.inbound import routing_history_limit
+    from app.services.channels.llm_bridge import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     agent_obj = await agent_dao.get(agent_id)

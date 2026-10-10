@@ -1,7 +1,7 @@
 """Shared channel LLM load/call helpers.
 
-Other IM routers historically imported these from ``app.api.feishu``.
-Keep the underscore names stable and re-export them from that module.
+Import shared helpers directly from ``app.services.channels.llm_bridge``,
+not from a channel's API router.
 """
 
 from __future__ import annotations

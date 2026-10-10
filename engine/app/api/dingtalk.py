@@ -156,7 +156,7 @@ async def process_dingtalk_message(
 
     import httpx
 
-    from app.api.feishu import _load_agent_and_model
+    from app.services.channels.llm_bridge import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     _ = sender_nick

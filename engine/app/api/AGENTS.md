@@ -4,7 +4,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Registration
 
-- Shared channel LLM helpers live in `app/services/channels/llm_bridge.py`. `feishu.py` re-exports `_load_agent_and_model` / `_call_llm_with_config` for existing IM importers.
+- Shared channel LLM helpers live in `app/services/channels/llm_bridge.py`. Import them directly from `app.services.channels.llm_bridge`, not from an API router.
 - Default: `prefix=settings.API_PREFIX` so `/agents` → `/api/agents`.
 - Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.

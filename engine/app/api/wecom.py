@@ -621,7 +621,7 @@ async def _process_wecom_text(
     )
     _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-    from app.api.feishu import _load_agent_and_model
+    from app.services.channels.llm_bridge import _load_agent_and_model
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 

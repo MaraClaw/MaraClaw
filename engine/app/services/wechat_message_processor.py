@@ -97,8 +97,8 @@ def _parse_wechat_delivery_config(
 async def process_wechat_message(
     agent_id: uuid.UUID, raw_message: JsonValue, config: ChannelConfigRecord | object
 ) -> None:
-    from app.api.feishu import _load_agent_and_model
     from app.services.activity_logger import log_activity
+    from app.services.channels.llm_bridge import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format
     from app.services.wechat_channel import (
         WECHAT_ILINK_BASE_URL,

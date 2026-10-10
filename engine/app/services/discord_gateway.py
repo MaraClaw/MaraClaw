@@ -230,9 +230,9 @@ class DiscordGatewayManager:
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
         try:
-            from app.api.feishu import _load_agent_and_model
             from app.services.channel_session import find_or_create_channel_session
             from app.services.channel_user_service import channel_user_service
+            from app.services.channels.llm_bridge import _load_agent_and_model
             from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
             sender_id = str(message.author.id)

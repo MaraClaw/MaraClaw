@@ -6,9 +6,9 @@ from typing import Never
 
 import pytest
 
-from app.api import feishu
 from app.core.json_types import JsonObject
 from app.services import wechat_channel, wechat_message_processor
+from app.services.channels import llm_bridge
 
 
 def _channel_config(extra_config: JsonObject) -> SimpleNamespace:
@@ -100,7 +100,7 @@ async def test_process_wechat_message_returns_before_database_for_malformed_boun
         raise AssertionError("LLM access")
 
     monkeypatch.setattr(wechat_message_processor.agent_dao, "get", unexpected_agent_get)
-    monkeypatch.setattr(feishu, "_call_llm_with_config", unexpected_llm_call)
+    monkeypatch.setattr(llm_bridge, "_call_llm_with_config", unexpected_llm_call)
     monkeypatch.setattr("app.services.channels.inbound.generate_channel_reply", unexpected_llm_call)
 
     await wechat_message_processor.process_wechat_message(uuid.uuid4(), raw_message, config)

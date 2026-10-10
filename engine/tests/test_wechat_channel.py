@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.api import feishu
 from app.services import activity_logger, wechat_channel, wechat_message_processor
+from app.services.channels import llm_bridge
 from app.services.llm.types import OpenAIMessage
 
 
@@ -159,7 +159,7 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
     monkeypatch.setattr(wechat_message_processor.chat_session_dao, "get", session_get)
     monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember_context)
     monkeypatch.setattr(wechat_channel, "send_wechat_text_message", send_message)
-    monkeypatch.setattr(feishu, "_load_agent_and_model", load_agent_and_model)
+    monkeypatch.setattr(llm_bridge, "_load_agent_and_model", load_agent_and_model)
     monkeypatch.setattr(
         "app.services.channels.inbound.generate_channel_reply",
         generate_reply,

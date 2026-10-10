@@ -37,13 +37,7 @@ from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut, TokenResponse, UserOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
-from app.services.channels.llm_bridge import (
-    DEFAULT_CONTEXT_WINDOW_SIZE as DEFAULT_CONTEXT_WINDOW_SIZE,
-    _call_agent_llm as _call_agent_llm,
-    _call_llm_with_config as _call_llm_with_config,
-    _get_llm_timeout as _get_llm_timeout,
-    _load_agent_and_model as _load_agent_and_model,
-)
+from app.services.channels.llm_bridge import _load_agent_and_model
 from app.services.feishu_service import feishu_service
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
@@ -90,10 +84,6 @@ def _schedule_background(coroutine: Awaitable[object]) -> None:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
-
-# Default LLM timeout for Feishu channel (fallback when model has no request_timeout set).
-# The per-model request_timeout field takes precedence - see _get_llm_timeout().
-_LLM_TIMEOUT_SECONDS_DEFAULT = 180.0
 
 # Number of tool status lines to keep visible in the Feishu card.
 # Shows the last N non-running lines plus any active "running" entry.

@@ -196,7 +196,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     logger.info(f"[Slack] Message from={sender_id}, channel={channel_id}: {user_text[:80]}")
 
-    from app.api.feishu import _load_agent_and_model
+    from app.services.channels.llm_bridge import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     agent_obj = await agent_dao.get(agent_id)
