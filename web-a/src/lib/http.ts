@@ -1,9 +1,10 @@
-import { apiUrl } from '@/lib/api'
-import { clearStoredToken, getStoredToken } from '@/lib/auth-storage'
+import { apiUrl } from './api.ts'
+import { adminSession } from './admin-session.ts'
+import { StaleSessionError, type SessionPolicy } from './session-policy.ts'
 
 export class ApiError extends Error {
-  status: number
-  detail: unknown
+  readonly status: number
+  readonly detail: unknown
 
   constructor(status: number, detail: unknown, message?: string) {
     super(message ?? formatApiDetail(detail) ?? `Request failed (${status})`)
@@ -37,61 +38,80 @@ export function formatApiDetail(detail: unknown): string | null {
 }
 
 type RequestOptions = {
-  method?: string
-  body?: unknown
-  token?: string | null
-  signal?: AbortSignal
+  readonly method?: string
+  readonly body?: unknown
+  readonly token?: string | null
+  readonly signal?: AbortSignal
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-  }
+type Transport = {
+  readonly fetch: typeof globalThis.fetch
+  readonly url: (path: string) => string
+}
 
-  const token = options.token === undefined ? getStoredToken() : options.token
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
+export function createApiRequest(policy: SessionPolicy, transport: Transport) {
+  return async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    const current = policy.capture()
+    const token = options.token === undefined ? current.token : options.token
+    const owner = token ? { ...current, token } : null
+    if (owner) policy.assertCurrent(owner)
+    const signal = owner
+      ? (options.signal ? AbortSignal.any([owner.signal, options.signal]) : owner.signal)
+      : options.signal
+    if (token) headers.Authorization = `Bearer ${token}`
 
-  let body: string | undefined
-  if (options.body !== undefined) {
-    headers['Content-Type'] = 'application/json'
-    body = JSON.stringify(options.body)
-  }
+    let body: string | undefined
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(options.body)
+    }
 
-  const response = await fetch(apiUrl(path), {
-    method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
-    headers,
-    body,
-    signal: options.signal,
-  })
+    function assertOwner() {
+      if (owner) policy.assertCurrent(owner)
+      signal?.throwIfAborted()
+    }
 
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  const text = await response.text()
-  let data: unknown = null
-  if (text) {
     try {
-      data = JSON.parse(text) as unknown
-    } catch {
-      data = text
+      assertOwner()
+      const response = await transport.fetch(transport.url(path), {
+        method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
+        headers,
+        body,
+        signal,
+      })
+      assertOwner()
+      if (response.status === 204) return undefined as T
+
+      const text = await response.text()
+      assertOwner()
+      let data: unknown = null
+      if (text) {
+        try {
+          data = JSON.parse(text) as unknown
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error
+          data = text
+        }
+      }
+
+      if (!response.ok) {
+        const detail = data && typeof data === 'object' && 'detail' in data ? data.detail : data
+        if (response.status === 401 && owner) policy.expire(owner)
+        throw new ApiError(response.status, detail)
+      }
+      return data as T
+    } catch (error) {
+      // Expiry has already notified auth; preserve that request's ApiError.
+      if (error instanceof ApiError && error.status === 401) throw error
+      if (owner && !policy.isCurrent(owner)) throw new StaleSessionError()
+      signal?.throwIfAborted()
+      throw error
     }
   }
-
-  if (!response.ok) {
-    const detail =
-      data && typeof data === 'object' && data !== null && 'detail' in data
-        ? (data as { detail: unknown }).detail
-        : data
-
-    if (response.status === 401 && token) {
-      clearStoredToken()
-    }
-
-    throw new ApiError(response.status, detail)
-  }
-
-  return data as T
 }
+
+export const apiRequest = createApiRequest(adminSession, {
+  fetch: (...args) => globalThis.fetch(...args),
+  url: apiUrl,
+})
