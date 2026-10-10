@@ -8,7 +8,6 @@ from app.core.logging import logger
 from app.core.permissions import evaluate_agent_relationship_status
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
-from app.dao.audit_log_dao import audit_log_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
 from app.services.audit_logger import write_audit_log
@@ -121,53 +120,26 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         note_lines.append(f'- Read the file via `read_file(path="{target_rel_path}")`')
         await storage.write_text(note_key, "\n".join(note_lines), encoding="utf-8")
 
-        # Prefer write_audit_log; fall back to DAO create for dual-stack compatibility.
-        try:
-            await write_audit_log(
-                action="collaboration:file_send",
-                details={
-                    "to_agent": str(target_id),
-                    "to_agent_name": target_name,
-                    "source_file": rel_path,
-                    "delivered_file": target_rel_path,
-                },
-                agent_id=from_agent_id,
-            )
-            await write_audit_log(
-                action="collaboration:file_receive",
-                details={
-                    "from_agent": str(from_agent_id),
-                    "from_agent_name": source_agent_name,
-                    "source_file": rel_path,
-                    "delivered_file": target_rel_path,
-                },
-                agent_id=target_id,
-            )
-        except Exception:
-            _ = await audit_log_dao.create(
-                obj_in={
-                    "agent_id": from_agent_id,
-                    "action": "collaboration:file_send",
-                    "details": {
-                        "to_agent": str(target_id),
-                        "to_agent_name": target_name,
-                        "source_file": rel_path,
-                        "delivered_file": target_rel_path,
-                    },
-                }
-            )
-            _ = await audit_log_dao.create(
-                obj_in={
-                    "agent_id": target_id,
-                    "action": "collaboration:file_receive",
-                    "details": {
-                        "from_agent": str(from_agent_id),
-                        "from_agent_name": source_agent_name,
-                        "source_file": rel_path,
-                        "delivered_file": target_rel_path,
-                    },
-                }
-            )
+        await write_audit_log(
+            action="collaboration:file_send",
+            details={
+                "to_agent": str(target_id),
+                "to_agent_name": target_name,
+                "source_file": rel_path,
+                "delivered_file": target_rel_path,
+            },
+            agent_id=from_agent_id,
+        )
+        await write_audit_log(
+            action="collaboration:file_receive",
+            details={
+                "from_agent": str(from_agent_id),
+                "from_agent_name": source_agent_name,
+                "source_file": rel_path,
+                "delivered_file": target_rel_path,
+            },
+            agent_id=target_id,
+        )
 
         await log_activity(
             from_agent_id,
