@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,6 +16,8 @@ async def test_initialize_agent_files_runs_after_gateway_key_file(monkeypatch, t
     from app.services.storage_runtime.local import LocalStorageBackend
 
     storage = LocalStorageBackend(str(tmp_path))
+    write_text = AsyncMock(wraps=storage.write_text)
+    monkeypatch.setattr(storage, "write_text", write_text)
     monkeypatch.setattr("app.services.agent_manager.get_storage_backend", lambda: storage)
     monkeypatch.setattr("app.services.agent_manager.settings.STORAGE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr("app.services.agent_manager.settings.AGENT_TEMPLATE_DIR", str(tmp_path / "missing-template"))
@@ -42,6 +45,9 @@ async def test_initialize_agent_files_runs_after_gateway_key_file(monkeypatch, t
 
     assert (agent_dir / "workspace").is_dir() or await storage.exists(f"{agent_id}/workspace/.gitkeep")
     assert await storage.exists(f"{agent_id}/soul.md")
+    task_writes = [call for call in write_text.await_args_list if call.args[0] == f"{agent_id}/tasks.json"]
+    assert len(task_writes) == 1
+    assert await storage.read_text(f"{agent_id}/tasks.json") == "[]"
 
 
 @pytest.mark.asyncio

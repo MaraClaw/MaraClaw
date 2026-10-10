@@ -1789,15 +1789,19 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
 
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     earliest = _user(role="platform_admin", is_genesis=False)
-    monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=earliest))
+    first_by_role = AsyncMock(return_value=earliest)
+    update_genesis = AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in}))
+    monkeypatch.setattr(seeder.user_dao, "first_by_role", first_by_role)
     monkeypatch.setattr(
         seeder.user_dao,
         "update",
-        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+        update_genesis,
     )
     found = await seeder._find_genesis_membership()
-    assert found is not None
-    assert found.is_genesis is True
+    assert found is None
+    assert earliest.is_genesis is False
+    first_by_role.assert_not_awaited()
+    update_genesis.assert_not_awaited()
 
     empty_slug = tp.slugify_tenant_name("   ")
     assert "-" in empty_slug

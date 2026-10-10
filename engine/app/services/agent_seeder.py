@@ -30,6 +30,7 @@ async def _create_openclaw_seed_agent(obj_in: dict[str, Any]) -> AgentRecord:
     write_gateway_api_key(agent, raw_key)
     return agent
 
+
 settings = get_settings()
 SEED_MARKER_KEY = "_bootstrap/.seeded"
 

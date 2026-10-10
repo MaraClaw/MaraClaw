@@ -147,17 +147,8 @@ def _has_login_credentials(user: UserRecord) -> bool:
 
 
 async def _find_genesis_membership() -> UserRecord | None:
-    """Return the persisted genesis PA, backfilling the flag on the earliest PA."""
-    genesis = await user_dao.genesis_platform_admin()
-    if genesis is not None:
-        return genesis
-    earliest = await user_dao.first_by_role("platform_admin")
-    if earliest is None:
-        return None
-    if not earliest.is_genesis:
-        earliest = await user_dao.update(db_obj=earliest, obj_in={"is_genesis": True}) or earliest
-        earliest.is_genesis = True
-    return earliest
+    """Return only the explicitly persisted genesis platform admin."""
+    return await user_dao.genesis_platform_admin()
 
 
 async def _load_genesis_with_credentials() -> UserRecord | None:

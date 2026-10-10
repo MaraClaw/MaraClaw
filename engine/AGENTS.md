@@ -51,7 +51,7 @@ No `alembic/`, no `app/models/`.
 | Reset/verify email origin | `app/services/frontend_origin.py` | Allowlisted `Origin`/`Referer` else `PUBLIC_BASE_URL` |
 | Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
 | DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
-| Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Greenfield source of truth; additive `PATCHES` |
+| Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Fresh-only source of truth; idempotent rerun, no upgrades |
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs. `read_webpage` + `search_x` (xAI). Linkup skills for web search. Do not grow `agent_tools.py` |
 | Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.4`). Isolated spawn. Not `document_conversion/` |
@@ -103,7 +103,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- Do not add SQLAlchemy, `app/models/`, or Alembic. Schema changes go in `schema_baseline.sql` + `PATCHES`.
+- Do not add SQLAlchemy, `app/models/`, or Alembic. Current schema definitions go only in `schema_baseline.sql`; no upgrade patches.
 - Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
 - Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`. The LLM `client.py` facade is retired; use its owning modules.
 - Do not start process-wide connector/`start_all`/trigger loops from request handlers (one `start_client` after save is the existing exception). Do not start them before `init_pool`.

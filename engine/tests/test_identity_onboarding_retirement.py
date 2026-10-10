@@ -81,6 +81,49 @@ async def test_teams_current_provider_writers_remain_resolvable(raw: str, persis
     create.assert_not_awaited()
 
 
+async def test_earliest_platform_admin_cannot_supply_unpersisted_genesis_authority() -> None:
+    # Given
+    identity = IdentityRecord(id=uuid4(), email="old@example.com", password_hash="usable")
+    earliest = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity, role="platform_admin")
+    settings = get_settings().model_copy(update={"PLATFORM_ADMIN_EMAIL": "", "PLATFORM_ADMIN_PASSWORD": ""})
+    first = AsyncMock(return_value=earliest)
+    update = AsyncMock()
+    with (
+        patch.object(seeder, "get_settings", return_value=settings),
+        patch.object(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None)),
+        patch.object(seeder.user_dao, "first_by_role", first),
+        patch.object(seeder.user_dao, "update", update),
+        pytest.raises(seeder.PlatformAdminSeedError),
+    ):
+        # When
+        await seeder.ensure_platform_admin()
+    # Then
+    assert earliest.is_genesis is False
+    first.assert_not_awaited()
+    update.assert_not_awaited()
+
+
+async def test_disabled_identity_cannot_be_elevated_from_bootstrap_env() -> None:
+    # Given
+    identity = IdentityRecord(id=uuid4(), email="disabled@example.com", password_hash="hash", is_active=False)
+    settings = get_settings().model_copy(
+        update={"PLATFORM_ADMIN_EMAIL": identity.email, "PLATFORM_ADMIN_PASSWORD": "bootstrap-secret"}
+    )
+    update = AsyncMock()
+    with (
+        patch.object(seeder, "get_settings", return_value=settings),
+        patch.object(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None)),
+        patch.object(seeder.identity_dao, "get_by_email", AsyncMock(return_value=identity)),
+        patch.object(seeder.identity_dao, "update", update),
+        patch.object(seeder, "connection_ctx"),
+        pytest.raises(seeder.PlatformAdminSeedError, match="disabled"),
+    ):
+        # When
+        await seeder.ensure_platform_admin()
+    # Then
+    update.assert_not_awaited()
+    assert identity.is_active is False
+    assert identity.is_platform_admin is False
 
 
 async def test_provider_profile_update_keeps_real_identity_and_membership_persistence() -> None:

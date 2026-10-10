@@ -61,7 +61,9 @@ class RecordingDockerClient:
 
 
 class OpenClawMemorySettings:
-    def __init__(self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.1", storage_root: str | None = None):
+    def __init__(
+        self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.1", storage_root: str | None = None
+    ):
         self.wrapped_settings = wrapped_settings
         self.OPENCLAW_MEMORY_TENCENTDB_ENABLED = memory_enabled
         self.TENCENTDB_PLUGIN_VERSION = plugin_version
@@ -150,9 +152,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         label="Grok fallback",
     )
 
-    config = manager._generate_openclaw_config(
-        agent, primary, secondary=secondary, fallback=fallback, selected=primary
-    )
+    config = manager._generate_openclaw_config(agent, primary, secondary=secondary, fallback=fallback, selected=primary)
 
     assert "agent" not in config
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
@@ -280,11 +280,7 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     agent_dir.mkdir()
     agent = SimpleNamespace(id=agent_id, name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     expires = datetime.now(UTC) + timedelta(hours=2)
-    access = (
-        "eyJhbGciOiJub25lIn0."
-        "eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWxpdmUifQ."
-        "sig"
-    )
+    access = "eyJhbGciOiJub25lIn0.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWxpdmUifQ.sig"
     primary = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
@@ -349,7 +345,9 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent = SimpleNamespace(
+        id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+    )
 
     # When
     container_id = await manager.start_container(agent=agent)
@@ -416,7 +414,9 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent = SimpleNamespace(
+        id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+    )
 
     container_id = await manager.start_container(agent=agent)
 
@@ -445,7 +445,9 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(id=agent_id, name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent = SimpleNamespace(
+        id=agent_id, name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+    )
 
     # When
     container_id = await manager.start_container(agent=agent)

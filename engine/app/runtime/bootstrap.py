@@ -1,9 +1,5 @@
 """Ordered genesis and optional seeds, preserving their startup failure policy."""
 
-import shutil
-from pathlib import Path
-
-from app.config import get_settings
 from app.core.logging import logger
 
 
@@ -26,21 +22,6 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.error("[startup] Platform admin seed failed: {}", exc)
         raise
-
-    try:
-        from app.dao.tenant_dao import tenant_dao
-
-        data_dir = Path(get_settings().AGENT_DATA_DIR)
-        old_dir = data_dir / "enterprise_info"
-        if old_dir.exists() and any(old_dir.iterdir()):
-            tenant = await tenant_dao.get_first_by_created_at()
-            if tenant:
-                new_dir = data_dir / f"enterprise_info_{tenant.id}"
-                if not new_dir.exists():
-                    _ = shutil.copytree(old_dir, new_dir)
-                    logger.info("[startup] Migrated enterprise_info for tenant {}", tenant.id)
-    except Exception as exc:
-        logger.warning("[startup] enterprise_info migration failed: {}", exc)
 
     try:
         from app.services.tool_seeder import clean_orphaned_mcp_tools, seed_builtin_tools

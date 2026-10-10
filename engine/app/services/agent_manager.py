@@ -284,7 +284,6 @@ class AgentManager:
         else:
             logger.info(f"Template dir not found ({template_dir}), creating minimal workspace")
             await storage.write_text(f"{agent_prefix}/tasks.json", "[]", encoding="utf-8")
-            await storage.write_text(f"{agent_prefix}/tasks.json", "[]", encoding="utf-8")
             for placeholder in (
                 "workspace/.gitkeep",
                 "workspace/knowledge_base/.gitkeep",
@@ -493,23 +492,11 @@ class AgentManager:
         if not profiles:
             return
         store: JsonObject = {"version": 1, "profiles": profiles}
-        wrote_legacy = self._atomic_write_json(
-            agent_dir / "credentials" / "oauth.json", json_object_from(legacy)
-        )
-        wrote_store = self._atomic_write_json(
-            agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store
-        )
+        wrote_legacy = self._atomic_write_json(agent_dir / "credentials" / "oauth.json", json_object_from(legacy))
+        wrote_store = self._atomic_write_json(agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store)
         self._upsert_auth_profile_sqlite(agent_dir, store)
         if wrote_legacy or wrote_store:
             logger.info("[OpenClaw] wrote OAuth profiles for guest {}", agent_dir.name)
-
-    def _sync_guest_xai_oauth(
-        self,
-        agent_dir: Path,
-        *models: LLMModelRecord | None,
-    ) -> None:
-        """Compatibility alias. Writes Grok and ChatGPT OAuth profiles."""
-        self._sync_guest_oauth(agent_dir, *models)
 
     def _guest_config_fingerprint(
         self,
@@ -526,8 +513,7 @@ class AgentManager:
             expires = getattr(row, "token_expires_at", None) if row is not None else None
             kind = getattr(row, "auth_kind", "") if row is not None else ""
             secret = (
-                f"{getattr(row, 'api_key_encrypted', '') or ''}|"
-                f"{getattr(row, 'refresh_token_encrypted', '') or ''}"
+                f"{getattr(row, 'api_key_encrypted', '') or ''}|{getattr(row, 'refresh_token_encrypted', '') or ''}"
             )
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
@@ -571,10 +557,10 @@ class AgentManager:
         wrote = self._atomic_write_json(path, config)
         if not wrote:
             _guest_config_fingerprints[str(agent.id)] = fingerprint
-            self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
+            self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
             logger.info("[OpenClaw] skip guest config write; file already current for {}", agent.id)
             return path
-        self._sync_guest_xai_oauth(agent_dir, selected, primary, secondary, fallback)
+        self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
         write_maraclaw_sync_skill(agent_dir)
         _guest_config_fingerprints[str(agent.id)] = fingerprint
         return path
@@ -712,9 +698,7 @@ class AgentManager:
         model_ids = [mid for mid in (agent.primary_model_id, secondary_id, fallback_id) if mid]
         loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
         tenant_id = getattr(agent, "tenant_id", None)
-        primary = owned_model_or_none(
-            loaded.get(agent.primary_model_id) if agent.primary_model_id else None, tenant_id
-        )
+        primary = owned_model_or_none(loaded.get(agent.primary_model_id) if agent.primary_model_id else None, tenant_id)
         secondary = owned_model_or_none(loaded.get(secondary_id) if secondary_id else None, tenant_id)
         fallback = owned_model_or_none(loaded.get(fallback_id) if fallback_id else None, tenant_id)
         if primary is not None:
@@ -737,7 +721,7 @@ class AgentManager:
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         self._atomic_write_json(agent_dir / "openclaw.json", config)
-        self._sync_guest_xai_oauth(agent_dir, primary, secondary, fallback)
+        self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
         _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
             primary=primary,
             secondary=secondary,
@@ -772,7 +756,14 @@ class AgentManager:
                 settings.OPENCLAW_IMAGE,
                 # Skip OfficeCLI download; a failed refresh restarts the guest
                 # and SIGKILLs in-flight inbox CLI turns (exit 137).
-                ["-s", "--", "/usr/local/bin/bootstrap-memory-tencentdb.sh", "/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway"],
+                [
+                    "-s",
+                    "--",
+                    "/usr/local/bin/bootstrap-memory-tencentdb.sh",
+                    "/usr/local/bin/validate-gogcli.sh",
+                    "openclaw",
+                    "gateway",
+                ],
                 detach=True,
                 name=f"maraclaw-agent-{str(agent.id)[:8]}",
                 entrypoint="tini",
