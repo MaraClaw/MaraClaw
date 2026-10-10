@@ -136,7 +136,7 @@ async def test_apps_retry_and_windows_title_only_refusal_use_fake_client(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_screenshot_grid_and_precision_aliases_preserve_argument_copy(monkeypatch, tmp_path: Path) -> None:
+async def test_screenshot_grid_and_precision_rectangle_preserve_argument_copy(monkeypatch, tmp_path: Path) -> None:
     injected: list[tuple[bytes, GridOptions]] = []
     seen_screenshot_arguments: list[ToolArguments] = []
 
@@ -180,7 +180,7 @@ async def test_screenshot_grid_and_precision_aliases_preserve_argument_copy(monk
     screenshot_arguments: ToolArguments = {"focus_x": 4, "focus_y": 5, "focus_width": 6, "focus_height": 7}
     screenshot = await agentbay_screen._agentbay_computer_screenshot(agent_id, tmp_path, screenshot_arguments)
     monkeypatch.setattr(agentbay_screen, "_agentbay_computer_screenshot", fake_screenshot)
-    precision_arguments: ToolArguments = {"focus_x": 1, "focus_y": 2, "focus_width": 3, "focus_height": 4}
+    precision_arguments: ToolArguments = {"x": 1, "y": 2, "width": 3, "height": 4}
     precision = await agentbay_screen._agentbay_computer_precision_screenshot(agent_id, tmp_path, precision_arguments)
 
     assert agentbay_screen._agentbay_extract_screen_dimensions({"width": "bad", "height": 100}) == (None, None, "")
@@ -191,6 +191,31 @@ async def test_screenshot_grid_and_precision_aliases_preserve_argument_copy(monk
     assert precision_arguments["width"] == 3
     assert seen_screenshot_arguments[0] is not precision_arguments
     assert seen_screenshot_arguments[0]["focus_width"] == 360
+    assert seen_screenshot_arguments[0]["focus_height"] == 240
+    assert precision_arguments == {"x": 1, "y": 2, "width": 3, "height": 4}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [{}, {"x": 1, "y": 2, "width": 3}])
+async def test_precision_screenshot_rejects_aliases_without_delegating(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, canonical: ToolArguments
+) -> None:
+    # Given aliases that used to fill missing canonical rectangle fields.
+    arguments: ToolArguments = {"focus_x": 1, "focus_y": 2, "focus_width": 3, "focus_height": 4, **canonical}
+    original = dict(arguments)
+    calls: list[ToolArguments] = []
+
+    async def screenshot(_agent_id: uuid.UUID, _workspace: Path, supplied: ToolArguments) -> str:
+        calls.append(supplied)
+        return "captured"
+
+    monkeypatch.setattr(agentbay_screen, "_agentbay_computer_screenshot", screenshot)
+    # When precision capture receives an incomplete canonical rectangle.
+    result = await agentbay_screen._agentbay_computer_precision_screenshot(uuid.uuid4(), tmp_path, arguments)
+    # Then it refuses before capturing and leaves the input untouched.
+    assert result.startswith("Missing required precision crop argument(s):")
+    assert calls == []
+    assert arguments == original
 
 
 @pytest.mark.asyncio

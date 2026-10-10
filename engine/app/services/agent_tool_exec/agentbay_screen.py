@@ -228,10 +228,6 @@ async def _agentbay_computer_save_screenshot(agent_id: uuid.UUID | None, ws: Pat
 async def _agentbay_computer_precision_screenshot(
     agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments
 ) -> str:
-    aliases = {"focus_x": "x", "focus_y": "y", "focus_width": "width", "focus_height": "height"}
-    for alias, canonical in aliases.items():
-        if arguments.get(canonical) is None and arguments.get(alias) is not None:
-            arguments[canonical] = arguments.get(alias)
     required = ("x", "y", "width", "height")
     missing = [key for key in required if arguments.get(key) is None]
     if missing:
