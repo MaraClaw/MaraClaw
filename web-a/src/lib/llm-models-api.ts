@@ -141,12 +141,12 @@ function tenantQuery(tenantId?: string): string {
   return tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
 }
 
-export async function listLlmProviders(): Promise<LlmProvider[]> {
-  return apiRequest<LlmProvider[]>('/api/enterprise/llm-providers')
+export async function listLlmProviders(signal?: AbortSignal): Promise<LlmProvider[]> {
+  return apiRequest<LlmProvider[]>('/api/enterprise/llm-providers', { signal })
 }
 
-export async function listLlmModels(tenantId?: string): Promise<LlmModel[]> {
-  return apiRequest<LlmModel[]>(`/api/enterprise/llm-models${tenantQuery(tenantId)}`)
+export async function listLlmModels(tenantId?: string, signal?: AbortSignal): Promise<LlmModel[]> {
+  return apiRequest<LlmModel[]>(`/api/enterprise/llm-models${tenantQuery(tenantId)}`, { signal })
 }
 
 export async function createLlmModel(input: LlmModelWrite, tenantId?: string): Promise<LlmModel> {
@@ -189,10 +189,13 @@ export async function startGrokSubscription(tenantId?: string): Promise<GrokSubs
   )
 }
 
-export async function getGrokSubscriptionStatus(sessionId: string): Promise<GrokSubscriptionStatus> {
+export async function getGrokSubscriptionStatus(
+  sessionId: string, signal?: AbortSignal,
+): Promise<GrokSubscriptionStatus> {
   const query = new URLSearchParams({ session_id: sessionId })
   return apiRequest<GrokSubscriptionStatus>(
     `/api/enterprise/llm-models/grok-subscription/status?${query.toString()}`,
+    { signal },
   )
 }
 
@@ -203,10 +206,13 @@ export async function startChatGPTSubscription(tenantId?: string): Promise<ChatG
   )
 }
 
-export async function getChatGPTSubscriptionStatus(sessionId: string): Promise<ChatGPTSubscriptionStatus> {
+export async function getChatGPTSubscriptionStatus(
+  sessionId: string, signal?: AbortSignal,
+): Promise<ChatGPTSubscriptionStatus> {
   const query = new URLSearchParams({ session_id: sessionId })
   return apiRequest<ChatGPTSubscriptionStatus>(
     `/api/enterprise/llm-models/chatgpt-subscription/status?${query.toString()}`,
+    { signal },
   )
 }
 
