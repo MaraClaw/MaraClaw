@@ -1,6 +1,5 @@
 """Composed builtin tool definitions."""
 
-
 from typing import Any
 
 from app.services.llm.finish import FINISH_TOOL_SEED
