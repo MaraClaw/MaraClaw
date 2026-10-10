@@ -4,13 +4,12 @@ from collections.abc import Sequence
 from typing import Any, TypedDict, TypeIs
 from uuid import UUID
 
-from app.core.json_types import JsonObject, JsonValue, json_as_str, json_object_from, object_list_from_row
+from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
-from app.dao import agent_dao, agent_tool_dao, tenant_dao, tool_dao
+from app.dao import agent_dao, agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.services import tool_definitions
-from app.services.tool_config import get_tenant_tool_config, meaningful_config, set_tenant_tool_config
 
 AGENTBAY_TOOLS = tool_definitions.AGENTBAY_TOOLS
 BUILTIN_TOOLS: Sequence[object] = tool_definitions.BUILTIN_TOOLS
@@ -53,12 +52,6 @@ SYNC_IS_DEFAULT_TOOL_NAMES = {
     "agentbay_computer_close_window",
     "agentbay_computer_dismiss_dialog",
     "agentbay_file_transfer",
-}
-
-LEGACY_IMAGE_TOOL_MODEL_DEFAULTS = {
-    "generate_image_siliconflow": "black-forest-labs/FLUX.1-schnell",
-    "generate_image_openai": "dall-e-3",
-    "generate_image_google": "gemini-2.5-flash-image",
 }
 
 
@@ -173,21 +166,6 @@ def _global_builtin_config(tool_data: BuiltinToolDefinition) -> JsonObject:
 async def seed_builtin_tools():
     """Insert or update builtin tools in the database."""
     async with connection_ctx():
-        # Legacy rename: older environments persisted this tool as
-        # `send_web_message`. Rename or merge it in-place so agents keep the
-        # same assignment after the first startup on the new version.
-        old_name = "send_web_message"
-        new_name = "send_platform_message"
-        old_tool = await tool_dao.get_by_name(old_name)
-        new_tool = await tool_dao.get_by_name(new_name)
-        if old_tool and not new_tool:
-            _ = await tool_dao.update(db_obj=old_tool, obj_in={"name": new_name})
-            logger.info(f"[ToolSeeder] Renamed builtin tool: {old_name} -> {new_name}")
-        elif old_tool and new_tool:
-            await agent_tool_dao.reassign_tool(from_tool_id=old_tool.id, to_tool_id=new_tool.id)
-            _ = await tool_dao.delete(id=old_tool.id)
-            logger.info(f"[ToolSeeder] Merged legacy builtin tool into {new_name}")
-
         new_tool_ids: list[UUID] = []
         for t in BUILTIN_TOOLS:
             if not _is_builtin_tool_definition(t):
@@ -252,14 +230,6 @@ async def seed_builtin_tools():
                         updates["config"] = merged
                         updated_fields.append("config")
                         config = merged
-                legacy_model = LEGACY_IMAGE_TOOL_MODEL_DEFAULTS.get(t["name"])
-                if legacy_model and config == {
-                    "model": legacy_model,
-                    "api_key": "",
-                    "base_url": "",
-                }:
-                    updates["config"] = {"model": "", "api_key": "", "base_url": ""}
-                    updated_fields.append("config")
                 if existing.parameters_schema != t["parameters_schema"]:
                     updates["parameters_schema"] = t["parameters_schema"]
                     updated_fields.append("parameters_schema")
@@ -301,48 +271,6 @@ async def seed_builtin_tools():
             helper_names=["agentbay_code_write_file", "agentbay_code_read_file", "agentbay_code_edit_file"],
             label="code",
         )
-
-        first_tenant = await tenant_dao.get_first_by_created_at()
-        if first_tenant:
-            migrated = 0
-            for tool in await tool_dao.list_by_source("builtin"):
-                if not (tool.config_schema or {}).get("fields"):
-                    continue
-                legacy_config = meaningful_config(tool.config or {})
-                if not legacy_config:
-                    continue
-                config_schema = tool.config_schema if _is_tool_config_schema(tool.config_schema) else None
-                existing_setting = await get_tenant_tool_config(
-                    None,
-                    first_tenant.id,
-                    tool.name,
-                    config_schema,
-                )
-                if not existing_setting:
-                    await set_tenant_tool_config(
-                        None,
-                        first_tenant.id,
-                        tool.name,
-                        legacy_config,
-                        config_schema,
-                    )
-                    migrated += 1
-                schema = json_object_from(tool.config_schema)
-                schema_fields = object_list_from_row(schema.get("fields"))
-                sensitive_keys = {
-                    key
-                    for field in schema_fields
-                    if json_as_str(field.get("type")) == "password" and (key := json_as_str(field.get("key")))
-                }
-                config = json_object_from(tool.config)
-                clean_config: JsonObject = {key: config[key] for key in config if key not in sensitive_keys}
-                if clean_config != tool.config:
-                    _ = await tool_dao.update(db_obj=tool, obj_in={"config": clean_config})
-            if migrated:
-                logger.info(
-                    f"[ToolSeeder] Migrated {migrated} legacy builtin tool config(s) "
-                    + f"to tenant_settings for tenant {first_tenant.id}"
-                )
 
     logger.info("[ToolSeeder] Builtin tools seeded")
 

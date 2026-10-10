@@ -1,6 +1,8 @@
 from collections import Counter
+from collections.abc import Sequence
 from inspect import iscoroutinefunction
 
+from app.core.json_types import is_json_object
 from app.services import tool_seeder
 
 TABLE_COUNTS = {
@@ -44,8 +46,16 @@ SEEDED_ONLY_SAMPLE_NAMES = {
 }
 
 
+def _table_entries(table: Sequence[object]) -> list[tool_seeder.BuiltinToolDefinition]:
+    entries: list[tool_seeder.BuiltinToolDefinition] = []
+    for entry in table:
+        assert tool_seeder._is_builtin_tool_definition(entry)
+        entries.append(entry)
+    return entries
+
+
 def _table_names(table):
-    return [entry["name"] for entry in table]
+    return [entry["name"] for entry in _table_entries(table)]
 
 
 def _seeded_names():
@@ -55,7 +65,15 @@ def _seeded_names():
 def _agent_tool_names():
     from app.services.agent_tools_definitions import AGENT_TOOLS
 
-    return {entry["function"]["name"] for entry in AGENT_TOOLS}
+    names: list[str] = []
+    for entry in AGENT_TOOLS:
+        assert is_json_object(entry)
+        function = entry["function"]
+        assert is_json_object(function)
+        name = function["name"]
+        assert isinstance(name, str)
+        names.append(name)
+    return names
 
 
 def test_public_import_contract_exposes_tool_seeder_tables_and_functions():
@@ -103,7 +121,7 @@ def test_each_public_tool_table_uses_the_current_required_key_shape():
 
     # When / Then: only the shape true of every current entry is asserted.
     for table in public_tables:
-        for entry in table:
+        for entry in _table_entries(table):
             assert set(entry) == REQUIRED_TOOL_KEYS
             assert isinstance(entry["name"], str)
             assert isinstance(entry["display_name"], str)
@@ -129,7 +147,7 @@ def test_seeded_tool_names_record_current_duplicate_names():
 def test_agent_tools_catalog_name_diff_is_documented_when_invariant_does_not_hold():
     # Given: app.services.agent_tools.AGENT_TOOLS is a separate OpenAI function catalog.
     seeded_names = _seeded_names()
-    agent_tool_names = _agent_tool_names()
+    agent_tool_names = set(_agent_tool_names())
 
     # When: comparing the name sets shows the current invariant does not hold.
     agent_tools_only = agent_tool_names - seeded_names
@@ -140,29 +158,23 @@ def test_agent_tools_catalog_name_diff_is_documented_when_invariant_does_not_hol
     assert seeded_only >= SEEDED_ONLY_SAMPLE_NAMES
 
 
-def test_seed_builtin_tools_idempotency_is_infrastructure_heavy_in_current_shape():
-    # Given: seed_builtin_tools owns creation, update, assignment, cleanup, and tenant migration SQL paths.
-    seeded_names = _table_names(tool_seeder.BUILTIN_TOOLS)
-
-    # When / Then: this wave locks the pure import/table surface instead of faking SQLAlchemy idempotency.
-    assert iscoroutinefunction(tool_seeder.seed_builtin_tools)
-    assert len(seeded_names) == TABLE_COUNTS["BUILTIN_TOOLS"]
-    assert Counter(seeded_names)["finish"] == 1
-
-
 def test_grok_is_the_default_image_provider():
-    image_tools = [entry for entry in tool_seeder.BUILTIN_TOOLS if entry["name"].startswith("generate_image_")]
+    image_tools = [
+        entry for entry in _table_entries(tool_seeder.BUILTIN_TOOLS) if entry["name"].startswith("generate_image_")
+    ]
     default_image_tools = [entry["name"] for entry in image_tools if entry["is_default"]]
 
     assert default_image_tools == ["generate_image_grok"]
     assert "Prefer this over other generate_image_*" in next(
-        entry["description"] for entry in tool_seeder.BUILTIN_TOOLS if entry["name"] == "generate_image_grok"
+        entry["description"]
+        for entry in _table_entries(tool_seeder.BUILTIN_TOOLS)
+        if entry["name"] == "generate_image_grok"
     )
     assert "generate_image_grok" in tool_seeder.SYNC_IS_DEFAULT_TOOL_NAMES
 
 
 def test_search_x_is_a_default_search_tool():
-    search_x = next(entry for entry in tool_seeder.BUILTIN_TOOLS if entry["name"] == "search_x")
+    search_x = next(entry for entry in _table_entries(tool_seeder.BUILTIN_TOOLS) if entry["name"] == "search_x")
 
     assert search_x["is_default"] is True
     assert search_x["category"] == "search"
@@ -380,6 +392,4 @@ def test_builtin_tools_preserve_current_name_order():
 
 
 def test_agent_tools_catalog_preserves_current_name_order():
-    from app.services.agent_tools_definitions import AGENT_TOOLS
-
-    assert [entry["function"]["name"] for entry in AGENT_TOOLS] == AGENT_TOOLS_NAME_ORDER
+    assert _agent_tool_names() == AGENT_TOOLS_NAME_ORDER
