@@ -4,45 +4,36 @@ Centralizes provider URLs and provider-specific API parameters
 so they don't need to be duplicated across websocket.py, scheduler.py,
 task_executor.py, agent_tools.py, and feishu.py.
 
-This module also exports the unified LLM client classes from client.py
-for convenient access.
+This module also exports shared LLM types, clients, and factory helpers
+from their owning modules for convenient access.
 """
 
 from collections.abc import Iterable
-from typing import Protocol
+from typing import Protocol, overload
 
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_as_str_or, json_loads_object
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.records.chat import ChatMessageRecord
-from app.services.llm.types import OpenAIMessage, ToolPayload
+from app.records.llm import LLMModelRecord
 
-# Re-export all client classes and functions from client.py
-from .client import (
+from .base import LLMClient, LLMError
+from .factory import chat_complete, chat_stream, create_llm_client
+from .providers import AnthropicClient, GeminiClient, OpenAICompatibleClient, OpenAIResponsesClient
+from .registry import (
     PROVIDER_ALIASES,
     PROVIDER_REGISTRY,
     PROVIDER_URLS,
     TOOL_CHOICE_PROVIDERS,
-    AnthropicClient,
-    GeminiClient,
-    LLMClient,
-    LLMError,
-    LLMMessage,
-    LLMResponse,
-    LLMStreamChunk,
-    OpenAICompatibleClient,
-    OpenAIResponsesClient,
     ProviderSpec,
-    chat_complete,
-    chat_stream,
-    create_llm_client,
     get_max_tokens,
     get_provider_base_url,
     get_provider_manifest,
     get_provider_spec,
     normalize_provider,
 )
+from .types import LLMMessage, LLMResponse, LLMStreamChunk, OpenAIMessage
 
 
 class _EncryptedModel(Protocol):
@@ -50,10 +41,9 @@ class _EncryptedModel(Protocol):
     def api_key_encrypted(self) -> str | None: ...
 
 
-# Keep ANTHROPIC_API_PROVIDERS for backward compatibility
-ANTHROPIC_API_PROVIDERS = {"anthropic"}
-
-# Keep the original PROVIDER_URLS reference (already exported from client)
+class _ClientModel(_EncryptedModel, Protocol):
+    @property
+    def request_timeout(self) -> int | None: ...
 
 
 def get_model_api_key(model: _EncryptedModel) -> str:
@@ -65,35 +55,61 @@ def get_model_api_key(model: _EncryptedModel) -> str:
     return decrypt_data(raw, settings.SECRET_KEY)
 
 
+@overload
+async def ensure_fresh_pool_model(model: LLMModelRecord) -> LLMModelRecord: ...
+
+
+@overload
+async def ensure_fresh_pool_model[T: _EncryptedModel](model: T) -> T | LLMModelRecord: ...
+
+
 async def ensure_fresh_pool_model(model: _EncryptedModel) -> _EncryptedModel:
     """Refresh a Grok or ChatGPT subscription row when the access token is stale."""
     kind = getattr(model, "auth_kind", "") or ""
-    if kind == "chatgpt_subscription":
+    if kind == "chatgpt_subscription" and isinstance(model, LLMModelRecord):
         from app.services.chatgpt_subscription import ensure_fresh_access_token
 
-        return await ensure_fresh_access_token(model)  # type: ignore[arg-type]
-    if kind == "grok_subscription":
+        return await ensure_fresh_access_token(model)
+    if kind == "grok_subscription" and isinstance(model, LLMModelRecord):
         from app.services.grok_subscription import ensure_fresh_access_token
 
-        return await ensure_fresh_access_token(model)  # type: ignore[arg-type]
+        return await ensure_fresh_access_token(model)
     return model
 
 
+@overload
 async def create_fresh_llm_client_from_model(
-    model: _EncryptedModel, *, timeout: float | None = None  # noqa: ASYNC109
-) -> tuple[_EncryptedModel, LLMClient]:
+    model: LLMModelRecord,
+    *,
+    timeout: float | None = None,  # noqa: ASYNC109
+) -> tuple[LLMModelRecord, LLMClient]: ...
+
+
+@overload
+async def create_fresh_llm_client_from_model[T: _ClientModel](
+    model: T,
+    *,
+    timeout: float | None = None,  # noqa: ASYNC109
+) -> tuple[T | LLMModelRecord, LLMClient]: ...
+
+
+async def create_fresh_llm_client_from_model(
+    model: _ClientModel,
+    *,
+    timeout: float | None = None,  # noqa: ASYNC109
+) -> tuple[_ClientModel, LLMClient]:
     """Refresh subscription tokens, then build (or reuse) a client."""
     fresh = await ensure_fresh_pool_model(model)
     return fresh, create_llm_client_from_model(fresh, timeout=timeout)
 
 
-def create_llm_client_from_model(model: _EncryptedModel, *, timeout: float | None = None) -> LLMClient:
+def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None = None) -> LLMClient:
     """Build a client from a pool row. ChatGPT subscription uses Codex Responses."""
     from app.services.llm.client_cache import cache_get, cache_put, fingerprint_secret
 
     resolved_timeout = timeout
     if resolved_timeout is None:
-        raw_timeout = getattr(model, "request_timeout", None)
+        raw_timeout = model.request_timeout
         resolved_timeout = float(raw_timeout) if raw_timeout else 120.0
     enc = getattr(model, "api_key_encrypted", None) or ""
     cache_key = (
@@ -136,23 +152,6 @@ def create_llm_client_from_model(model: _EncryptedModel, *, timeout: float | Non
         timeout=resolved_timeout,
     )
     return cache_put(cache_key, built)
-
-
-def get_tool_params(provider: str) -> ToolPayload:
-    """Return provider-specific tool calling parameters.
-
-    Qwen and OpenAI support `tool_choice` and `parallel_tool_calls`.
-    Anthropic uses a different tool calling format, so we skip these params.
-
-    Note: This function is kept for backward compatibility.
-    The new client classes handle this internally.
-    """
-    if provider in TOOL_CHOICE_PROVIDERS:
-        return {
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-        }
-    return {}
 
 
 def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -> list[OpenAIMessage]:
@@ -312,9 +311,7 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
     return sanitized
 
 
-# Keep backward compatibility aliases
 __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
-    "get_tool_params",
     "get_provider_base_url",
     "get_max_tokens",
     "get_model_api_key",
@@ -339,7 +336,6 @@ __all__ = [  # noqa: RUF022 - ordering is a tested public compatibility contract
     "PROVIDER_ALIASES",
     "PROVIDER_REGISTRY",
     "PROVIDER_URLS",
-    "ANTHROPIC_API_PROVIDERS",
     "TOOL_CHOICE_PROVIDERS",
     "normalize_provider",
     "get_provider_spec",

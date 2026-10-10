@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, assert_never
 
-from app.services.llm.base import ChunkCallback, LLMClient, ThinkingCallback, ToolDefinition
+from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolDefinition
 from app.services.llm.client_cache import cache_get, cache_put, fingerprint_secret
 from app.services.llm.providers import AnthropicClient, GeminiClient, OpenAICompatibleClient, OpenAIResponsesClient
 from app.services.llm.registry import (
-    PROVIDER_CLIENTS,
-    PROVIDER_URLS,
-    TOOL_CHOICE_PROVIDERS,
     get_max_tokens,
     get_provider_base_url,
     get_provider_spec,
     normalize_provider,
 )
 from app.services.llm.types import LLMMessage, LLMToolCall, LLMUsage, OpenAIMessage
+
+
+class UnknownProviderError(LLMError):
+    provider: str
+
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        super().__init__(f"Unregistered LLM provider: {provider!r}")
 
 
 class ChatChoiceMessage(TypedDict):
@@ -57,6 +62,8 @@ def create_llm_client(
     """
     normalized_provider = normalize_provider(provider)
     spec = get_provider_spec(normalized_provider)
+    if spec is None:
+        raise UnknownProviderError(normalized_provider)
     final_base_url = get_provider_base_url(normalized_provider, base_url)
     cache_key = (
         "factory",
@@ -70,48 +77,42 @@ def create_llm_client(
     if cached is not None:
         return cached
 
-    if spec and spec.protocol == "anthropic":
-        built: LLMClient = AnthropicClient(
-            api_key=api_key,
-            base_url=final_base_url,
-            model=model,
-            timeout=timeout,
-        )
-    elif spec and spec.protocol == "openai_responses":
-        built = OpenAIResponsesClient(
-            api_key=api_key,
-            base_url=final_base_url,
-            model=model,
-            timeout=timeout,
-            supports_tool_choice=spec.supports_tool_choice,
-        )
-    elif spec and spec.protocol == "gemini":
-        built = GeminiClient(
-            api_key=api_key,
-            base_url=final_base_url,
-            model=model,
-            timeout=timeout,
-            supports_tool_choice=spec.supports_tool_choice,
-        )
-    elif normalized_provider in PROVIDER_CLIENTS:
-        supports_tool_choice = normalized_provider in TOOL_CHOICE_PROVIDERS
-        built = OpenAICompatibleClient(
-            api_key=api_key,
-            base_url=final_base_url,
-            model=model,
-            timeout=timeout,
-            supports_tool_choice=supports_tool_choice,
-            supports_cache_control=normalized_provider == "qwen",
-        )
-    else:
-        built = OpenAICompatibleClient(
-            api_key=api_key,
-            base_url=final_base_url or PROVIDER_URLS["openai"],
-            model=model,
-            timeout=timeout,
-            supports_tool_choice=True,
-            supports_cache_control=False,
-        )
+    built: LLMClient
+    match spec.protocol:
+        case "anthropic":
+            built = AnthropicClient(
+                api_key=api_key,
+                base_url=final_base_url,
+                model=model,
+                timeout=timeout,
+            )
+        case "openai_responses":
+            built = OpenAIResponsesClient(
+                api_key=api_key,
+                base_url=final_base_url,
+                model=model,
+                timeout=timeout,
+                supports_tool_choice=spec.supports_tool_choice,
+            )
+        case "gemini":
+            built = GeminiClient(
+                api_key=api_key,
+                base_url=final_base_url,
+                model=model,
+                timeout=timeout,
+                supports_tool_choice=spec.supports_tool_choice,
+            )
+        case "openai_compatible":
+            built = OpenAICompatibleClient(
+                api_key=api_key,
+                base_url=final_base_url,
+                model=model,
+                timeout=timeout,
+                supports_tool_choice=spec.supports_tool_choice,
+                supports_cache_control=normalized_provider == "qwen",
+            )
+        case unreachable:
+            assert_never(unreachable)
     return cache_put(cache_key, built)
 
 
@@ -220,6 +221,7 @@ async def chat_stream(
 
 
 __all__ = [
+    "UnknownProviderError",
     "chat_complete",
     "chat_stream",
     "create_llm_client",

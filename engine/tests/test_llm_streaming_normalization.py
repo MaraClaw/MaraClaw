@@ -1,14 +1,13 @@
 from collections.abc import Iterable
 from types import TracebackType
 
-from app.services.llm.client import (
+from app.services.llm.providers import (
     AnthropicClient,
     GeminiClient,
-    LLMMessage,
-    LLMResponse,
     OpenAICompatibleClient,
     OpenAIResponsesClient,
 )
+from app.services.llm.types import LLMMessage, LLMResponse
 
 
 class FakeStreamResponse:
@@ -81,7 +80,12 @@ async def test_openai_compatible_stream_normalizes_partial_json_reasoning_usage_
 
     response = await llm_client.stream(
         messages=[LLMMessage(role="user", content="hello")],
-        tools=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "lookup", "description": "", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
         temperature=0,
         max_tokens=32,
         on_chunk=on_chunk,
@@ -155,7 +159,12 @@ async def test_anthropic_stream_normalizes_native_text_thinking_signature_tool_a
 
     response = await llm_client.stream(
         messages=[LLMMessage(role="user", content="hello")],
-        tools=[{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "search", "description": "", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
         temperature=1,
         max_tokens=64,
         on_chunk=on_chunk,
@@ -210,7 +219,12 @@ async def test_gemini_stream_normalizes_native_text_function_calls_usage_and_fin
 
     response = await llm_client.stream(
         messages=[LLMMessage(role="user", content="hello")],
-        tools=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "lookup", "description": "", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
         temperature=0,
         max_tokens=64,
         on_chunk=on_chunk,
@@ -270,7 +284,12 @@ async def test_openai_responses_stream_delegates_to_complete_and_forwards_callba
 
     response = await llm_client.stream(
         messages=[LLMMessage(role="user", content="hello")],
-        tools=[{"type": "function", "function": {"name": "finish", "parameters": {"type": "object"}}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "finish", "description": "", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
         temperature=0,
         max_tokens=32,
         on_chunk=on_chunk,

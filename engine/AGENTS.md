@@ -55,7 +55,7 @@ No `alembic/`, no `app/models/`.
 | API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
 | Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs. `read_webpage` + `search_x` (xAI). Linkup skills for web search. Do not grow `agent_tools.py` |
 | Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.4`). Isolated spawn. Not `document_conversion/` |
-| LLM | `app/services/llm/` | `caller.py` orchestrates; `client.py` is glue |
+| LLM | `app/services/llm/` | `caller.py` orchestrates; `factory.py` constructs registered protocol clients; import shared types from `base.py` / `types.py` |
 | Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
@@ -105,7 +105,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 
 - Do not add SQLAlchemy, `app/models/`, or Alembic. Schema changes go in `schema_baseline.sql` + `PATCHES`.
 - Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
-- Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `llm/client.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`.
+- Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`. The LLM `client.py` facade is retired; use its owning modules.
 - Do not start process-wide connector/`start_all`/trigger loops from request handlers (one `start_client` after save is the existing exception). Do not start them before `init_pool`.
 - Do not inject sandbox guest proxy from process `HTTP_PROXY`. Do not put authenticated proxy URLs on bwrap `--setenv`.
 - Do not expose secrets/hashes/cookies in schemas. Do not let non-admins set `allow_network` / tool proxy fields.

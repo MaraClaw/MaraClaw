@@ -1,8 +1,9 @@
 import json
 import uuid
-from types import SimpleNamespace
 
 import pytest
+
+from app.records.llm import LLMModelRecord
 
 
 class FakeStreamClient:
@@ -25,7 +26,7 @@ class FakeStreamClient:
 
 
 def _finish_response(content: str):
-    from app.services.llm.client import LLMResponse
+    from app.services.llm.types import LLMResponse
 
     return LLMResponse(
         content="",
@@ -43,7 +44,7 @@ def _finish_response(content: str):
 
 
 def _finish_response_with_arguments(arguments):
-    from app.services.llm.client import LLMResponse
+    from app.services.llm.types import LLMResponse
 
     return LLMResponse(
         content="",
@@ -61,13 +62,14 @@ def _finish_response_with_arguments(arguments):
 
 
 def _plain_response(content: str):
-    from app.services.llm.client import LLMResponse
+    from app.services.llm.types import LLMResponse
 
     return LLMResponse(content=content, tool_calls=[])
 
 
-def _model() -> SimpleNamespace:
-    return SimpleNamespace(
+def _model() -> LLMModelRecord:
+    return LLMModelRecord(
+        id=uuid.UUID(int=1),
         provider="openai",
         model="fake-model",
         base_url="https://example.invalid/v1",
@@ -83,7 +85,7 @@ def test_finish_tool_schema_is_default_and_requires_content():
     from app.services.llm.finish import FINISH_TOOL_DEFINITION, FINISH_TOOL_SEED
 
     assert FINISH_TOOL_DEFINITION["function"]["name"] == "finish"
-    assert FINISH_TOOL_DEFINITION["function"]["parameters"]["required"] == ["content"]
+    assert FINISH_TOOL_DEFINITION["function"]["parameters"].get("required") == ["content"]
     assert FINISH_TOOL_SEED["name"] == "finish"
     assert FINISH_TOOL_SEED["is_default"] is True
     assert FINISH_TOOL_SEED["parameters_schema"]["required"] == ["content"]
@@ -177,6 +179,7 @@ async def test_call_llm_requires_finish_tool_to_stop(monkeypatch):
             ]
         ),
     )
+
     async def _fresh_client(model, **_kwargs):
         return model, fake_client
 
@@ -238,6 +241,7 @@ async def test_invalid_finish_does_not_stop_and_is_returned_as_tool_error(monkey
             ]
         ),
     )
+
     async def _fresh_client(model, **_kwargs):
         return model, fake_client
 
@@ -273,6 +277,7 @@ async def test_skip_tools_still_exposes_finish(monkeypatch):
         "app.services.agent_context.build_agent_context",
         lambda *_args, **_kwargs: _async_return(("static", "dynamic")),
     )
+
     async def _fresh_client(model, **_kwargs):
         return model, fake_client
 
@@ -322,7 +327,7 @@ def test_finish_is_in_always_available_core_tools():
 @pytest.mark.asyncio
 async def test_mid_loop_token_limit_checking(monkeypatch):
     from app.services.llm import caller
-    from app.services.llm.client import LLMResponse
+    from app.services.llm.types import LLMResponse
 
     # Setup FakeStreamClient with several rounds of dummy tool calls
     responses = [
@@ -358,6 +363,7 @@ async def test_mid_loop_token_limit_checking(monkeypatch):
         ),
     )
     monkeypatch.setattr(caller, "execute_tool", lambda *_args, **_kwargs: _async_return("Success"))
+
     async def _fresh_client(model, **_kwargs):
         return model, fake_client
 

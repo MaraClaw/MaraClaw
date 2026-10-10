@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from .client import LLMError
+from .base import LLMError
 
 
 class FailoverErrorType(Enum):

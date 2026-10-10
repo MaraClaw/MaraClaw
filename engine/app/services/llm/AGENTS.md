@@ -9,7 +9,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - `registry.py` owns `ProviderSpec`, aliases, provider manifests, protocol/client mappings, base URLs, and token-limit helpers.
 - `factory.py` owns `create_llm_client(...)`, `chat_complete(...)`, and `chat_stream(...)`. Identical configs reuse a cached wrapper (`client_cache.py`, key hashes secrets). HTTP is pooled by timeout in `http_pool.py`; wrapper `close()` detaches and does not tear down the pool.
 - `providers/` contains provider/protocol clients. Read `providers/AGENTS.md` before changing protocol parsing or streaming normalization.
-- `client.py` is now a compatibility/public-contract surface around the split modules; do not move large new provider logic back into it.
+- `client.py` has been retired. Import types, clients, registry helpers, and factory functions from their owning modules; do not recreate a compatibility facade.
 - `caller.py` is the agent orchestration layer. Agent/chat/trigger/websocket flows should enter through `call_agent_llm`, `call_agent_llm_with_tools`, `call_llm`, or `call_llm_with_failover`.
 - `call_agent_llm(agent_id, user_text, ...)` and `call_agent_llm_with_tools(agent_id, system_prompt, user_prompt, ...)` own their DAO reads. Do not pass DB placeholders or a `db` keyword.
 - `router.py` is the complexity preflight. Conversational turns call `select_turn_model` once, then pass the **selected** model into `call_llm_with_failover`. Fallback is a failure lane, never a cheap-model substitute. Do not grow this logic inside `caller.py`.
@@ -24,7 +24,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 ## Provider Rules
 
 - Runtime provider config comes from `llm_model_dao` / `LLMModelRecord` rows, not direct env vars: provider, model, encrypted API key, base URL, timeout, temperature, vision support, max output tokens.
-- Unknown providers currently fall back to OpenAI-compatible behavior; do not remove that compatibility without migrating stored model rows.
+- Providers must resolve through the current registry (including existing aliases). Unknown names raise `UnknownProviderError` before factory cache lookup or client construction; an explicit endpoint does not authorize an unknown name. Use registered `custom` for custom OpenAI-compatible endpoints. This fresh-only contract has no persisted-model migration lane.
 - Preserve streaming normalization for tool-call ids, partial JSON deltas, usage chunks, reasoning/thinking fields, and provider-native message shapes.
 - New providers should be added through `ProviderSpec`/registry plus a provider client class or explicit OpenAI-compatible mapping.
 - Grok (xAI) is registered as `grok` (`xai` / `x-ai` / `x_ai` aliases) on the OpenAI-compatible protocol at `https://api.x.ai/v1`.
@@ -40,6 +40,6 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 
 ## Tests
 
-- Existing focused coverage includes `tests/test_finish_protocol.py`, `tests/test_llm_client_contract.py`, and `tests/test_llm_streaming_normalization.py`.
+- Existing focused coverage includes `tests/test_finish_protocol.py`, `tests/test_llm_client_contract.py`, `tests/test_llm_registered_provider_contract.py`, and `tests/test_llm_streaming_normalization.py`.
 - Add fake HTTP/stream parser tests for provider client changes.
 - Add pair-integrity tests when changing `convert_chat_messages_to_llm_format` or `truncate_messages_with_pair_integrity`.

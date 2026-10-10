@@ -1,5 +1,10 @@
 from dataclasses import fields, is_dataclass
+from importlib import import_module
 from typing import Final
+
+import pytest
+
+from app.services.llm import base, factory, providers, registry, types, utils
 
 PACKAGE_EXPORTS: Final = (
     "call_llm",
@@ -25,7 +30,6 @@ PACKAGE_EXPORTS: Final = (
 )
 
 UTILS_EXPORTS: Final = (
-    "get_tool_params",
     "get_provider_base_url",
     "get_max_tokens",
     "get_model_api_key",
@@ -50,42 +54,10 @@ UTILS_EXPORTS: Final = (
     "PROVIDER_ALIASES",
     "PROVIDER_REGISTRY",
     "PROVIDER_URLS",
-    "ANTHROPIC_API_PROVIDERS",
     "TOOL_CHOICE_PROVIDERS",
     "normalize_provider",
     "get_provider_spec",
     "get_provider_manifest",
-)
-
-CLIENT_PUBLIC_SYMBOLS: Final = (
-    "LLMMessage",
-    "LLMResponse",
-    "LLMStreamChunk",
-    "ChunkCallback",
-    "ToolCallback",
-    "ThinkingCallback",
-    "LLMClient",
-    "OpenAICompatibleClient",
-    "OpenAIResponsesClient",
-    "GeminiClient",
-    "AnthropicClient",
-    "ProviderSpec",
-    "PROVIDER_ALIASES",
-    "PROVIDER_REGISTRY",
-    "PROVIDER_CLIENTS",
-    "PROVIDER_URLS",
-    "TOOL_CHOICE_PROVIDERS",
-    "MAX_TOKENS_BY_PROVIDER",
-    "MAX_TOKENS_BY_MODEL",
-    "LLMError",
-    "normalize_provider",
-    "get_provider_spec",
-    "get_provider_manifest",
-    "get_provider_base_url",
-    "get_max_tokens",
-    "create_llm_client",
-    "chat_complete",
-    "chat_stream",
 )
 
 PROVIDER_KEYS: Final = (
@@ -111,14 +83,15 @@ PROVIDER_KEYS: Final = (
 
 def test_package_facade_exports_current_public_symbols():
     from app.services import llm
-    from app.services.llm import client, utils
 
     assert tuple(llm.__all__) == PACKAGE_EXPORTS
     for name in PACKAGE_EXPORTS:
         assert getattr(llm, name) is not None
 
-    for name in ("LLMClient", "LLMResponse", "LLMError", "LLMMessage"):
-        assert getattr(llm, name) is getattr(client, name)
+    for name in ("LLMClient", "LLMError"):
+        assert getattr(llm, name) is getattr(base, name)
+    for name in ("LLMResponse", "LLMMessage"):
+        assert getattr(llm, name) is getattr(types, name)
 
     for name in (
         "create_llm_client",
@@ -133,58 +106,49 @@ def test_package_facade_exports_current_public_symbols():
         assert getattr(llm, name) is getattr(utils, name)
 
 
-def test_client_module_public_contract_symbols_are_importable():
-    from app.services.llm import client
+def test_client_module_is_retired() -> None:
+    with pytest.raises(ModuleNotFoundError) as exc:
+        import_module("app.services.llm.client")
+    assert exc.value.name == "app.services.llm.client"
 
-    for name in CLIENT_PUBLIC_SYMBOLS:
-        assert getattr(client, name) is not None
 
-
-def test_utils_exports_current_client_and_compatibility_surface():
-    from app.services.llm import client, utils
-
+def test_utils_exports_current_owned_module_surface():
     assert tuple(utils.__all__) == UTILS_EXPORTS
     for name in UTILS_EXPORTS:
         assert getattr(utils, name) is not None
 
-    for name in (
-        "LLMClient",
-        "OpenAICompatibleClient",
-        "OpenAIResponsesClient",
-        "GeminiClient",
-        "AnthropicClient",
-        "LLMMessage",
-        "LLMResponse",
-        "LLMStreamChunk",
-        "LLMError",
-        "ProviderSpec",
-        "PROVIDER_ALIASES",
-        "PROVIDER_REGISTRY",
-        "PROVIDER_URLS",
-        "TOOL_CHOICE_PROVIDERS",
-        "create_llm_client",
-        "chat_complete",
-        "chat_stream",
-        "get_max_tokens",
-        "get_provider_manifest",
-        "get_provider_base_url",
-        "get_provider_spec",
-        "normalize_provider",
+    for owner, names in (
+        (base, ("LLMClient", "LLMError")),
+        (providers, ("OpenAICompatibleClient", "OpenAIResponsesClient", "GeminiClient", "AnthropicClient")),
+        (types, ("LLMMessage", "LLMResponse", "LLMStreamChunk")),
+        (factory, ("create_llm_client", "chat_complete", "chat_stream")),
+        (
+            registry,
+            (
+                "ProviderSpec",
+                "PROVIDER_ALIASES",
+                "PROVIDER_REGISTRY",
+                "PROVIDER_URLS",
+                "TOOL_CHOICE_PROVIDERS",
+                "get_max_tokens",
+                "get_provider_manifest",
+                "get_provider_base_url",
+                "get_provider_spec",
+                "normalize_provider",
+            ),
+        ),
     ):
-        assert getattr(utils, name) is getattr(client, name)
+        for name in names:
+            assert getattr(utils, name) is getattr(owner, name)
 
-    expected_anthropic_api_providers = {"anthropic"}
-    assert expected_anthropic_api_providers == utils.ANTHROPIC_API_PROVIDERS
-    assert utils.get_tool_params("openai") == {"tool_choice": "auto", "parallel_tool_calls": True}
-    assert utils.get_tool_params("anthropic") == {}
+    assert not hasattr(utils, "ANTHROPIC_API_PROVIDERS")
+    assert not hasattr(utils, "get_tool_params")
 
 
 def test_provider_registry_keys_and_provider_spec_shape():
-    from app.services.llm import client
-
-    assert tuple(client.PROVIDER_REGISTRY) == PROVIDER_KEYS
-    assert is_dataclass(client.ProviderSpec)
-    assert tuple(field.name for field in fields(client.ProviderSpec)) == (
+    assert tuple(registry.PROVIDER_REGISTRY) == PROVIDER_KEYS
+    assert is_dataclass(registry.ProviderSpec)
+    assert tuple(field.name for field in fields(registry.ProviderSpec)) == (
         "provider",
         "display_name",
         "protocol",
@@ -195,7 +159,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
         "model_max_tokens",
     )
 
-    openai = client.PROVIDER_REGISTRY["openai"]
+    openai = registry.PROVIDER_REGISTRY["openai"]
     assert openai.provider == "openai"
     assert openai.display_name == "OpenAI"
     assert openai.protocol == "openai_compatible"
@@ -205,7 +169,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
     assert openai.default_max_tokens == 16384
     assert openai.model_max_tokens == {}
 
-    qwen = client.PROVIDER_REGISTRY["qwen"]
+    qwen = registry.PROVIDER_REGISTRY["qwen"]
     assert qwen.model_max_tokens == {
         "qwen-plus": 16384,
         "qwen-long": 16384,
@@ -214,13 +178,13 @@ def test_provider_registry_keys_and_provider_spec_shape():
         "qwen3.7-max": 16384,
     }
 
-    first = client.ProviderSpec(
+    first = registry.ProviderSpec(
         provider="one",
         display_name="One",
         protocol="openai_compatible",
         default_base_url=None,
     )
-    second = client.ProviderSpec(
+    second = registry.ProviderSpec(
         provider="two",
         display_name="Two",
         protocol="gemini",
@@ -233,9 +197,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
 
 
 def test_provider_registry_derivatives_and_aliases_match_current_behavior():
-    from app.services.llm import client
-
-    assert client.PROVIDER_ALIASES == {
+    assert registry.PROVIDER_ALIASES == {
         "openai_response": "openai-response",
         "openairesponses": "openai-response",
         "xai": "grok",
@@ -245,36 +207,36 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
         "z.ai": "zhipu",
         "z_ai": "zhipu",
     }
-    assert client.normalize_provider(" OpenAI_Response ") == "openai-response"
-    assert client.get_provider_spec("openairesponses") is client.PROVIDER_REGISTRY["openai-response"]
-    assert client.normalize_provider("XAI") == "grok"
-    assert client.get_provider_spec("x-ai") is client.PROVIDER_REGISTRY["grok"]
-    assert client.normalize_provider("Z.AI") == "zhipu"
-    assert client.get_provider_spec("zai") is client.PROVIDER_REGISTRY["zhipu"]
+    assert registry.normalize_provider(" OpenAI_Response ") == "openai-response"
+    assert registry.get_provider_spec("openairesponses") is registry.PROVIDER_REGISTRY["openai-response"]
+    assert registry.normalize_provider("XAI") == "grok"
+    assert registry.get_provider_spec("x-ai") is registry.PROVIDER_REGISTRY["grok"]
+    assert registry.normalize_provider("Z.AI") == "zhipu"
+    assert registry.get_provider_spec("zai") is registry.PROVIDER_REGISTRY["zhipu"]
 
-    assert client.PROVIDER_CLIENTS["anthropic"] is client.AnthropicClient
-    assert client.PROVIDER_CLIENTS["openai"] is client.OpenAICompatibleClient
-    assert client.PROVIDER_CLIENTS["openai-response"] is client.OpenAIResponsesClient
-    assert client.PROVIDER_CLIENTS["gemini"] is client.GeminiClient
-    assert client.PROVIDER_CLIENTS["custom"] is client.OpenAICompatibleClient
-    assert client.PROVIDER_CLIENTS["grok"] is client.OpenAICompatibleClient
+    assert registry.PROVIDER_CLIENTS["anthropic"] is providers.AnthropicClient
+    assert registry.PROVIDER_CLIENTS["openai"] is providers.OpenAICompatibleClient
+    assert registry.PROVIDER_CLIENTS["openai-response"] is providers.OpenAIResponsesClient
+    assert registry.PROVIDER_CLIENTS["gemini"] is providers.GeminiClient
+    assert registry.PROVIDER_CLIENTS["custom"] is providers.OpenAICompatibleClient
+    assert registry.PROVIDER_CLIENTS["grok"] is providers.OpenAICompatibleClient
 
-    expected_provider_urls = {key: spec.default_base_url for key, spec in client.PROVIDER_REGISTRY.items()}
-    assert expected_provider_urls == client.PROVIDER_URLS
-    expected_provider_max_tokens = {key: spec.default_max_tokens for key, spec in client.PROVIDER_REGISTRY.items()}
-    assert expected_provider_max_tokens == client.MAX_TOKENS_BY_PROVIDER
-    assert client.MAX_TOKENS_BY_MODEL == {
+    expected_provider_urls = {key: spec.default_base_url for key, spec in registry.PROVIDER_REGISTRY.items()}
+    assert expected_provider_urls == registry.PROVIDER_URLS
+    expected_provider_max_tokens = {key: spec.default_max_tokens for key, spec in registry.PROVIDER_REGISTRY.items()}
+    assert expected_provider_max_tokens == registry.MAX_TOKENS_BY_PROVIDER
+    assert registry.MAX_TOKENS_BY_MODEL == {
         "qwen-plus": 16384,
         "qwen-long": 16384,
         "qwen-turbo": 8192,
         "qwen-max": 8192,
         "qwen3.7-max": 16384,
     }
-    assert "anthropic" not in client.TOOL_CHOICE_PROVIDERS
-    assert "baidu" not in client.TOOL_CHOICE_PROVIDERS
-    assert "openai" in client.TOOL_CHOICE_PROVIDERS
+    assert "anthropic" not in registry.TOOL_CHOICE_PROVIDERS
+    assert "baidu" not in registry.TOOL_CHOICE_PROVIDERS
+    assert "openai" in registry.TOOL_CHOICE_PROVIDERS
 
-    manifest_by_provider = {item["provider"]: item for item in client.get_provider_manifest()}
+    manifest_by_provider = {item["provider"]: item for item in registry.get_provider_manifest()}
     assert tuple(manifest_by_provider) == PROVIDER_KEYS
     assert manifest_by_provider["openai-response"]["aliases"] == ["openai_response", "openairesponses"]
     assert manifest_by_provider["grok"]["display_name"] == "Grok (xAI)"
@@ -293,44 +255,40 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
 
 
 def test_create_llm_client_factory_returns_current_provider_classes_and_flags():
-    from app.services.llm import client
-
-    anthropic = client.create_llm_client("anthropic", "secret", "claude", timeout=7)
-    assert type(anthropic) is client.AnthropicClient
+    anthropic = factory.create_llm_client("anthropic", "secret", "claude", timeout=7)
+    assert type(anthropic) is providers.AnthropicClient
     assert anthropic.base_url == "https://api.anthropic.com"
     assert anthropic.model == "claude"
     assert anthropic.timeout == 7
 
-    responses = client.create_llm_client("openai_response", "secret", "gpt-4.1")
-    assert type(responses) is client.OpenAIResponsesClient
+    responses = factory.create_llm_client("openai_response", "secret", "gpt-4.1")
+    assert type(responses) is providers.OpenAIResponsesClient
     assert responses.base_url == "https://api.openai.com/v1"
 
-    gemini = client.create_llm_client("gemini", "secret", "gemini-2.5-pro")
-    assert type(gemini) is client.GeminiClient
+    gemini = factory.create_llm_client("gemini", "secret", "gemini-2.5-pro")
+    assert type(gemini) is providers.GeminiClient
     assert gemini.base_url == "https://generativelanguage.googleapis.com/v1beta"
 
-    grok = client.create_llm_client("xai", "secret", "grok-4")
-    assert type(grok) is client.OpenAICompatibleClient
+    grok = factory.create_llm_client("xai", "secret", "grok-4")
+    assert type(grok) is providers.OpenAICompatibleClient
     assert grok.base_url == "https://api.x.ai/v1"
     assert grok.model == "grok-4"
     assert grok.supports_tool_choice is True
 
-    qwen = client.create_llm_client("qwen", "secret", "qwen-plus")
-    assert type(qwen) is client.OpenAICompatibleClient
+    qwen = factory.create_llm_client("qwen", "secret", "qwen-plus")
+    assert type(qwen) is providers.OpenAICompatibleClient
     assert qwen.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert qwen.supports_tool_choice is True
     assert qwen.supports_cache_control is True
 
-    baidu = client.create_llm_client("baidu", "secret", "ernie")
-    assert type(baidu) is client.OpenAICompatibleClient
+    baidu = factory.create_llm_client("baidu", "secret", "ernie")
+    assert type(baidu) is providers.OpenAICompatibleClient
     assert baidu.base_url == "https://qianfan.baidubce.com/v2"
     assert baidu.supports_tool_choice is False
     assert baidu.supports_cache_control is False
 
 
 def test_get_max_tokens_preserves_current_priority_order():
-    from app.services.llm import client
-
     cases = (
         ("qwen", "qwen-plus-latest", None, 16384),
         ("qwen", "qwen-turbo", None, 8192),
@@ -340,35 +298,29 @@ def test_get_max_tokens_preserves_current_priority_order():
         ("openai", "gpt-4.1", 777, 777),
     )
     for provider, model, override, expected in cases:
-        assert client.get_max_tokens(provider, model, override) == expected
+        assert registry.get_max_tokens(provider, model, override) == expected
 
 
-def test_unknown_provider_falls_back_to_openai_compatible_client_and_base_url():
-    from app.services.llm import client
-    from app.services.llm.utils import create_llm_client as utils_create_llm_client
+@pytest.mark.parametrize("base_url", [None, "https://gateway.example/v42"])
+def test_unknown_provider_is_rejected_with_any_endpoint(base_url: str | None) -> None:
+    with pytest.raises(factory.UnknownProviderError) as exc:
+        utils.create_llm_client("__no_such_provider__", "secret", "custom-model", base_url=base_url, timeout=9)
+    assert exc.value.provider == "__no_such_provider__"
+    assert registry.get_provider_base_url("__no_such_provider__") is None
 
-    fallback = client.create_llm_client(
-        provider="__no_such_provider__",
-        api_key="secret",
-        model="custom-model",
-        timeout=9,
-    )
-    assert type(fallback) is client.OpenAICompatibleClient
-    assert fallback.api_key == "secret"
-    assert fallback.model == "custom-model"
-    assert fallback.timeout == 9
-    assert fallback.base_url == "https://api.openai.com/v1"
-    assert fallback.supports_tool_choice is True
-    assert fallback.supports_cache_control is False
 
-    custom = utils_create_llm_client(
-        provider="__no_such_provider__",
+def test_registered_custom_provider_uses_explicit_endpoint() -> None:
+    custom = utils.create_llm_client(
+        provider="custom",
         api_key="secret",
         model="custom-model",
         base_url="https://gateway.example/v42",
+        timeout=9,
     )
-    assert type(custom) is client.OpenAICompatibleClient
+    assert type(custom) is providers.OpenAICompatibleClient
+    assert custom.api_key == "secret"
+    assert custom.model == "custom-model"
+    assert custom.timeout == 9
     assert custom.base_url == "https://gateway.example/v42"
     assert custom.supports_tool_choice is True
     assert custom.supports_cache_control is False
-    assert client.get_provider_base_url("__no_such_provider__") is None

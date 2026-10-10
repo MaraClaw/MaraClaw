@@ -30,8 +30,7 @@ from app.services.token_tracker import (
     record_token_usage,
 )
 
-from .base import ChunkCallback, ThinkingCallback, ToolCallback, ToolCallbackData, ToolDefinition
-from .client import LLMError
+from .base import ChunkCallback, LLMError, ThinkingCallback, ToolCallback, ToolCallbackData, ToolDefinition
 from .failover import FailoverErrorType, classify_error
 from .finish import FINISH_PROTOCOL_REMINDER, FINISH_TOOL_DEFINITION, find_finish_call, parse_tool_arguments
 from .turn import TurnContext
@@ -1022,9 +1021,7 @@ async def call_agent_llm_with_tools(
         _unsaved_usage = TokenUsage()
         tool_executed = False
         try:
-            model, client = await create_fresh_llm_client_from_model(
-                model, timeout=_get_model_timeout(model)
-            )
+            model, client = await create_fresh_llm_client_from_model(model, timeout=_get_model_timeout(model))
 
             max_tokens = get_max_tokens(model.provider, model.model, getattr(model, "max_output_tokens", None))
 

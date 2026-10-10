@@ -21,6 +21,7 @@ Example:
     )
 """
 
+from .base import LLMClient, LLMError
 from .caller import (
     FailoverGuard,
     call_agent_llm,
@@ -29,8 +30,8 @@ from .caller import (
     call_llm_with_failover,
     is_retryable_error,
 )
-from .client import LLMClient, LLMError, LLMMessage, LLMResponse
 from .failover import FailoverErrorType, classify_error
+from .types import LLMMessage, LLMResponse
 from .utils import (
     create_fresh_llm_client_from_model,
     create_llm_client,
