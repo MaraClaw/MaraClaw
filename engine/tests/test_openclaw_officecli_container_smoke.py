@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from openclaw_officecli_smoke_cleanup import CLEANUP_PROBE, CleanupFailure, cleanup_error_message, run_cleanup
-from openclaw_officecli_smoke_probe import CHILD_MARKER, GOG_MARKER, PROBE, TENCENT_MARKER
+from openclaw_officecli_smoke_probe import CHILD_MARKER, EMPTY_OFFLINE_PROBE, GOG_MARKER, PROBE, TENCENT_MARKER
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 SMOKE_FLAG: Final = "RUN_OPENCLAW_OFFICECLI_SMOKE"
@@ -257,6 +257,7 @@ def test_real_linux_arm64_officecli_restart_smoke() -> None:
         empty = _run_container(
             workspace,
             RunRequest(workspace.container_names[2], workspace.empty_state_dir, offline=True),
+            probe=EMPTY_OFFLINE_PROBE,
         )
         assert empty.returncode == 0, f"empty-state offline start failed\n{empty.describe()}"
         assert (workspace.empty_state_dir / TENCENT_MARKER).is_file()

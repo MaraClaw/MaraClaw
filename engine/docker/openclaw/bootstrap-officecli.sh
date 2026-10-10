@@ -35,7 +35,9 @@ parse_metadata() {
     metadata_count=0
 
     is_regular_file "$metadata_file" || return 1
-    [ ! -x "$metadata_file" ] || return 1
+    # Docker Desktop bind mounts can report X_OK for mode 0600; inspect actual execute bits.
+    metadata_executable="$(find "$metadata_file" \( -perm -100 -o -perm -010 -o -perm -001 \) -print)" || return 1
+    [ -z "$metadata_executable" ] || return 1
 
     while IFS= read -r metadata_line || [ -n "$metadata_line" ]; do
         metadata_count=$((metadata_count + 1))

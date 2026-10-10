@@ -82,5 +82,11 @@ ENV TENCENTDB_PLUGIN_VERSION=${TENCENTDB_PLUGIN_VERSION} \
     OFFICECLI_NO_AUTO_RESIDENT=1
 
 USER node
+# Warm npm using the exact runtime installer, not a different dependency tree.
+# Only npm's integrity-checked cache survives; no guest state or OfficeCLI is baked.
+RUN WARM_STATE="$(mktemp -d)" \
+    && trap 'rm -rf "$WARM_STATE"' EXIT \
+    && OPENCLAW_STATE_DIR="$WARM_STATE" npm_config_offline=false \
+        /usr/local/bin/bootstrap-memory-tencentdb.sh true
 ENTRYPOINT ["tini", "-s", "--", "/usr/local/bin/bootstrap-officecli.sh"]
 CMD ["/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway"]

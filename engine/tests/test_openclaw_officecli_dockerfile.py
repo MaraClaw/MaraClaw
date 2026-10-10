@@ -51,7 +51,7 @@ REGRESSION_CASES: Final = (
     ("OFFICECLI_SKIP_UPDATE=1", "OFFICECLI_SKIP_UPDATE=0", "OfficeCLI runtime flags"),
     (" OFFICECLI_NO_AUTO_RESIDENT=1", "", "OfficeCLI runtime flags"),
     ("OFFICECLI_SKIP_UPDATE=1", "OFFICECLI_SKIP_UPDATE", "OfficeCLI runtime flags"),
-    ("USER node\nENTRYPOINT", "USER root\nENTRYPOINT", "final USER"),
+    ("ENTRYPOINT", "USER root\nENTRYPOINT", "final USER"),
     ("ENTRYPOINT", "ENTRYPOINT_BROKEN", "ENTRYPOINT"),
     ('"tini"', '"not-tini"', "ENTRYPOINT"),
     ('bootstrap-officecli.sh"]', 'bootstrap-memory-tencentdb.sh"]', "ENTRYPOINT"),
@@ -80,8 +80,8 @@ REGRESSION_CASES: Final = (
         "OfficeCLI helper chmod",
     ),
     (
-        "USER node\nENTRYPOINT",
-        "COPY vendor/officecli /usr/local/bin/officecli\nUSER node\nENTRYPOINT",
+        "ENTRYPOINT",
+        "COPY vendor/officecli /usr/local/bin/officecli\nENTRYPOINT",
         "OfficeCLI COPY/ADD",
     ),
     (

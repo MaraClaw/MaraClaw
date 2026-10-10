@@ -42,7 +42,19 @@ if [ "$INSTALLED_VERSION" != "$PLUGIN_VERSION" ]; then
     # and `openclaw plugins install` refuses to run. Use a throwaway config.
     INSTALL_CONFIG="$(mktemp "$STATE_DIR/.plugin-install-config.XXXXXX")"
     printf '{}\n' > "$INSTALL_CONFIG"
-    if OPENCLAW_CONFIG_PATH="$INSTALL_CONFIG" openclaw plugins install "$SOURCE" --pin; then
+    if (
+        set -- openclaw plugins install "$SOURCE"
+        if [ "$SOURCE" = "$PLUGIN_PACKAGE@$PLUGIN_VERSION" ]; then
+            set -- "$@" --pin
+        else
+            # Only the configured archive that passed checksum verification is trusted.
+            set -- "$@" --force --accept-capabilities
+            # The image warms this exact install's dependency cache at build time.
+            # Scope cache-only resolution to the archive install, not the gateway.
+            export npm_config_offline="${npm_config_offline:-true}"
+        fi
+        OPENCLAW_CONFIG_PATH="$INSTALL_CONFIG" "$@"
+    ); then
         rm -f "$INSTALL_CONFIG"
     else
         install_status=$?

@@ -38,6 +38,19 @@ def install_fake_tools(root: Path) -> tuple[Path, Path, Path]:
                 'with log_path.open("a", encoding="utf-8") as log_file:',
                 '    log_file.write("\\0".join(sys.argv[1:]) + "\\n")',
                 "",
+                'if sys.argv[1:3] == ["plugins", "install"]:',
+                '    if Path(sys.argv[3]).is_file() and "--pin" in sys.argv[4:]:',
+                '        print("--pin is only supported with npm registry installs.", file=sys.stderr)',
+                "        raise SystemExit(1)",
+                '    if Path(sys.argv[3]).is_file() and "--force" not in sys.argv[4:]:',
+                '        print("Install cancelled; rerun with --force after reviewing the source.", file=sys.stderr)',
+                "        raise SystemExit(1)",
+                '    if Path(sys.argv[3]).is_file() and "--accept-capabilities" not in sys.argv[4:]:',
+                '        print("Plugin requires capability consent.", file=sys.stderr)',
+                "        raise SystemExit(1)",
+                '    if not Path(sys.argv[3]).is_file() and {"--force", "--accept-capabilities"}.intersection(sys.argv[4:]):',
+                "        raise SystemExit(2)",
+                "",
                 'if os.environ.get("OPENCLAW_FAKE_FAIL") == "1":',
                 "    raise SystemExit(17)",
                 "",
@@ -149,7 +162,9 @@ def test_first_run_installs_archive_and_writes_version_marker(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     assert result.stdout == "openclaw-ok"
     assert checksum_calls(paths.checksum_log_path) == [["-c", f"{paths.archive_path}.sha256"]]
-    assert openclaw_calls(paths.log_path) == [["plugins", "install", str(paths.archive_path), "--pin"]]
+    assert openclaw_calls(paths.log_path) == [
+        ["plugins", "install", str(paths.archive_path), "--force", "--accept-capabilities"]
+    ]
     assert (paths.state_dir / MARKER_FILENAME).read_text(encoding="utf-8").strip() == DEFAULT_VERSION
 
 
@@ -184,7 +199,9 @@ def test_version_bump_triggers_reinstall_and_marker_update(tmp_path: Path) -> No
     assert result.returncode == 0, result.stderr
     assert result.stdout == "openclaw-ok"
     assert checksum_calls(paths.checksum_log_path) == [["-c", f"{paths.archive_path}.sha256"]]
-    assert openclaw_calls(paths.log_path) == [["plugins", "install", str(paths.archive_path), "--pin"]]
+    assert openclaw_calls(paths.log_path) == [
+        ["plugins", "install", str(paths.archive_path), "--force", "--accept-capabilities"]
+    ]
     assert (paths.state_dir / MARKER_FILENAME).read_text(encoding="utf-8").strip() == "2"
 
 
@@ -233,7 +250,9 @@ def test_install_spec_env_does_not_override_baked_archive(tmp_path: Path) -> Non
     # Then
     assert result.returncode == 0, result.stderr
     assert checksum_calls(paths.checksum_log_path) == [["-c", f"{paths.archive_path}.sha256"]]
-    assert openclaw_calls(paths.log_path) == [["plugins", "install", str(paths.archive_path), "--pin"]]
+    assert openclaw_calls(paths.log_path) == [
+        ["plugins", "install", str(paths.archive_path), "--force", "--accept-capabilities"]
+    ]
 
 
 def test_failed_checksum_exits_nonzero_and_does_not_install_or_write_marker(tmp_path: Path) -> None:
@@ -249,6 +268,22 @@ def test_failed_checksum_exits_nonzero_and_does_not_install_or_write_marker(tmp_
     assert result.returncode == 18
     assert result.stdout == ""
     assert checksum_calls(paths.checksum_log_path) == [["-c", f"{paths.archive_path}.sha256"]]
+    assert openclaw_calls(paths.log_path) == []
+    assert not (paths.state_dir / MARKER_FILENAME).exists()
+
+
+def test_missing_checksum_does_not_authorize_install_or_execute_command(tmp_path: Path) -> None:
+    # Given
+    paths = create_bootstrap_paths(tmp_path)
+    Path(f"{paths.archive_path}.sha256").unlink()
+
+    # When
+    result = run_bootstrap(build_env(paths), "sh", "-c", "printf openclaw-ok")
+
+    # Then
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert checksum_calls(paths.checksum_log_path) == []
     assert openclaw_calls(paths.log_path) == []
     assert not (paths.state_dir / MARKER_FILENAME).exists()
 

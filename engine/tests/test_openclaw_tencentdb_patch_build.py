@@ -94,7 +94,11 @@ def _static_contract_errors(dockerfile_source: str, bootstrap_source: str) -> tu
     assets = ("PATCH_SCRIPT", PATCH_ASSET, VERIFIER_BIN, CLASSIFIER_ASSET, CLASSIFIER_BIN)
     if any(asset in line for line in bootstrap_source.splitlines() if line.strip() and not line.lstrip().startswith("#") for asset in assets):  # fmt: skip
         errors.append("runtime bootstrap must not invoke the classifier or patch")
-    if instructions[-3:] != FINAL:
+    runtime = tuple(
+        next((instruction for instruction in reversed(instructions) if instruction[0] == name), None)
+        for name, _body in FINAL
+    )
+    if runtime != FINAL:
         errors.append("final runtime must remain node with the existing entrypoint and command")
     return tuple(errors)
 
@@ -173,6 +177,9 @@ def test_tencentdb_patch_build_contract_rejects_weakened_invariants(tmp_path: Pa
             "hard-code dist bundle names",
         ),
         (compliant.replace('"gateway"]', '"agent"]', 1), "final runtime"),
+        (f"{compliant}\nUSER root\n", "final runtime"),
+        (f'{compliant}\nENTRYPOINT ["sh"]\n', "final runtime"),
+        (f'{compliant}\nCMD ["openclaw", "agent"]\n', "final runtime"),
     )
     for candidate, expected in mutations:
         assert expected in "\n".join(_static_contract_errors(candidate, bootstrap))

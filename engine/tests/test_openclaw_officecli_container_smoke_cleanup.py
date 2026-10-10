@@ -1,4 +1,32 @@
-from openclaw_officecli_smoke_cleanup import CleanupFailure, cleanup_error_message, run_cleanup
+import subprocess
+from pathlib import Path
+
+from openclaw_officecli_smoke_cleanup import CLEANUP_PROBE, CleanupFailure, cleanup_error_message, run_cleanup
+
+
+def test_cleanup_probe_makes_release_contents_writable(tmp_path: Path) -> None:
+    # Given
+    release = tmp_path / ".officecli" / "releases" / "test-release"
+    release.mkdir(parents=True)
+    binary = release / "officecli"
+    binary.write_text("test binary", encoding="utf-8")
+    binary.chmod(0o444)
+    release.chmod(0o555)
+
+    # When
+    completed = subprocess.run(  # noqa: S603 - execute the owned teardown probe against temporary state.
+        ("/bin/sh", "-c", CLEANUP_PROBE),
+        env={"OPENCLAW_STATE_DIR": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    # Then
+    assert completed.returncode == 0, completed.stderr
+    assert binary.stat().st_mode & 0o222 == 0o222
+    assert release.stat().st_mode & 0o222 == 0o222
 
 
 class CleanupProbeError(Exception):
