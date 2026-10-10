@@ -58,8 +58,6 @@ class ChannelUserService:
             legacy.append("microsoft_teams")
         elif normalized == "microsoft_teams":
             legacy.append("teams")
-        elif normalized == "google_chat":
-            legacy.extend(["googlechat", "gchat"])
         return legacy
 
     def _get_channel_ids(

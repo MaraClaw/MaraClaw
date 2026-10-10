@@ -325,7 +325,7 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 @router.get("/registration-config")
 async def get_registration_config() -> dict[str, Any]:
     """Public - tenant creation is platform-admin only; self-create is gone."""
-    return {"allow_self_create_company": False, "tenant_creation": "platform_admin_only"}
+    return {"tenant_creation": "platform_admin_only"}
 
 
 def _org_summary(tenant: TenantRecord) -> OrgSummary:

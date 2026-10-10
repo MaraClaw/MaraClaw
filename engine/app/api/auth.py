@@ -34,7 +34,6 @@ from app.schemas.schemas import (
     RegisterInitResponse,
     ResendVerificationRequest,
     ResetPasswordRequest,
-    SSORegisterRequest,
     SuggestedOrg,
     TenantChoice,
     TenantSwitchRequest,
@@ -42,7 +41,6 @@ from app.schemas.schemas import (
     TokenResponse,
     UserLogin,
     UserOut,
-    UserRegister,
     UserUpdate,
     VerifyEmailRequest,
 )
@@ -168,31 +166,6 @@ async def _pending_org_fields(user: UserRecord, email: str | None) -> tuple[bool
     return True, _suggested_org(suggested)
 
 
-@router.post("/register", response_model=Any, status_code=status.HTTP_201_CREATED)
-async def register(
-    data: UserRegister,
-    background_tasks: BackgroundTasks,
-    request: Request,
-):
-    """Legacy registration endpoint - kept for backward compatibility.
-
-    For new implementations, use:
-    - /register/init - Step 1: Initialize registration
-    - /register/sso - SSO registration
-    - /verify-email - Step 3: Verify email
-    """
-    from app.config import get_settings
-
-    settings = get_settings()
-
-    # Handle SSO registration if provider info provided
-    if data.provider and data.provider_code:
-        return await _handle_sso_register(data)
-
-    # Regular username/password registration - delegate to new flow
-    return await _handle_normal_register(data, background_tasks, settings, request)
-
-
 @router.post("/register/init", response_model=RegisterInitResponse, status_code=status.HTTP_201_CREATED)
 async def register_init(
     data: RegisterInitRequest,
@@ -309,175 +282,10 @@ async def register_init(
         message="Registration initiated. Please verify your email."
         if not identity.email_verified
         else "Registration successful.",
-        needs_company_setup=user.tenant_id is None,
         needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
         suggested_org=_suggested_org(placement.suggested),
         target_tenant_id=data.target_tenant_id,
     )
-
-
-@router.post("/register/sso", response_model=TokenResponse)
-async def register_sso(
-    data: SSORegisterRequest,
-) -> TokenResponse:
-    """SSO registration - completely separate from normal registration flow.
-
-    This endpoint handles OAuth-based registration/login via external providers.
-    """
-    from app.services.auth_registry import auth_provider_registry
-    from app.services.registration_service import registration_service
-
-    logger.info(f"[REGISTER_SSO] Starting SSO registration: provider={data.provider}")
-
-    # Move provider lookup outside transaction
-    auth_provider = await auth_provider_registry.get_provider(data.provider)
-    if not auth_provider:
-        raise HTTPException(status_code=400, detail=f"Provider '{data.provider}' not supported")
-
-    user, is_new, error = await registration_service.register_with_sso(data.provider, data.code, auth_provider)
-
-    if error:
-        raise HTTPException(status_code=400, detail=error)
-    if user is None:
-        raise HTTPException(status_code=400, detail="SSO registration failed")
-
-    from app.services.org_membership import (
-        DefaultOrgUnavailableError,
-        InvitationError,
-        attach_user_to_org,
-        consume_invitation_code,
-        place_new_registration,
-    )
-
-    placement = None
-    if not user.tenant_id:
-        try:
-            placement = await place_new_registration(email=user.email, invitation_code=data.invitation_code)
-        except InvitationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except DefaultOrgUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        if placement.tenant_id is not None:
-            placed = await tenant_dao.get(placement.tenant_id)
-            if placed is not None:
-                user = await attach_user_to_org(user, placed)
-                if data.invitation_code:
-                    await consume_invitation_code(data.invitation_code)
-
-    token = create_access_token(str(user.id), user.role)
-
-    logger.info(f"[REGISTER_SSO] SSO successful: user_id={user.id}, is_new={is_new}")
-
-    return TokenResponse(
-        access_token=token,
-        user=UserOut.model_validate(user),
-        needs_company_setup=user.tenant_id is None,
-        needs_org_confirm=bool(placement and placement.needs_org_confirm and user.tenant_id is None),
-        suggested_org=_suggested_org(placement.suggested if placement else None),
-    )
-
-
-async def _handle_normal_register(
-    data: UserRegister,
-    background_tasks: BackgroundTasks,
-    settings: Settings,
-    request: Request | None = None,
-) -> RegisterInitResponse:
-    """Legacy normal registration handler."""
-    logger.info(f"[REGISTER_LEGACY] email={data.email}")
-
-    from app.services.registration_service import registration_service
-    from app.services.system_email_service import resolve_email_config_async
-
-    # 1. Compute hash first (without DB connection checked out)
-    password_hash = None
-    if data.password:
-        password_hash = await hash_password_async(data.password)
-
-    # 2. Resolve email config once outside transaction
-    email_config = await resolve_email_config_async()
-
-    # 3. Check if this email is already registered globally outside transaction
-    # Platform admin is seeded from env - open registration never elevates to platform_admin.
-    identity = await identity_dao.get_by_email(data.email)
-    if identity:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Email already registered, please login directly."
-        )
-
-    from app.services.org_membership import (
-        DefaultOrgUnavailableError,
-        InvitationError,
-        consume_invitation_code,
-        place_new_registration,
-    )
-
-    try:
-        placement = await place_new_registration(email=data.email, invitation_code=data.invitation_code)
-    except InvitationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except DefaultOrgUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    tenant_uuid = placement.tenant_id
-    role = "member"
-
-    identity = await registration_service.find_or_create_identity(
-        email=data.email,
-        username=data.username,
-        password=data.password,
-        is_platform_admin=False,
-        email_config=email_config,
-        password_hash=password_hash,
-    )
-
-    # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
-    if identity.email and identity.email != data.email:
-        logger.warning(
-            f"[REGISTER_LEGACY] Identity email mismatch: submitted={data.email} returned={identity.email} - rejecting"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken. Please choose a different username.",
-        )
-
-    user = await registration_service.create_user_with_identity(
-        identity=identity,
-        display_name=data.display_name or data.username,
-        role=role,
-        tenant_id=tenant_uuid,
-        registration_source="web",
-        email_config=email_config,
-    )
-    if data.invitation_code and tenant_uuid is not None:
-        await consume_invitation_code(data.invitation_code)
-
-    # 4. Send verification email only when the identity still needs it (outside transaction)
-    if not identity.email_verified:
-        await _send_verification_email_task(user, background_tasks, settings, request)
-
-    # 5. Generate access token and build response payload outside transaction
-    token = create_access_token(str(user.id), user.role)
-    return RegisterInitResponse(
-        user_id=user.id,
-        email=data.email,
-        access_token=token,
-        user=UserOut.model_validate(user),
-        message="Registration successful. Please verify your email."
-        if not identity.email_verified
-        else "Registration successful.",
-        needs_company_setup=user.tenant_id is None,
-        needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
-        suggested_org=_suggested_org(placement.suggested),
-    )
-
-
-async def _handle_sso_register(data: UserRegister) -> TokenResponse:
-    """Legacy SSO registration handler - delegates to new SSO endpoint logic."""
-    # Redirect to new SSO flow
-    if not data.provider or not data.provider_code:
-        raise HTTPException(status_code=400, detail="SSO provider and authorization code are required")
-    sso_data = SSORegisterRequest(provider=data.provider, code=data.provider_code, invitation_code=data.invitation_code)
-    return await register_sso(sso_data)
 
 
 @router.post("/login", response_model=Any)
@@ -616,44 +424,9 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks, request: Req
         user=user_out,
         identity=IdentityOut.model_validate(identity),
         must_change_password=must_change,
-        needs_company_setup=needs_confirm,
         needs_org_confirm=needs_confirm,
         suggested_org=suggested,
     )
-
-
-@router.get("/email-hint")
-async def get_email_hint(username: str):
-    """Return a hinted email address for a given username."""
-    identity = await identity_dao.get_by_username(username)
-
-    if not identity or not identity.email:
-        raise HTTPException(status_code=404, detail="Account not found.")
-
-    email = identity.email
-    parts = email.split("@")
-    if len(parts) == 2:
-        name, domain = parts
-
-        # Obfuscate name
-        obs_name = name[0] + "***" if len(name) <= 2 else name[:2] + "***" + name[-1]
-
-        # Obfuscate domain
-        domain_parts = domain.split(".")
-        if len(domain_parts) >= 2:
-            d_name = domain_parts[0]
-            d_ext = ".".join(domain_parts[1:])
-            if len(d_name) <= 2:
-                obs_domain = d_name[0] + "***." + d_ext
-            else:
-                obs_domain = d_name[0] + "***" + d_name[-1] + "." + d_ext
-            hint = f"{obs_name}@{obs_domain}"
-        else:
-            hint = f"{obs_name}@{domain}"
-    else:
-        hint = email[:3] + "***"
-
-    return {"hint": hint}
 
 
 @router.post("/forgot-password")
@@ -1086,7 +859,7 @@ async def oauth_callback(
         return TokenResponse(
             access_token=jwt_token,
             user=UserOut.model_validate(user),
-            needs_company_setup=user.tenant_id is None,
+            needs_org_confirm=user.tenant_id is None,
         )
 
     # ── Step 1: Exchange code, detect multi-tenant ────────────────────────────
@@ -1174,7 +947,7 @@ async def oauth_callback(
     return TokenResponse(
         access_token=jwt_token,
         user=UserOut.model_validate(user),
-        needs_company_setup=user.tenant_id is None,
+        needs_org_confirm=user.tenant_id is None,
     )
 
 
@@ -1295,7 +1068,7 @@ async def verify_email(data: VerifyEmailRequest):
         access_token=token,
         user=UserOut.model_validate(user) if user else None,
         identity=IdentityOut.model_validate(identity),
-        needs_company_setup=user.tenant_id is None if user else True,
+        needs_org_confirm=user.tenant_id is None if user else True,
     )
 
 

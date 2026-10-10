@@ -128,13 +128,11 @@ class AdminAuditLogOut(BaseModel):
 
 
 class PlatformSettingsOut(BaseModel):
-    allow_self_create_company: bool = False
     invitation_code_enabled: bool = False
     sso_custom_domain_redirect_enabled: bool = True
 
 
 class PlatformSettingsUpdate(BaseModel):
-    allow_self_create_company: bool | None = None
     invitation_code_enabled: bool | None = None
     sso_custom_domain_redirect_enabled: bool | None = None
 
@@ -534,7 +532,6 @@ async def get_platform_settings(current_user: UserRecord = Depends(require_role(
     settings: dict[str, bool] = {}
 
     for key, default in [
-        ("allow_self_create_company", False),
         ("invitation_code_enabled", False),
         ("sso_custom_domain_redirect_enabled", True),
     ]:

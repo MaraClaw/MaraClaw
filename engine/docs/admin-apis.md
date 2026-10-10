@@ -35,7 +35,9 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 
 Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Genesis platform admin membership is the **MaraClaw** system org. Genesis is stored on `users.is_genesis` and cannot be moved by role change, assign-user, or join.
 
-While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). The `allow_self_create_company` flag is retained on platform settings but does not create tenants.
+While `must_change_password` is true, login still issues a token, but `get_current_user`, WebSocket chat, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). Platform settings expose invitation-code and SSO-domain redirect toggles only.
+
+Fresh-only installations use `POST /api/auth/register/init` for password registration and `POST /api/auth/{provider}/callback` for OAuth registration/login. The obsolete `/api/auth/register`, `/api/auth/register/sso`, and `/api/auth/email-hint` routes are unavailable (404). Registration/token responses expose `needs_org_confirm` and optional `suggested_org`; `needs_company_setup` has been removed. The inert `allow_self_create_company` setting is no longer exposed or writable.
 
 Password-reset and verify links prefer the requesting frontend `Origin` (or Referer origin) when it is listed in `CORS_ORIGINS` — so `web-a` (`:5174`) and `web-e` (`:5173`) each receive their own links. Unknown origins are ignored; fallback is `PUBLIC_BASE_URL` (the end-user site, `web-e`).
 
@@ -64,7 +66,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/platform-admins` | - | Platform admin list with `is_genesis` / `is_active` |
 | `PATCH` | `/api/admin/platform-admins/{user_id}/active` | `{ is_active }` | Genesis PA only. Cannot target self or genesis. Deactivating the last active PA is blocked. |
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
-| `GET` | `/api/admin/platform-settings` | - | `{ allow_self_create_company, invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
+| `GET` | `/api/admin/platform-settings` | - | `{ invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
 | `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
 | `POST` | `/api/admin/linkup-keys` | `{ label, api_key }` | **201** add a key. Missing/blank `label` or `api_key` → **422**. Duplicate secret → **409**. Appends to the rotation cycle. |
@@ -127,7 +129,7 @@ is_system, is_default_end_user_org, can_disable
 | `POST` | `/api/tenants/join-suggested` | Confirm the **verified** email-domain match. Active user required. Genesis / platform admin blocked. |
 | `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
 | `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
-| `GET` | `/api/tenants/registration-config` | Public. Always `{ allow_self_create_company: false, tenant_creation: "platform_admin_only" }`. |
+| `GET` | `/api/tenants/registration-config` | Public. Always `{ tenant_creation: "platform_admin_only" }`. |
 | `DELETE` | `/api/tenants/{tenant_id}` | Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
 | `GET` | `/api/tenants/me` | Any member; company + default model |

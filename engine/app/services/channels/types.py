@@ -92,9 +92,6 @@ def outbound_provider_key(value: str | None) -> str | None:
     kind = CHANNEL_TYPES.get(stored)
     if kind:
         return kind.outbound_key
-    # Legacy: outbound used short "teams" while DB used microsoft_teams
-    if stored == "teams":
-        return "teams"
     return stored
 
 

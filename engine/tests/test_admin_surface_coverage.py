@@ -99,6 +99,7 @@ async def test_get_client_ip_none_and_host():
 async def test_list_companies(monkeypatch):
     tenant = _tenant()
     monkeypatch.setattr(admin_api.tenant_dao, "list_ordered_by_created_at", AsyncMock(return_value=[tenant]))
+
     async def count_for_tenant(_tid, *, is_active=None):
         if is_active is True:
             return 2
@@ -235,7 +236,7 @@ async def test_list_admin_audit_logs(monkeypatch):
 async def test_platform_settings_get_and_update(monkeypatch):
     monkeypatch.setattr(admin_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=False))
     settings = await admin_api.get_platform_settings(_user())
-    assert settings.allow_self_create_company is False
+    assert settings.invitation_code_enabled is False
 
     set_flag = AsyncMock()
     monkeypatch.setattr(admin_api.system_setting_dao, "set_flag", set_flag)
@@ -478,7 +479,7 @@ async def test_tenants_join_registration_and_me(monkeypatch):
 
     monkeypatch.setattr(tenants_api.system_setting_dao, "is_flag_enabled", AsyncMock(return_value=False))
     cfg = await tenants_api.get_registration_config()
-    assert cfg["allow_self_create_company"] is False
+    assert "allow_self_create_company" not in cfg
     assert cfg["tenant_creation"] == "platform_admin_only"
 
     member = _user(role="member", tenant_id=tenant.id)

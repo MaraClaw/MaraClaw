@@ -402,20 +402,19 @@ async def get_user_detail(
     agents = await agent_dao.list_for_creator(target.id, tenant_id=target.tenant_id)
     agents_count = len(agents)
     base = _user_out(target, agents_count=agents_count)
-    return UserDetailOut(
-        **base.model_dump(),
-        agents=[
-            UserAgentOut(
-                id=agent.id,
-                name=agent.name,
-                status=agent.status,
-                is_expired=bool(agent.is_expired),
-                role_description=agent.role_description or None,
-                last_active_at=agent.last_active_at,
-            )
-            for agent in agents
-        ],
-    )
+    detail = UserDetailOut.model_validate(base)
+    detail.agents = [
+        UserAgentOut(
+            id=agent.id,
+            name=agent.name,
+            status=agent.status,
+            is_expired=bool(agent.is_expired),
+            role_description=agent.role_description or None,
+            last_active_at=agent.last_active_at,
+        )
+        for agent in agents
+    ]
+    return detail
 
 
 @router.patch("/{user_id}/role")

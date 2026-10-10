@@ -25,7 +25,6 @@ from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.org import OrgMemberRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
-from app.services.auth_provider import BaseAuthProvider
 from app.services.sso_service import sso_service
 from app.services.system_email_service import SystemEmailConfig, resolve_email_config_async
 
@@ -294,72 +293,6 @@ class RegistrationService:
         )
 
         return user, True
-
-    async def register_with_sso(
-        self,
-        provider_type: str,
-        code: str,
-        auth_provider: BaseAuthProvider,
-    ) -> tuple[UserRecord | None, bool, str | None]:
-        """Register or login user via SSO."""
-        try:
-            token_data = await auth_provider.exchange_code_for_token(code)
-            access_token = token_data.get("access_token")
-            if not isinstance(access_token, str) or not access_token:
-                return None, False, "Failed to get access token from provider"
-
-            user_info_obj = await auth_provider.get_user_info(access_token)
-
-            user_info: SSOUserInfo = {
-                "name": user_info_obj.name,
-                "email": user_info_obj.email,
-                "avatar_url": user_info_obj.avatar_url,
-                "mobile": user_info_obj.mobile,
-                "raw_data": user_info_obj.raw_data,
-            }
-
-            email_addr = user_info_obj.email
-            sso_tenant_id: str | None = None
-            if email_addr:
-                tenant = await self.detect_tenant_by_email(email_addr)
-                sso_tenant_id = str(tenant.id) if tenant else None
-
-            lookup_provider_user_id = user_info_obj.provider_union_id or user_info_obj.provider_user_id
-            if not lookup_provider_user_id:
-                return None, False, "SSO provider did not return a user id"
-            existing_user = await sso_service.resolve_user_identity(
-                lookup_provider_user_id,
-                provider_type,
-                tenant_id=sso_tenant_id,
-                identity_data=dict(user_info),
-            )
-            if existing_user:
-                return existing_user, False, None
-
-            if user_info_obj.email:
-                existing_by_email = await sso_service.match_user_by_email(user_info_obj.email, tenant_id=sso_tenant_id)
-                if existing_by_email:
-                    _ = await sso_service.link_identity(
-                        str(existing_by_email.id),
-                        provider_type,
-                        lookup_provider_user_id,
-                        dict(user_info),
-                        tenant_id=(str(existing_by_email.tenant_id) if existing_by_email.tenant_id else sso_tenant_id),
-                    )
-                    return existing_by_email, False, None
-
-            user, is_new = await self.handle_sso_registration(
-                provider_type,
-                lookup_provider_user_id,
-                user_info,
-            )
-
-            await self.bind_org_member(user)
-            return user, is_new, None
-
-        except Exception:
-            logger.exception("SSO registration failed for %s provider", provider_type)
-            return None, False, "SSO registration failed"
 
     # ── TenantRecord for registration ──────────────────────────────────────────────
 

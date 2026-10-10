@@ -206,11 +206,6 @@ class BaseAuthProvider(ABC):
         self.provider = provider
         return provider
 
-    async def _find_user_by_legacy_fields(self, user_info: ExternalUserInfo) -> UserRecord | None:
-        """Find user by legacy provider-specific fields (if any)."""
-        del user_info
-        return None
-
     async def _update_existing_user(self, user: UserRecord, user_info: ExternalUserInfo) -> UserRecord:
         """Update existing user with new info from provider."""
         user_fields: dict[str, object] = {}
@@ -232,7 +227,6 @@ class BaseAuthProvider(ABC):
                 loaded = await user_dao.get_with_identity(user.id)
                 if loaded:
                     user = loaded
-        await self._update_legacy_user_fields(user, user_info)
         return user
 
     async def _create_new_user(self, user_info: ExternalUserInfo, tenant_id: str | None) -> UserRecord:
@@ -264,18 +258,7 @@ class BaseAuthProvider(ABC):
             }
         )
         user.identity = identity
-        await self._set_legacy_user_fields(user, user_info)
         return user
-
-    async def _update_legacy_user_fields(self, user: UserRecord, user_info: ExternalUserInfo):
-        """Override in subclass to update provider-specific legacy fields."""
-        del user, user_info
-        return
-
-    async def _set_legacy_user_fields(self, user: UserRecord, user_info: ExternalUserInfo):
-        """Override in subclass to set provider-specific legacy fields on new user."""
-        del user, user_info
-        return
 
 
 class FeishuAuthProvider(BaseAuthProvider):
@@ -344,21 +327,6 @@ class FeishuAuthProvider(BaseAuthProvider):
                 mobile=self._payload_string(info_data, "mobile"),
                 raw_data=info_data,
             )
-
-    @override
-    async def _find_user_by_legacy_fields(self, user_info: ExternalUserInfo) -> UserRecord | None:
-        """Feishu legacy lookup removed (open_id/union_id no longer stored on User)."""
-        return None
-
-    @override
-    async def _update_legacy_user_fields(self, user: UserRecord, user_info: ExternalUserInfo):
-        """No-op: legacy Feishu fields removed from User."""
-        return
-
-    @override
-    async def _set_legacy_user_fields(self, user: UserRecord, user_info: ExternalUserInfo):
-        """No-op: legacy Feishu fields removed from User."""
-        return
 
 
 class DingTalkAuthProvider(BaseAuthProvider):

@@ -95,7 +95,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 - Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** - every process still mounts all routers.
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
 - Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends paths (WS, file download) must call `load_user_from_access_token`.
-- New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone. `allow_self_create_company` does not create tenants.
+- New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone; platform settings expose only invitation and SSO-domain toggles.
 - Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis is persisted on `users.is_genesis` (not recomputed from `created_at`). Genesis rows cannot be demoted, reassigned, or converted by join.
 - Login ignores inactive memberships. Deactivating an org admin does not flip `identity.is_active` (multi-tenant identities). Deactivating a platform admin does. Deactivating an end user also stops their agents/triggers/schedules.
 - Tenant delete tombstones orphaned identities so emails can be reused. `POST /api/tenants/{id}/genesis-org-admin` repairs a tenant that has no genesis OA.

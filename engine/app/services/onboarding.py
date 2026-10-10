@@ -363,15 +363,6 @@ async def mark_onboarding_phase(
         )
 
 
-async def mark_onboarded(
-    db: object | None,
-    agent_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> None:
-    """Backward-compatible helper for callers that mean "completed"."""
-    await mark_onboarding_phase(db, agent_id, user_id, PHASE_COMPLETED)
-
-
 async def try_begin_onboarding_greeting(
     agent_id: uuid.UUID,
     user_id: uuid.UUID,

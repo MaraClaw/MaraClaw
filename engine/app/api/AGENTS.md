@@ -31,6 +31,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Auth / admin genesis
 
+- Registration uses `POST /auth/register/init`; OAuth registration/login uses `POST /auth/{provider}/callback`. Fresh-only installs do not expose `/auth/register`, `/auth/register/sso`, or `/auth/email-hint`. Auth responses use `needs_org_confirm`, not `needs_company_setup`.
 - `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation). Reset/verify emails resolve the frontend via `frontend_origin` (allowlisted Origin/Referer).
 - `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
 - `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True` via `tenant_provisioning`. Unique email race → 409. `POST /platform-admins` is **genesis platform admin only**. Genesis PA may `PATCH /platform-admins/{id}/active`. Admin trail: `GET /audit-logs`.

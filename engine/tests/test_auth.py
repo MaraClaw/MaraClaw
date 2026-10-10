@@ -1,6 +1,7 @@
 """Unit tests for the authentication API (app/api/auth.py)."""
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -294,11 +295,12 @@ async def test_oauth_callback_passes_redirect_uri():
 
 
 @pytest.mark.asyncio
-async def test_handle_normal_register_returns_submitted_email(monkeypatch):
-    """Legacy /register must echo data.email even when user.email is missing."""
-    from app.schemas.schemas import UserRegister
+async def test_register_init_returns_submitted_email(monkeypatch):
+    """Canonical registration echoes submitted email even when user.email is missing."""
+    from app.schemas.schemas import RegisterInitRequest
 
-    data = UserRegister(username="ada", email="ada@example.com", password="secret1")
+    # Given a fresh identity and a membership without a stored email.
+    data = RegisterInitRequest(username="ada", email="ada@example.com", password="secret1")
     identity = SimpleNamespace(id=uuid.uuid4(), email=None, email_verified=True)
     user = SimpleNamespace(
         id=uuid.uuid4(),
@@ -321,6 +323,12 @@ async def test_handle_normal_register_returns_submitted_email(monkeypatch):
     )
     placement = SimpleNamespace(tenant_id=None, needs_org_confirm=False, suggested=None)
 
+    @asynccontextmanager
+    async def connection():
+        yield
+
+    monkeypatch.setattr(auth_api, "connection_ctx", connection)
+    monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
     monkeypatch.setattr(auth_api, "hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_api, "create_access_token", lambda *a, **k: "tok")
@@ -337,11 +345,14 @@ async def test_handle_normal_register_returns_submitted_email(monkeypatch):
             AsyncMock(return_value=user),
         ),
     ):
-        result = await auth_api._handle_normal_register(data, AsyncMock(), SimpleNamespace())
+        # When registration runs through the current public handler.
+        result = await auth_api.register_init(data, AsyncMock(), _dummy_request())
 
+    # Then the response retains the submitted email and issued credentials.
     assert result.email == "ada@example.com"
     assert result.user_id == user.id
     assert result.access_token == "tok"
+    assert "needs_company_setup" not in result.model_dump()
 
 
 def test_http_header_reads_present_value_and_default():
