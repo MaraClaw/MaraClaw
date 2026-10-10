@@ -79,17 +79,17 @@ export function asAdminUser(admin: PlatformAdmin): AdminUser {
   }
 }
 
-export async function listUsers(tenantId?: string): Promise<AdminUser[]> {
+export async function listUsers(tenantId?: string, signal?: AbortSignal): Promise<AdminUser[]> {
   const suffix = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  return apiRequest<AdminUser[]>(`/api/users/${suffix}`)
+  return apiRequest<AdminUser[]>(`/api/users/${suffix}`, { signal })
 }
 
-export async function getUserDetail(userId: string): Promise<UserDetail> {
-  return apiRequest<UserDetail>(`/api/users/${userId}`)
+export async function getUserDetail(userId: string, signal?: AbortSignal): Promise<UserDetail> {
+  return apiRequest<UserDetail>(`/api/users/${userId}`, { signal })
 }
 
-export async function listPlatformAdmins(): Promise<PlatformAdmin[]> {
-  return apiRequest<PlatformAdmin[]>('/api/admin/platform-admins')
+export async function listPlatformAdmins(signal?: AbortSignal): Promise<PlatformAdmin[]> {
+  return apiRequest<PlatformAdmin[]>('/api/admin/platform-admins', { signal })
 }
 
 export async function setUserActive(userId: string, isActive: boolean): Promise<AdminUser> {
