@@ -39,10 +39,10 @@ export type CreateCompanyResponse = {
   must_change_password: boolean
 }
 
-export async function listCompanies(q?: string): Promise<CompanyStats[]> {
+export async function listCompanies(q?: string, signal?: AbortSignal): Promise<CompanyStats[]> {
   const query = q?.trim()
   const suffix = query ? `?q=${encodeURIComponent(query)}` : ''
-  return apiRequest<CompanyStats[]>(`/api/admin/companies${suffix}`)
+  return apiRequest<CompanyStats[]>(`/api/admin/companies${suffix}`, { signal })
 }
 
 export async function createCompany(input: CreateCompanyInput): Promise<CreateCompanyResponse> {
@@ -52,7 +52,7 @@ export async function createCompany(input: CreateCompanyInput): Promise<CreateCo
   })
 }
 
-export async function getTenant(tenantId: string): Promise<CompanyStats> {
+export async function getTenant(tenantId: string, signal?: AbortSignal): Promise<CompanyStats> {
   const tenant = await apiRequest<{
     id: string
     name: string
@@ -61,7 +61,7 @@ export async function getTenant(tenantId: string): Promise<CompanyStats> {
     is_system?: boolean
     is_default_end_user_org?: boolean
     can_disable?: boolean
-  }>(`/api/tenants/${tenantId}`)
+  }>(`/api/tenants/${tenantId}`, { signal })
   const isSystem = Boolean(tenant.is_system)
   const isDefaultEndUserOrg = Boolean(tenant.is_default_end_user_org)
   return {
@@ -89,8 +89,8 @@ export async function toggleCompany(companyId: string): Promise<{ ok: boolean; i
   })
 }
 
-export async function listEmailDomains(tenantId: string): Promise<EmailDomain[]> {
-  return apiRequest<EmailDomain[]>(`/api/tenants/${tenantId}/email-domains`)
+export async function listEmailDomains(tenantId: string, signal?: AbortSignal): Promise<EmailDomain[]> {
+  return apiRequest<EmailDomain[]>(`/api/tenants/${tenantId}/email-domains`, { signal })
 }
 
 export async function addEmailDomain(

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import {
   addEmailDomain,
   deleteEmailDomain,
@@ -33,11 +34,11 @@ export function CompanyDetailPage() {
     navigate('/companies')
   }
 
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: () => listCompanies() })
+  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: ({ signal }) => listCompanies(undefined, signal) })
   const company = companies.data?.find((item) => item.id === companyId)
   const domains = useQuery({
     queryKey: ['email-domains', companyId],
-    queryFn: () => listEmailDomains(companyId!),
+    queryFn: ({ signal }) => listEmailDomains(companyId ?? '', signal),
     enabled: Boolean(companyId),
   })
 

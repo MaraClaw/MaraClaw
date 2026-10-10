@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/hooks/use-auth'
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { getTenant, listCompanies, toggleCompany } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { isPlatformAdminUser } from '@/lib/types/auth'
@@ -32,12 +33,12 @@ export function CompaniesPage() {
   const search = useDebouncedValue(searchInput, 300)
   const companies = useQuery({
     queryKey: ['admin-companies', user?.tenant_id, search],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return await listCompanies(search)
+        return await listCompanies(search, signal)
       } catch (error) {
         if (error instanceof ApiError && error.status === 403 && user?.tenant_id) {
-          const own = await getTenant(user.tenant_id)
+          const own = await getTenant(user.tenant_id, signal)
           const needle = search.trim().toLowerCase()
           if (!needle) return [own]
           const haystack = `${own.name} ${own.slug}`.toLowerCase()
