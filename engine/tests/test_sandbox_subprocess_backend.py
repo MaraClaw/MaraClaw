@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.services.sandbox.base import resolve_exec_timeout
-from app.services.sandbox.config import SandboxConfig
+from app.services.sandbox.config import SandboxConfig, SandboxConfigOverrides, SandboxType
 from app.services.sandbox.local.subprocess_backend import SubprocessBackend
+from app.services.sandbox.registry import get_sandbox_backend
 
 
 class BlockingStream:
@@ -16,14 +16,14 @@ class BlockingStream:
 
 class BlockingProcess:
     def __init__(self):
-        self.pid = 999_999
+        self.pid: int = 999_999
         self.returncode: int | None = None
-        self.started = asyncio.Event()
-        self.finished = asyncio.Event()
-        self.stdout = BlockingStream()
-        self.stderr = BlockingStream()
-        self.killed = False
-        self.reaped = False
+        self.started: asyncio.Event = asyncio.Event()
+        self.finished: asyncio.Event = asyncio.Event()
+        self.stdout: BlockingStream = BlockingStream()
+        self.stderr: BlockingStream = BlockingStream()
+        self.killed: bool = False
+        self.reaped: bool = False
 
     async def wait(self) -> int:
         self.started.set()
@@ -230,16 +230,51 @@ def test_subprocess_backend_bwrap_isolation_flags_and_no_proxy_argv(tmp_path: Pa
     assert cmd[cmd.index("--chdir") + 1] == "/workspace"
 
 
-def test_resolve_exec_timeout_maps_legacy_timeout_kwarg() -> None:
-    kwargs: dict[str, object] = {"timeout": 5, "on_output": None}
-    assert resolve_exec_timeout(30, kwargs) == 5
-    assert "timeout" not in kwargs
-    assert resolve_exec_timeout(12, {"timeout": 5}) == 12
-    assert resolve_exec_timeout(30, {}) == 30
+@pytest.mark.parametrize("sandbox_type", list(SandboxType))
+@pytest.mark.parametrize("exec_timeout", [30, 12])
+async def test_execute_rejects_old_timeout_keyword(
+    sandbox_type: SandboxType, exec_timeout: int, tmp_path: Path
+) -> None:
+    # Given: any configured backend, including explicit canonical timeout overrides
+    backend = get_sandbox_backend(
+        SandboxConfig(type=sandbox_type, api_key="test-key", api_url="http://sandbox.invalid")
+    )
+
+    # When / Then: the retired keyword fails before execution or provider access
+    with pytest.raises(TypeError, match=r"timeout.*exec_timeout"):
+        await backend.execute(
+            "print(1)", "python", exec_timeout=exec_timeout, work_dir=str(tmp_path), timeout=5, on_output=None
+        )
+
+
+async def test_execute_enforces_canonical_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: a sandbox child that cannot complete within a zero-second execution budget
+    backend = SubprocessBackend(SandboxConfig())
+    process = BlockingProcess()
+
+    async def ensure_venv(_: Path) -> None:
+        return None
+
+    async def launch(*_: object, **__: object) -> BlockingProcess:
+        return process
+
+    monkeypatch.setattr(backend, "_ensure_workspace_venv", ensure_venv)
+    monkeypatch.setattr(backend, "_build_bwrap_command", lambda *_: ["sandbox"])
+    monkeypatch.setattr("app.services.sandbox.local.subprocess_backend.asyncio.create_subprocess_exec", launch)
+
+    # When: the canonical execution timeout is passed with supported output context
+    result = await backend.execute("print(1)", "python", exec_timeout=0, work_dir=str(tmp_path), on_output=None)
+
+    # Then: the timeout is enforced and cleanup preserves the execution contract
+    assert not result.success
+    assert result.exit_code == 124
+    assert process.killed
+    assert process.reaped
+    assert not (tmp_path / "_exec_tmp.py").exists()
 
 
 def test_sandbox_config_proxy_parsing() -> None:
-    data = {
+    data: SandboxConfigOverrides = {
         "http_proxy": "http://10.0.0.1:3128",
         "https_proxy": "http://10.0.0.1:3128",
         "no_proxy": ".local,10.0.0.0/8",

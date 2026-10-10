@@ -15,7 +15,7 @@ from app.core.json_types import (
     json_object_from_response,
 )
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities, resolve_exec_timeout
+from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -78,7 +78,9 @@ class AioSandboxBackend(BaseSandboxBackend):
         **kwargs: object,
     ) -> ExecutionResult:
         """Execute code using aio-sandbox."""
-        timeout = resolve_exec_timeout(exec_timeout, kwargs)
+        if "timeout" in kwargs:
+            raise TypeError("execute() no longer accepts 'timeout'; use 'exec_timeout'")
+        timeout = exec_timeout
         start_time = time.time()
 
         # Determine endpoint based on language

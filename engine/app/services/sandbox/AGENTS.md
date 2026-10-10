@@ -29,7 +29,8 @@ The enum member for `codesandbox` is misspelled as `CODEDANDBOX` while its value
 - Keep env/default parsing in `app/config.py` / `SandboxConfig`, not inside individual backends.
 - Every backend must return `ExecutionResult` and `SandboxCapabilities` shapes from `base.py`.
 - Backend selection and fallback policy belong in the registry/caller boundary, not inside API or remote backends.
-- Dangerous-pattern filters live in `local/subprocess_backend.py` and `agent_tool_exec/code_exec.py`. `agent_tools.py` only re-exports `_execute_code` wrappers.
+- Dangerous-pattern filters live in `local/subprocess_backend.py`. `agent_tools.py` re-exports the `_execute_code` entry point.
+- Local and E2B code tools execute only through the configured sandbox backend. Configuration or execution errors surface without retrying on the host.
 - Code-exec tool path: `app/services/agent_tool_exec/code_exec.py` merges DB tool config over platform `get_sandbox_config()`.
 - Tests should fake backend clients rather than require live cloud services, Docker daemons, or host isolation binaries.
 
