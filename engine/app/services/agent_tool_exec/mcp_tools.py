@@ -75,7 +75,7 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
 
 
 async def _discover_resources(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
-    """Search Smithery registry for MCP servers."""
+    """Search Smithery and ModelScope registries for MCP servers."""
     query_value = arguments.get("query", "")
     query = query_value if isinstance(query_value, str) else ""
     if not query:
@@ -87,9 +87,9 @@ async def _discover_resources(agent_id: uuid.UUID, arguments: ToolArguments) -> 
         else 5
     )
 
-    from app.services.resource_discovery import search_smithery
+    from app.services.resource_discovery import search_registries
 
-    return await search_smithery(query, max_results, agent_id=agent_id)
+    return await search_registries(query, max_results, agent_id=agent_id)
 
 
 async def _import_mcp_server(agent_id: uuid.UUID, arguments: ToolArguments) -> str:

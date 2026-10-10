@@ -563,7 +563,6 @@ async def test_execute_tool_routes_mcp_resources_directly_to_extracted_module(mo
     monkeypatch.setattr(mcp_tools, "_import_mcp_server", import_mcp_server)
     monkeypatch.setattr(agent_tools, "_discover_resources", legacy_fail)
     monkeypatch.setattr(agent_tools, "_import_mcp_server", legacy_fail)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
 
@@ -628,13 +627,24 @@ async def test_legacy_mcp_facades_delegate_to_extracted_modules(monkeypatch):
     ]
 
 
+def test_resource_discovery_public_search_alias_is_retired() -> None:
+    # Given: the current resource-discovery module.
+    from app.services import resource_discovery
+
+    # When: a caller looks up the retired public search entry point.
+    alias_exists = hasattr(resource_discovery, "search_smithery")
+
+    # Then: only the canonical registry-search entry point is available.
+    assert not alias_exists
+
+
 async def test_mcp_resource_helpers_preserve_discovery_and_import_contracts(monkeypatch):
     from app.services import resource_discovery
 
     mcp_tools = importlib.import_module("app.services.agent_tool_exec.mcp_tools")
     calls = []
 
-    async def search_smithery(query: str, max_results: int, *, agent_id: uuid.UUID) -> str:
+    async def search_registries(query: str, max_results: int, *, agent_id: uuid.UUID) -> str:
         calls.append(("search", query, max_results, agent_id))
         return "search result"
 
@@ -652,7 +662,7 @@ async def test_mcp_resource_helpers_preserve_discovery_and_import_contracts(monk
         calls.append(("smithery", server_id, agent_id, config, reauthorize))
         return "smithery result"
 
-    monkeypatch.setattr(resource_discovery, "search_smithery", search_smithery)
+    monkeypatch.setattr(resource_discovery, "search_registries", search_registries)
     monkeypatch.setattr(resource_discovery, "import_mcp_direct", import_mcp_direct)
     monkeypatch.setattr(resource_discovery, "import_mcp_from_smithery", import_mcp_from_smithery)
 
@@ -878,7 +888,7 @@ async def test_normal_image_dispatch_prefers_registered_handler_over_facade(monk
     upload_image.assert_not_awaited()
 
 
-async def test_normal_image_dispatch_routes_unregistered_tools_through_workspace(monkeypatch, tmp_path):
+async def test_normal_image_dispatch_routes_registered_tools_through_workspace(monkeypatch, tmp_path):
     calls = []
 
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
@@ -900,7 +910,6 @@ async def test_normal_image_dispatch_routes_unregistered_tools_through_workspace
     monkeypatch.setattr(agent_tools, "_run_with_temp_workspace", run_with_temp_workspace)
     monkeypatch.setattr(agent_tools, "_upload_image", upload_image)
     monkeypatch.setattr(agent_tools, "_generate_image", generate_image)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
 
     agent_id = uuid.uuid4()
@@ -936,7 +945,7 @@ async def test_normal_image_dispatch_routes_unregistered_tools_through_workspace
     ]
 
 
-async def test_leftover_search_x_dispatch_when_registry_is_disabled(monkeypatch):
+async def test_search_x_dispatch_uses_registered_handler(monkeypatch):
     calls = []
 
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
@@ -948,7 +957,6 @@ async def test_leftover_search_x_dispatch_when_registry_is_disabled(monkeypatch)
 
     x_search_mod = importlib.import_module("app.services.agent_tool_exec.x_search")
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(x_search_mod, "_search_x", search_x)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
 
@@ -1003,7 +1011,7 @@ async def test_normal_code_dispatch_propagates_output_callback(monkeypatch, tmp_
         calls.append(("workspace", kwargs))
         return await runner(tmp_path)
 
-    async def on_output(_text: str, _label: str) -> None:
+    async def on_output(_text: str, _label: str = "stdout", /) -> None:
         return None
 
     agent_dao_mod = importlib.import_module("app.dao.agent_dao")
@@ -1015,7 +1023,6 @@ async def test_normal_code_dispatch_propagates_output_callback(monkeypatch, tmp_
     monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _agent_id: tmp_path)
     monkeypatch.setattr(agent_tools, "_execute_code", execute_code)
     monkeypatch.setattr(agent_tools, "_run_with_temp_workspace", run_with_temp_workspace)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(agent_dao_mod.agent_dao, "get", no_agent)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
 
@@ -1102,7 +1109,6 @@ async def test_extracted_direct_routing_deploy_tools_use_modules_not_legacy_faca
     monkeypatch.setattr(agent_tools, "_vercel_set_env", legacy_fail)
     monkeypatch.setattr(agent_tools, "_vercel_manage_domain", legacy_fail)
     monkeypatch.setattr(agent_tools, "_neon_create_database", legacy_fail)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
     monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)
@@ -1146,20 +1152,27 @@ def test_public_agent_tools_import_contract():
 
 
 def test_agent_tools_catalog_names_and_shape_match_current_contract():
-    tool_names = tuple(tool["function"]["name"] for tool in agent_tools_definitions.AGENT_TOOLS)
-
-    assert tool_names == EXPECTED_CATALOG_NAMES
+    from app.core.json_types import is_json_object
     from app.services.llm.finish import FINISH_TOOL_DEFINITION
 
     assert agent_tools_definitions.AGENT_TOOLS[0] is FINISH_TOOL_DEFINITION
+    tool_names: list[str] = []
     for tool in agent_tools_definitions.AGENT_TOOLS:
+        assert is_json_object(tool)
         assert set(tool) == {"type", "function"}
         assert tool["type"] == "function"
-        assert set(tool["function"]) == {"name", "description", "parameters"}
-        assert isinstance(tool["function"]["name"], str)
-        assert isinstance(tool["function"]["description"], str)
-        assert tool["function"]["parameters"]["type"] == "object"
-        assert isinstance(tool["function"]["parameters"]["properties"], dict)
+        function = tool["function"]
+        assert is_json_object(function)
+        assert set(function) == {"name", "description", "parameters"}
+        name = function["name"]
+        assert isinstance(name, str)
+        assert isinstance(function["description"], str)
+        parameters = function["parameters"]
+        assert is_json_object(parameters)
+        assert parameters["type"] == "object"
+        assert isinstance(parameters["properties"], dict)
+        tool_names.append(name)
+    assert tuple(tool_names) == EXPECTED_CATALOG_NAMES
 
 
 def test_existing_agent_tools_monkeypatch_seams_still_exist():

@@ -339,7 +339,6 @@ async def test_extracted_direct_routing_okr_tools_use_modules_not_legacy_facade(
     monkeypatch.setattr(agent_tools, "_get_okr", legacy_fail)
     monkeypatch.setattr(agent_tools, "_update_kr_progress", legacy_fail)
     monkeypatch.setattr(agent_tools, "_generate_okr_report", legacy_fail)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
     monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
     monkeypatch.setattr(activity_logger, "log_activity", _noop_log_activity)

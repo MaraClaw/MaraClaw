@@ -2,38 +2,51 @@
 
 from __future__ import annotations
 
-import importlib
 import uuid
 
 from app.services.agent_tool_exec.registry import ToolArguments, ToolOutputCallback, register
 
 
 def _agent_tools():
-    return importlib.import_module("app.services.agent_tools")
+    from app.services import agent_tools
+
+    return agent_tools
 
 
 def _mcp_tools():
-    return importlib.import_module("app.services.agent_tool_exec.mcp_tools")
+    from app.services.agent_tool_exec import mcp_tools
+
+    return mcp_tools
 
 
 def _okr_read():
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_read")
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_read
+
+    return _agent_tool_exec_okr_read
 
 
 def _okr_write():
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_write")
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return _agent_tool_exec_okr_write
 
 
 def _okr_reports():
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_okr_reports")
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
+
+    return _agent_tool_exec_okr_reports
 
 
 def _deploy():
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_deploy")
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy
+
+    return _agent_tool_exec_deploy
 
 
 def _deploy_ops():
-    return importlib.import_module("app.services.agent_tool_exec._agent_tool_exec_deploy_ops")
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy_ops
+
+    return _agent_tool_exec_deploy_ops
 
 
 @register("manage_tasks")

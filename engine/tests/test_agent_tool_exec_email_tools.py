@@ -323,15 +323,9 @@ async def test_dispatcher_routes_literal_email_tool_to_facade(monkeypatch: pytes
     async def log_activity(*_: object, **__: object) -> None:
         return None
 
-    facade = SimpleNamespace(
-        FINISH_TOOL_NAME="finish",
-        _get_agent_tenant_id=tenant_lookup,
-        _agent_workspace_root=lambda _: tmp_path,
-        resolve_tool_handler=lambda _: None,
-        _handle_email_tool=handle,
-    )
-    monkeypatch.setattr(dispatcher, "agent_tools", facade)
-    monkeypatch.setattr(dispatcher, "_TOOL_AUTONOMY_MAP", {})
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _: tmp_path)
+    monkeypatch.setattr(agent_tools, "_handle_email_tool", handle)
     monkeypatch.setitem(sys.modules, "app.services.activity_logger", SimpleNamespace(log_activity=log_activity))
 
     result = await dispatcher.execute_tool("send_email", arguments, agent_id, user_id)

@@ -4,8 +4,10 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import agent_tools
-from app.services.agent_tool_exec import channel_context, channel_messaging, dispatcher
+from app.services.agent_tool_exec import channel_context, channel_messaging, dispatcher, registry
 
 
 def test_okr_daily_collection_uses_platform_messaging_owner():
@@ -88,15 +90,52 @@ async def test_channel_platform_user_reroutes_once_through_the_facade(monkeypatc
     assert calls[0][1] == {"username": "Alex", "message": "hello"}
 
 
-def test_dispatcher_keeps_literal_platform_channel_and_file_routes():
-    source = inspect.getsource(dispatcher.execute_tool)
+@pytest.mark.parametrize("name", ["send_platform_message", "send_channel_message", "send_channel_file"])
+async def test_dispatcher_routes_messages_and_files_through_registered_handlers(monkeypatch, tmp_path, name):
+    # Given: registered messaging handlers and a tenant-scoped workspace.
+    from app.dao import agent_dao
+    from app.services import activity_logger
+    from app.services.agent_tool_exec import channel_files
 
-    assert 'tool_name == "send_platform_message"' in source
-    assert "agent_tools._send_platform_message(agent_id, arguments)" in source
-    assert 'tool_name == "send_channel_message"' in source
-    assert "agent_tools._send_channel_message(agent_id, arguments)" in source
-    assert 'tool_name == "send_channel_file"' in source
-    assert "_send_channel_file(agent_id, temp_ws, arguments)" in source
+    agent_id = uuid.uuid4()
+    arguments: registry.ToolArguments = {"file_path": "report.txt", "message": "ready"}
+    calls = []
+    workspaces = []
+
+    async def tenant_lookup(_agent_id):
+        return "tenant-im"
+
+    async def no_agent(_agent_id):
+        return None
+
+    async def send(*args):
+        calls.append(args)
+        return "sent through registry"
+
+    async def workspace(_agent_id, tenant_id, callback, *, paths, sync_back=False):
+        workspaces.append((_agent_id, tenant_id, paths, sync_back))
+        return await callback(tmp_path)
+
+    async def log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _: tmp_path)
+    monkeypatch.setattr(agent_dao, "get", no_agent)
+    owner = channel_files if name == "send_channel_file" else agent_tools
+    monkeypatch.setattr(owner, f"_{name}", send)
+    monkeypatch.setattr(agent_tools, "_run_with_temp_workspace", workspace)
+    monkeypatch.setattr(activity_logger, "log_activity", log)
+    # When: the public dispatcher executes the tool normally.
+    result = await dispatcher.execute_tool(name, arguments, agent_id, uuid.uuid4())
+    # Then: each registered route delegates once with the original arguments.
+    assert result == "sent through registry"
+    if name == "send_channel_file":
+        assert calls == [(agent_id, tmp_path, arguments)]
+        assert workspaces == [(agent_id, "tenant-im", ["report.txt"], False)]
+    else:
+        assert calls == [(agent_id, arguments)]
+        assert workspaces == []
 
 
 async def test_channel_file_uses_the_facade_context_callback(tmp_path: Path):

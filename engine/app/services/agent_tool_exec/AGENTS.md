@@ -17,9 +17,9 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 
 ## Placement
 
-- Put new execution handlers here when they can be isolated from legacy `agent_tools.py` branching.
+- Put new execution handlers here and register them; do not add duplicate dispatch branches.
 - Register in `_agent_tool_exec_<family>.py` (side-effect imported from `agent_tools.py`). Put implementation in the unprefixed family module (`workspace_*.py`, `feishu_*.py`, …).
-- `_agent_tool_exec_leftover.py` registers plaza / publish / clawhub / email / tasks / images / code / channel send / MCP discover-import / OKR / deploy. Those names are also still in `dispatcher.py` `elif`s because several tests force `resolve_tool_handler = None`. New work: add `@register` here; do not grow the leftover file or the facade.
+- `_agent_tool_exec_leftover.py` registers plaza / publish / clawhub / email / tasks / images / code / channel send / MCP discover-import / OKR / deploy. `dispatcher.py` resolves registered handlers, otherwise executes MCP tools; there are no duplicate builtin fallbacks. New work: add `@register` here; do not grow the leftover file or the facade.
 - Keep tool catalog metadata in `app/services/tool_definitions/` (seed) and `app/services/agent_tools_definitions/` (OpenAI shapes).
 - Avoid importing route modules or FastAPI dependencies here; handlers should stay service-layer code.
 

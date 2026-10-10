@@ -400,7 +400,6 @@ async def test_dispatcher_routes_literal_clawhub_name_and_direct_rejects_it(
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant)
     monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _agent_id: tmp_path)
     monkeypatch.setattr(agent_tools, "_search_clawhub", search)
-    monkeypatch.setattr(agent_tools, "resolve_tool_handler", lambda _tool_name: None)
     monkeypatch.setitem(sys.modules, "app.services.activity_logger", SimpleNamespace(log_activity=log_activity))
 
     assert await agent_tools.execute_tool("search_clawhub", arguments, agent_id, uuid.uuid4()) == "routed"
