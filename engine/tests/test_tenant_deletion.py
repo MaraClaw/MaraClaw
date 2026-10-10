@@ -8,10 +8,12 @@ from fastapi import HTTPException
 
 from app.api import tenants as tenants_api
 from app.dao.tenant_dao import TenantDAO
+from app.records.user import UserRecord
 
 
-def make_user(tenant_id: uuid.UUID, role: str = "org_admin"):
-    return SimpleNamespace(
+def make_user(tenant_id: uuid.UUID, role: str = "org_admin") -> UserRecord:
+    return UserRecord(
+        id=uuid.uuid4(),
         display_name="Tenant deletion test user",
         role=role,
         tenant_id=tenant_id,
@@ -95,7 +97,7 @@ async def test_delete_tenant_does_not_fallback_when_cleanup_fails(monkeypatch) -
     tenant_id = uuid.uuid4()
 
     async def fake_get(_id):
-        return SimpleNamespace(id=_id)
+        return SimpleNamespace(id=_id, name="Acme")
 
     async def fake_delete(_id):
         raise RuntimeError("cleanup failed")

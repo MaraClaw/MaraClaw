@@ -294,6 +294,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             ),
             "DELETE FROM agent_tools WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
             "DELETE FROM agents WHERE tenant_id = %(tid)s",
+            "DELETE FROM skill_files WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = %(tid)s)",
             "DELETE FROM skills WHERE tenant_id = %(tid)s",
             "DELETE FROM llm_models WHERE tenant_id = %(tid)s",
             "DELETE FROM identity_providers WHERE tenant_id = %(tid)s",
@@ -304,6 +305,14 @@ class TenantDAO(BaseDAO[TenantRecord]):
             "DELETE FROM org_members WHERE tenant_id = %(tid)s",
             "DELETE FROM org_departments WHERE tenant_id = %(tid)s",
             "DELETE FROM invitation_codes WHERE tenant_id = %(tid)s",
+            (
+                "UPDATE agent_templates SET created_by = NULL "
+                + "WHERE created_by IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
+            ),
+            (
+                "UPDATE enterprise_info SET updated_by = NULL "
+                + "WHERE updated_by IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
+            ),
             "DELETE FROM users WHERE tenant_id = %(tid)s",
             "DELETE FROM tenants WHERE id = %(tid)s",
         ]
