@@ -68,30 +68,35 @@ function rangeQuery(params: SearchAnalyticsQuery, extra?: Record<string, string>
 
 export async function getSearchAnalyticsSummary(
   params: SearchAnalyticsQuery,
+  signal?: AbortSignal,
 ): Promise<SearchAnalyticsSummary> {
-  return apiRequest<SearchAnalyticsSummary>(`/api/admin/search-analytics/summary${rangeQuery(params)}`)
+  return apiRequest<SearchAnalyticsSummary>(`/api/admin/search-analytics/summary${rangeQuery(params)}`, { signal })
 }
 
 export async function getSearchAnalyticsTimeseries(
   params: SearchAnalyticsQuery,
+  signal?: AbortSignal,
 ): Promise<SearchAnalyticsPoint[]> {
-  return apiRequest<SearchAnalyticsPoint[]>(`/api/admin/search-analytics/timeseries${rangeQuery(params)}`)
+  return apiRequest<SearchAnalyticsPoint[]>(`/api/admin/search-analytics/timeseries${rangeQuery(params)}`, { signal })
 }
 
 export async function getSearchAnalyticsOrgs(
   params: SearchAnalyticsQuery,
+  signal?: AbortSignal,
 ): Promise<SearchAnalyticsOrg[]> {
-  return apiRequest<SearchAnalyticsOrg[]>(`/api/admin/search-analytics/orgs${rangeQuery(params)}`)
+  return apiRequest<SearchAnalyticsOrg[]>(`/api/admin/search-analytics/orgs${rangeQuery(params)}`, { signal })
 }
 
 export async function getSearchAnalyticsTrending(
   params: SearchAnalyticsQuery,
+  signal?: AbortSignal,
 ): Promise<SearchAnalyticsTrend[]> {
   return apiRequest<SearchAnalyticsTrend[]>(
     `/api/admin/search-analytics/trending${rangeQuery(params)}`,
+    { signal },
   )
 }
 
-export async function getSearchAnalyticsExportStatus(): Promise<SearchAnalyticsExportStatus> {
-  return apiRequest<SearchAnalyticsExportStatus>('/api/admin/search-analytics/export-status')
+export async function getSearchAnalyticsExportStatus(signal?: AbortSignal): Promise<SearchAnalyticsExportStatus> {
+  return apiRequest<SearchAnalyticsExportStatus>('/api/admin/search-analytics/export-status', { signal })
 }

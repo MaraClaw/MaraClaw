@@ -94,30 +94,30 @@ export function SearchEngineAnalytics() {
   const window = useMemo(() => rangeFor(range), [range])
   const scoped = { ...window, tenantId: tenantId || undefined }
 
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: () => listCompanies() })
+  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: ({ signal }) => listCompanies(undefined, signal) })
   const systemSummary = useQuery({
     queryKey: ['admin-search-analytics-summary', window, 'system'],
-    queryFn: () => getSearchAnalyticsSummary(window),
+    queryFn: ({ signal }) => getSearchAnalyticsSummary(window, signal),
   })
   const summary = useQuery({
     queryKey: ['admin-search-analytics-summary', scoped],
-    queryFn: () => getSearchAnalyticsSummary(scoped),
+    queryFn: ({ signal }) => getSearchAnalyticsSummary(scoped, signal),
   })
   const series = useQuery({
     queryKey: ['admin-search-analytics-timeseries', scoped],
-    queryFn: () => getSearchAnalyticsTimeseries(scoped),
+    queryFn: ({ signal }) => getSearchAnalyticsTimeseries(scoped, signal),
   })
   const orgs = useQuery({
     queryKey: ['admin-search-analytics-orgs', window],
-    queryFn: () => getSearchAnalyticsOrgs(window),
+    queryFn: ({ signal }) => getSearchAnalyticsOrgs(window, signal),
   })
   const trending = useQuery({
     queryKey: ['admin-search-analytics-trending', scoped],
-    queryFn: () => getSearchAnalyticsTrending(scoped),
+    queryFn: ({ signal }) => getSearchAnalyticsTrending(scoped, signal),
   })
   const exportStatus = useQuery({
     queryKey: ['admin-search-analytics-export'],
-    queryFn: getSearchAnalyticsExportStatus,
+    queryFn: ({ signal }) => getSearchAnalyticsExportStatus(signal),
   })
 
   const error =
@@ -348,11 +348,11 @@ export function SearchAnalyticsSnapshot() {
   const window = useMemo(() => rangeFor('7'), [])
   const summary = useQuery({
     queryKey: ['admin-search-analytics-summary', window, 'system'],
-    queryFn: () => getSearchAnalyticsSummary(window),
+    queryFn: ({ signal }) => getSearchAnalyticsSummary(window, signal),
   })
   const orgs = useQuery({
     queryKey: ['admin-search-analytics-orgs', window],
-    queryFn: () => getSearchAnalyticsOrgs(window),
+    queryFn: ({ signal }) => getSearchAnalyticsOrgs(window, signal),
   })
   const data = summary.data
   const top = (orgs.data ?? []).slice(0, 3)
