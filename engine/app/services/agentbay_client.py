@@ -745,7 +745,7 @@ async def check_agentbay_channel(
         return {"ok": False, "error": str(e)}
 
 
-async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, session_id: str = "") -> AgentBayClient:
+async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, session_id: str) -> AgentBayClient:
     """Get or create AgentBay client for agent.
 
     Sessions are cached per (agent_id, session_id, image_type) so that each
@@ -756,8 +756,7 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
     Args:
         agent_id: The agent UUID.
         image_type: One of 'browser', 'computer', 'code'.
-        session_id: The ChatSession ID. Defaults to '' for backward compat
-                    (e.g. check_agentbay_channel, single-session callers).
+        session_id: Explicit ChatSession ID, or '' for non-chat callers.
     """
 
     now = datetime.now(UTC)
