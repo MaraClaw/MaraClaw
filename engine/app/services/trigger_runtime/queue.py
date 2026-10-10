@@ -12,7 +12,6 @@ from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 
 
 async def enqueue_trigger_execution(
-    db: object | None,
     *,
     trigger: AgentTriggerRecord,
     source: str,
@@ -21,11 +20,8 @@ async def enqueue_trigger_execution(
     payload_obj: JsonObject | None = None,
 ) -> tuple[TriggerExecutionRecord | None, bool]:
     """Insert a generic trigger execution record.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     ``trigger`` may be an ORM model or record; only ``id`` and ``agent_id`` are read.
     """
-    del db
     return await trigger_execution_dao.try_enqueue(
         obj_in={
             "id": uuid4(),
@@ -42,7 +38,6 @@ async def enqueue_trigger_execution(
 
 
 async def enqueue_webhook_execution(
-    db: object | None,
     *,
     trigger: AgentTriggerRecord,
     body: bytes,
@@ -64,7 +59,6 @@ async def enqueue_webhook_execution(
     )[:255]
 
     return await enqueue_trigger_execution(
-        db,
         trigger=trigger,
         source="webhook",
         idempotency_key=delivery_key,

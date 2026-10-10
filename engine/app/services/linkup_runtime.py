@@ -98,13 +98,11 @@ def _package_files(package_dir: Path) -> list[tuple[str, str]]:
     return files
 
 
-async def seed_linkup_skills(db: object | None = None) -> int:
+async def seed_linkup_skills() -> int:
     """Idempotently seed vendored Linkup skills as builtin default skills.
 
     Returns the number of skill packages processed.
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
-    del db
 
     default_folders = set(linkup_default_skill_folder_names())
     processed = 0

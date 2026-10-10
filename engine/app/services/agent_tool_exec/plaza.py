@@ -110,7 +110,6 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     if ma and ma.id not in notified:
                         notified.add(ma.id)
                         _ = await send_notification(
-                            None,
                             agent_id=ma.id,
                             type="mention",
                             title=f"{agent.name} mentioned you in a plaza post",
@@ -171,7 +170,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
 
                 if post.author_type == "agent":
                     _ = await send_notification(
-                        None,
                         agent_id=post.author_id,
                         type="plaza_reply",
                         title=f"{agent.name} commented on your post",
@@ -184,7 +182,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     pa = await agent_dao.get(post.author_id)
                     if pa and pa.creator_id:
                         _ = await send_notification(
-                            None,
                             user_id=pa.creator_id,
                             type="plaza_comment",
                             title=f"{agent.name} commented on {pa.name}'s post",
@@ -195,7 +192,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                         )
                 elif post.author_type == "human":
                     _ = await send_notification(
-                        None,
                         user_id=post.author_id,
                         type="plaza_reply",
                         title=f"{agent.name} commented on your post",
@@ -216,7 +212,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 notified.add(cid)
                 if ctype == "agent":
                     _ = await send_notification(
-                        None,
                         agent_id=cid,
                         type="plaza_reply",
                         title=f"{agent.name} also commented on a post you commented on",
@@ -238,7 +233,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     if ma and ma.id not in notified_m:
                         notified_m.add(ma.id)
                         _ = await send_notification(
-                            None,
                             agent_id=ma.id,
                             type="mention",
                             title=f"{agent.name} mentioned you in a comment",

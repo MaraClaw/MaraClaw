@@ -100,7 +100,6 @@ async def broadcast_notification(
     req: BroadcastRequest,
     background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ) -> dict[str, Any]:
     """Send a notification to all users and agents in the current tenant.
     Requires org_admin or platform_admin role."""
@@ -121,7 +120,7 @@ async def broadcast_notification(
     if req.send_email:
         from app.services.system_email_service import resolve_email_config_async
 
-        email_config = await resolve_email_config_async(db)
+        email_config = await resolve_email_config_async()
         if not email_config:
             raise HTTPException(400, "System email is not configured. Please configure it in Platform Settings.")
 
@@ -132,7 +131,6 @@ async def broadcast_notification(
     )
     for user in users:
         _ = await send_notification(
-            None,
             user_id=user.id,
             type="broadcast",
             title=req.title,
@@ -144,7 +142,6 @@ async def broadcast_notification(
     agents = await agent_dao.list_for_tenant(tenant_id)
     for agent in agents:
         _ = await send_notification(
-            None,
             agent_id=agent.id,
             type="broadcast",
             title=req.title,

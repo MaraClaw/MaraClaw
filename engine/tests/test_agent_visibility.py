@@ -84,7 +84,7 @@ async def test_agent_relationship_status_requires_original_creator_to_still_mana
         target_agent=target,
     )
 
-    async def cannot_manage(_db, _user_id, _agent):
+    async def cannot_manage(_user_id, _agent):
         return False
 
     async def get_agent(agent_id):
@@ -95,7 +95,6 @@ async def test_agent_relationship_status_requires_original_creator_to_still_mana
     monkeypatch.setattr(permissions.agent_dao, "get", get_agent)
 
     status = await permissions.evaluate_agent_relationship_status(
-        None,
         rel,
         current_user_id=uuid.uuid4(),
     )
@@ -132,7 +131,7 @@ async def test_agent_relationship_status_active_when_original_creator_still_mana
         target_agent=target,
     )
 
-    async def can_manage(_db, user_id, _agent):
+    async def can_manage(user_id, _agent):
         return user_id == creator_id
 
     async def get_agent(agent_id):
@@ -143,7 +142,6 @@ async def test_agent_relationship_status_active_when_original_creator_still_mana
     monkeypatch.setattr(permissions.agent_dao, "get", get_agent)
 
     status = await permissions.evaluate_agent_relationship_status(
-        None,
         rel,
     )
 

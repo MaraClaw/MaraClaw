@@ -50,13 +50,13 @@ def _install_candidate_dependencies(monkeypatch: pytest.MonkeyPatch, rows: tuple
     agent = CandidateAgent(tenant_id=tenant_id)
     current_user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="org_admin")
 
-    async def check_access(_user: Any, _agent_id: uuid.UUID, _db: Any = None) -> tuple[CandidateAgent, str]:
+    async def check_access(_user: Any, _agent_id: uuid.UUID) -> tuple[CandidateAgent, str]:
         return agent, "manage"
 
-    async def department_paths(_db: Any, _members: list[CandidateMember]) -> dict[uuid.UUID, str]:
+    async def department_paths(_members: list[CandidateMember]) -> dict[uuid.UUID, str]:
         return {}
 
-    async def platform_access(_db: Any, _user_id: uuid.UUID, _agent: CandidateAgent) -> str:
+    async def platform_access(_user_id: uuid.UUID, _agent: CandidateAgent) -> str:
         return "manage"
 
     async def list_candidates(**_kwargs: Any) -> list[CandidateRow]:

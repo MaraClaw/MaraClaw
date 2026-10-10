@@ -352,7 +352,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     agent = SimpleNamespace(id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
 
     # When
-    container_id = await manager.start_container(db=SimpleNamespace(), agent=agent)
+    container_id = await manager.start_container(agent=agent)
 
     # Then
     assert container_id == "container-1234567890"
@@ -418,7 +418,7 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     agent = SimpleNamespace(id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
 
-    container_id = await manager.start_container(db=SimpleNamespace(), agent=agent)
+    container_id = await manager.start_container(agent=agent)
 
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
@@ -448,7 +448,7 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
     agent = SimpleNamespace(id=agent_id, name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None)
 
     # When
-    container_id = await manager.start_container(db=SimpleNamespace(), agent=agent)
+    container_id = await manager.start_container(agent=agent)
 
     # Then
     assert container_id is None

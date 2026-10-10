@@ -87,7 +87,7 @@ async def test_get_wecom_channel_reports_runtime_websocket_status(monkeypatch):
     agent_id = uuid.uuid4()
     config = make_channel(agent_id, connection_mode="websocket")
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return AgentRecord(id=agent_id, name="Agent", creator_id=uuid.uuid4()), None
 
     async def fake_get_for_agent(*, agent_id: uuid.UUID, channel_type: str):
@@ -116,7 +116,7 @@ async def test_get_wecom_channel_marks_webhook_mode_disconnected(monkeypatch):
     agent_id = uuid.uuid4()
     config = make_channel(agent_id, connection_mode="webhook")
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return AgentRecord(id=agent_id, name="Agent", creator_id=uuid.uuid4()), None
 
     async def fake_get_for_agent(*, agent_id: uuid.UUID, channel_type: str):
@@ -143,7 +143,7 @@ async def test_delete_wecom_channel_stops_runtime_client(monkeypatch):
     deleted_ids: list[uuid.UUID] = []
     creator = make_user()
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return AgentRecord(id=agent_id, name="Agent", creator_id=creator.id), None
 
     async def fake_stop_client(aid):

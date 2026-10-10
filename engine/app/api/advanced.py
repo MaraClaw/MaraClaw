@@ -39,12 +39,10 @@ class InterAgentMessage(BaseModel):
 
 
 @router.get("/agents/{agent_id}/collaborators")
-async def list_collaborators(
-    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-):
+async def list_collaborators(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     """List agents that can collaborate with this agent."""
     _ = await check_agent_access(current_user, agent_id)
-    return await collaboration_service.list_collaborators(db, agent_id)
+    return await collaboration_service.list_collaborators(agent_id)
 
 
 @router.post("/agents/{agent_id}/collaborate/delegate")
@@ -52,13 +50,12 @@ async def delegate_task(
     agent_id: uuid.UUID,
     data: DelegateRequest,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     """Delegate a task from one agent to another."""
     _ = await check_agent_access(current_user, agent_id)
     try:
         return await collaboration_service.delegate_task(
-            db, agent_id, data.to_agent_id, data.task_title, data.task_description
+            agent_id, data.to_agent_id, data.task_title, data.task_description
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -69,12 +66,11 @@ async def send_inter_agent_message(
     agent_id: uuid.UUID,
     data: InterAgentMessage,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     """Send a message between agents."""
     _ = await check_agent_access(current_user, agent_id)
     return await collaboration_service.send_message_between_agents(
-        db, agent_id, data.to_agent_id, data.message, data.msg_type
+        agent_id, data.to_agent_id, data.message, data.msg_type
     )
 
 

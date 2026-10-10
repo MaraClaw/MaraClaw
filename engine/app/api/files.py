@@ -202,7 +202,6 @@ def _visible_storage_key(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUI
 
 
 async def _require_agent_file_delete_access(
-    db: object | None,
     current_user: UserRecord,
     agent_id: uuid.UUID,
 ) -> None:
@@ -430,7 +429,7 @@ async def _read_storage_companion(
             if not await storage.is_file(key):
                 continue
             content = await storage.read_text(key, encoding="utf-8", errors="replace")
-        except (OSError, UnicodeError, HTTPException):
+        except OSError, UnicodeError, HTTPException:
             continue
         if content:
             return content, rel
@@ -707,7 +706,6 @@ async def write_file(
     path: str,
     data: FileWrite,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ) -> dict[str, Any]:
     """Write content to a file (create or overwrite)."""
     _ = await check_agent_access(current_user, agent_id)
@@ -728,7 +726,6 @@ async def write_file(
         return {"status": "ok", "path": path, "revision_id": None}
 
     result = await write_workspace_file(
-        db,
         agent_id=agent_id,
         base_dir=_agent_base_dir(agent_id),
         path=path,
@@ -751,14 +748,12 @@ async def lock_file(
     agent_id: uuid.UUID,
     data: FileLockBody,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     """Acquire or refresh a short-lived human editing lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(data.path):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Focus is stored in the system database.")
     lock = await acquire_edit_lock(
-        db,
         agent_id=agent_id,
         path=data.path,
         user_id=current_user.id,
@@ -768,18 +763,16 @@ async def lock_file(
 
 
 @router.delete("/locks")
-async def unlock_file(
-    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-):
+async def unlock_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)):
     """Release the current user's edit lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
-    await release_edit_lock(db, agent_id=agent_id, path=path, user_id=current_user.id)
+    await release_edit_lock(agent_id=agent_id, path=path, user_id=current_user.id)
     return {"status": "ok", "path": path}
 
 
 @router.get("/revisions")
 async def get_file_revisions(
-    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
 ) -> list[dict[str, Any]]:
     """List version history for the currently opened Workspace file."""
     _ = await check_agent_access(current_user, agent_id)
@@ -787,7 +780,7 @@ async def get_file_revisions(
         return []
     if path.startswith("enterprise_info"):
         return []
-    revisions = await list_revisions(db, agent_id=agent_id, path=path)
+    revisions = await list_revisions(agent_id=agent_id, path=path)
     return [
         {
             "id": str(rev.id),
@@ -810,7 +803,6 @@ async def restore_file_revision(
     agent_id: uuid.UUID,
     data: RestoreRevisionBody,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ) -> dict[str, Any]:
     """Restore a file to a previous revision's after-content."""
     _ = await check_agent_access(current_user, agent_id)
@@ -821,7 +813,6 @@ async def restore_file_revision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore an empty/deleted revision")
 
     restored = await write_workspace_file(
-        db,
         agent_id=agent_id,
         base_dir=_agent_base_dir(agent_id),
         path=revision.path,
@@ -843,10 +834,9 @@ async def delete_file(
     path: str,
     expected_version_token: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     """Delete a file."""
-    await _require_agent_file_delete_access(db, current_user, agent_id)
+    await _require_agent_file_delete_access(current_user, agent_id)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -857,7 +847,6 @@ async def delete_file(
     if path.strip("/") == "enterprise_info":
         raise HTTPException(status_code=400, detail="Cannot delete enterprise_info root")
     result = await delete_workspace_file(
-        db,
         agent_id=agent_id,
         base_dir=_agent_base_dir(agent_id),
         path=path,

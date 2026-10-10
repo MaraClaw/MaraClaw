@@ -251,7 +251,6 @@ class DiscordGatewayManager:
             _extra_info = {"name": _display}
 
             _platform_user = await channel_user_service.resolve_channel_user(
-                db=None,
                 agent=agent_obj,
                 channel_type="discord",
                 external_user_id=sender_id,
@@ -271,7 +270,6 @@ class DiscordGatewayManager:
             platform_user_id = _platform_user.id
 
             sess = await find_or_create_channel_session(
-                db=None,
                 agent_id=agent_id,
                 user_id=platform_user_id,
                 external_conv_id=conv_id,
@@ -296,7 +294,7 @@ class DiscordGatewayManager:
             )
             _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
             from app.services.channels import inbound as channel_inbound
 

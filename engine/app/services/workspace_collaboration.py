@@ -119,28 +119,19 @@ async def read_text_if_exists(path: Path) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
-async def cleanup_expired_locks(db: object | None = None) -> None:
-    """Remove stale edit locks.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+async def cleanup_expired_locks() -> None:
+    """Remove stale edit locks."""
     _ = await workspace_edit_lock_dao.delete_expired(now=datetime.now(UTC))
 
 
 async def acquire_edit_lock(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
     user_id: uuid.UUID,
     session_id: str | None = None,
 ) -> WorkspaceEditLockRecord:
-    """Acquire or refresh a human edit lock.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Acquire or refresh a human edit lock."""
     await cleanup_expired_locks()
     normalized = normalize_workspace_path(path)
     now = datetime.now(UTC)
@@ -155,17 +146,12 @@ async def acquire_edit_lock(
 
 
 async def release_edit_lock(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
     user_id: uuid.UUID,
 ) -> None:
-    """Release a human edit lock owned by a user.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Release a human edit lock owned by a user."""
     await workspace_edit_lock_dao.delete_for_user_path(
         agent_id=agent_id,
         path=normalize_workspace_path(path),
@@ -174,22 +160,16 @@ async def release_edit_lock(
 
 
 async def get_active_lock(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
 ) -> WorkspaceEditLockRecord | None:
-    """Return an active lock for a file, if present.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Return an active lock for a file, if present."""
     await cleanup_expired_locks()
     return await workspace_edit_lock_dao.get_for_path(agent_id, normalize_workspace_path(path))
 
 
 async def record_revision(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
@@ -201,11 +181,7 @@ async def record_revision(
     session_id: str | None = None,
     merge_user_autosave: bool = False,
 ) -> WorkspaceFileRevisionRecord | None:
-    """Record a revision, optionally merging rapid user autosaves.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Record a revision, optionally merging rapid user autosaves."""
     normalized = normalize_workspace_path(path)
     # PostgreSQL text columns cannot store NUL bytes. Treat such content as
     # non-text revision data so binary files can still be moved/deleted safely.
@@ -254,7 +230,6 @@ async def record_revision(
 
 
 async def write_workspace_file(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -268,11 +243,7 @@ async def write_workspace_file(
     merge_user_autosave: bool = False,
     expected_version_token: str | None = None,
 ) -> WorkspaceWriteResult:
-    """Write text content, enforcing human locks for agent/system actors.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Write text content, enforcing human locks for agent/system actors."""
     normalized = normalize_workspace_path(path)
     if not normalized:
         return WorkspaceWriteResult(False, normalized, "Missing file path")
@@ -339,7 +310,6 @@ async def write_workspace_file(
 
 
 async def delete_workspace_file(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -350,11 +320,7 @@ async def delete_workspace_file(
     enforce_human_lock: bool = True,
     expected_version_token: str | None = None,
 ) -> WorkspaceWriteResult:
-    """Delete a workspace file and record the deleted content.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Delete a workspace file and record the deleted content."""
     normalized = normalize_workspace_path(path)
     storage = get_storage_backend()
     storage_key = normalize_storage_key(f"{agent_id}/{normalized}")
@@ -428,7 +394,6 @@ async def delete_workspace_file(
 
 
 async def move_workspace_path(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     base_dir: Path,
@@ -442,11 +407,7 @@ async def move_workspace_path(
     expected_source_version_token: str | None = None,
     expected_destination_version_token: str | None = None,
 ) -> WorkspaceWriteResult:
-    """Move or rename a workspace file/folder while respecting edit locks.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Move or rename a workspace file/folder while respecting edit locks."""
     source_normalized = normalize_workspace_path(source_path)
     destination_normalized = normalize_workspace_path(destination_path)
     if not source_normalized:
@@ -620,17 +581,12 @@ async def _collect_storage_tree_versions(storage: StorageBackend, root_key: str)
 
 
 async def list_revisions(
-    db: object | None = None,
     *,
     agent_id: uuid.UUID,
     path: str,
     limit: int = 50,
 ) -> list[WorkspaceFileRevisionRecord]:
-    """List recent revisions for one file.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """List recent revisions for one file."""
     return list(
         await workspace_file_revision_dao.list_for_path(
             agent_id,

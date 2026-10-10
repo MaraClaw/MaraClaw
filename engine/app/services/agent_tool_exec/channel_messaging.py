@@ -59,7 +59,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
             member = relationship.member
             if not member or member.name != member_name or member.status != "active":
                 continue
-            status_info = await evaluate_human_relationship_status(None, relationship)
+            status_info = await evaluate_human_relationship_status(relationship)
             if status_info["access_status"] == "active":
                 rows.append((relationship, member, _normalize_provider_type(relationship.provider_type)))
 

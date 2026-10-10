@@ -24,7 +24,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "❌ Agent not found"
-        _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=agent.creator_id)
+        _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=agent.creator_id)
 
         # 1. Look up target user by username or display_name within tenant
         target_user = await user_dao.find_by_username_or_display_name(
@@ -42,7 +42,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         rel = await agent_relationship_dao.get_for_agent_and_user(agent_id, target_user.id)
         if not rel:
             return f"❌ {target_user.display_name or target_user.username} is not in your active relationship network"
-        status_info = await evaluate_human_relationship_status(None, rel, source_agent=agent)
+        status_info = await evaluate_human_relationship_status(rel, source_agent=agent)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_user.display_name or target_user.username} "
@@ -52,7 +52,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         # Agent-initiated platform messages should always go to the long-lived primary session
         from app.services.chat_session_service import ensure_primary_platform_session
 
-        session = await ensure_primary_platform_session(None, agent_id, target_user.id)
+        session = await ensure_primary_platform_session(agent_id, target_user.id)
 
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
@@ -67,7 +67,6 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
             from app.api.websocket import maybe_mark_session_read_for_active_viewer
 
             _ = await maybe_mark_session_read_for_active_viewer(
-                None,
                 agent_id=agent_id,
                 session_id=str(session.id),
                 user_id=target_user.id,

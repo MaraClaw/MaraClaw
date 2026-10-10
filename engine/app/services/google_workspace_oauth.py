@@ -60,7 +60,7 @@ def parse_google_oauth_state(state: str) -> tuple[str, tuple[uuid.UUID, ...]] | 
     return kind, values
 
 
-async def get_google_provider(db: object | None, provider_id: uuid.UUID):
+async def get_google_provider(provider_id: uuid.UUID):
     provider = await identity_provider_dao.get(provider_id)
     if not provider or provider.provider_type != "google_workspace":
         raise HTTPException(status_code=404, detail="Google Workspace provider not found")
@@ -68,7 +68,6 @@ async def get_google_provider(db: object | None, provider_id: uuid.UUID):
 
 
 async def get_google_provider_base_url(
-    db: object | None,
     provider: IdentityProviderRecord,
     request: Request | None = None,
 ) -> str:
@@ -77,15 +76,14 @@ async def get_google_provider_base_url(
         tenant = await tenant_dao.get(provider.tenant_id)
     if tenant:
         return await platform_service.get_tenant_sso_base_url(tenant, request)
-    return await platform_service.get_public_base_url(db, request)
+    return await platform_service.get_public_base_url(request)
 
 
 async def get_google_redirect_uri(
-    db: object | None,
     provider: IdentityProviderRecord,
     request: Request | None = None,
 ) -> str:
-    base_url = await get_google_provider_base_url(db, provider, request)
+    base_url = await get_google_provider_base_url(provider, request)
     return f"{base_url}/api{GOOGLE_CALLBACK_PATH}"
 
 

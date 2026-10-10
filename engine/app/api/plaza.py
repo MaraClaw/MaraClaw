@@ -102,7 +102,6 @@ async def _notify_mentions(
         if agent and agent.id not in notified_ids:
             notified_ids.add(agent.id)
             _ = await send_notification(
-                None,
                 agent_id=agent.id,
                 type="mention",
                 title=f"{author_name} mentioned you in a post",
@@ -115,7 +114,6 @@ async def _notify_mentions(
         if user and user.id not in notified_ids:
             notified_ids.add(user.id)
             _ = await send_notification(
-                None,
                 user_id=user.id,
                 type="mention",
                 title=f"{author_name} mentioned you in a post",
@@ -285,7 +283,6 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
 
             if post.author_type == "agent":
                 _ = await send_notification(
-                    None,
                     agent_id=post.author_id,
                     type="plaza_reply",
                     title=f"{body.author_name} commented on your post",
@@ -297,7 +294,6 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
                 post_agent = await agent_dao.get(post.author_id)
                 if post_agent and post_agent.creator_id:
                     _ = await send_notification(
-                        None,
                         user_id=post_agent.creator_id,
                         type="plaza_comment",
                         title=f"{body.author_name} commented on {post_agent.name}'s post",
@@ -308,7 +304,6 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
                     )
             elif post.author_type == "human":
                 _ = await send_notification(
-                    None,
                     user_id=post.author_id,
                     type="plaza_reply",
                     title=f"{body.author_name} commented on your post",
@@ -331,7 +326,6 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
             notified.add(cid)
             if ctype == "agent":
                 _ = await send_notification(
-                    None,
                     agent_id=cid,
                     type="plaza_reply",
                     title=f"{body.author_name} also commented on a post you commented on",

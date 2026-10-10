@@ -41,7 +41,6 @@ class CollaborationService:
 
     async def delegate_task(
         self,
-        db: object | None,
         from_agent_id: uuid.UUID,
         to_agent_id: uuid.UUID,
         task_title: str,
@@ -86,7 +85,7 @@ class CollaborationService:
             "status": "delegated",
         }
 
-    async def list_collaborators(self, db: object | None, agent_id: uuid.UUID) -> list[CollaboratorSummary]:
+    async def list_collaborators(self, agent_id: uuid.UUID) -> list[CollaboratorSummary]:
         """List agents that can collaborate with the given agent.
 
         Returns agents from the same enterprise (same creator's org).
@@ -110,7 +109,6 @@ class CollaborationService:
 
     async def send_message_between_agents(
         self,
-        db: object | None,
         from_agent_id: uuid.UUID,
         to_agent_id: uuid.UUID,
         message: str,

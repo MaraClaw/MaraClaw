@@ -177,7 +177,6 @@ async def test_login_or_register_links_existing_user_to_feishu_member_without_le
     }
 
     returned_user, token = await feishu_service_module.feishu_service.login_or_register(
-        None,
         feishu_user,
         str(tenant_id),
     )

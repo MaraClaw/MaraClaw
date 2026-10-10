@@ -94,12 +94,10 @@ def meaningful_config(config: Mapping[str, JsonValue] | None) -> JsonObject:
 
 
 async def get_tenant_tool_config(
-    db: object | None,
     tenant_id: uuid.UUID | None,
     tool_name: str,
     config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
 ) -> JsonObject:
-    del db
     if not tenant_id:
         return {}
     async with connection_ctx() as conn:
@@ -148,13 +146,11 @@ async def get_tenant_tool_configs(
 
 
 async def set_tenant_tool_config(
-    db: object | None,
     tenant_id: uuid.UUID,
     tool_name: str,
     config: Mapping[str, JsonValue],
     config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
 ) -> None:
-    del db
     encrypted = encrypt_sensitive_fields(meaningful_config(config), config_schema)
     stored_value: JsonObject = {"config": encrypted}
     key = tenant_tool_config_key(tool_name)
@@ -176,8 +172,7 @@ async def set_tenant_tool_config(
             )
 
 
-async def delete_tenant_tool_config(db: object | None, tenant_id: uuid.UUID, tool_name: str) -> None:
-    del db
+async def delete_tenant_tool_config(tenant_id: uuid.UUID, tool_name: str) -> None:
     async with connection_ctx() as conn:
         await conn.execute(
             "DELETE FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
@@ -185,10 +180,10 @@ async def delete_tenant_tool_config(db: object | None, tenant_id: uuid.UUID, too
         )
 
 
-async def get_tool_company_config(db: object | None, tool: ToolRecord | Any, tenant_id: uuid.UUID | None) -> JsonObject:
+async def get_tool_company_config(tool: ToolRecord | Any, tenant_id: uuid.UUID | None) -> JsonObject:
     """Return company config for a tool without leaking builtin config across tenants."""
     if getattr(tool, "source", None) == "builtin":
-        return await get_tenant_tool_config(db, tenant_id, tool.name, getattr(tool, "config_schema", None))
+        return await get_tenant_tool_config(tenant_id, tool.name, getattr(tool, "config_schema", None))
     return decrypt_sensitive_fields(getattr(tool, "config", None) or {}, getattr(tool, "config_schema", None))
 
 

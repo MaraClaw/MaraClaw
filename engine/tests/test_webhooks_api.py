@@ -174,7 +174,7 @@ async def test_receive_webhook_success(monkeypatch, client):
     monkeypatch.setattr(webhooks_api, "_record_and_count_hits", fake_record_and_count_hits)
 
     # Mock enqueue_webhook_execution
-    async def fake_enqueue_webhook_execution(db, *, trigger, body, payload_text, payload_obj, request_headers):
+    async def fake_enqueue_webhook_execution(*, trigger, body, payload_text, payload_obj, request_headers):
         return SimpleNamespace(id=uuid.uuid4()), True
 
     monkeypatch.setattr(webhooks_api, "enqueue_webhook_execution", fake_enqueue_webhook_execution)

@@ -43,9 +43,8 @@ class OrgSyncDepartmentMixin:
     provider_type: ClassVar[str]
     tenant_id: uuid.UUID | None
 
-    async def _reconcile(self, db: object | None, provider_id: uuid.UUID, sync_start: datetime):
+    async def _reconcile(self, provider_id: uuid.UUID, sync_start: datetime):
         """Mark records that were not updated in this sync as deleted."""
-        del db
         now = _utcnow()
         async with connection_ctx() as conn:
             await conn.execute(
@@ -61,9 +60,8 @@ class OrgSyncDepartmentMixin:
                 {"provider_id": provider_id, "sync_start": sync_start, "now": now},
             )
 
-    async def _update_member_counts(self, db: object | None, provider_id: uuid.UUID):
+    async def _update_member_counts(self, provider_id: uuid.UUID):
         """Update member_count for all departments to include recursive sub-department members."""
-        del db
         async with connection_ctx() as conn:
             # Direct counts
             await conn.execute(
@@ -114,9 +112,8 @@ class OrgSyncDepartmentMixin:
         for d_id, d_data in dept_map.items():
             await org_department_dao.set_member_count(d_id, d_data["total"])
 
-    async def _ensure_provider(self, db: object | None) -> IdentityProviderRecord:
+    async def _ensure_provider(self) -> IdentityProviderRecord:
         """Ensure IdentityProvider record exists."""
-        del db
         if self.provider:
             return self.provider
 
@@ -157,9 +154,8 @@ class OrgSyncDepartmentMixin:
             self.provider = provider
             return provider
 
-    async def _upsert_department(self, db: object | None, provider: IdentityProviderRecord, dept: ExternalDepartment):
+    async def _upsert_department(self, provider: IdentityProviderRecord, dept: ExternalDepartment):
         """Insert or update a department."""
-        del db
         existing = await org_department_dao.get_by_external(
             external_id=dept.external_id,
             provider_id=provider.id,
@@ -209,9 +205,8 @@ class OrgSyncDepartmentMixin:
                 )
             )
 
-    async def _rebuild_department_paths(self, db: object | None, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
+    async def _rebuild_department_paths(self, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
         """Normalize OrgDepartment.path using parent_id/name reverse derivation."""
-        del db
         departments = list(await org_department_dao.list_for_provider(provider_id))
         path_map = build_department_path_map(departments)
 
@@ -222,9 +217,8 @@ class OrgSyncDepartmentMixin:
 
         return path_map
 
-    async def _refresh_member_department_paths(self, db: object | None, provider_id: uuid.UUID):
+    async def _refresh_member_department_paths(self, provider_id: uuid.UUID):
         """Refresh OrgMember.department_path from the normalized department tree."""
-        del db
         departments = list(await org_department_dao.list_for_provider(provider_id))
         dept_path_map = build_department_path_map(departments)
 

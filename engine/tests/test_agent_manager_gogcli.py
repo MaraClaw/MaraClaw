@@ -92,7 +92,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     restore_calls = []
 
-    async def restore_state(_db, requested_agent_id, restored_agent_dir):
+    async def restore_state(requested_agent_id, restored_agent_dir):
         restore_calls.append(
             (requested_agent_id, restored_agent_dir, gogcli_runtime.gogcli_secret_file(agent_id).exists())
         )
@@ -102,7 +102,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
     agent.gogcli_enabled = True
 
     # When
-    await manager.start_container(db=SimpleNamespace(), agent=agent)
+    await manager.start_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None
@@ -133,7 +133,7 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
     async def materialize_agent_dir(_requested_agent_id):
         return agent_dir
 
-    async def restore_state(_db, requested_agent_id, restored_agent_dir):
+    async def restore_state(requested_agent_id, restored_agent_dir):
         assert requested_agent_id == agent_id
         gogcli_runtime.write_gogcli_keyring_secret(requested_agent_id, "restored password")
         assert restored_agent_dir == agent_dir
@@ -144,7 +144,7 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
     agent.gogcli_enabled = True
 
     # When
-    await manager.start_container(db=SimpleNamespace(), agent=agent)
+    await manager.start_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None
@@ -172,7 +172,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
 
-    async def restore_state(_db, _requested_agent_id, _restored_agent_dir):
+    async def restore_state(_requested_agent_id, _restored_agent_dir):
         msg = "disabled gogcli agents must not restore gogcli credential state"
         raise AssertionError(msg)
 
@@ -181,7 +181,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
     agent.gogcli_enabled = False
 
     # When
-    await manager.start_container(db=SimpleNamespace(), agent=agent)
+    await manager.start_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None

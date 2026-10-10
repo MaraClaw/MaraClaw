@@ -58,18 +58,14 @@ class AuthProviderRegistry:
 
     async def create_provider(
         self,
-        db: object | None,
         provider_type: str,
         name: str,
         config: JsonObject,
         tenant_id: str | None = None,
     ) -> IdentityProviderRecord:
         """Create a new identity provider.
-
-        ``db`` is accepted for call-site compatibility and ignored; the DAO
         manages its own psycopg connection/transaction.
         """
-        del db
         provider = await identity_provider_dao.create(
             obj_in={
                 "provider_type": provider_type,
@@ -84,14 +80,12 @@ class AuthProviderRegistry:
 
     async def update_provider(
         self,
-        db: object | None,
         provider_id: str,
         name: str | None = None,
         config: JsonObject | None = None,
         is_active: bool | None = None,
     ) -> IdentityProviderRecord | None:
         """Update an existing identity provider."""
-        del db
         provider_uuid = as_uuid(provider_id)
         if provider_uuid is None:
             return None
@@ -113,9 +107,8 @@ class AuthProviderRegistry:
         self._clear_cache(provider.provider_type)
         return provider
 
-    async def delete_provider(self, db: object | None, provider_id: str) -> bool:
+    async def delete_provider(self, provider_id: str) -> bool:
         """Delete an identity provider."""
-        del db
         provider_uuid = as_uuid(provider_id)
         if provider_uuid is None:
             return False

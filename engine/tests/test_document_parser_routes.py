@@ -119,7 +119,7 @@ async def test_chat_upload_when_storage_backed_then_retains_original(
     agent_id = str(uuid.uuid4())
     _bind_storage(monkeypatch, storage, tmp_path)
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return make_agent(uuid.uuid4()), "manage"
 
     monkeypatch.setattr(upload_api, "check_agent_access", fake_check_agent_access)
@@ -144,7 +144,7 @@ async def test_agent_upload_when_office_file_then_writes_same_stem_sidecar(
     agent = make_agent(user.id, tenant_id=user.tenant_id)
     storage = LocalStorageBackend(str(tmp_path))
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -194,7 +194,7 @@ async def test_preview_when_docx_then_returns_anydoc_text(monkeypatch: pytest.Mo
     key = f"{agent.id}/{rel}"
     await storage.write_bytes(key, _fixture("supported.docx"))
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -214,7 +214,7 @@ async def test_preview_when_pptx_then_returns_anydoc_text(monkeypatch: pytest.Mo
     rel = "workspace/deck.pptx"
     await storage.write_bytes(f"{agent.id}/{rel}", _fixture("supported.pptx"))
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -232,7 +232,7 @@ async def test_preview_when_pdf_then_keeps_download_payload(monkeypatch: pytest.
     rel = "workspace/notes.pdf"
     await storage.write_bytes(f"{agent.id}/{rel}", _fixture("supported.pdf"))
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -251,7 +251,7 @@ async def test_preview_when_xlsx_then_preserves_sheets_payload(monkeypatch: pyte
     rel = "workspace/metrics.xlsx"
     await storage.write_bytes(f"{agent.id}/{rel}", _fixture("supported.xlsx"))
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -487,7 +487,7 @@ async def test_agent_upload_when_markdown_exists_then_does_not_clobber(
     existing.parent.mkdir(parents=True, exist_ok=True)
     existing.write_text("# hand written\n", encoding="utf-8")
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)
@@ -516,7 +516,7 @@ async def test_preview_when_companion_exists_then_skips_anydoc(monkeypatch: pyte
     companion.parent.mkdir(parents=True, exist_ok=True)
     companion.write_text("sidecar only", encoding="utf-8")
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     def fail_convert(*_args: object, **_kwargs: object) -> str:
@@ -536,7 +536,7 @@ async def test_agent_upload_when_path_collapses_out_of_workspace_then_rejected(
     user = make_user()
     agent = make_agent(user.id, tenant_id=user.tenant_id)
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, LocalStorageBackend(str(tmp_path)), tmp_path)
@@ -589,7 +589,7 @@ async def test_preview_when_xls_openpyxl_fails_then_still_returns_payload(
     rel = "workspace/legacy.xls"
     await storage.write_bytes(f"{agent.id}/{rel}", b"not-a-real-xls")
 
-    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID, _db: object = None) -> object:
+    async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
     _bind_storage(monkeypatch, storage, tmp_path)

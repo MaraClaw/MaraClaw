@@ -145,7 +145,7 @@ class CategoryConfigUpdate(BaseModel):
 # ─── Global Tool CRUD ──────────────────────────────────────
 @router.get("")
 async def list_tools(
-    tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> list[dict[str, object]]:
     """List platform tools scoped by tenant (builtin + tenant-specific)."""
     target_tenant_id = _resolve_target_tenant_id(current_user, tenant_id)
@@ -159,7 +159,7 @@ async def list_tools(
         if t.source == "builtin":
             raw_config = builtin_configs.get(t.name, {})
         else:
-            raw_config = await get_tool_company_config(db, t, target_tenant_id)
+            raw_config = await get_tool_company_config(t, target_tenant_id)
         company_config = mask_sensitive_fields(raw_config, t.config_schema)
         response.append(
             {
@@ -247,9 +247,7 @@ async def update_tools_bulk(updates: list[BulkToolUpdateItem], current_user: Use
 
 
 @router.put("/{tool_id}")
-async def update_tool(
-    tool_id: uuid.UUID, data: ToolUpdate, current_user: UserRecord = Depends(get_current_user), db: object | None = None
-):
+async def update_tool(tool_id: uuid.UUID, data: ToolUpdate, current_user: UserRecord = Depends(get_current_user)):
     """Update a tool."""
     _require_catalog_manager(current_user)
     tool = await tool_dao.get(tool_id)
@@ -269,7 +267,7 @@ async def update_tool(
         if tool.source == "builtin":
             if not target_tenant_id:
                 raise HTTPException(status_code=400, detail="tenant_id is required to configure builtin tools")
-            await set_tenant_tool_config(db, target_tenant_id, tool.name, config_value, tool.config_schema)
+            await set_tenant_tool_config(target_tenant_id, tool.name, config_value, tool.config_schema)
         else:
             update_data["config"] = _encrypt_sensitive_fields(config_value, tool.config_schema)
 
@@ -536,7 +534,6 @@ async def get_agent_tool_config(
     agent_id: uuid.UUID,
     tool_id: uuid.UUID,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ) -> dict[str, object]:
     """Get merged tool config (global defaults + agent overrides) and config_schema.
 
@@ -551,7 +548,7 @@ async def get_agent_tool_config(
     at = await agent_tool_dao.get_assignment(agent_id, tool_id)
 
     schema = tool.config_schema
-    raw_global = await get_tool_company_config(db, tool, agent.tenant_id)
+    raw_global = await get_tool_company_config(tool, agent.tenant_id)
     raw_agent = _decrypt_sensitive_fields(json_object_from(at.config if at else {}), schema)
 
     masked_global = mask_sensitive_fields(raw_global, schema)
@@ -609,7 +606,7 @@ async def update_agent_tool_config(
 
 @router.get("/agents/{agent_id}/with-config")
 async def get_agent_tools_with_config(
-    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> list[dict[str, object]]:
     """Get agent's enabled tools with per-agent config info and config_schema for settings UI.
 
@@ -649,7 +646,7 @@ async def get_agent_tools_with_config(
             continue
         enabled = at.enabled if at else t.is_default
 
-        raw_global = await get_tool_company_config(db, t, agent_obj2.tenant_id)
+        raw_global = await get_tool_company_config(t, agent_obj2.tenant_id)
 
         if t.name in system_settings_tool_map and not raw_global.get("api_key"):
             ss_key, ss_field = system_settings_tool_map[t.name]
@@ -731,7 +728,7 @@ async def get_email_providers(
 
 @router.get("/agents/{agent_id}/category-config/{category}")
 async def get_category_config(
-    agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, object]:
     """Get shared configuration for a tool category.
 
@@ -755,7 +752,7 @@ async def get_category_config(
     raw_global: JsonObject = {}
     cat_schema: Mapping[str, object] | None = None
     for ct in all_cat_tools:
-        company_config = await get_tool_company_config(db, ct, agent.tenant_id)
+        company_config = await get_tool_company_config(ct, agent.tenant_id)
         if company_config:
             cat_schema = ct.config_schema
             raw_global = company_config

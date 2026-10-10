@@ -108,7 +108,7 @@ def make_agent(agent_id: uuid.UUID, creator_id: uuid.UUID):
     return SimpleNamespace(id=agent_id, name="Storage Agent", creator_id=creator_id, primary_model_id=None)
 
 
-async def allow_access(user, agent_id: uuid.UUID, db: object = None):
+async def allow_access(user, agent_id: uuid.UUID):
     return make_agent(agent_id, user.id), "manage"
 
 

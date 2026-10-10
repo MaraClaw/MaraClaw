@@ -222,7 +222,6 @@ def _locale_directive(user_locale: str) -> str:
 
 
 async def resolve_onboarding_prompt(
-    db: object | None,
     agent: AgentRecord,
     user_id: uuid.UUID,
     *,
@@ -234,9 +233,7 @@ async def resolve_onboarding_prompt(
     Returns ``None`` when the pair is fully completed and the turn should
     proceed normally. Otherwise returns an :class:`OnboardingInjection` with
     either the first greeting prompt or the second configuration prompt.
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
-    del db
     async with connection_ctx() as conn:
         existing = await conn.fetchone(
             "SELECT phase FROM agent_user_onboardings WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s LIMIT 1",
@@ -337,7 +334,6 @@ async def resolve_onboarding_prompt(
 
 
 async def mark_onboarding_phase(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
     phase: str = PHASE_COMPLETED,
@@ -345,9 +341,7 @@ async def mark_onboarding_phase(
     """Insert or update the onboarding phase for a user/agent pair.
 
     Called as soon as the LLM begins streaming the relevant onboarding turn.
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
-    del db
     if phase not in {
         PHASE_GREETED,
         PHASE_CUSTOM_STYLE,
@@ -379,12 +373,10 @@ async def mark_onboarded(
 
 
 async def try_begin_onboarding_greeting(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> bool:
     """Claim the hidden first-run greeting. False when it already ran."""
-    del db
     async with connection_ctx() as conn:
         row = await conn.fetchone(
             """
@@ -399,12 +391,10 @@ async def try_begin_onboarding_greeting(
 
 
 async def is_onboarded(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> bool:
     """Shortcut for API serializers that need ``onboarded_for_me`` on AgentOut."""
-    del db
     async with connection_ctx() as conn:
         row = await conn.fetchone(
             "SELECT 1 FROM agent_user_onboardings WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s LIMIT 1",
@@ -414,16 +404,13 @@ async def is_onboarded(
 
 
 async def onboarded_agent_ids(
-    db: object | None,
     user_id: uuid.UUID,
     agent_ids: list[uuid.UUID],
 ) -> set[uuid.UUID]:
     """Bulk variant of ``is_onboarded`` for list endpoints.
 
     Returns the subset of ``agent_ids`` the user is already onboarded to.
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
-    del db
     if not agent_ids:
         return set()
     async with connection_ctx() as conn:

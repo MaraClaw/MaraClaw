@@ -23,10 +23,10 @@ async def test_run_returns_two_without_resolver_when_agent_uuid_is_invalid(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a resolver that records whether the CLI reaches the DB-owning seam.
-    resolver_calls: list[tuple[uuid.UUID | None, None]] = []
+    resolver_calls: list[uuid.UUID | None] = []
 
-    async def resolve_config(agent_id: uuid.UUID | None, db: None) -> AgentBayConfigResolution:
-        resolver_calls.append((agent_id, db))
+    async def resolve_config(agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
+        resolver_calls.append(agent_id)
         return AgentBayConfigResolution(AgentBayConfigSource.UNRESOLVED, None)
 
     monkeypatch.setattr(checker, "resolve_agentbay_config", resolve_config)
@@ -47,11 +47,11 @@ async def test_run_uses_global_resolution_without_agent_uuid(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a usable global configuration with a known secret.
-    resolver_calls: list[tuple[uuid.UUID | None, None]] = []
+    resolver_calls: list[uuid.UUID | None] = []
     secret = "akm-global-secret-must-not-be-printed"
 
-    async def resolve_config(agent_id: uuid.UUID | None, db: None) -> AgentBayConfigResolution:
-        resolver_calls.append((agent_id, db))
+    async def resolve_config(agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
+        resolver_calls.append(agent_id)
         return AgentBayConfigResolution(AgentBayConfigSource.BROWSER_NAVIGATE_TOOL, secret)
 
     monkeypatch.setattr(checker, "resolve_agentbay_config", resolve_config)
@@ -62,7 +62,7 @@ async def test_run_uses_global_resolution_without_agent_uuid(
     # Then: the resolver receives the global lookup and only its source is reported.
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert resolver_calls == [(None, None)]
+    assert resolver_calls == [None]
     assert captured.out == "AgentBay configuration source: browser_navigate_tool\n"
     assert secret not in captured.out
     assert captured.err == ""
@@ -74,11 +74,11 @@ async def test_run_passes_uuid_to_agent_first_resolver(
 ) -> None:
     # Given: a selected agent and a usable per-agent configuration.
     agent_id = uuid.uuid4()
-    resolver_calls: list[tuple[uuid.UUID | None, None]] = []
+    resolver_calls: list[uuid.UUID | None] = []
     secret = "akm-agent-secret-must-not-be-printed"
 
-    async def resolve_config(received_agent_id: uuid.UUID | None, db: None) -> AgentBayConfigResolution:
-        resolver_calls.append((received_agent_id, db))
+    async def resolve_config(received_agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
+        resolver_calls.append(received_agent_id)
         return AgentBayConfigResolution(AgentBayConfigSource.PER_AGENT_CHANNEL, secret)
 
     monkeypatch.setattr(checker, "resolve_agentbay_config", resolve_config)
@@ -89,7 +89,7 @@ async def test_run_passes_uuid_to_agent_first_resolver(
     # Then: the resolver performs the agent-first lookup and the secret is not reported.
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert resolver_calls == [(agent_id, None)]
+    assert resolver_calls == [agent_id]
     assert captured.out == "AgentBay configuration source: per_agent_channel\n"
     assert secret not in captured.out
     assert captured.err == ""
@@ -100,7 +100,7 @@ async def test_run_returns_one_when_resolver_cannot_select_configuration(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: an unresolved configuration from the shared resolver.
-    async def resolve_config(agent_id: uuid.UUID | None, db: None) -> AgentBayConfigResolution:
+    async def resolve_config(agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
         return AgentBayConfigResolution(AgentBayConfigSource.UNRESOLVED, None)
 
     monkeypatch.setattr(checker, "resolve_agentbay_config", resolve_config)

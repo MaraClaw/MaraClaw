@@ -36,9 +36,8 @@ from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_h
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 
-async def _get_agent_by_key(api_key: str, db: object | None = None) -> AgentRecord:
+async def _get_agent_by_key(api_key: str) -> AgentRecord:
     """Authenticate an OpenClaw agent by its API key."""
-    del db
     from app.services.openclaw_hot_cache import get_cached_agent_by_key, set_cached_agent_by_key
 
     cached = get_cached_agent_by_key(api_key)
@@ -55,14 +54,14 @@ async def _get_agent_by_key(api_key: str, db: object | None = None) -> AgentReco
 
 
 @router.get("/poll", response_model=GatewayPollResponse)
-async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None):
+async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")):
     """OpenClaw agent polls for pending messages.
 
     Returns all pending messages and marks them as delivered.
     Also updates openclaw_last_seen for online status tracking.
     """
     logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
-    agent = await _get_agent_by_key(x_api_key, db)
+    agent = await _get_agent_by_key(x_api_key)
 
     from app.services.openclaw_hot_cache import should_touch_last_seen
 
@@ -143,7 +142,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key"), db: obj
 async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipItem]:
     rel_items: list[GatewayRelationshipItem] = []
     for r in await agent_relationship_dao.list_for_agent_with_members(agent.id):
-        status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+        status_info = await evaluate_human_relationship_status(r, source_agent=agent)
         if r.member and status_info["access_status"] == "active":
             channels = []
             if getattr(r.member, "external_id", None) or getattr(r.member, "open_id", None):
@@ -160,7 +159,7 @@ async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipIte
                 )
             )
     for r in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
-        status_info = await evaluate_agent_relationship_status(None, r)
+        status_info = await evaluate_agent_relationship_status(r)
         if r.target_agent and status_info["access_status"] == "active":
             rel_items.append(
                 GatewayRelationshipItem(
@@ -178,14 +177,12 @@ async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipIte
 
 
 @router.post("/report")
-async def report_result(
-    body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key"), db: object | None = None
-):
+async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key")):
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
     logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
-    agent = await _get_agent_by_key(x_api_key, db)
+    agent = await _get_agent_by_key(x_api_key)
 
     msg = await gateway_message_dao.get_for_agent(body.message_id, agent.id)
     if not msg:
@@ -270,9 +267,9 @@ async def report_result(
 
 
 @router.post("/heartbeat")
-async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None):
+async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")):
     """Pure heartbeat ping - keeps the OpenClaw agent marked as online."""
-    agent = await _get_agent_by_key(x_api_key, db)
+    agent = await _get_agent_by_key(x_api_key)
     _ = await agent_dao.update(
         db_obj=agent,
         obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
@@ -285,7 +282,7 @@ async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key"), db: object 
 
 @router.post("/send-message")
 async def send_message(
-    body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None
+    body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key")
 ) -> dict[str, Any]:
     """OpenClaw agent sends a message to a person or another agent.
 
@@ -293,7 +290,7 @@ async def send_message(
     - Agent target: enqueue for the peer guest; reply arrives on the next poll
     - Human target: send via available channel (feishu, etc.)
     """
-    agent = await _get_agent_by_key(x_api_key, db)
+    agent = await _get_agent_by_key(x_api_key)
     _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
 
     target_name = body.target.strip()
@@ -306,7 +303,7 @@ async def send_message(
         candidate = rel.target_agent
         if not candidate:
             continue
-        status_info = await evaluate_agent_relationship_status(None, rel)
+        status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] != "active":
             continue
         if candidate.name.lower() == target_name.lower() or target_name.lower() in candidate.name.lower():
@@ -339,14 +336,14 @@ async def send_message(
 
     target_member = None
     for r in rels:
-        status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+        status_info = await evaluate_human_relationship_status(r, source_agent=agent)
         if r.member and status_info["access_status"] == "active" and r.member.name == target_name:
             target_member = r.member
             break
     # Fuzzy match if exact match fails
     if not target_member:
         for r in rels:
-            status_info = await evaluate_human_relationship_status(None, r, source_agent=agent)
+            status_info = await evaluate_human_relationship_status(r, source_agent=agent)
             if r.member and status_info["access_status"] == "active" and target_name.lower() in r.member.name.lower():
                 target_member = r.member
                 break
@@ -425,11 +422,9 @@ async def send_message(
 
 
 @router.get("/setup-guide/{agent_id}")
-async def get_setup_guide(
-    agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key"), db: object | None = None
-):
+async def get_setup_guide(agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key")):
     """Return the pre-filled Skill file and Heartbeat instruction for this agent."""
-    agent = await _get_agent_by_key(x_api_key, db)
+    agent = await _get_agent_by_key(x_api_key)
     if agent.id != agent_id:
         raise HTTPException(status_code=403, detail="Key does not match this agent")
 

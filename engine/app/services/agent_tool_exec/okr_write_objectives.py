@@ -28,9 +28,7 @@ def _float_argument(arguments: ToolArguments, name: str, default: float) -> floa
 
 
 class _OkrAccessModule(Protocol):
-    async def _load_okr_request_context(
-        self, db: object | None, agent_id: uuid.UUID, user_id: uuid.UUID | None
-    ) -> _OKRRequestContext: ...
+    async def _load_okr_request_context(self, agent_id: uuid.UUID, user_id: uuid.UUID | None) -> _OKRRequestContext: ...
 
     def _can_create_okr_target(
         self, ctx: _OKRRequestContext, owner_type: str, owner_id: uuid.UUID | None
@@ -59,7 +57,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
     if not agent_id:
         return "OKR tools require agent context."
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         ag = ctx["agent"]
         if not ag:
             return "Agent not found."
@@ -165,7 +163,7 @@ async def _create_key_result(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
     if not agent_id:
         return "OKR tools require agent context."
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         if not ctx["agent"]:
             return "Agent not found."
         if not ctx["tenant_id"]:
@@ -211,7 +209,7 @@ async def _update_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
     if not agent_id:
         return "OKR tools require agent context."
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         if not ctx["agent"]:
             return "Agent not found."
         if not ctx["tenant_id"]:

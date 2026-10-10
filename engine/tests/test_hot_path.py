@@ -175,7 +175,6 @@ async def test_call_agent_llm_skips_dao_when_turn_preloaded(monkeypatch: pytest.
     primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
     fallback = SimpleNamespace(model="f", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
-        None,
         agent.id,
         "hello",
         turn=TurnContext(agent=agent, primary_model=primary, fallback_model=fallback),
@@ -250,7 +249,6 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
     )
     primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
-        None,
         agent.id,
         "hello",
         turn=TurnContext(agent=agent, primary_model=primary, fallback_model=None),
@@ -288,7 +286,6 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
         expires_at=None,
     )
     result = await caller.call_agent_llm(
-        None,
         agent.id,
         "hi",
         turn=TurnContext(agent=agent, primary_model=primary, secondary_model=secondary),

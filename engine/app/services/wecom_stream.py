@@ -458,7 +458,6 @@ async def _process_wecom_stream_message(
     conv_id = _build_wecom_conv_id(sender_id, chat_id, normalized_chat_type)
 
     platform_user = await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent_obj,
         channel_type="wecom",
         external_user_id=sender_id,
@@ -468,7 +467,6 @@ async def _process_wecom_stream_message(
 
     _is_group = normalized_chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id)
     sess = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=agent_obj.creator_id if _is_group else platform_user_id,
         external_conv_id=conv_id,
@@ -495,7 +493,7 @@ async def _process_wecom_stream_message(
     )
     _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
     from app.services.channels import inbound as channel_inbound
 

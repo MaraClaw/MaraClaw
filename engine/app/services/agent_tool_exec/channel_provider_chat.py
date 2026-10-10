@@ -55,7 +55,6 @@ async def _send_slack_message(
         try:
             await _save_channel_message(
                 None,
-                db=None,
                 agent_id=agent_id,
                 org_member=target_member,
                 external_conv_id=f"slack_{channel_id}",
@@ -90,7 +89,6 @@ async def _send_teams_channel_message(
 
         agent = await agent_dao.get(agent_id)
         platform_user = await get_platform_user_by_org_member(
-            db=None,
             org_member=target_member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
@@ -136,7 +134,6 @@ async def _send_google_chat_message(
 
         agent = await agent_dao.get(agent_id)
         platform_user = await get_platform_user_by_org_member(
-            db=None,
             org_member=target_member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
@@ -187,7 +184,6 @@ async def _send_google_chat_message(
         )
         await _save_channel_message(
             None,
-            db=None,
             agent_id=agent_id,
             org_member=target_member,
             external_conv_id=external,
@@ -240,7 +236,6 @@ async def _send_wechat_channel_message(
         )
         await _save_channel_message(
             None,
-            db=None,
             agent_id=agent_id,
             org_member=target_member,
             external_conv_id=conv_id,

@@ -93,16 +93,14 @@ class ChannelUserService:
         channel_type: str,
         external_user_id: str | None,
         extra_info: dict[str, Any] | None = None,
-        db: object | None = None,
     ) -> UserRecord:
         """Resolve channel user identity, find or create platform User."""
-        del db
         tenant_id = agent.tenant_id
         tenant_id_text = str(tenant_id) if tenant_id is not None else None
         extra_info = json_object_from(extra_info)
 
-        provider = await self._ensure_provider(None, channel_type, tenant_id)
-        org_member = await self._find_org_member(None, provider.id, channel_type, external_user_id, extra_info)
+        provider = await self._ensure_provider(channel_type, tenant_id)
+        org_member = await self._find_org_member(provider.id, channel_type, external_user_id, extra_info)
 
         user: UserRecord | None = None
 
@@ -132,9 +130,7 @@ class ChannelUserService:
                 if org_member and not org_member.user_id:
                     _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
                 elif not org_member:
-                    existing_member = await self._find_existing_org_member_for_user(
-                        None, user.id, provider.id, tenant_id
-                    )
+                    existing_member = await self._find_existing_org_member_for_user(user.id, provider.id, tenant_id)
                     if existing_member:
                         unionid, open_id, external_id = self._get_channel_ids(
                             channel_type, external_user_id, extra_info
@@ -154,7 +150,7 @@ class ChannelUserService:
                         )
                     else:
                         _ = await self._create_org_member_shell(
-                            None, provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
+                            provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
                         )
             return user
 
@@ -166,24 +162,21 @@ class ChannelUserService:
                 + "refusing to lazily create a duplicate user from open_id only."
             )
 
-        user = await self._create_channel_user(None, channel_type, external_user_id, extra_info, tenant_id)
+        user = await self._create_channel_user(channel_type, external_user_id, extra_info, tenant_id)
 
         if should_persist_member:
             if org_member:
                 _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
             else:
                 _ = await self._create_org_member_shell(
-                    None, provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
+                    provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
                 )
         logger.info(f"[{channel_type}] Created new user: {user.id} for external_id: {external_user_id}")
 
         return user
 
-    async def _ensure_provider(
-        self, db: object | None, provider_type: str, tenant_id: uuid.UUID | None
-    ) -> IdentityProviderRecord:
+    async def _ensure_provider(self, provider_type: str, tenant_id: uuid.UUID | None) -> IdentityProviderRecord:
         """Get or create IdentityProvider record."""
-        del db
         canonical_type = self._normalize_channel_type(provider_type)
 
         provider = await identity_provider_dao.get_by_type_and_tenant(canonical_type, tenant_id)
@@ -209,14 +202,12 @@ class ChannelUserService:
 
     async def _find_org_member(
         self,
-        db: object | None,
         provider_id: uuid.UUID,
         channel_type: str,
         external_user_id: str | None,
         extra_info: dict[str, Any] | None = None,
     ) -> OrgMemberRecord | None:
         """Find OrgMember by external identity."""
-        del db
         try:
             extra_info = json_object_from(extra_info)
             unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
@@ -254,7 +245,6 @@ class ChannelUserService:
 
     async def _create_org_member_shell(
         self,
-        db: object | None,
         provider: IdentityProviderRecord | Any,
         channel_type: str,
         external_user_id: str | None,
@@ -262,7 +252,6 @@ class ChannelUserService:
         linked_user_id: uuid.UUID | None = None,
     ) -> OrgMemberRecord:
         """Create a shell OrgMember record for this identity."""
-        del db
         info = json_object_from(extra_info)
         identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
         name = _extra_text(info, "name") or f"{channel_type.capitalize()} User {identity_seed[:8]}"
@@ -287,12 +276,10 @@ class ChannelUserService:
 
     async def _find_existing_org_member_for_user(
         self,
-        db: object | None,
         user_id: uuid.UUID,
         provider_id: uuid.UUID,
         tenant_id: uuid.UUID | None,
     ) -> OrgMemberRecord | None:
-        del db
         return await org_member_dao.get_active_for_user_and_provider(
             user_id=user_id,
             provider_id=provider_id,
@@ -301,14 +288,12 @@ class ChannelUserService:
 
     async def _create_channel_user(
         self,
-        db: object | None,
         channel_type: str,
         external_user_id: str | None,
         extra_info: dict[str, Any],
         tenant_id: uuid.UUID | None,
     ) -> UserRecord:
         """Create a new Identity + User for channel identity (lazy registration)."""
-        del db
         info = json_object_from(extra_info)
         email = _extra_text(info, "email")
         mobile = _extra_text(info, "mobile")
@@ -363,10 +348,8 @@ channel_user_service = ChannelUserService()
 async def get_platform_user_by_org_member(
     org_member: OrgMemberRecord | Any,
     agent_tenant_id: uuid.UUID | None = None,
-    db: object | None = None,
 ) -> UserRecord:
     """Get or create platform User from an existing OrgMember."""
-    del db
     agent_tenant_id_text = str(agent_tenant_id) if agent_tenant_id is not None else None
 
     if org_member.user_id:

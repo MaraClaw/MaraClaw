@@ -48,11 +48,10 @@ def _compute_okr_period_bounds(frequency: str, length_days: int | None) -> tuple
 
 
 async def _load_okr_request_context(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID | None,
 ) -> _OKRRequestContext:
-    """Load agent + requester via DAOs. ``db`` is dual-stack compatible and ignored."""
+    """Load the agent and requester through their DAOs."""
     agent = await agent_dao.get(agent_id)
     requester = await user_dao.get(user_id) if user_id else None
 

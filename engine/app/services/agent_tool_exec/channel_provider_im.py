@@ -48,7 +48,6 @@ async def _send_dingtalk_message(
             try:
                 await channel_provider_common._save_channel_message(
                     agent_tools,
-                    db=None,
                     agent_id=agent_id,
                     org_member=target_member,
                     external_conv_id=f"dingtalk_p2p_{user_id}",
@@ -98,7 +97,6 @@ async def _send_wecom_message(
             try:
                 await channel_provider_common._save_channel_message(
                     agent_tools,
-                    db=None,
                     agent_id=agent_id,
                     org_member=target_member,
                     external_conv_id=f"wecom_p2p_{user_id}",

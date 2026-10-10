@@ -92,7 +92,6 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
         logger.info(f"[TaskExec] Calling LLM with tools for task: {task_title}")
 
         reply = await call_agent_llm_with_tools(
-            db=None,
             agent_id=agent_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,

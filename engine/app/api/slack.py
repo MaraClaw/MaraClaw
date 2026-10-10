@@ -90,12 +90,11 @@ async def get_slack_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     from app.services.platform_service import platform_service
 
     _ = await check_agent_access(current_user, agent_id)
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/slack/{agent_id}/webhook"}
 
 
@@ -249,7 +248,6 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         }
     )
     platform_user = await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent_obj,
         channel_type="slack",
         external_user_id=sender_id,
@@ -263,7 +261,6 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     platform_user_id = platform_user.id
 
     sess = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=creator_id if _is_group_slack else platform_user_id,
         external_conv_id=conv_id,
@@ -373,7 +370,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     )
     _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     _cfg_app_secret = config.app_secret or ""
 
     from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs_s

@@ -709,24 +709,23 @@ _AGENTBAY_SESSION_TIMEOUT = timedelta(minutes=5)
 AGENTBAY_API_URL = "https://api.agentbay.ai/v1"
 
 
-async def get_agentbay_api_key_for_agent(agent_id: uuid.UUID, db: object | None = None) -> str | None:
+async def get_agentbay_api_key_for_agent(agent_id: uuid.UUID) -> str | None:
     """Return the configured AgentBay API key for the given agent.
 
     This compatibility wrapper preserves the legacy public key-only API.
     """
     from app.services.agentbay_config import resolve_agentbay_config
 
-    return (await resolve_agentbay_config(agent_id, db)).api_key
+    return (await resolve_agentbay_config(agent_id)).api_key
 
 
 async def check_agentbay_channel(
     agent_id: uuid.UUID,
     current_user: object,
-    db: object | None = None,
 ) -> dict[str, bool | str]:
     """Probe AgentBay connectivity for the agent."""
     del current_user
-    key = await get_agentbay_api_key_for_agent(agent_id, db)
+    key = await get_agentbay_api_key_for_agent(agent_id)
     if not key:
         return {"ok": False, "error": "AgentBay not configured"}
     try:

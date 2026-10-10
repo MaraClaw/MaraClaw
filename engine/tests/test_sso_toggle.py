@@ -177,7 +177,7 @@ async def test_sso_config_uses_public_callback_for_unresolved_tenant(monkeypatch
         auth_urls = await sso_api.get_sso_config(sid=sid, request=request)
 
     tenant_url.assert_not_awaited()
-    public_url.assert_awaited_once_with(None, request)
+    public_url.assert_awaited_once_with(request)
     assert auth_urls[0]["url"].startswith("https://open.feishu.cn/open-apis/authen/v1/index?app_id=scoped-feishu-app")
     assert "redirect_uri=https%3A//public.example/api/auth/feishu/callback" in auth_urls[0]["url"]
 
@@ -189,13 +189,14 @@ async def test_switch_tenant_sso_toggle(monkeypatch):
 
     from app.api import auth as auth_api
     from app.dao import system_setting_dao, tenant_dao, user_dao
+    from app.records.user import UserRecord
     from app.schemas.schemas import TenantSwitchRequest
 
     target_tenant_id = uuid.uuid4()
     identity_id = uuid.uuid4()
     target_user = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=target_tenant_id, is_active=True)
     tenant = SimpleNamespace(id=target_tenant_id, slug="acme", sso_domain="https://acme.com", is_active=True)
-    current_user = SimpleNamespace(identity_id=identity_id, display_name="Current User", id=uuid.uuid4())
+    current_user = UserRecord(identity_id=identity_id, display_name="Current User", id=uuid.uuid4())
     data = TenantSwitchRequest(tenant_id=target_tenant_id)
     request = MagicMock()
 

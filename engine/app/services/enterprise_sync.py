@@ -23,7 +23,7 @@ class EnterpriseSyncService:
     """Synchronize enterprise information to all online Agent containers."""
 
     async def update_enterprise_info(
-        self, db: object | None, info_type: str, content: JsonObject, visible_roles: list[str], updated_by: uuid.UUID
+        self, info_type: str, content: JsonObject, visible_roles: list[str], updated_by: uuid.UUID
     ) -> EnterpriseInfoRecord:
         """Update enterprise info in database and notify all agents."""
         info = await enterprise_info_dao.upsert(
@@ -45,7 +45,7 @@ class EnterpriseSyncService:
         logger.info(f"Published enterprise_info update: {info_type} v{info.version}")
         return info
 
-    async def sync_to_agent(self, db: object | None, agent_id: uuid.UUID, agent_role: str = "") -> None:
+    async def sync_to_agent(self, agent_id: uuid.UUID, agent_role: str = "") -> None:
         """Pull enterprise info from DB and write to agent's enterprise_info/ directory.
 
         Filters by visible_roles - if empty, all roles can see it.
@@ -74,12 +74,12 @@ class EnterpriseSyncService:
 
         logger.info(f"Synced enterprise info to agent {agent_id}")
 
-    async def sync_to_all_agents(self, db: object | None) -> int:
+    async def sync_to_all_agents(self) -> int:
         """Sync enterprise info to all running agents. Returns count."""
         agents = await agent_dao.list_by_status("running")
 
         for agent in agents:
-            await self.sync_to_agent(None, agent.id, agent.role_description)
+            await self.sync_to_agent(agent.id, agent.role_description)
 
         logger.info(f"Synced enterprise info to {len(agents)} agents")
         return len(agents)

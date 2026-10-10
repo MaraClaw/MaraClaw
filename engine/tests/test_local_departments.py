@@ -111,4 +111,4 @@ async def test_accessible_relationship_users_filter_inactive_and_foreign_ids(mon
         permissions.agent_permission_dao, "list_user_scope_ids", AsyncMock(return_value=[direct, inactive, foreign])
     )
     monkeypatch.setattr(permissions.local_department_dao, "accessible_user_ids", AsyncMock(return_value={department}))
-    assert await permissions.get_agent_accessible_user_ids(None, agent) == {creator, direct, department, admin}
+    assert await permissions.get_agent_accessible_user_ids(agent) == {creator, direct, department, admin}

@@ -67,7 +67,7 @@ async def mark_sso_session_scanned(sid: uuid.UUID):
 
 
 @router.get("/sso/config")
-async def get_sso_config(sid: uuid.UUID, request: Request, db: object | None = None) -> list[dict[str, Any]]:
+async def get_sso_config(sid: uuid.UUID, request: Request) -> list[dict[str, Any]]:
     """List active SSO providers with their redirect URLs for the specified session ID."""
     session = await sso_scan_session_dao.get(sid)
     if not session:
@@ -81,11 +81,11 @@ async def get_sso_config(sid: uuid.UUID, request: Request, db: object | None = N
     if session.tenant_id:
         tenant_obj = await tenant_dao.get(session.tenant_id)
         if tenant_obj is None:
-            public_base = await platform_service.get_public_base_url(db, request)
+            public_base = await platform_service.get_public_base_url(request)
         else:
             public_base = await platform_service.get_tenant_sso_base_url(tenant_obj, request)
     else:
-        public_base = await platform_service.get_public_base_url(db, request)
+        public_base = await platform_service.get_public_base_url(request)
 
     auth_urls: list[dict[str, Any]] = []
     for p in providers:
@@ -127,7 +127,7 @@ async def get_sso_config(sid: uuid.UUID, request: Request, db: object | None = N
                 "google_workspace", str(session.tenant_id) if session.tenant_id else None
             )
             if auth_provider:
-                redir = await get_google_redirect_uri(db, p, request)
+                redir = await get_google_redirect_uri(p, request)
                 auth_provider.config["redirect_uri"] = redir
                 state = sign_google_sso_state(sid, p.id)
                 url = await auth_provider.get_authorization_url(redir, state)

@@ -15,17 +15,14 @@ from app.records.chat import ChatSessionRecord
 
 
 async def get_primary_platform_session(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ChatSessionRecord | None:
     """Return the current primary first-party session for a user+agent pair, if any."""
-    del db
     return await chat_session_dao.get_primary_platform(agent_id=agent_id, user_id=user_id)
 
 
 async def ensure_primary_platform_session(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ChatSessionRecord:
@@ -36,9 +33,8 @@ async def ensure_primary_platform_session(
     - Otherwise promote the most relevant existing web session.
     - Only create a brand new primary session when the pair has never talked on-platform.
     """
-    del db
 
-    primary = await get_primary_platform_session(None, agent_id, user_id)
+    primary = await get_primary_platform_session(agent_id, user_id)
     if primary:
         return primary
 

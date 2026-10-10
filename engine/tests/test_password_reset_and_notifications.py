@@ -189,7 +189,21 @@ def _http_request(*, origin: str | None = None, referer: str | None = None):
         headers.append((b"origin", origin.encode()))
     if referer:
         headers.append((b"referer", referer.encode()))
-    return Request({"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/api/auth/forgot-password", "raw_path": b"/api/auth/forgot-password", "query_string": b"", "headers": headers, "client": ("127.0.0.1", 123), "server": ("127.0.0.1", 8000)})
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/auth/forgot-password",
+            "raw_path": b"/api/auth/forgot-password",
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 123),
+            "server": ("127.0.0.1", 8000),
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -421,7 +435,7 @@ async def test_reset_password_updates_user(monkeypatch):
 async def test_broadcast_notification_rejects_missing_system_email_config(monkeypatch):
     current_user = make_user(role="org_admin")
 
-    async def fake_resolve_email_config_async(db):
+    async def fake_resolve_email_config_async():
         return None
 
     monkeypatch.setattr(
@@ -446,7 +460,7 @@ async def test_broadcast_notification_queues_email_delivery(monkeypatch):
     target_user = make_user(email="bob@example.com", tenant_id=current_user.tenant_id)
     background_tasks = BackgroundTasks()
 
-    async def fake_resolve_email_config_async(db):
+    async def fake_resolve_email_config_async():
         return configured_system_email()
 
     async def fake_list_users(*_args, **_kwargs):

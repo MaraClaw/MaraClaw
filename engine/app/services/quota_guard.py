@@ -176,13 +176,12 @@ async def check_agent_creation_quota(user_id: uuid.UUID) -> None:
 # ── Heartbeat floor enforcement ────────────────────────────────────
 
 
-async def enforce_heartbeat_floor(tenant_id: uuid.UUID, floor: int | None = None, db: object | None = None) -> int:
+async def enforce_heartbeat_floor(tenant_id: uuid.UUID, floor: int | None = None) -> int:
     """Enforce heartbeat floor on all agents in the tenant.
 
     Args:
         tenant_id: The tenant to enforce for.
         floor: The minimum interval in minutes. If None, reads from tenant.
-        db: Optional dual-stack session handle (ignored; DAO path is used).
 
     Returns number of agents adjusted.
     """

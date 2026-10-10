@@ -34,7 +34,7 @@ settings = get_settings()
 async def get_google_workspace_sync_authorize_url(
     provider_id: uuid.UUID, request: Request, current_user: UserRecord = Depends(get_current_admin)
 ):
-    provider = await get_google_provider(None, provider_id)
+    provider = await get_google_provider(provider_id)
     if current_user.role != "platform_admin" and provider.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Not authorized to manage this provider")
 
@@ -43,7 +43,7 @@ async def get_google_workspace_sync_authorize_url(
     if not auth_provider.client_id or not auth_provider.client_secret:
         raise HTTPException(status_code=400, detail="Please save Client ID and Client Secret first")
 
-    redirect_uri = await get_google_redirect_uri(None, provider, request)
+    redirect_uri = await get_google_redirect_uri(provider, request)
     state = sign_google_oauth_state(GOOGLE_SYNC_STATE_KIND, provider_id)
     url = await auth_provider.get_admin_authorization_url(redirect_uri, state)
     return {"authorization_url": url}
@@ -54,7 +54,6 @@ async def _handle_google_sso_callback(
     sid: uuid.UUID | None,
     provider_id: uuid.UUID | None,
     request: Request | None,
-    db: object | None,
 ):
     tenant_id = None
     if sid:
@@ -64,7 +63,7 @@ async def _handle_google_sso_callback(
 
     provider = None
     if provider_id:
-        provider = await get_google_provider(None, provider_id)
+        provider = await get_google_provider(provider_id)
         if tenant_id and provider.tenant_id != tenant_id:
             return HTMLResponse("Auth failed: provider does not belong to this tenant")
 
@@ -84,7 +83,7 @@ async def _handle_google_sso_callback(
             str(tenant_id) if tenant_id else None,
         )
     if provider:
-        redirect_uri = await get_google_redirect_uri(None, provider, request)
+        redirect_uri = await get_google_redirect_uri(provider, request)
         auth_provider.config["redirect_uri"] = redirect_uri
 
     try:
@@ -137,10 +136,9 @@ async def _handle_google_admin_sync_callback(
     code: str,
     provider_id: uuid.UUID,
     request: Request,
-    db: object | None,
 ):
-    provider = await get_google_provider(None, provider_id)
-    redirect_uri = await get_google_redirect_uri(None, provider, request)
+    provider = await get_google_provider(provider_id)
+    redirect_uri = await get_google_redirect_uri(provider, request)
     config = provider.config or {}
     configured_customer_id = config.get("customer_id")
     customer_id = (
@@ -194,17 +192,17 @@ async def _handle_google_admin_sync_callback(
 
 
 @router.get(GOOGLE_CALLBACK_PATH)
-async def google_workspace_callback(code: str, request: Request, state: str | None = None, db: object | None = None):
+async def google_workspace_callback(code: str, request: Request, state: str | None = None):
     """Unified callback for Google Workspace SSO login and admin authorization."""
     parsed_state = parse_google_oauth_state(state) if state else None
     if parsed_state:
         state_kind, state_value = parsed_state
         if state_kind == GOOGLE_SYNC_STATE_KIND:
-            return await _handle_google_admin_sync_callback(code, state_value[0], request, db)
+            return await _handle_google_admin_sync_callback(code, state_value[0], request)
         if state_kind == GOOGLE_SSO_STATE_KIND:
             sid = state_value[0]
             provider_id = state_value[1] if len(state_value) > 1 else None
-            return await _handle_google_sso_callback(code, sid, provider_id, request, db)
+            return await _handle_google_sso_callback(code, sid, provider_id, request)
 
     sid: uuid.UUID | None = None
     if state:
@@ -213,4 +211,4 @@ async def google_workspace_callback(code: str, request: Request, state: str | No
         except ValueError, AttributeError:
             return HTMLResponse("Authorization failed: invalid state")
 
-    return await _handle_google_sso_callback(code, sid, None, request, db)
+    return await _handle_google_sso_callback(code, sid, None, request)

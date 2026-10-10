@@ -563,9 +563,9 @@ async def update_enterprise_info(
 ):
     """Create or update enterprise information. Triggers sync to agents."""
     info = await enterprise_sync_service.update_enterprise_info(
-        None, info_type, data.content, data.visible_roles, current_user.id
+        info_type, data.content, data.visible_roles, current_user.id
     )
-    _ = await enterprise_sync_service.sync_to_all_agents(None)
+    _ = await enterprise_sync_service.sync_to_all_agents()
     return EnterpriseInfoOut.model_validate(info)
 
 
@@ -602,7 +602,7 @@ async def resolve_approval(
 ):
     """Approve or reject a pending approval request."""
     try:
-        approval = await autonomy_service.resolve_approval(None, approval_id, current_user, data.action)
+        approval = await autonomy_service.resolve_approval(approval_id, current_user, data.action)
         return ApprovalRequestOut.model_validate(approval)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -727,7 +727,7 @@ async def update_tenant_quotas(
     if floor is not None:
         from app.services.quota_guard import enforce_heartbeat_floor
 
-        adjusted_count = await enforce_heartbeat_floor(tenant.id, floor=json_as_int(floor), db=None)
+        adjusted_count = await enforce_heartbeat_floor(tenant.id, floor=json_as_int(floor))
 
     return {
         "message": "Tenant quotas updated",
@@ -904,7 +904,7 @@ async def _sync_tenant_sso_state(tenant_id: uuid.UUID) -> None:
 
 async def _regenerate_all_sso_domains() -> None:
     """Regenerate sso_domain for ALL tenants when public_base_url changes."""
-    base_url = await platform_service.get_public_base_url(None)
+    base_url = await platform_service.get_public_base_url()
     host = base_url.split("://")[-1].split(":")[0].split("/")[0]
     is_ip = platform_service.is_ip_address(host)
 
@@ -1383,7 +1383,7 @@ async def list_org_members(
         limit=100,
     )
     members = [m for m, _pn, _pt in pairs]
-    member_paths = await derive_member_department_paths(None, members)
+    member_paths = await derive_member_department_paths(members)
     return [
         {
             "id": str(m.id),
@@ -1424,7 +1424,7 @@ async def trigger_org_sync(provider_id: str | None = None, current_user: UserRec
     if not _is_platform_admin_user(current_user) and provider.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot sync other tenant's provider")
 
-    return await org_sync_service.sync_provider(None, provider_id)
+    return await org_sync_service.sync_provider(provider_id)
 
 
 @router.get("/org/wecom-verify/{provider_id}")
@@ -1520,13 +1520,13 @@ def _require_tenant_admin(current_user: UserRecord) -> uuid.UUID:
     return current_user.tenant_id
 
 
-async def _ensure_invitation_email_enabled(db: object | None = None) -> None:
+async def _ensure_invitation_email_enabled() -> None:
     """Require enabled system email before accepting email invitations."""
     from app.services.system_email_service import resolve_email_config_async
 
-    if await resolve_email_config_async(db):
+    if await resolve_email_config_async():
         return
-    if await resolve_email_config_async(db, include_disabled=True):
+    if await resolve_email_config_async(include_disabled=True):
         raise HTTPException(
             status_code=400,
             detail="System email SMTP is configured but disabled. Enable system email before sending invitations.",
@@ -1581,9 +1581,9 @@ async def invite_users(
     if not tenant:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    await _ensure_invitation_email_enabled(None)
+    await _ensure_invitation_email_enabled()
 
-    base_url = await platform_service.get_public_base_url(None, request=request)
+    base_url = await platform_service.get_public_base_url(request=request)
 
     invited_count = 0
     for email in data.emails:

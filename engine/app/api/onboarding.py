@@ -135,7 +135,6 @@ async def _tenant_model_ids(
 
 
 async def _create_personal_assistant(
-    db: object | None,
     user: UserRecord,
     data: PersonalAssistantRequest,
 ) -> tuple[AgentRecord, str]:
@@ -192,7 +191,7 @@ async def _create_personal_assistant(
             "access_level": "manage",
         }
     )
-    _ = await ensure_access_granted_platform_relationships(db, agent, created_by_user_id=user.id)
+    _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=user.id)
 
     from app.api.agents import _persist_agent_runtime
     from app.services.agent_manager import agent_manager
@@ -211,7 +210,7 @@ async def _create_personal_assistant(
     await _regenerate_relationships_file(agent.id)
 
     try:
-        _ = await agent_manager.start_container(db, agent)
+        _ = await agent_manager.start_container(agent)
         agent = await _persist_agent_runtime(agent)
     except Exception:
         _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
@@ -235,7 +234,7 @@ async def start_onboarding(data: OnboardingStartRequest, current_user: UserRecor
 
 @router.post("/personal-assistant", status_code=status.HTTP_201_CREATED)
 async def create_personal_assistant(
-    data: PersonalAssistantRequest, current_user: UserRecord = Depends(get_current_user), db: object | None = None
+    data: PersonalAssistantRequest, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Create the user's private assistant and advance onboarding."""
     row = await _ensure_row(current_user, "join")
@@ -245,7 +244,7 @@ async def create_personal_assistant(
             row = await user_tenant_onboarding_dao.update(db_obj=row, obj_in={"current_step": "opening"}) or row
             return {"agent": {"id": str(existing.id), "name": existing.name}, "onboarding": _status_payload(row)}
 
-    agent, raw_key = await _create_personal_assistant(db, current_user, data)
+    agent, raw_key = await _create_personal_assistant(current_user, data)
     row = (
         await user_tenant_onboarding_dao.update(
             db_obj=row,

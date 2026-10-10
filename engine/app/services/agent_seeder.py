@@ -720,7 +720,7 @@ async def patch_existing_okr_agent() -> None:
         if agent.tenant_id:
             from app.services.okr_agent_hook import sync_okr_agent_platform_members
 
-            changed = bool(await sync_okr_agent_platform_members(None, agent.tenant_id)) or changed
+            changed = bool(await sync_okr_agent_platform_members(agent.tenant_id)) or changed
 
         if changed:
             logger.info(f"[AgentSeeder] OKR Agent patch applied for {agent.id}")
@@ -822,6 +822,6 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
     _ = await _sync_okr_triggers_with_settings(okr_agent.id, settings)
     from app.services.okr_agent_hook import sync_okr_agent_platform_members
 
-    _ = await sync_okr_agent_platform_members(None, tenant_id)
+    _ = await sync_okr_agent_platform_members(tenant_id)
     logger.info(f"[AgentSeeder] Created OKR Agent for tenant {tenant_id} ({okr_agent.id})")
     logger.info(f"[AgentSeeder] OKR triggers created for tenant {tenant_id}")

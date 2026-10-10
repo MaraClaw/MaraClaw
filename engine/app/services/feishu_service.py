@@ -335,14 +335,13 @@ class FeishuService:
             }
 
     async def login_or_register(
-        self, db: object | None, feishu_user: FeishuOAuthUser, tenant_id: str | None = None
+        self, feishu_user: FeishuOAuthUser, tenant_id: str | None = None
     ) -> tuple[UserRecord, str]:
         """Login existing user or register new one via Feishu SSO.
 
         Uses OrgMember as the identity anchor (synced from Feishu org directory).
-        Returns (user, jwt_token). ``db`` is accepted for call-site compatibility.
+        Returns (user, jwt_token).
         """
-        del db
         open_id = feishu_user["open_id"]
         user_id = feishu_user.get("user_id", "")
         fs_email = feishu_user.get("email", "")

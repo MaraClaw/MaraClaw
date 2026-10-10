@@ -94,12 +94,8 @@ class SSOService:
         provider_type: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: object,
     ) -> UserRecord | None:
         """Resolve user from external identity via OrgMember."""
-        # Accept legacy `db=` kwarg for gradual call-site migration.
-        _compat.pop("db", None)
-
         provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             return None
@@ -207,11 +203,8 @@ class SSOService:
         provider_user_id: str,
         identity_data: dict[str, Any] | None = None,
         tenant_id: str | None = None,
-        **_compat: object,
     ) -> OrgMemberRecord:
         """Link an external identity to an existing user via OrgMember."""
-        _compat.pop("db", None)
-
         provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             raise ValueError(f"Provider {provider_type} not found for tenant {tenant_id}")
@@ -288,11 +281,8 @@ class SSOService:
         user_id: str,
         provider_type: str,
         tenant_id: str | None = None,
-        **_compat: object,
     ) -> bool:
         """Unlink an external identity (OrgMember) from a user."""
-        _compat.pop("db", None)
-
         provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             return False
@@ -311,10 +301,8 @@ class SSOService:
         provider_user_id: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
-        **_compat: object,
     ) -> UserRecord | None:
         """Check if an external identity is already linked to another user."""
-        _compat.pop("db", None)
         return await self.resolve_user_identity(
             provider_user_id,
             provider_type,
@@ -322,15 +310,13 @@ class SSOService:
             identity_data=identity_data,
         )
 
-    async def validate_sso_enablement(self, tenant_id: uuid.UUID, **_compat: object) -> bool:
+    async def validate_sso_enablement(self, tenant_id: uuid.UUID) -> bool:
         """Check if SSO can be enabled for this tenant under IP restrictions."""
-        _compat.pop("db", None)
-
         tenant = await tenant_dao.get(tenant_id)
         if tenant and tenant.sso_enabled:
             return True
 
-        base_url = await platform_service.get_public_base_url(None)
+        base_url = await platform_service.get_public_base_url()
         parts = base_url.split("://")
         if len(parts) < 2:
             return True

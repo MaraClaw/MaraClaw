@@ -247,9 +247,7 @@ class AgentManager:
             return
         link.symlink_to(workspace)
 
-    async def initialize_agent_files(
-        self, agent: AgentRecord, personality: str = "", boundaries: str = "", db: object | None = None
-    ) -> None:
+    async def initialize_agent_files(self, agent: AgentRecord, personality: str = "", boundaries: str = "") -> None:
         """Copy template files and customize for this agent."""
         agent_dir = self._agent_dir(agent.id)
         template_dir = self._template_dir()
@@ -681,7 +679,7 @@ class AgentManager:
 
         return config
 
-    async def start_container(self, db: object | None, agent: AgentRecord) -> str | None:
+    async def start_container(self, agent: AgentRecord) -> str | None:
         """Start an OpenClaw Gateway Docker container for the agent.
 
         Returns container_id or None if Docker not available.
@@ -694,7 +692,7 @@ class AgentManager:
 
         agent_dir = await self._materialize_agent_dir(agent.id)
         if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
-            _ = await restore_gogcli_state(db, agent.id, agent_dir)
+            _ = await restore_gogcli_state(agent.id, agent_dir)
 
         original = agent
         self._replace_existing_guest_container(agent)

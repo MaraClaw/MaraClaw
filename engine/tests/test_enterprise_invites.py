@@ -18,7 +18,7 @@ def test_new_invitation_code_uses_expected_public_format():
 async def test_invitation_email_preflight_rejects_disabled_system_email(monkeypatch):
     calls = []
 
-    async def fake_resolve_email_config_async(_db, *, include_disabled: bool = False):
+    async def fake_resolve_email_config_async(*, include_disabled: bool = False):
         calls.append(include_disabled)
         if include_disabled:
             return SystemEmailConfig(
@@ -39,7 +39,7 @@ async def test_invitation_email_preflight_rejects_disabled_system_email(monkeypa
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await enterprise_api._ensure_invitation_email_enabled(None)
+        await enterprise_api._ensure_invitation_email_enabled()
 
     assert excinfo.value.status_code == 400
     assert "disabled" in excinfo.value.detail
@@ -48,7 +48,7 @@ async def test_invitation_email_preflight_rejects_disabled_system_email(monkeypa
 
 @pytest.mark.asyncio
 async def test_invitation_email_preflight_accepts_enabled_system_email(monkeypatch):
-    async def fake_resolve_email_config_async(_db, *, include_disabled: bool = False):
+    async def fake_resolve_email_config_async(*, include_disabled: bool = False):
         return SystemEmailConfig(
             from_address="bot@example.com",
             from_name="MaraClaw",
@@ -65,4 +65,4 @@ async def test_invitation_email_preflight_accepts_enabled_system_email(monkeypat
         fake_resolve_email_config_async,
     )
 
-    await enterprise_api._ensure_invitation_email_enabled(None)
+    await enterprise_api._ensure_invitation_email_enabled()

@@ -142,7 +142,7 @@ def _serialize(config: ChannelConfigRecord) -> dict[str, JsonValue]:
     }
 
 
-async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID, db: object | None = None) -> str | None:
+async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID) -> str | None:
     """Return the configured Atlassian API key for the given agent, or None."""
     from app.config import get_settings
     from app.core.security import decrypt_data

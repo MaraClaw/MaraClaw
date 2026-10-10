@@ -139,15 +139,10 @@ async def _compute_access_level(user: _UserLike, agent: _AgentLike) -> str | Non
 
 
 async def get_agent_access_level_for_user_id(
-    db: object | None,
     user_id: uuid.UUID | None,
     agent: _AgentLike,
 ) -> str | None:
-    """Return 'manage', 'use', or None for a platform user and an agent.
-
-    ``db`` is accepted for call-site compatibility and ignored.
-    """
-    del db
+    """Return 'manage', 'use', or None for a platform user and an agent."""
     if not user_id:
         return None
 
@@ -173,16 +168,14 @@ async def get_agent_access_level_for_user_id(
 
 
 async def user_can_manage_agent_id(
-    db: object | None,
     user_id: uuid.UUID | None,
     agent: _AgentLike,
 ) -> bool:
-    return (await get_agent_access_level_for_user_id(db, user_id, agent)) == "manage"
+    return (await get_agent_access_level_for_user_id(user_id, agent)) == "manage"
 
 
-async def get_agent_accessible_user_ids(db: object | None, agent: AgentRecord) -> set[uuid.UUID]:
+async def get_agent_accessible_user_ids(agent: AgentRecord) -> set[uuid.UUID]:
     """Return platform users who can access an agent under current policy."""
-    del db
     access_mode = agent.access_mode or "company"
     if agent.tenant_id is None:
         return set()
@@ -216,13 +209,11 @@ def _agent_available(agent: AgentRecord | None) -> tuple[bool, str | None]:
 
 
 async def evaluate_agent_relationship_status(
-    db: object | None,
     rel: AgentAgentRelationshipRecord,
     *,
     current_user_id: uuid.UUID | None = None,
 ) -> RelationshipStatus:
     """Compute the effective status for an Agent -> Agent relationship."""
-    del db
     source = await agent_dao.get(rel.agent_id)
     target = rel.target_agent
     if target is None:
@@ -251,8 +242,8 @@ async def evaluate_agent_relationship_status(
 
     created_by_user_id = rel.created_by_user_id
     if created_by_user_id:
-        if await user_can_manage_agent_id(None, created_by_user_id, source) and await user_can_manage_agent_id(
-            None, created_by_user_id, target
+        if await user_can_manage_agent_id(created_by_user_id, source) and await user_can_manage_agent_id(
+            created_by_user_id, target
         ):
             return {
                 "access_allowed": True,
@@ -282,9 +273,7 @@ async def evaluate_agent_relationship_status(
         if not user_id or user_id in seen:
             continue
         seen.add(user_id)
-        if await user_can_manage_agent_id(None, user_id, source) and await user_can_manage_agent_id(
-            None, user_id, target
-        ):
+        if await user_can_manage_agent_id(user_id, source) and await user_can_manage_agent_id(user_id, target):
             return {
                 "access_allowed": True,
                 "access_status": "active",
@@ -299,13 +288,11 @@ async def evaluate_agent_relationship_status(
 
 
 async def evaluate_human_relationship_status(
-    db: object | None,
     rel: AgentRelationshipRecord,
     *,
     source_agent: AgentRecord | None = None,
 ) -> RelationshipStatus:
     """Compute the effective status for an Agent -> Human relationship."""
-    del db
     if source_agent is None:
         source_agent = await agent_dao.get(rel.agent_id)
     member = rel.member
@@ -331,7 +318,7 @@ async def evaluate_human_relationship_status(
             "access_status_reason": "different_tenant",
         }
     if member.user_id:
-        access_level = await get_agent_access_level_for_user_id(None, member.user_id, source_agent)
+        access_level = await get_agent_access_level_for_user_id(member.user_id, source_agent)
         if not access_level:
             return {
                 "access_allowed": False,
@@ -346,15 +333,11 @@ async def evaluate_human_relationship_status(
     }
 
 
-async def check_agent_access(
-    user: _UserLike, agent_id: uuid.UUID, db: object | None = None, *, fresh: bool = False
-) -> tuple[AgentRecord, str]:
+async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, *, fresh: bool = False) -> tuple[AgentRecord, str]:
     """Check if a user has access to a specific agent.
 
     Returns (agent, access_level) where access_level is 'manage' or 'use'.
-    ``db`` is optional and ignored (legacy dual-stack parameter).
     """
-    del db
     if not getattr(user, "is_active", True):
         raise HTTPException(403, "User is inactive")
     if fresh:

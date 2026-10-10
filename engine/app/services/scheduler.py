@@ -65,7 +65,6 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
         user_prompt = f"[Scheduled task] {instruction}"
 
         reply = await call_agent_llm_with_tools(
-            db=None,
             agent_id=agent_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,

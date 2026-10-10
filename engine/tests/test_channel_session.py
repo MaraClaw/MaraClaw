@@ -30,7 +30,6 @@ async def test_find_or_create_retries_unique_violation(monkeypatch: pytest.Monke
     monkeypatch.setattr(channel_session_mod.chat_session_dao, "create", create)
 
     session = await channel_session_mod.find_or_create_channel_session(
-        None,
         agent_id,
         user_id,
         "feishu_p2p_1",

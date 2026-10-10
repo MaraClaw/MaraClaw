@@ -7,15 +7,12 @@ from pydantic import SecretStr
 
 from app.api import gogcli as gogcli_api
 from app.api.gogcli import GogcliKeyringSecretRequest, set_gogcli_keyring_secret
+from app.records.user import UserRecord
 from app.services import gogcli_runtime
 
 
-def _user(role: str = "member"):
-    return SimpleNamespace(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4(), display_name="Test User")
-
-
-def _db() -> object:
-    return SimpleNamespace(close=lambda: None)
+def _user(role: str = "member") -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4(), display_name="Test User")
 
 
 def _agent(*, enabled: bool = True) -> SimpleNamespace:
@@ -32,13 +29,13 @@ async def test_keyring_secret_endpoint_writes_secret_for_manager(monkeypatch, tm
     _configure_runtime(monkeypatch, tmp_path)
     agent = _agent(enabled=True)
 
-    async def check_access(_current_user, agent_id, _db=None):
+    async def check_access(_current_user, agent_id):
         assert agent_id == agent.id
         return agent, "manage"
 
     persist_calls = []
 
-    async def persist_secret(_db, agent_id, password):
+    async def persist_secret(agent_id, password):
         persist_calls.append((agent_id, password))
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -49,7 +46,6 @@ async def test_keyring_secret_endpoint_writes_secret_for_manager(monkeypatch, tm
         agent.id,
         GogcliKeyringSecretRequest(password=SecretStr("correct horse battery staple")),
         _user(),
-        _db(),
     )
 
     # Then
@@ -65,7 +61,7 @@ async def test_keyring_secret_endpoint_offloads_blocking_write(monkeypatch, tmp_
     agent = _agent(enabled=True)
     offload_calls = []
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     def blocking_write(_agent_id, _password):
@@ -76,7 +72,7 @@ async def test_keyring_secret_endpoint_offloads_blocking_write(monkeypatch, tmp_
         offload_calls.append((function, args))
         return tmp_path / "stored-secret"
 
-    async def persist_secret(_db, _agent_id, _password):
+    async def persist_secret(_agent_id, _password):
         return None
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -89,7 +85,6 @@ async def test_keyring_secret_endpoint_offloads_blocking_write(monkeypatch, tmp_
         agent.id,
         GogcliKeyringSecretRequest(password=SecretStr("correct horse battery staple")),
         _user(),
-        _db(),
     )
 
     # Then
@@ -102,7 +97,7 @@ async def test_keyring_secret_endpoint_requires_manage_access(monkeypatch, tmp_p
     _configure_runtime(monkeypatch, tmp_path)
     agent = _agent(enabled=True)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "use"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -113,7 +108,6 @@ async def test_keyring_secret_endpoint_requires_manage_access(monkeypatch, tmp_p
             agent.id,
             GogcliKeyringSecretRequest(password=SecretStr("secret")),
             _user(),
-            _db(),
         )
     assert exc_info.value.status_code == 403
 
@@ -123,7 +117,7 @@ async def test_keyring_secret_endpoint_rejects_non_gogcli_agent(monkeypatch, tmp
     _configure_runtime(monkeypatch, tmp_path)
     agent = _agent(enabled=False)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -134,7 +128,6 @@ async def test_keyring_secret_endpoint_rejects_non_gogcli_agent(monkeypatch, tmp
             agent.id,
             GogcliKeyringSecretRequest(password=SecretStr("secret")),
             _user(),
-            _db(),
         )
     assert exc_info.value.status_code == 400
 
@@ -143,7 +136,7 @@ async def test_start_auth_endpoint_requires_manage_access(monkeypatch) -> None:
     # Given
     agent = _agent(enabled=True)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "use"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -152,7 +145,7 @@ async def test_start_auth_endpoint_requires_manage_access(monkeypatch) -> None:
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user(), _db())
+        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user())
     assert exc_info.value.status_code == 403
 
 
@@ -160,7 +153,7 @@ async def test_start_auth_endpoint_rejects_non_gogcli_agent(monkeypatch) -> None
     # Given
     agent = _agent(enabled=False)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -169,7 +162,7 @@ async def test_start_auth_endpoint_rejects_non_gogcli_agent(monkeypatch) -> None
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user(), _db())
+        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user())
     assert exc_info.value.status_code == 400
 
 
@@ -179,7 +172,7 @@ async def test_start_auth_endpoint_reports_missing_container_without_raw_output(
     agent.container_id = None
     raw_output = "raw-gog-stdout-should-not-leak"
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def failing_start(_docker_client, _agent, _account_email):
@@ -192,7 +185,7 @@ async def test_start_auth_endpoint_reports_missing_container_without_raw_output(
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user(), _db())
+        await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user())
     assert exc_info.value.status_code == 409
     assert raw_output not in str(exc_info.value.detail)
 
@@ -203,7 +196,7 @@ async def test_start_auth_endpoint_returns_sanitized_auth_url(monkeypatch) -> No
     agent.container_id = "container-oauth"
     raw_output = "raw-gog-stdout-should-not-leak"
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def starting_auth(_docker_client, _agent, _account_email):
@@ -221,7 +214,7 @@ async def test_start_auth_endpoint_returns_sanitized_auth_url(monkeypatch) -> No
     start_request = gogcli_api.GogcliAuthStartRequest
 
     # When
-    response = await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user(), _db())
+    response = await start_auth(agent.id, start_request(account_email="maraclaw@example.com"), _user())
 
     # Then
     payload = response.model_dump()
@@ -236,7 +229,7 @@ async def test_auth_status_endpoint_requires_manage_access(monkeypatch) -> None:
     # Given
     agent = _agent(enabled=True)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "use"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -244,7 +237,7 @@ async def test_auth_status_endpoint_requires_manage_access(monkeypatch) -> None:
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await get_status(agent.id, _user(), _db())
+        await get_status(agent.id, _user())
     assert exc_info.value.status_code == 403
 
 
@@ -252,7 +245,7 @@ async def test_auth_status_endpoint_rejects_non_gogcli_agent(monkeypatch) -> Non
     # Given
     agent = _agent(enabled=False)
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -260,7 +253,7 @@ async def test_auth_status_endpoint_rejects_non_gogcli_agent(monkeypatch) -> Non
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await get_status(agent.id, _user(), _db())
+        await get_status(agent.id, _user())
     assert exc_info.value.status_code == 400
 
 
@@ -270,7 +263,7 @@ async def test_auth_status_endpoint_reports_missing_container_without_raw_output
     agent.container_id = None
     raw_output = "raw-gog-stderr-should-not-leak"
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def missing_container_status(_docker_client, _agent):
@@ -282,7 +275,7 @@ async def test_auth_status_endpoint_reports_missing_container_without_raw_output
 
     # When / Then
     with pytest.raises(HTTPException) as exc_info:
-        await get_status(agent.id, _user(), _db())
+        await get_status(agent.id, _user())
     assert exc_info.value.status_code == 409
     assert raw_output not in str(exc_info.value.detail)
 
@@ -293,7 +286,7 @@ async def test_auth_status_endpoint_returns_sanitized_status(monkeypatch) -> Non
     agent.container_id = "container-oauth"
     raw_output = "raw-gog-status-output-should-not-leak"
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def authenticated_status(_docker_client, _agent):
@@ -307,7 +300,7 @@ async def test_auth_status_endpoint_returns_sanitized_status(monkeypatch) -> Non
 
     capture_calls = []
 
-    async def capture_state(_db, agent_id, _agent_dir, status):
+    async def capture_state(agent_id, _agent_dir, status):
         capture_calls.append((agent_id, status.authenticated, status.account_hint))
 
     monkeypatch.setattr(gogcli_api, "check_agent_access", check_access)
@@ -316,7 +309,7 @@ async def test_auth_status_endpoint_returns_sanitized_status(monkeypatch) -> Non
     get_status = gogcli_api.get_gogcli_auth_status
 
     # When
-    response = await get_status(agent.id, _user(), _db())
+    response = await get_status(agent.id, _user())
 
     # Then
     payload = response.model_dump()
@@ -334,13 +327,13 @@ async def test_auth_status_endpoint_marks_snapshotted_state_needs_reauth(monkeyp
     agent = _agent(enabled=True)
     agent.container_id = "container-oauth"
 
-    async def check_access(_current_user, _agent_id, _db=None):
+    async def check_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def unauthenticated_status(_docker_client, _agent):
         return SimpleNamespace(authenticated=False, account_hint=None, detail="Not authenticated")
 
-    async def mark_needs_reauth(_db, agent_id):
+    async def mark_needs_reauth(agent_id):
         assert agent_id == agent.id
         return True
 
@@ -349,7 +342,7 @@ async def test_auth_status_endpoint_marks_snapshotted_state_needs_reauth(monkeyp
     monkeypatch.setattr(gogcli_api, "mark_gogcli_needs_reauth_if_snapshot_exists", mark_needs_reauth)
 
     # When
-    response = await gogcli_api.get_gogcli_auth_status(agent.id, _user(), _db())
+    response = await gogcli_api.get_gogcli_auth_status(agent.id, _user())
 
     # Then
     assert response.model_dump() == {

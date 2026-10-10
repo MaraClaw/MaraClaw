@@ -1,6 +1,5 @@
 import asyncio
 import uuid
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import override
@@ -53,33 +52,33 @@ class _SyncAdapterWithFailure(_DummyAdapter):
         self.failure_provider = provider
 
     @override
-    async def _ensure_provider(self, db: object) -> SimpleNamespace:
+    async def _ensure_provider(self) -> SimpleNamespace:
         return self.failure_provider
 
     @override
-    async def _upsert_department(self, db: object, provider: SimpleNamespace, dept: ExternalDepartment) -> None:
+    async def _upsert_department(self, provider: SimpleNamespace, dept: ExternalDepartment) -> None:
         return None
 
     @override
     async def _upsert_member(
-        self, db: object, provider: SimpleNamespace, user: ExternalUser, department_external_id: str
+        self, provider: SimpleNamespace, user: ExternalUser, department_external_id: str
     ) -> dict[str, bool]:
         raise ValueError("unionid is required")
 
     @override
-    async def _reconcile(self, db: object, provider_id: uuid.UUID, sync_start: datetime) -> None:
+    async def _reconcile(self, provider_id: uuid.UUID, sync_start: datetime) -> None:
         self.reconcile_called = True
 
     @override
-    async def _update_member_counts(self, db: object, provider_id: uuid.UUID) -> None:
+    async def _update_member_counts(self, provider_id: uuid.UUID) -> None:
         self.member_counts_updated = True
 
     @override
-    async def _rebuild_department_paths(self, db: object, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
+    async def _rebuild_department_paths(self, provider_id: uuid.UUID) -> dict[uuid.UUID, str]:
         return {}
 
     @override
-    async def _refresh_member_department_paths(self, db: object, provider_id: uuid.UUID) -> None:
+    async def _refresh_member_department_paths(self, provider_id: uuid.UUID) -> None:
         return None
 
     @override
@@ -119,27 +118,17 @@ def test_validate_member_identifiers_allows_wecom_without_unionid():
 
 def test_sync_org_structure_skips_reconcile_after_member_failure(monkeypatch):
     adapter = _SyncAdapterWithFailure()
-    db = SimpleNamespace(begin_nested=None, flush=None)
-
-    @asynccontextmanager
-    async def begin_nested():
-        yield
-
-    async def flush() -> None:
-        return None
 
     async def fake_provider_update(*, db_obj, obj_in):
         if isinstance(getattr(db_obj, "config", None), dict) and isinstance(obj_in.get("config"), dict):
             db_obj.config = obj_in["config"]
         return db_obj
 
-    monkeypatch.setattr(db, "begin_nested", begin_nested, raising=False)
-    monkeypatch.setattr(db, "flush", flush, raising=False)
     from app.dao.identity_provider_dao import identity_provider_dao
 
     monkeypatch.setattr(identity_provider_dao, "update", fake_provider_update)
 
-    result = asyncio.run(adapter.sync_org_structure(db))
+    result = asyncio.run(adapter.sync_org_structure())
 
     assert adapter.reconcile_called is False
     assert adapter.member_counts_updated is True
@@ -165,7 +154,7 @@ def test_reconcile_marks_stale_members_and_departments(monkeypatch):
 
     monkeypatch.setattr(dept_mod, "connection_ctx", lambda: _Ctx())
 
-    asyncio.run(adapter._reconcile(None, uuid.uuid4(), datetime.now(UTC)))
+    asyncio.run(adapter._reconcile(uuid.uuid4(), datetime.now(UTC)))
 
     assert len(statements) == 2
     assert any("org_members" in s for s in statements)

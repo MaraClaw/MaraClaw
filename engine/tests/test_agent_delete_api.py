@@ -61,7 +61,7 @@ async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch):
     agent = make_agent(creator.id)
     executed: list[str] = []
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def fake_delete_with_related(agent_id):
@@ -97,7 +97,7 @@ async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(m
     agent = make_agent(creator.id)
     called_with: list[uuid.UUID] = []
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def fake_delete_with_related(agent_id):
@@ -127,7 +127,7 @@ async def test_delete_agent_propagates_required_cleanup_failure_without_committi
     creator = make_user()
     agent = make_agent(creator.id)
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def failing_delete(_agent_id):
@@ -155,7 +155,7 @@ async def test_delete_agent_ignores_expected_container_and_archive_failures(monk
     agent = make_agent(creator.id)
     deleted: list[uuid.UUID] = []
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "manage"
 
     async def fake_delete_with_related(agent_id):

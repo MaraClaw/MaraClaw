@@ -55,11 +55,9 @@ def build_department_path_map(departments: Sequence[OrgDepartmentRecord]) -> dic
 
 
 async def derive_member_department_paths(
-    db: object | None,
     members: Sequence[OrgMemberRecord],
 ) -> dict[uuid.UUID, str]:
     """Resolve member department paths from department_id via the department tree."""
-    del db
     dept_ids = {member.department_id for member in members if member.department_id}
     if not dept_ids:
         return {}

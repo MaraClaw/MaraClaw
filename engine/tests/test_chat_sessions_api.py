@@ -30,7 +30,7 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
         is_primary=False,
     )
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return agent, "use"
 
     async def fake_agent_get(_id):
@@ -100,7 +100,7 @@ async def test_creator_can_list_all_sessions(monkeypatch):
         is_primary=False,
     )
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return agent, "manage"
 
     async def fake_agent_get(_id):
@@ -171,7 +171,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         thinking=None,
     )
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return SimpleNamespace(id=agent_id, creator_id=uuid.uuid4()), "use"
 
     async def fake_get_session(_sid, _aid):
@@ -227,7 +227,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         thinking=None,
     )
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return agent, "manage"
 
     async def fake_get_session(_sid, _aid):
@@ -272,7 +272,7 @@ async def test_create_session_returns_web_session_shape(monkeypatch):
         created_at=now,
     )
 
-    async def fake_check_agent_access(_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_user, _agent_id):
         return SimpleNamespace(id=agent_id), "use"
 
     async def fake_create(*, obj_in):

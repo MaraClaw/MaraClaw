@@ -15,7 +15,6 @@ from app.services.channel_user_service import get_platform_user_by_org_member
 async def _save_channel_message(
     facade: ModuleType | None = None,
     *,
-    db: object | None = None,
     agent_id: uuid.UUID,
     org_member: OrgMemberRecord,
     external_conv_id: str,
@@ -23,16 +22,13 @@ async def _save_channel_message(
     message_text: str,
     log_label: str,
 ) -> None:
-    """Persist a proactive outbound channel message. ``db`` is dual-stack and ignored."""
-    del db
+    """Persist a proactive outbound channel message."""
     agent = await agent_dao.get(agent_id)
     platform_user = await get_platform_user_by_org_member(
-        db=None,
         org_member=org_member,
         agent_tenant_id=agent.tenant_id if agent else None,
     )
     session = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=platform_user.id,
         external_conv_id=external_conv_id,

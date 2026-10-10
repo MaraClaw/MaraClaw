@@ -164,10 +164,10 @@ async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel/webhook-url")
-async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
+async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request):
     from app.services.platform_service import platform_service
 
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/whatsapp/{agent_id}/webhook"}
 
 
@@ -256,7 +256,6 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     continue
 
                 platform_user = await channel_user_service.resolve_channel_user(
-                    db=None,
                     agent=agent_obj,
                     channel_type="whatsapp",
                     external_user_id=sender_phone,
@@ -265,7 +264,6 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 platform_user_id = platform_user.id
                 conv_id = f"whatsapp_{sender_phone}"
                 sess = await find_or_create_channel_session(
-                    db=None,
                     agent_id=agent_id,
                     user_id=platform_user_id,
                     external_conv_id=conv_id,
@@ -289,7 +287,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 )
                 _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-                _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+                _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
                 from app.services.channels import inbound as channel_inbound
 

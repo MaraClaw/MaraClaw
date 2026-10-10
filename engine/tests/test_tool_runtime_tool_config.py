@@ -48,7 +48,7 @@ async def test_tool_config_merges_global_tenant_and_agent_values_in_precedence_o
     }
     cached = []
 
-    async def get_tenant_config(_db, received_tenant_id, tool_name, config_schema):
+    async def get_tenant_config(received_tenant_id, tool_name, config_schema):
         assert received_tenant_id == tenant_id
         assert tool_name == "configured_tool"
         assert config_schema == {"fields": [{"key": "secret_key", "type": "password"}]}

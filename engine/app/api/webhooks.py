@@ -136,7 +136,6 @@ async def receive_webhook(token: str, request: Request):
         payload_str = repr(body[:2000])
 
     _execution, created = await enqueue_webhook_execution(
-        None,
         trigger=target,
         body=body,
         payload_text=payload_str,

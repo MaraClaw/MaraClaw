@@ -24,9 +24,7 @@ def _float_value(value: ToolArgumentValue) -> float:
 
 
 class _OkrAccessModule(Protocol):
-    async def _load_okr_request_context(
-        self, db: object | None, agent_id: uuid.UUID, user_id: uuid.UUID | None
-    ) -> _OKRRequestContext: ...
+    async def _load_okr_request_context(self, agent_id: uuid.UUID, user_id: uuid.UUID | None) -> _OKRRequestContext: ...
 
     def _can_access_existing_okr_target(
         self, ctx: _OKRRequestContext, owner_type: str, owner_id: uuid.UUID | None
@@ -93,7 +91,7 @@ async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | N
     except ValueError:
         return f"Invalid kr_id format: {kr_id_str}"
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         if not ctx["agent"]:
             return "Agent not found."
         if not ctx["tenant_id"]:
@@ -175,7 +173,7 @@ async def _update_kr_content(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
     if not provided_updates:
         return "No KR content fields provided. You can update: title, target_value, unit, focus_ref, status."
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         if not ctx["agent"]:
             return "Agent not found."
         if not ctx["tenant_id"]:
@@ -226,7 +224,7 @@ async def _update_any_kr_progress(
     if not agent_id:
         return "OKR tools require agent context."
     try:
-        ctx = await _okr_access_module()._load_okr_request_context(None, agent_id, user_id)
+        ctx = await _okr_access_module()._load_okr_request_context(agent_id, user_id)
         if not ctx["agent"]:
             return "Agent not found."
         if not ctx["tenant_id"]:

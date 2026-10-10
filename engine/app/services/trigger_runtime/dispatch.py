@@ -39,7 +39,6 @@ def runtime_execution_payload(trigger: AgentTriggerRecord) -> JsonObject:
 
 async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> None:
     _ = await enqueue_trigger_execution(
-        None,
         trigger=trigger,
         source=trigger.type,
         idempotency_key=build_scheduled_execution_key(trigger, now),

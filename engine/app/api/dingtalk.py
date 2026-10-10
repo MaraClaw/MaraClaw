@@ -174,7 +174,6 @@ async def process_dingtalk_message(
     conv_id = f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
 
     platform_user = await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent_obj,
         channel_type="dingtalk",
         external_user_id=sender_staff_id,
@@ -183,7 +182,6 @@ async def process_dingtalk_message(
     platform_user_id = platform_user.id
 
     sess = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=platform_user_id,
         external_conv_id=conv_id,
@@ -223,7 +221,7 @@ async def process_dingtalk_message(
     _dt_app_key = _dt_cfg.app_id if _dt_cfg else None
     _dt_app_secret = _dt_cfg.app_secret if _dt_cfg else None
 
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     _agent_name = agent_obj.name
 
     llm_user_text = user_text

@@ -32,12 +32,10 @@ async def _save_outgoing_to_feishu_session(outgoing: _OutgoingFeishuMessage) -> 
     try:
         agent = await agent_dao.get(outgoing.agent_id)
         platform_user = await get_platform_user_by_org_member(
-            db=None,
             org_member=outgoing.member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
         session = await find_or_create_channel_session(
-            db=None,
             agent_id=outgoing.agent_id,
             user_id=platform_user.id,
             external_conv_id=f"feishu_p2p_{outgoing.feishu_user_id}",
@@ -86,7 +84,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             )
             if not direct_relationship:
                 return "❌ Recipient is not in your active relationship network"
-            status_info = await evaluate_human_relationship_status(None, direct_relationship)
+            status_info = await evaluate_human_relationship_status(direct_relationship)
             if status_info["access_status"] != "active":
                 return (
                     "❌ Relationship to recipient is not active "
@@ -121,7 +119,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
 
         target_member = None
         for relationship in relationships:
-            status_info = await evaluate_human_relationship_status(None, relationship)
+            status_info = await evaluate_human_relationship_status(relationship)
             if (
                 relationship.member
                 and status_info["access_status"] == "active"

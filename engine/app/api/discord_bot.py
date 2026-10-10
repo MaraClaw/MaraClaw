@@ -125,10 +125,10 @@ async def get_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = De
 
 
 @router.get("/agents/{agent_id}/discord-channel/webhook-url")
-async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
+async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request):
     from app.services.platform_service import platform_service
 
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/discord/{agent_id}/webhook"}
 
 
@@ -284,7 +284,6 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             _extra_info = mapping_from_row({"name": _display})
 
             _platform_user = await channel_user_service.resolve_channel_user(
-                db=None,
                 agent=agent_obj,
                 channel_type="discord",
                 external_user_id=sender_id,
@@ -304,7 +303,6 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             platform_user_id = _platform_user.id
 
             sess = await find_or_create_channel_session(
-                db=None,
                 agent_id=agent_id,
                 user_id=creator_id if _is_group_discord else platform_user_id,
                 external_conv_id=conv_id,
@@ -331,7 +329,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             )
             _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
-            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
             cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
             _bot_token_bg = cfg.app_secret if cfg else ""

@@ -12,7 +12,6 @@ from app.services.registration_service import registration_service
 
 
 async def ensure_access_granted_platform_relationships(
-    db: object | None,
     agent: AgentRecord,
     *,
     created_by_user_id: uuid.UUID | None = None,
@@ -31,7 +30,7 @@ async def ensure_access_granted_platform_relationships(
     if access_mode not in ("private", "custom") or not agent.tenant_id:
         return False
 
-    user_ids = await get_agent_accessible_user_ids(None, agent)
+    user_ids = await get_agent_accessible_user_ids(agent)
     if not user_ids:
         return False
 

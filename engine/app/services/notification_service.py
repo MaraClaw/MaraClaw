@@ -10,7 +10,6 @@ from app.records.notification import NotificationRecord
 
 
 async def send_notification(
-    db: object | None = None,
     user_id: uuid.UUID | None = None,
     *,
     agent_id: uuid.UUID | None = None,
@@ -21,11 +20,7 @@ async def send_notification(
     ref_id: uuid.UUID | None = None,
     sender_name: str | None = None,
 ) -> NotificationRecord:
-    """Create and persist a notification for a user or an agent.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+    """Create and persist a notification for a user or an agent."""
     if not user_id and not agent_id:
         raise ValueError("Either user_id or agent_id must be provided")
 

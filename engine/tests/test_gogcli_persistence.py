@@ -62,10 +62,10 @@ async def test_keyring_password_and_authenticated_data_restore_from_encrypted_st
     status = GogcliAuthStatus(authenticated=True, account_hint="maraclaw@example.com", detail="Authenticated")
 
     # When
-    await gogcli_persistence.upsert_gogcli_keyring_password(None, agent_id, "correct horse battery staple")
-    await gogcli_persistence.capture_authenticated_gogcli_state(None, agent_id, agent_dir, status)
+    await gogcli_persistence.upsert_gogcli_keyring_password(agent_id, "correct horse battery staple")
+    await gogcli_persistence.capture_authenticated_gogcli_state(agent_id, agent_dir, status)
     shutil.rmtree(data_dir)
-    await gogcli_persistence.restore_gogcli_state(None, agent_id, agent_dir)
+    await gogcli_persistence.restore_gogcli_state(agent_id, agent_dir)
 
     # Then
     assert dao.state is not None
@@ -97,7 +97,7 @@ async def test_capture_authenticated_state_skips_when_status_is_not_authenticate
     status = GogcliAuthStatus(authenticated=False, account_hint=None, detail="Not authenticated")
 
     # When
-    await gogcli_persistence.capture_authenticated_gogcli_state(None, agent_id, agent_dir, status)
+    await gogcli_persistence.capture_authenticated_gogcli_state(agent_id, agent_dir, status)
 
     # Then
     assert dao.state is None
@@ -117,7 +117,7 @@ async def test_mark_needs_reauth_updates_only_when_snapshot_exists(monkeypatch: 
     bind_dao(monkeypatch, dao)
 
     # When
-    await gogcli_persistence.mark_gogcli_needs_reauth_if_snapshot_exists(None, agent_id)
+    await gogcli_persistence.mark_gogcli_needs_reauth_if_snapshot_exists(agent_id)
 
     # Then
     assert state.status == "needs_reauth"
@@ -140,7 +140,7 @@ async def test_restore_marks_needs_reauth_when_encrypted_state_is_corrupted(monk
     bind_dao(monkeypatch, dao)
 
     # When
-    restored = await gogcli_persistence.restore_gogcli_state(None, agent_id, tmp_path / "agent-workspace")
+    restored = await gogcli_persistence.restore_gogcli_state(agent_id, tmp_path / "agent-workspace")
 
     # Then
     assert restored is False

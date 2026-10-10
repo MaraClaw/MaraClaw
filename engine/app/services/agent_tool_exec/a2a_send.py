@@ -78,7 +78,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
                 f"❌ You do not have a relationship with {target_agent.name}. Only agents in your relationship list "
                 + "can receive files. Ask your administrator to add a relationship if needed."
             )
-        status_info = await evaluate_agent_relationship_status(None, rel)
+        status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_agent.name} is not active "

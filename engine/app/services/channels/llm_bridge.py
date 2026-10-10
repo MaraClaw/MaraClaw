@@ -30,15 +30,14 @@ def _get_llm_timeout(model: LLMModelRecord) -> float:
 
 
 async def _load_agent_and_model(
-    db: object | None, agent_id: uuid.UUID
+    agent_id: uuid.UUID,
 ) -> tuple[AgentRecord | None, LLMModelRecord | None, LLMModelRecord | None]:
     """Load agent and LLM model configs.
 
-    Returns (agent, model, fallback_model). ``db`` is accepted for call-site
-    compatibility and ignored (pure-psycopg path). Routing happens later in
-    ``_call_llm_with_config`` so this tuple stays backward compatible.
+    Returns (agent, enabled primary model, enabled fallback model).
+    ``_call_llm_with_config`` loads the secondary model and selects the turn's
+    model and failover target later; the secondary model is not a tuple slot.
     """
-    del db
     from app.dao import agent_dao
     from app.services.llm.router import load_agent_model_bundle
 
@@ -141,7 +140,6 @@ async def _call_llm_with_config(
 
 
 async def _call_agent_llm(
-    db: object | None,
     agent_id: uuid.UUID,
     user_text: str,
     history: list[OpenAIMessage] | None = None,
@@ -151,7 +149,7 @@ async def _call_agent_llm(
     on_thinking: ThinkingCallback | None = None,
     on_tool_call: ToolCallback | None = None,
 ) -> str:
-    agent, model, fallback_model = await _load_agent_and_model(db, agent_id)
+    agent, model, fallback_model = await _load_agent_and_model(agent_id)
     if not agent:
         return "⚠️ Digital employee not found"
     return await _call_llm_with_config(

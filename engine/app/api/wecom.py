@@ -336,8 +336,8 @@ async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
 
 
 @router.get("/agents/{agent_id}/wecom-channel/webhook-url")
-async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None):
-    public_base = await platform_service.get_public_base_url(db, request)
+async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request):
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/wecom/{agent_id}/webhook"}
 
 
@@ -584,7 +584,6 @@ async def _process_wecom_text(
 
     # Resolve channel user via unified service (uses OrgMember + SSO patterns)
     platform_user = await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent_obj,
         channel_type="wecom",
         external_user_id=from_user,
@@ -594,7 +593,6 @@ async def _process_wecom_text(
 
     # Find or create session
     sess = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=creator_id if _is_group else platform_user_id,
         external_conv_id=conv_id,
@@ -625,7 +623,7 @@ async def _process_wecom_text(
 
     from app.api.feishu import _load_agent_and_model
 
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
     from app.services.channels import inbound as channel_inbound
 

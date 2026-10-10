@@ -55,7 +55,7 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     sent: list[tuple[str, str, object, str | None]] = []
     delivered: list[tuple[object, object, str]] = []
 
-    async def get_agent(_key: str, _db=None) -> AgentRecord:
+    async def get_agent(_key: str) -> AgentRecord:
         return agent
 
     async def get_for_agent(_message_id, _agent_id):

@@ -23,7 +23,7 @@ class PlatformService:
         ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$")
         return bool(ip_pattern.match(h))
 
-    async def get_public_base_url(self, db: object | None = None, request: Request | None = None) -> str:
+    async def get_public_base_url(self, request: Request | None = None) -> str:
         """Resolve the platform's public base URL with priority lookup.
 
         Priority:
@@ -31,7 +31,6 @@ class PlatformService:
         2. Incoming request's base URL (browser address)
         3. Hardcoded fallback (https://try.maraclaw.ai)
         """
-        del db
         # 1. Try environment variable
         env_url = os.environ.get("PUBLIC_BASE_URL")
         if env_url:
@@ -50,7 +49,6 @@ class PlatformService:
         tenant: _TenantSsoTarget,
         request: Request | None = None,
         *,
-        db: object | None = None,
         sso_redirect_enabled: bool = True,
     ) -> str:
         """Generate the SSO base URL for a tenant based on IP/Domain logic.
@@ -63,9 +61,9 @@ class PlatformService:
             return tenant.sso_domain.rstrip("/")
 
         if not sso_redirect_enabled:
-            return await self.get_public_base_url(db, request)
+            return await self.get_public_base_url(request)
 
-        base_url = await self.get_public_base_url(db, request)
+        base_url = await self.get_public_base_url(request)
 
         # Parse protocol and host
         # Example: http://1.2.3.4:8000 or http://maraclaw.ai

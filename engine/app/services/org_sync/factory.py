@@ -22,7 +22,6 @@ SYNC_ADAPTER_CLASSES: dict[str, type[BaseOrgSyncAdapter]] = {
 
 
 async def get_org_sync_adapter(
-    db: object | None,
     provider_type: str,
     tenant_id: uuid.UUID | None = None,
     provider_id: uuid.UUID | None = None,
@@ -30,7 +29,6 @@ async def get_org_sync_adapter(
     """Factory function to create org sync adapter.
 
     Args:
-        db: Database session (accepted for compatibility; ignored - pure-psycopg path)
         provider_type: Type of provider (feishu, dingtalk, etc.)
         tenant_id: Optional tenant ID
         provider_id: Optional specific provider ID (if not provided, uses first found by type)
@@ -38,7 +36,6 @@ async def get_org_sync_adapter(
     Returns:
         Adapter instance or None if not supported
     """
-    del db
     if provider_id:
         provider = await identity_provider_dao.get(provider_id)
     else:

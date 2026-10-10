@@ -35,7 +35,7 @@ async def run(arguments: Sequence[str]) -> int:
             print(_USAGE, file=sys.stderr)
             return 2
 
-    resolution = await resolve_agentbay_config(agent_id, None)
+    resolution = await resolve_agentbay_config(agent_id)
     _report_source(resolution.source)
     return 0 if resolution.api_key is not None else 1
 

@@ -121,7 +121,7 @@ async def _build_a2a_context(
                 f"❌ You do not have a relationship with {target.name}. Only agents in your relationship list "
                 + "can be contacted. Ask your administrator to add a relationship if needed."
             )
-        status_info = await evaluate_agent_relationship_status(None, rel)
+        status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target.name} is not active "

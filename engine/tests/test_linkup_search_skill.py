@@ -164,7 +164,7 @@ async def test_seed_linkup_skills_upserts_official_default_package(
     monkeypatch.setattr(linkup_runtime.skill_dao, "upsert_skill_package", fake_upsert_skill_package)
 
     # When
-    processed = await seed_linkup_skills(None)
+    processed = await seed_linkup_skills()
 
     # Then
     assert processed == len(DEFAULT_LINKUP_SKILLS)

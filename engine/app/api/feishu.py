@@ -499,11 +499,11 @@ async def get_channel_config(agent_id: uuid.UUID, current_user: UserRecord = Dep
 
 
 @router.get("/agents/{agent_id}/channel/webhook-url")
-async def get_webhook_url(agent_id: uuid.UUID, request: Request, db: object | None = None) -> dict[str, str]:
+async def get_webhook_url(agent_id: uuid.UUID, request: Request) -> dict[str, str]:
     """Get the webhook URL for this agent's Feishu bot."""
     from app.services.platform_service import platform_service
 
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/feishu/{agent_id}/webhook"}
 
 
@@ -560,7 +560,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
 
     # ── Phase 1: Load config + agent/model for LLM (pure-psycopg DAOs) ──
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     if not config:
         return {"code": 1, "msg": "Channel not found"}
     app_id = config.app_id
@@ -799,7 +799,6 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
 
             try:
                 platform_user = await channel_user_service.resolve_channel_user(
-                    db=None,
                     agent=agent_obj,
                     channel_type="feishu",
                     # For Feishu, external_user_id is strictly user_id (tenant-stable).
@@ -1372,7 +1371,6 @@ async def _handle_feishu_file(
 
     try:
         platform_user = await channel_user_service.resolve_channel_user(
-            db=None,
             agent=agent_obj,
             channel_type="feishu",
             # For Feishu, external_user_id is strictly user_id (tenant-stable).
@@ -1443,7 +1441,7 @@ async def _handle_feishu_file(
     )
 
     # Pre-load agent/model for LLM call
-    _agent_model_img, _llm_model_img, _fallback_model_img = await _load_agent_and_model(None, agent_id)
+    _agent_model_img, _llm_model_img, _fallback_model_img = await _load_agent_and_model(agent_id)
 
     # For images: call LLM so vision models can actually see the image
     if msg_type == "image":

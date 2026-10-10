@@ -64,7 +64,6 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
 
     async def resolve_channel_user(
         *,
-        db: object,
         agent: _Agent,
         channel_type: str,
         external_user_id: str,
@@ -74,7 +73,6 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
 
     async def find_channel_session(
         *,
-        db: object,
         agent_id: uuid.UUID,
         user_id: uuid.UUID,
         external_conv_id: str,
@@ -84,7 +82,6 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         return channel_session
 
     async def remember_context(
-        db: object,
         *,
         agent_id: uuid.UUID,
         from_user_id: str,
@@ -110,7 +107,6 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         return channel_session
 
     async def load_agent_and_model(
-        db: object,
         requested_agent_id: uuid.UUID,
     ) -> tuple[_Agent, None, None]:
         events.append("load-model")

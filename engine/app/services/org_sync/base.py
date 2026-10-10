@@ -77,16 +77,12 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
             List of ExternalUser
         """
 
-    async def sync_org_structure(self, db: object | None = None) -> dict[str, Any]:
+    async def sync_org_structure(self) -> dict[str, Any]:
         """Main sync function - syncs departments and members.
-
-        Args:
-            db: Accepted for dual-stack compatibility and ignored (DAO path).
 
         Returns:
             Dict with sync results: {"departments": count, "members": count, "users_created": count, "profiles_synced": count, "errors": []}
         """
-        del db
         errors = []
         dept_count = 0
         member_count = 0
@@ -96,7 +92,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
         partial_failure = False
 
         # Ensure provider exists
-        provider = await self._ensure_provider(None)
+        provider = await self._ensure_provider()
 
         try:
             # Fetch departments over HTTP first, then persist on one connection.
@@ -104,14 +100,14 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
             async with optional_connection_ctx():
                 for dept in departments:
                     try:
-                        await self._upsert_department(None, provider, dept)
+                        await self._upsert_department(provider, dept)
                         dept_count += 1
                     except Exception as e:
                         partial_failure = True
                         errors.append(f"Department {dept.external_id}: {e!s}")
                         logger.error(f"[OrgSync] Failed to sync department {dept.external_id}: {e}")
 
-                _ = await self._rebuild_department_paths(None, provider.id)
+                _ = await self._rebuild_department_paths(provider.id)
 
             # Fetch users over HTTP; persist each department's members together.
             for dept in departments:
@@ -126,7 +122,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                 async with optional_connection_ctx():
                     for user in users:
                         try:
-                            stats = await self._upsert_member(None, provider, user, dept.external_id)
+                            stats = await self._upsert_member(provider, user, dept.external_id)
                             if stats.get("user_created"):
                                 user_count += 1
                             if stats.get("profile_synced"):
@@ -138,7 +134,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                             errors.append(f"Member {user.external_id}: {e!s}")
 
             async with optional_connection_ctx():
-                await self._refresh_member_department_paths(None, provider.id)
+                await self._refresh_member_department_paths(provider.id)
 
                 if self.provider:
                     from app.dao.identity_provider_dao import identity_provider_dao
@@ -157,9 +153,9 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                         )
                         errors.append("Reconcile skipped due to partial sync failures")
                     else:
-                        await self._reconcile(None, provider.id, sync_start)
+                        await self._reconcile(provider.id, sync_start)
 
-                    await self._update_member_counts(None, provider.id)
+                    await self._update_member_counts(provider.id)
 
         except Exception as e:
             import traceback

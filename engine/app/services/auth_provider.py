@@ -138,13 +138,8 @@ class BaseAuthProvider(ABC):
         self,
         user_info: ExternalUserInfo,
         tenant_id: str | None = None,
-        db: object | None = None,
     ) -> tuple[UserRecord, bool]:
-        """Find existing user or create new one via Identity/OrgMember.
-
-        ``db`` is accepted for call-site compatibility and ignored.
-        """
-        del db
+        """Find existing user or create new one via Identity/OrgMember."""
         from app.services.registration_service import registration_service
         from app.services.sso_service import sso_service
 

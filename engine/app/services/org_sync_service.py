@@ -8,7 +8,7 @@ from app.dao.identity_provider_dao import identity_provider_dao
 class OrgSyncService:
     """Sync org structure from a specific identity provider."""
 
-    async def sync_provider(self, db: object | None, provider_id: str) -> JsonObject:
+    async def sync_provider(self, provider_id: str) -> JsonObject:
         import uuid as _uuid
 
         pid = _uuid.UUID(provider_id) if isinstance(provider_id, str) else provider_id
@@ -19,8 +19,7 @@ class OrgSyncService:
 
         from app.services.org_sync_adapter import get_org_sync_adapter
 
-        # Adapter factory may still accept a dual-stack db handle for unmigrated adapters.
-        adapter = await get_org_sync_adapter(db, provider.provider_type, provider_id=pid)
+        adapter = await get_org_sync_adapter(provider.provider_type, provider_id=pid)
         if not adapter:
             return {"error": f"Provider type '{provider.provider_type}' not supported for org sync"}
 
@@ -34,7 +33,7 @@ class OrgSyncService:
         adapter.tenant_id = provider.tenant_id
 
         try:
-            return await adapter.sync_org_structure(db)
+            return await adapter.sync_org_structure()
         except Exception as e:
             logger.error(f"[OrgSync] Provider sync failed: {e}")
             return {"error": str(e)}

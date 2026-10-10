@@ -157,14 +157,12 @@ def get_wechat_context_entry(
 
 
 async def remember_wechat_context(
-    db: object | None,
     *,
     agent_id: uuid.UUID,
     from_user_id: str,
     context_token: str,
     conv_id: str,
 ) -> None:
-    del db
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
     if not config:
         return

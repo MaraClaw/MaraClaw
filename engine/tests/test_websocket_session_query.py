@@ -16,7 +16,7 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
         calls["get_primary"] = {"agent_id": agent_id, "user_id": user_id}
         return
 
-    async def ensure_primary_session(db, agent_id, user_id):
+    async def ensure_primary_session(agent_id, user_id):
         calls["ensure"] = {"agent_id": agent_id, "user_id": user_id}
         return SimpleNamespace(id=uuid.uuid4())
 
@@ -50,7 +50,7 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
     user_id = uuid.uuid4()
     handler = websocket.WebSocketChatHandler(WebSocket[State](scope, receive, send), agent_id, "token")
 
-    conv_id = await handler._resolve_chat_session(None, user_id)
+    conv_id = await handler._resolve_chat_session(user_id)
 
     assert conv_id is not None
     assert calls["get_primary"]["agent_id"] == agent_id
@@ -61,14 +61,22 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_to_session_falls_back_to_user(monkeypatch) -> None:
-    sent: list[object] = []
+    sent: list[dict] = []
 
     async def route_message(**kwargs):
         sent.append(kwargs)
 
     monkeypatch.setattr(websocket.realtime_router, "route_message", route_message)
     manager = websocket.ConnectionManager()
-    ws = object()
+    scope: Scope = {"type": "websocket"}
+
+    async def receive() -> Message:
+        return {"type": "websocket.disconnect"}
+
+    async def send(_message: Message) -> None:
+        return None
+
+    ws = WebSocket[State](scope, receive, send)
     user_id = str(uuid.uuid4())
     manager.active_connections["agent-1"] = [(ws, "other-session", user_id)]
 

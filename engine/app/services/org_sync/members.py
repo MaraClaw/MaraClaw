@@ -23,13 +23,11 @@ class OrgSyncMemberMixin:
 
     async def _upsert_member(
         self,
-        db: object | None,
         provider: IdentityProviderRecord,
         user: ExternalUser,
         department_external_id: str,
     ) -> dict[str, bool]:
         """Insert or update a member, platform user, and identity."""
-        del db
         stats = {"user_created": False, "profile_synced": False}
         self._validate_member_identifiers(provider, user)
 
@@ -50,7 +48,7 @@ class OrgSyncMemberMixin:
                 provider_id=provider.id,
             )
 
-        existing_member = await self._find_existing_member(None, provider, user)
+        existing_member = await self._find_existing_member(provider, user)
 
         now = _utcnow()
         user_id = None
@@ -162,11 +160,9 @@ class OrgSyncMemberMixin:
 
     async def _find_existing_member(
         self,
-        db: object | None,
         provider: IdentityProviderRecord,
         user: ExternalUser,
     ) -> OrgMemberRecord | None:
-        del db
         if user.unionid:
             existing_member = await org_member_dao.get_by_unionid(provider.id, user.unionid)
             if existing_member:
@@ -180,9 +176,8 @@ class OrgSyncMemberMixin:
             unionid=user.unionid or None,
         )
 
-    async def _resolve_platform_user(self, db: object | None, user: ExternalUser) -> UserRecord | None:
+    async def _resolve_platform_user(self, user: ExternalUser) -> UserRecord | None:
         """Resolve platform user from external user info."""
-        del db
         email = _normalize_contact(user.email)
         if email:
             # Prefer tenant-scoped lookup when available

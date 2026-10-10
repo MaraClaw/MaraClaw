@@ -877,7 +877,6 @@ async def call_llm_with_failover(
 
 
 async def call_agent_llm(
-    db: object,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
     agent_id: uuid.UUID,
     user_text: str,
     history: list[OpenAIMessage] | None = None,
@@ -963,7 +962,6 @@ async def call_agent_llm(
 
 
 async def call_agent_llm_with_tools(
-    db: object,  # dual-stack: accepted for call-site compatibility; DAO path ignores SQLAlchemy session
     agent_id: uuid.UUID,
     system_prompt: str,
     user_prompt: str,

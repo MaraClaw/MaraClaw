@@ -77,7 +77,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 | `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
 | `connection_ctx` | cm | `app/db/session.py:26` | 130+ | Commit on success; join if nested |
 | `BaseDAO` | class | `app/dao/base.py` | 43 | CRUD + record dataclass defaults |
-| `check_agent_access` | function | `app/core/permissions.py:349` | 39 | `(user, agent_id)` - leftover `db` ignored |
+| `check_agent_access` | function | `app/core/permissions.py:349` | 39 | `(user, agent_id)` - no DB placeholder |
 | `logger` | import | `app/core/logging` | 146 | Queued process logger |
 | `TOOL_HANDLERS` | registry | `app/services/agent_tool_exec/registry.py` | tools | `@register` dispatch |
 | `get_sandbox_backend` | function | `app/services/sandbox/registry.py` | tools | Backend factory |

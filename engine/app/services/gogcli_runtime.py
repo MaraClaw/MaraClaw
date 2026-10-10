@@ -126,12 +126,8 @@ def gogcli_skill_folder_names() -> list[str]:
     return [folder_name for folder_name, _path in _skill_files()]
 
 
-async def seed_gogcli_skill(db: object | None = None) -> None:
-    """Idempotently seed all vendored gogcli skills as non-default skills.
-
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
-    """
-    del db
+async def seed_gogcli_skill() -> None:
+    """Idempotently seed all vendored gogcli skills as non-default skills."""
     if not GOGCLI_ENABLED or not settings.GOGCLI_ENABLED:
         return
 

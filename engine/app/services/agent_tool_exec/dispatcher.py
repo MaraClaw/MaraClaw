@@ -266,7 +266,6 @@ async def execute_tool(
             agent = await agent_dao.get(agent_id)
             if agent:
                 result_check = await autonomy_service.check_and_enforce(
-                    None,
                     agent,
                     action_type,
                     {"tool": tool_name, "args": str(arguments)[:200], "requested_by": str(user_id)},

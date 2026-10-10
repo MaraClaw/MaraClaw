@@ -354,13 +354,12 @@ async def get_teams_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     """Get the Microsoft Teams webhook URL for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     from app.services.platform_service import platform_service
 
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/teams/{agent_id}/webhook"}
 
 

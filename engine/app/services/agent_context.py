@@ -168,13 +168,13 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
 
     human_rows: list[tuple[AgentRelationshipRecord, str | None]] = []
     for rel in await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id):
-        status_info = await evaluate_human_relationship_status(None, rel)
+        status_info = await evaluate_human_relationship_status(rel)
         if status_info["access_status"] == "active":
             human_rows.append((rel, _display_provider_name(rel.provider_name, rel.provider_type)))
 
     agent_rels: list[AgentAgentRelationshipRecord] = []
     for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id):
-        status_info = await evaluate_agent_relationship_status(None, rel)
+        status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] == "active":
             agent_rels.append(rel)
 

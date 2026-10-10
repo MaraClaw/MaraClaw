@@ -74,7 +74,6 @@ async def _execute_workspace_mutation(
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
             )
         write_result = await write_workspace_file(
-            None,
             agent_id=agent_id,
             base_dir=base_dir,
             path=path,
@@ -107,7 +106,6 @@ async def _execute_workspace_mutation(
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
             )
         move_result = await move_workspace_path(
-            None,
             agent_id=agent_id,
             base_dir=base_dir,
             source_path=source_path,
@@ -129,7 +127,6 @@ async def _execute_workspace_mutation(
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
             )
         delete_result = await delete_workspace_file(
-            None,
             agent_id=agent_id,
             base_dir=base_dir,
             path=path,
@@ -184,7 +181,6 @@ async def _execute_workspace_mutation(
             content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
         )
         write_result = await write_workspace_file(
-            None,
             agent_id=agent_id,
             base_dir=base_dir,
             path=normalized_path,

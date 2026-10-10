@@ -55,7 +55,6 @@ async def resolve_sender_user(
     extra_info: dict[str, Any] | None = None,
 ) -> UserRecord:
     return await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent,
         channel_type=channel_type,
         external_user_id=external_user_id,
@@ -74,7 +73,6 @@ async def open_channel_session(
     group_name: str | None = None,
 ) -> ChatSessionRecord:
     return await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=user_id,
         external_conv_id=external_conv_id,

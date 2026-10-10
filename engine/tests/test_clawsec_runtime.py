@@ -123,7 +123,7 @@ async def test_seed_clawsec_skills_creates_default_and_catalog_packages(
     )
 
     # When
-    processed = await seed_clawsec_skills(None)
+    processed = await seed_clawsec_skills()
 
     # Then
     assert processed == 6
@@ -168,7 +168,7 @@ async def test_seed_clawsec_skills_noop_when_disabled(monkeypatch: pytest.Monkey
     monkeypatch.setattr(clawsec_runtime.skill_dao, "upsert_skill_package", boom)
 
     # When
-    processed = await seed_clawsec_skills(None)
+    processed = await seed_clawsec_skills()
 
     # Then
     assert processed == 0

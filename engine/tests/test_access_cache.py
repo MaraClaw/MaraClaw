@@ -469,7 +469,7 @@ async def test_access_helpers_observe_version_before_decision_inputs(monkeypatch
     if helper == "request":
         result = (await permissions.check_agent_access(user, agent.id))[1]
     else:
-        result = await permissions.get_agent_access_level_for_user_id(None, user.id, agent)
+        result = await permissions.get_agent_access_level_for_user_id(user.id, agent)
     assert result == "use"
     assert not any(key.startswith("acl:v1:") for key in fake.store)
 
@@ -484,7 +484,7 @@ async def test_inactive_user_id_helper_rejects_even_a_request_memo(monkeypatch):
 
     monkeypatch.setattr(permissions.user_dao, "get", user_input)
     access_cache.memo_set(user.id, agent.id, agent, "manage")
-    assert await permissions.get_agent_access_level_for_user_id(None, user.id, agent) is None
+    assert await permissions.get_agent_access_level_for_user_id(user.id, agent) is None
 
 
 class _SessionPoolCM:

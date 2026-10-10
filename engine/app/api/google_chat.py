@@ -119,10 +119,9 @@ async def get_google_chat_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-    db: object | None = None,
 ):
     _ = await check_agent_access(current_user, agent_id)
-    public_base = await platform_service.get_public_base_url(db, request)
+    public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/google-chat/{agent_id}/webhook"}
 
 

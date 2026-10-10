@@ -66,13 +66,10 @@ class BroadcastEmailRecipient:
     body: str
 
 
-async def resolve_email_config_async(
-    db: object | None = None, *, include_disabled: bool = False
-) -> SystemEmailConfig | None:
+async def resolve_email_config_async(*, include_disabled: bool = False) -> SystemEmailConfig | None:
     """Resolve email configuration from the 'system_email_platform' system setting.
 
-    ``db`` is accepted for call-site compatibility but ignored - the lookup
-    goes through ``system_setting_dao`` which manages its own session.
+    The lookup goes through ``system_setting_dao`` which manages its own session.
     """
     from app.dao import system_setting_dao
 
@@ -103,14 +100,13 @@ async def resolve_email_config_async(
     return None
 
 
-async def send_system_email(to: str, subject: str, body: str, db: object | None = None) -> None:
+async def send_system_email(to: str, subject: str, body: str) -> None:
     """Send a plain-text system email without blocking the event loop.
 
     Args:
         to: Recipient email address
         subject: Email subject
         body: Email body text
-        db: Ignored; kept for call-site compatibility
     """
     config = await resolve_email_config_async()
 
@@ -149,7 +145,6 @@ async def send_password_reset_email(
     display_name: str,
     reset_url: str,
     expiry_minutes: int,
-    db: object | None = None,
 ) -> None:
     """Send a password reset email using the configured template.
 
@@ -158,15 +153,14 @@ async def send_password_reset_email(
         display_name: User display name
         reset_url: Password reset URL
         expiry_minutes: Token expiry time in minutes
-        db: Optional database session
     """
     variables = {
         "display_name": display_name,
         "reset_url": reset_url,
         "expiry_minutes": str(expiry_minutes),
     }
-    subject, body = await render_email_template("password_reset", variables, db=db)
-    await send_system_email(to, subject, body, db=db)
+    subject, body = await render_email_template("password_reset", variables)
+    await send_system_email(to, subject, body)
 
 
 async def send_company_invitation_email(
@@ -174,7 +168,6 @@ async def send_company_invitation_email(
     inviter_name: str,
     company_name: str,
     invite_url: str,
-    db: object | None = None,
 ) -> None:
     """Send a company invitation email using the configured template.
 
@@ -183,15 +176,14 @@ async def send_company_invitation_email(
         inviter_name: Name of the person inviting
         company_name: Name of the company
         invite_url: Registration URL with invitation code
-        db: Optional database session
     """
     variables = {
         "inviter_name": inviter_name,
         "company_name": company_name,
         "invite_url": invite_url,
     }
-    subject, body = await render_email_template("company_invitation", variables, db=db)
-    await send_system_email(to, subject, body, db=db)
+    subject, body = await render_email_template("company_invitation", variables)
+    await send_system_email(to, subject, body)
 
 
 async def deliver_broadcast_emails(recipients: Iterable[BroadcastEmailRecipient]) -> None:
@@ -294,14 +286,12 @@ def _render_template(template_str: str, variables: dict[str, str]) -> str:
 async def render_email_template(
     scenario_key: str,
     variables: dict[str, str],
-    db: object | None = None,  # kept for call-site compat, ignored
 ) -> tuple[str, str]:
     """Render an email template for a given scenario.
 
     Args:
         scenario_key: One of the known scenario keys (e.g. 'email_verification')
         variables: Dict of variable_name -> value to substitute
-        db: Ignored; kept for backward-compatibility
 
     Returns:
         (subject, body) tuple with variables substituted
@@ -315,12 +305,11 @@ async def render_email_template(
     return subject, body
 
 
-async def send_test_email(to: str, db: object | None = None) -> None:
+async def send_test_email(to: str) -> None:
     """Send a test email to verify SMTP configuration.
 
     Args:
         to: Recipient email address
-        db: Ignored; kept for call-site compatibility
     """
     config = await resolve_email_config_async(include_disabled=True)
 

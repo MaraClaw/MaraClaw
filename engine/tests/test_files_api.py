@@ -61,7 +61,7 @@ async def test_use_access_cannot_delete_agent_workspace_file(monkeypatch, tmp_pa
     workspace_file.parent.mkdir(parents=True)
     workspace_file.write_text("do not delete", encoding="utf-8")
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "use"
 
     monkeypatch.setattr(files_api.settings, "AGENT_DATA_DIR", str(tmp_path))
@@ -87,7 +87,7 @@ async def test_manage_access_can_delete_agent_workspace_file(monkeypatch, tmp_pa
     workspace_file.parent.mkdir(parents=True)
     workspace_file.write_text("delete me", encoding="utf-8")
 
-    async def fake_check_agent_access(_current_user, _agent_id, _db=None):
+    async def fake_check_agent_access(_current_user, _agent_id):
         return agent, "manage"
 
     storage = LocalStorageBackend(str(tmp_path))

@@ -159,7 +159,7 @@ async def get_tool_config(
             tenant_config: JsonObject = {}
             schema = _as_tool_config_schema(config_schema)
             if tool_source == "builtin":
-                tenant_config = await get_tenant_tool_config(None, agent_tenant_id, db_tool_name, schema)
+                tenant_config = await get_tenant_tool_config(agent_tenant_id, db_tool_name, schema)
             if not isinstance(global_config, dict):
                 global_config = dict[str, Any](global_config)
             merged: dict[str, Any] = {**global_config, **tenant_config, **agent_config}
@@ -174,7 +174,7 @@ async def get_tool_config(
     tenant_config = {}
     schema = _as_tool_config_schema(tool.config_schema)
     if tool.source == "builtin":
-        tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, schema)
+        tenant_config = await get_tenant_tool_config(agent_tenant_id, tool.name, schema)
     merged = {**(tool.config or {}), **tenant_config}
     if not merged:
         return None

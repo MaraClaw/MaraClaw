@@ -58,7 +58,7 @@ def _config():
     return SimpleNamespace(app_id="app-id", app_secret="app-secret")
 
 
-async def _active_status(_db, relationship, **_kwargs):
+async def _active_status(relationship, **_kwargs):
     return {
         "access_status": getattr(relationship, "access_status", "active"),
         "access_status_reason": getattr(relationship, "access_status_reason", None),
@@ -88,8 +88,8 @@ def _patch_dependencies(
     async def list_with_members(_agent_id):
         return list(named_relationships or [])
 
-    async def platform_user(*, db, org_member, agent_tenant_id=None):
-        platform_calls.append((db, org_member, agent_tenant_id))
+    async def platform_user(*, org_member, agent_tenant_id=None):
+        platform_calls.append((org_member, agent_tenant_id))
         return SimpleNamespace(id=uuid.uuid4())
 
     async def channel_session(**kwargs):

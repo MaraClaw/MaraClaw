@@ -14,15 +14,10 @@ if TYPE_CHECKING:
 
 
 async def _resolve_a2a_target(
-    db: object | None,
     from_agent_id: uuid.UUID,
     agent_name: str,
 ) -> tuple[AgentRecord | None, str | None]:
-    """Resolve a peer agent by exact then fuzzy name match within the source tenant.
-
-    ``db`` is accepted for dual-stack call-site compatibility and ignored.
-    """
-    del db
+    """Resolve a peer agent by exact then fuzzy name match within the source tenant."""
     source_agent = await agent_dao.get(from_agent_id)
     source_tenant_id = source_agent.tenant_id if source_agent else None
 
@@ -54,17 +49,12 @@ async def _resolve_a2a_target(
 
 
 async def _ensure_a2a_session(
-    db: object | None,
     from_agent_id: uuid.UUID,
     target_id: uuid.UUID,
     source_name: str,
     owner_id: uuid.UUID,
 ) -> tuple[ChatSessionRecord, str]:
-    """Get or create the canonical agent↔agent chat session.
-
-    ``db`` is accepted for dual-stack call-site compatibility and ignored.
-    """
-    del db
+    """Get or create the canonical agent↔agent chat session."""
     session_agent_id = min(from_agent_id, target_id, key=str)
     session_peer_id = max(from_agent_id, target_id, key=str)
     chat_session = await chat_session_dao.get_agent_peer_session(

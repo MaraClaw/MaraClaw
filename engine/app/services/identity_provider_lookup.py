@@ -36,13 +36,8 @@ async def get_preferred_identity_provider(
     tenant_id: str | None = None,
     *,
     is_active: bool | None = True,
-    db: object | None = None,
 ) -> IdentityProviderRecord | None:
-    """Fetch the preferred provider without raising on duplicate rows.
-
-    ``db`` is accepted for call-site compatibility and ignored.
-    """
-    del db
+    """Fetch the preferred provider without raising on duplicate rows."""
     return await identity_provider_dao.get_preferred(
         str(provider_type),
         as_uuid(tenant_id),

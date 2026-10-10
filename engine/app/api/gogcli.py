@@ -64,7 +64,7 @@ class GogcliAuthStatusResponse(BaseModel):
     detail: str
 
 
-async def _get_gogcli_manage_agent(db: object | None, current_user: UserRecord, agent_id: uuid.UUID) -> AgentRecord:
+async def _get_gogcli_manage_agent(current_user: UserRecord, agent_id: uuid.UUID) -> AgentRecord:
     """Return a gogcli-enabled agent after enforcing manage/admin access."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level == "manage" or current_user.role in GOGCLI_ADMIN_ROLES:
@@ -92,14 +92,13 @@ async def set_gogcli_keyring_secret(
     agent_id: uuid.UUID,
     data: GogcliKeyringSecretRequest,
     current_user: Annotated[UserRecord, Depends(get_current_user)],
-    db: object | None = None,
 ) -> None:
     """Store or rotate the file-keyring password for a gogcli-enabled agent."""
-    agent = await _get_gogcli_manage_agent(db, current_user, agent_id)
+    agent = await _get_gogcli_manage_agent(current_user, agent_id)
 
     password = data.password.get_secret_value()
     _ = await run_sync(write_gogcli_keyring_secret, agent.id, password)
-    _ = await upsert_gogcli_keyring_password(db, agent.id, password)
+    _ = await upsert_gogcli_keyring_password(agent.id, password)
     logger.info(f"gogcli keyring secret updated for agent {agent.id}")
 
 
@@ -108,10 +107,9 @@ async def start_gogcli_auth(
     agent_id: uuid.UUID,
     data: GogcliAuthStartRequest,
     current_user: Annotated[UserRecord, Depends(get_current_user)],
-    db: object | None = None,
 ) -> GogcliAuthStartResponse:
     """Start a safe gogcli OAuth handoff for an already-running agent container."""
-    agent = await _get_gogcli_manage_agent(db, current_user, agent_id)
+    agent = await _get_gogcli_manage_agent(current_user, agent_id)
     _require_gogcli_container(agent)
 
     result = await start_gogcli_auth_handoff(_gogcli_docker_client(), agent, data.account_email)
@@ -124,17 +122,16 @@ async def start_gogcli_auth(
 async def get_gogcli_auth_status(
     agent_id: uuid.UUID,
     current_user: Annotated[UserRecord, Depends(get_current_user)],
-    db: object | None = None,
 ) -> GogcliAuthStatusResponse:
     """Return safe gogcli OAuth status fields for an already-running agent container."""
-    agent = await _get_gogcli_manage_agent(db, current_user, agent_id)
+    agent = await _get_gogcli_manage_agent(current_user, agent_id)
     _require_gogcli_container(agent)
 
     result = await read_gogcli_auth_status(_gogcli_docker_client(), agent)
     detail = result.detail
     if result.authenticated:
-        _ = await capture_authenticated_gogcli_state(db, agent.id, agent_manager._agent_dir(agent.id), result)
-    elif await mark_gogcli_needs_reauth_if_snapshot_exists(db, agent.id):
+        _ = await capture_authenticated_gogcli_state(agent.id, agent_manager._agent_dir(agent.id), result)
+    elif await mark_gogcli_needs_reauth_if_snapshot_exists(agent.id):
         detail = "Needs re-authentication"
     return GogcliAuthStatusResponse(
         authenticated=result.authenticated,

@@ -85,7 +85,7 @@ async def resolve_trigger_delivery_target(
         if not isinstance(origin_user_id, str):
             return None
         try:
-            primary = await ensure_primary_platform_session(None, agent.id, uuid.UUID(origin_user_id))
+            primary = await ensure_primary_platform_session(agent.id, uuid.UUID(origin_user_id))
             return {
                 "kind": "primary_user_session",
                 "session_id": str(primary.id),
@@ -350,7 +350,6 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
                         from app.api.websocket import maybe_mark_session_read_for_active_viewer
 
                         _ = await maybe_mark_session_read_for_active_viewer(
-                            None,
                             agent_id=agent_id,
                             session_id=notify_session_id,
                             user_id=uuid.UUID(notify_owner_user_id),

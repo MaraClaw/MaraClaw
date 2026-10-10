@@ -197,7 +197,7 @@ async def _agent_to_out(agent: AgentRecord, viewer_id: uuid.UUID) -> AgentOut:
     from app.services.onboarding import is_onboarded
 
     model = AgentOut.model_validate(agent)
-    model.onboarded_for_me = await is_onboarded(None, agent.id, viewer_id)
+    model.onboarded_for_me = await is_onboarded(agent.id, viewer_id)
     return model
 
 
@@ -259,7 +259,7 @@ async def list_agents(
     unread_by_agent = await _build_unread_count_by_agent(agents, current_user)
     from app.services.onboarding import onboarded_agent_ids
 
-    onboarded = await onboarded_agent_ids(None, current_user.id, [a.id for a in agents])
+    onboarded = await onboarded_agent_ids(current_user.id, [a.id for a in agents])
     out: list[AgentOut] = []
     for a in agents:
         model = _serialize_agent_out(a, unread_by_agent.get(str(a.id), 0))
@@ -358,7 +358,7 @@ async def _background_agent_setup(
             return
 
         if agent.tenant_id:
-            await hook_new_agent(None, agent.id, agent.tenant_id)
+            await hook_new_agent(agent.id, agent.tenant_id)
     except Exception as e:
         logger.exception(f"Error finishing agent setup for {agent_id}: {e}")
         await _set_agent_status_error(agent_id)
@@ -508,7 +508,7 @@ async def create_agent(
                 }
             )
 
-    _ = await ensure_access_granted_platform_relationships(None, agent, created_by_user_id=current_user.id)
+    _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
 
     raw_key, key_hash = mint_openclaw_gateway_key()
     agent = await agent_dao.update(
@@ -801,7 +801,6 @@ async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermi
         )
 
     relationships_changed = await ensure_access_granted_platform_relationships(
-        None,
         agent,
         created_by_user_id=current_user.id,
     )
@@ -1041,7 +1040,7 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can start agent")
 
-    _ = await agent_manager.start_container(None, agent)
+    _ = await agent_manager.start_container(agent)
     agent = await _persist_agent_runtime(agent)
     return await _agent_to_out(agent, current_user.id)
 
@@ -1098,7 +1097,7 @@ async def resolve_agent_approval(
     from app.services.autonomy_service import autonomy_service
 
     try:
-        approval = await autonomy_service.resolve_approval(None, approval_id, current_user, data.action)
+        approval = await autonomy_service.resolve_approval(approval_id, current_user, data.action)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

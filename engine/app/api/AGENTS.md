@@ -22,10 +22,10 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 - Users: `current_user: UserRecord = Depends(get_current_user)` - not `User`.
 - Admin: `get_current_admin` / `require_role(...)` (both inherit `must_change_password` gate from `get_current_user`).
-- Agents: `await check_agent_access(current_user, agent_id)` - leftover `db` args are ignored.
+- Agents: `await check_agent_access(current_user, agent_id)`; no discarded DB argument is accepted.
 - Persistence: DAOs. Short CRUD routers bind `bind_crud_connection` in `app.main` (one checkout). Do not attach that dependency to websocket / connector inbound / gateway / `linkup_proxy`. Extra `async with connection_ctx():` still joins.
 - `admin_search_analytics.py`: platform_admin only. Live SQL over `web_search_events`. Never return raw queries.
-- Many handlers still take unused `db=None` (legacy shim). Keep the arg; do not revive a session.
+- Handlers use canonical arguments without legacy DB placeholders; preserve real `DbConnection` parameters in transaction/locking helpers.
 - `websocket.py` and `files.py` download authenticate via `load_user_from_access_token` (identity + force-change). `gateway.py` uses agent API keys.
 - `gogcli.py` is mounted (`/api/agents/{id}/gogcli`); users are `UserRecord`.
 

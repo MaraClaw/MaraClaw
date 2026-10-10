@@ -161,14 +161,12 @@ manager = ConnectionManager()
 
 
 async def maybe_mark_session_read_for_active_viewer(
-    db: object | None,
     *,
     agent_id: uuid.UUID,
     session_id: str,
     user_id: uuid.UUID,
 ) -> bool:
     """Advance last_read_at_by_user if the owner is actively viewing this exact session."""
-    del db
     if not await manager.is_user_viewing_session(str(agent_id), session_id, str(user_id)):
         return False
 
@@ -300,13 +298,13 @@ class WebSocketChatHandler:
             )
 
             # Resolve or create chat session
-            conv_id = await self._resolve_chat_session(None, self.user.id)
+            conv_id = await self._resolve_chat_session(self.user.id)
             if not conv_id:
                 return False
             self.conv_id = conv_id
 
             # Load history messages
-            await self._load_history(None)
+            await self._load_history()
 
         except Exception as e:
             logger.exception(f"[WS] Setup error: {e}")
@@ -327,9 +325,8 @@ class WebSocketChatHandler:
 
         return True
 
-    async def _resolve_chat_session(self, db: object | None, user_id: uuid.UUID) -> str | None:
+    async def _resolve_chat_session(self, user_id: uuid.UUID) -> str | None:
         """Resolves existing session or creates a new one."""
-        del db
         conv_id = self.session_id_param
         if conv_id:
             try:
@@ -350,14 +347,13 @@ class WebSocketChatHandler:
             if _latest:
                 conv_id = str(_latest.id)
             else:
-                _new_session = await ensure_primary_platform_session(None, self.agent_id, user_id)
+                _new_session = await ensure_primary_platform_session(self.agent_id, user_id)
                 conv_id = str(_new_session.id)
                 logger.info(f"[WS] Selected primary session {conv_id}")
         return conv_id
 
-    async def _load_history(self, db: object | None):
+    async def _load_history(self):
         """Loads and prepares history messages for the conversation."""
-        del db
         try:
             self.history_messages = list(
                 await chat_message_dao.list_recent(
@@ -433,7 +429,7 @@ class WebSocketChatHandler:
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already started)."""
-        if await is_onboarded(None, self.agent_id, self.user.id):
+        if await is_onboarded(self.agent_id, self.user.id):
             logger.info("[WS] Onboarding trigger ignored - pair already onboarded")
             await self.websocket.send_json(
                 {
@@ -442,7 +438,7 @@ class WebSocketChatHandler:
                 }
             )
             return True
-        claimed = await try_begin_onboarding_greeting(None, self.agent_id, self.user.id)
+        claimed = await try_begin_onboarding_greeting(self.agent_id, self.user.id)
         if not claimed:
             logger.info("[WS] Onboarding trigger ignored - greeting already claimed")
             await self.websocket.send_json(

@@ -60,7 +60,6 @@ async def test_first_contact_is_the_only_tool_free_greeting_turn(monkeypatch):
     _patch_connection(monkeypatch, [None, 0, 0])
 
     injection = await resolve_onboarding_prompt(
-        None,
         _make_agent(),
         uuid.uuid4(),
         user_name="Ray",
@@ -85,7 +84,6 @@ async def test_template_follow_up_keeps_tools_enabled(monkeypatch):
     )
 
     injection = await resolve_onboarding_prompt(
-        None,
         _make_agent(template_id=template_id),
         uuid.uuid4(),
         user_name="Ray",
@@ -109,7 +107,6 @@ async def test_custom_follow_up_keeps_tools_enabled(monkeypatch):
     )
 
     injection = await resolve_onboarding_prompt(
-        None,
         _make_agent(),
         uuid.uuid4(),
         user_name="Ray",
@@ -133,7 +130,6 @@ async def test_custom_boundary_follow_up_keeps_tools_enabled(monkeypatch):
     )
 
     injection = await resolve_onboarding_prompt(
-        None,
         _make_agent(),
         uuid.uuid4(),
         user_name="Ray",
@@ -151,5 +147,5 @@ async def test_try_begin_onboarding_greeting_claims_once(monkeypatch):
     user_id = uuid.uuid4()
     _patch_connection(monkeypatch, [{"agent_id": agent_id}, None])
 
-    assert await try_begin_onboarding_greeting(None, agent_id, user_id) is True
-    assert await try_begin_onboarding_greeting(None, agent_id, user_id) is False
+    assert await try_begin_onboarding_greeting(agent_id, user_id) is True
+    assert await try_begin_onboarding_greeting(agent_id, user_id) is False

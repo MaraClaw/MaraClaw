@@ -43,11 +43,10 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     agent_lookup_calls: list[uuid.UUID] = []
     tenant_lookup_calls: list[tuple[uuid.UUID, str]] = []
 
-    async def get_source_agent(_api_key: str, _db=None) -> AgentRecord:
+    async def get_source_agent(_api_key: str) -> AgentRecord:
         return source_agent
 
     async def active_human_relationship(
-        _db,
         _relationship,
         *,
         source_agent: AgentRecord | None = None,
@@ -85,7 +84,6 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
         await gateway.send_message(
             GatewaySendMessageRequest(target=member.name, content="Hello"),
             "api-key",
-            None,
         )
 
     assert error.value.status_code == 400

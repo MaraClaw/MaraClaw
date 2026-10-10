@@ -1,5 +1,3 @@
-from unittest.mock import MagicMock
-
 import pytest
 from fastapi.responses import HTMLResponse
 
@@ -56,7 +54,7 @@ async def test_google_sso_callback_redacts_invalid_token_payload(monkeypatch: py
         assert provider_type == "google_workspace"
         assert tenant_id is None
 
-    async def get_google_redirect_uri(_db, _provider, _request=None) -> str:
+    async def get_google_redirect_uri(_provider, _request=None) -> str:
         return "https://example.test/callback"
 
     monkeypatch.setattr(google_workspace.auth_provider_registry, "get_provider", get_provider)
@@ -64,9 +62,8 @@ async def test_google_sso_callback_redacts_invalid_token_payload(monkeypatch: py
     monkeypatch.setattr(google_workspace, "get_google_redirect_uri", get_google_redirect_uri)
     monkeypatch.setattr(google_workspace, "logger", log_recorder)
 
-    db = MagicMock()
     # When: the SSO callback handles the OAuth exchange response.
-    response = await google_workspace._handle_google_sso_callback("authorization-code", None, None, None, db)
+    response = await google_workspace._handle_google_sso_callback("authorization-code", None, None, None)
 
     # Then: the public failure response is unchanged and the payload stays out of logs.
     assert isinstance(response, HTMLResponse)

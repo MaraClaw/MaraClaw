@@ -31,15 +31,13 @@ class AutonomyService:
 
     async def check_and_enforce(
         self,
-        db: object | None = None,
         agent: AgentRecord | None = None,
         action_type: str = "",
         details: JsonObject | None = None,
     ) -> JsonObject:
         """Check if an action is allowed under the agent's autonomy policy.
 
-        ``db`` is accepted for dual-stack call-site compatibility and ignored;
-        persistence goes through DAOs / connection_ctx.
+        Persistence goes through DAOs / connection_ctx.
 
         Returns:
             {
@@ -99,15 +97,11 @@ class AutonomyService:
 
     async def resolve_approval(
         self,
-        db: object | None = None,
         approval_id: uuid.UUID | None = None,
         user: UserRecord | None = None,
         action: str = "",
     ) -> ApprovalRequestRecord:
-        """Approve or reject a pending approval request.
-
-        ``db`` is accepted for dual-stack call-site compatibility and ignored.
-        """
+        """Approve or reject a pending approval request."""
         if approval_id is None or user is None:
             raise ValueError("Approval not found")
 
@@ -151,7 +145,6 @@ class AutonomyService:
             if execution_result:
                 body_text = f"Result: {execution_result}"
             _ = await send_notification(
-                None,
                 user_id=agent.creator_id,
                 type="approval_resolved",
                 title=f"[{agent.name}] {approval.action_type} - {status_label}",
@@ -166,7 +159,6 @@ class AutonomyService:
                     requester_id = uuid.UUID(requested_by)
                     if requester_id != agent.creator_id:
                         _ = await send_notification(
-                            None,
                             user_id=requester_id,
                             type="approval_resolved",
                             title=f"[{agent.name}] {approval.action_type} - {status_label}",
@@ -215,7 +207,6 @@ class AutonomyService:
         from app.services.notification_service import send_notification
 
         _ = await send_notification(
-            None,
             user_id=agent.creator_id,
             type="autonomy_l2",
             title=f"[{agent.name}] executed: {action_type}",
@@ -264,7 +255,6 @@ class AutonomyService:
         from app.services.notification_service import send_notification
 
         _ = await send_notification(
-            None,
             user_id=agent.creator_id,
             type="approval_pending",
             title=f"[{agent.name}] requests approval: {approval.action_type}",

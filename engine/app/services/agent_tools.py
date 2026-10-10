@@ -1474,11 +1474,10 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolParameters) -> 
 
 
 async def _load_okr_request_context(
-    db: object | None,
     agent_id: uuid.UUID,
     user_id: uuid.UUID | None,
 ) -> _agent_tool_exec_okr_access._OKRRequestContext:
-    return await _agent_tool_exec_okr_access._load_okr_request_context(db, agent_id, user_id)
+    return await _agent_tool_exec_okr_access._load_okr_request_context(agent_id, user_id)
 
 
 def _okr_permission_denied(message: str) -> str:

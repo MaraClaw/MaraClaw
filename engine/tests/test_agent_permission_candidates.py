@@ -16,7 +16,7 @@ async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(mon
     current_user = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=tenant_id)
     agent = SimpleNamespace(id=agent_id, tenant_id=tenant_id)
 
-    async def fake_check_access(_user, _agent_id, _db=None):
+    async def fake_check_access(_user, _agent_id):
         return agent, "manage"
 
     monkeypatch.setattr(agents_api, "check_agent_access", fake_check_access)
@@ -60,7 +60,7 @@ async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(mon
     async def fake_get_many_with_identity(user_ids):
         return {user_1.id: user_1}
 
-    async def fake_resolve_or_create(_org_member, agent_tenant_id=None, db=None):
+    async def fake_resolve_or_create(_org_member, agent_tenant_id=None):
         return user_2
 
     monkeypatch.setattr(agents_api.org_member_dao, "list_permission_candidates", fake_list_permission_candidates)

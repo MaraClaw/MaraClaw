@@ -125,7 +125,7 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
             tool = await tool_dao.get_by_name(tool_name)
             if not tool:
                 continue
-            tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, tool.config_schema)
+            tenant_config = await get_tenant_tool_config(agent_tenant_id, tool.name, tool.config_schema)
             tenant_value: object = tenant_config.get("smithery_api_key")
             if isinstance(tenant_value, str) and tenant_value:
                 return tenant_value
@@ -183,7 +183,7 @@ async def _get_modelscope_api_token(agent_id: uuid.UUID | None = None) -> str:
             tool = await tool_dao.get_by_name(tool_name)
             if not tool:
                 continue
-            tenant_config = await get_tenant_tool_config(None, agent_tenant_id, tool.name, tool.config_schema)
+            tenant_config = await get_tenant_tool_config(agent_tenant_id, tool.name, tool.config_schema)
             tenant_value: object = tenant_config.get("modelscope_api_token")
             if isinstance(tenant_value, str) and tenant_value:
                 return tenant_value

@@ -133,7 +133,6 @@ async def process_wechat_message(
         "external_id": from_user_id,
     }
     platform_user = await channel_user_service.resolve_channel_user(
-        db=None,
         agent=agent_obj,
         channel_type="wechat",
         external_user_id=from_user_id,
@@ -143,7 +142,6 @@ async def process_wechat_message(
     conv_id = f"wechat_{message['session_id']}"
 
     sess = await find_or_create_channel_session(
-        db=None,
         agent_id=agent_id,
         user_id=platform_user_id,
         external_conv_id=conv_id,
@@ -152,7 +150,6 @@ async def process_wechat_message(
     )
     session_conv_id = str(sess.id)
     await remember_wechat_context(
-        None,
         agent_id=agent_id,
         from_user_id=from_user_id,
         context_token=context_token,
@@ -176,7 +173,7 @@ async def process_wechat_message(
         conversation_id=session_conv_id,
     )
     _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(None, agent_id)
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
     from app.services.channels import inbound as channel_inbound
 

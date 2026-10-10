@@ -15,7 +15,6 @@ from app.records.chat import ChatSessionRecord
 
 
 async def find_or_create_channel_session(
-    db: object | None,
     agent_id: _uuid.UUID,
     user_id: _uuid.UUID,
     external_conv_id: str,
@@ -28,9 +27,7 @@ async def find_or_create_channel_session(
 
     Relies on the UNIQUE constraint on (agent_id, external_conv_id) in the DB.
 
-    ``db`` is accepted for call-site compatibility and ignored (psycopg path).
     """
-    del db
     session = await chat_session_dao.get_by_external_conv(
         agent_id=agent_id,
         external_conv_id=external_conv_id,

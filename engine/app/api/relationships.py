@@ -56,7 +56,7 @@ def _display_provider_name(provider_name: str | None, provider_type: str | None)
 
 
 async def _can_manage_agent(user_id: uuid.UUID, agent: AgentRecord) -> bool:
-    return (await get_agent_access_level_for_user_id(None, user_id, agent)) == "manage"
+    return (await get_agent_access_level_for_user_id(user_id, agent)) == "manage"
 
 
 async def _get_valid_member_user_id(
@@ -140,7 +140,6 @@ async def get_relationships(
     """Get all human relationships for this agent."""
     source_agent, _access_level = await check_agent_access(current_user, agent_id)
     if await ensure_access_granted_platform_relationships(
-        None,
         source_agent,
         created_by_user_id=current_user.id,
     ):
@@ -148,7 +147,6 @@ async def get_relationships(
 
     rows = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
     member_paths = await derive_member_department_paths(
-        None,
         [r.member for r in rows if r.member],
     )
     out: list[dict[str, object]] = []
@@ -161,7 +159,7 @@ async def get_relationships(
                 "relation": r.relation,
                 "relation_label": RELATION_LABELS.get(r.relation, r.relation),
                 "description": r.description,
-                **(await evaluate_human_relationship_status(None, r, source_agent=source_agent)),
+                **(await evaluate_human_relationship_status(r, source_agent=source_agent)),
                 "member": {
                     "name": r.member.name,
                     "title": r.member.title,
@@ -194,7 +192,7 @@ async def search_human_relationship_candidates(
 
     allowed_user_ids: list[uuid.UUID] | None = None
     if access_mode != "company":
-        allowed_user_ids = list(await get_agent_accessible_user_ids(None, agent))
+        allowed_user_ids = list(await get_agent_accessible_user_ids(agent))
 
     if agent.tenant_id is None:
         return []
@@ -224,7 +222,6 @@ async def search_human_relationship_candidates(
 
     filtered = sorted(filtered, key=lambda row: (row[0].name or "").lower())[:100]
     member_paths = await derive_member_department_paths(
-        None,
         [m for m, _provider_name, _provider_type, _linked_user_id in filtered],
     )
     org_member_candidates: list[HumanRelationshipCandidate] = [
@@ -246,7 +243,7 @@ async def search_human_relationship_candidates(
             "user_id": str(linked_user_id) if linked_user_id else None,
             "is_platform_user": bool(linked_user_id),
             "platform_access_level": (
-                await get_agent_access_level_for_user_id(None, linked_user_id, agent) if linked_user_id else None
+                await get_agent_access_level_for_user_id(linked_user_id, agent) if linked_user_id else None
             ),
         }
         for m, provider_name, provider_type, linked_user_id in filtered
@@ -274,7 +271,7 @@ async def save_relationships(
             platform_user = await user_dao.get_with_identity(platform_user_id)
             if not platform_user or platform_user.tenant_id != _agent.tenant_id or not platform_user.is_active:
                 raise HTTPException(status_code=400, detail="Platform user is not available")
-            if not await get_agent_access_level_for_user_id(None, platform_user.id, _agent):
+            if not await get_agent_access_level_for_user_id(platform_user.id, _agent):
                 raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
             if _agent.tenant_id is None:
                 raise HTTPException(status_code=400, detail="Agent has no organization")
@@ -305,7 +302,7 @@ async def save_relationships(
         linked_user_id = await _get_valid_member_user_id(member, _agent.tenant_id)
         if member.user_id and not linked_user_id:
             raise HTTPException(status_code=400, detail="Relationship member is linked to an unavailable platform user")
-        if linked_user_id and not await get_agent_access_level_for_user_id(None, linked_user_id, _agent):
+        if linked_user_id and not await get_agent_access_level_for_user_id(linked_user_id, _agent):
             raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
         existing = existing_by_member.get(member_id)
         _ = await agent_relationship_dao.create(
@@ -382,7 +379,7 @@ async def get_agent_relationships(
     rels = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
     out: list[dict[str, object]] = []
     for r in rels:
-        status_info = await evaluate_agent_relationship_status(None, r, current_user_id=current_user.id)
+        status_info = await evaluate_agent_relationship_status(r, current_user_id=current_user.id)
         out.append(
             {
                 "id": str(r.id),

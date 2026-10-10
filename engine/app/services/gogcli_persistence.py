@@ -57,14 +57,12 @@ def _gogcli_data_dir(agent_dir: Path) -> Path:
     return data_dir
 
 
-async def get_gogcli_credential_state(db: object | None, agent_id: UUID) -> GogcliCredentialStateRecord | None:
+async def get_gogcli_credential_state(agent_id: UUID) -> GogcliCredentialStateRecord | None:
     """Return the persisted gogcli credential row for one agent."""
     return await gogcli_credential_state_dao.get_by_agent(agent_id)
 
 
-async def upsert_gogcli_keyring_password(
-    db: object | None, agent_id: UUID, password: str
-) -> GogcliCredentialStateRecord:
+async def upsert_gogcli_keyring_password(agent_id: UUID, password: str) -> GogcliCredentialStateRecord:
     """Persist an encrypted gogcli file-keyring password for one agent."""
     now = datetime.now(UTC)
     encrypted_password = encrypt_data(password, settings.SECRET_KEY)
@@ -78,7 +76,7 @@ async def upsert_gogcli_keyring_password(
     return await gogcli_credential_state_dao.upsert_fields(agent_id, fields)
 
 
-async def restore_gogcli_state(db: object | None, agent_id: UUID, agent_dir: Path) -> bool:
+async def restore_gogcli_state(agent_id: UUID, agent_dir: Path) -> bool:
     """Restore encrypted gogcli keyring and data snapshot into a materialized agent directory."""
     state = await gogcli_credential_state_dao.get_by_agent(agent_id)
     if state is None:
@@ -112,7 +110,6 @@ async def restore_gogcli_state(db: object | None, agent_id: UUID, agent_dir: Pat
 
 
 async def capture_authenticated_gogcli_state(
-    db: object | None,
     agent_id: UUID,
     agent_dir: Path,
     status: GogcliAuthStatus,
@@ -143,7 +140,7 @@ async def capture_authenticated_gogcli_state(
     )
 
 
-async def mark_gogcli_needs_reauth_if_snapshot_exists(db: object | None, agent_id: UUID) -> bool:
+async def mark_gogcli_needs_reauth_if_snapshot_exists(agent_id: UUID) -> bool:
     """Mark a previously snapshotted gogcli state as requiring re-authentication."""
     state = await gogcli_credential_state_dao.get_by_agent(agent_id)
     if state is None or not state.encrypted_gog_data_archive:
