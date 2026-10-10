@@ -13,6 +13,7 @@ from unittest.mock import patch
 from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
+from app.runtime.tasks import EventTasks, cancel_tasks, is_async_callback
 
 try:
     import lark_oapi as _lark_mod
@@ -203,6 +204,9 @@ class FeishuWSManager:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._event_tasks: set[asyncio.Task[None]] = set()
         self._ping_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+        self._sdk_tasks: EventTasks = EventTasks()
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._closing: bool = False
 
     def _create_event_handler(self, agent_id: uuid.UUID) -> _EventHandler:
         """Create an event dispatcher for a specific agent."""
@@ -215,22 +219,17 @@ class FeishuWSManager:
                     logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
                     return
 
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(self._async_handle_message(agent_id, data))
-                self._event_tasks.add(task)
-                task.add_done_callback(self._event_tasks.discard)
-            except RuntimeError:
-                try:
-                    # If no running loop in this thread, try to find the main event loop
-                    # This is a heuristic and might need adjustment depending on the exact async framework setup
-                    main_task = next((task for task in asyncio.all_tasks() if task.get_name() != "feishu-ws"), None)
-                    if main_task is None:
-                        logger.warning("[Feishu WS] No active main task found for event dispatch")
+                def dispatch() -> None:
+                    if self._closing:
                         return
-                    main_loop = main_task.get_loop()
-                    _ = asyncio.run_coroutine_threadsafe(self._async_handle_message(agent_id, data), main_loop)
-                except Exception as e:
-                    logger.exception(f"[Feishu WS] Could not dispatch event to main loop: {e}")
+                    task = asyncio.create_task(self._async_handle_message(agent_id, data))
+                    self._event_tasks.add(task)
+                    task.add_done_callback(self._event_tasks.discard)
+
+                if self._main_loop and self._main_loop.is_running():
+                    self._main_loop.call_soon_threadsafe(dispatch)
+            except RuntimeError as exc:
+                logger.warning("[Feishu WS] Could not dispatch event: {}", exc)
 
         if _lark_mod is None:
             raise RuntimeError("lark-oapi package is not installed")
@@ -291,15 +290,13 @@ class FeishuWSManager:
 
         logger.info(f"[Feishu WS] Starting async WS client for agent {agent_id} (App ID: {app_id})")
 
-        # Stop existing client task if any
-        if stop_existing and agent_id in self._tasks:
-            old_task = self._tasks.pop(agent_id, None)
-            if old_task and not old_task.done():
-                _ = old_task.cancel()
-                logger.info(f"[Feishu WS] Cancelled old WS task for {agent_id}")
-        previous_ping_task = self._ping_tasks.pop(agent_id, None)
-        if previous_ping_task and not previous_ping_task.done():
-            _ = previous_ping_task.cancel()
+        self._main_loop = asyncio.get_running_loop()
+        self._closing = False
+        self._sdk_tasks.closing = False
+        if stop_existing:
+            await self.stop_client(agent_id)
+        elif agent_id in self._tasks and not self._tasks[agent_id].done():
+            return
 
         try:
             event_handler = self._create_event_handler(agent_id)
@@ -330,6 +327,11 @@ class FeishuWSManager:
             return
         client = built
         self._clients[agent_id] = client
+        # Retain SDK-spawned receive/message work for this client, without changing SDK retries.
+        for name in ("_receive_message_loop", "_handle_message"):
+            callback: object = getattr(client, name, None)
+            if is_async_callback(callback):
+                setattr(client, name, self._sdk_tasks.wrap(callback))
 
         # Build scoped proxy bypass: active only during _connect() to avoid
         # permanently replacing websockets.connect for the whole process.
@@ -354,6 +356,7 @@ class FeishuWSManager:
                 await _do_full_connect()
                 logger.info(f"[Feishu WS] Connected for agent {agent_id}, receive loop started")
             except asyncio.CancelledError:
+                await client._disconnect()
                 return
             except Exception as e:
                 logger.exception(f"[Feishu WS] Initial connect failed for agent {agent_id}: {e}")
@@ -414,19 +417,29 @@ class FeishuWSManager:
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stops an actively running WebSocket client for an agent."""
         ping_task = self._ping_tasks.pop(agent_id, None)
-        if ping_task and not ping_task.done():
-            _ = ping_task.cancel()
-        if agent_id in self._tasks:
-            task = self._tasks.pop(agent_id)
-            if not task.done():
-                _ = task.cancel()
-                logger.info(f"[Feishu WS] Stopped client task for agent {agent_id}")
+        task = self._tasks.pop(agent_id, None)
+        await cancel_tasks(child for child in (ping_task, task) if child is not None)
         if agent_id in self._clients:
             client = self._clients.pop(agent_id)
             try:
                 await client._disconnect()
             except Exception as e:
                 logger.error(f"[Feishu WS] Error disconnecting client for {agent_id}: {e}")
+
+    async def stop_all(self) -> None:
+        self._closing = True
+        self._sdk_tasks.closing = True
+        await self._sdk_tasks.stop()
+        results = await asyncio.gather(
+            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients) | set(self._ping_tasks)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("[Feishu WS] Client cleanup failed: {}", result)
+        await cancel_tasks(self._event_tasks)
+        self._event_tasks.clear()
+        self._main_loop = None
 
     async def start_all(self) -> None:
         """Start WS clients for all configured Feishu agents."""
