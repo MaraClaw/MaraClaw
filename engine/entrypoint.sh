@@ -3,7 +3,10 @@
 
 set -e
 
-PROCESS_ROLE="${PROCESS_ROLE:-all}"
+# Validate before permission fixes, privilege changes, bootstrap or resource work.
+# app.process_roles imports only the standard library (including before bootstrap).
+PROCESS_ROLE="$(python -m app.process_roles)"
+export PROCESS_ROLE
 ALLOW_MIGRATION_FAILURE="${ALLOW_MIGRATION_FAILURE:-false}"
 START_COMMAND="${START_COMMAND:-uvicorn app.main:app --host 0.0.0.0 --port 8000}"
 
