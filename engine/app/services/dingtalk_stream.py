@@ -10,7 +10,6 @@ import json
 import threading
 import uuid
 from collections.abc import Coroutine
-from concurrent.futures import Future as ConcurrentFuture
 from pathlib import Path
 from typing import TypedDict
 
@@ -18,6 +17,7 @@ import httpx
 
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
+from app.runtime.tasks import OwnedTasks
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.storage import store_agent_upload
 
@@ -471,12 +471,6 @@ async def _send_dingtalk_media_message(
 # ─── Stream Manager ─────────────────────────────────────
 
 
-def _fire_and_forget(loop: asyncio.AbstractEventLoop, coro: Coroutine[object, object, object]) -> None:
-    """Schedule a coroutine on the main loop and log any unhandled exception."""
-    future: ConcurrentFuture[object] = asyncio.run_coroutine_threadsafe(coro, loop)
-    future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-
-
 class DingTalkStreamManager:
     """Manages DingTalk Stream clients for all agents."""
 
@@ -484,6 +478,23 @@ class DingTalkStreamManager:
         self._threads: dict[uuid.UUID, threading.Thread] = {}
         self._stop_events: dict[uuid.UUID, threading.Event] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._children: OwnedTasks = OwnedTasks()
+        self._closing: bool = False
+
+    def _dispatch(self, loop: asyncio.AbstractEventLoop, coro: Coroutine[object, object, object]) -> None:
+        def schedule() -> None:
+            if self._closing:
+                coro.close()
+            else:
+                self._children.start("dingtalk-message", coro)
+
+        if self._closing or loop.is_closed():
+            coro.close()
+            return
+        try:
+            loop.call_soon_threadsafe(schedule)
+        except RuntimeError:
+            coro.close()
 
     async def start_client(
         self,
@@ -500,12 +511,16 @@ class DingTalkStreamManager:
         logger.info(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)")
 
         # Capture the main event loop so threads can dispatch coroutines back
-        if self._main_loop is None:
-            self._main_loop = asyncio.get_running_loop()
+        self._main_loop = asyncio.get_running_loop()
+        self._closing = False
 
         # Stop existing client if any
         if stop_existing:
             await self.stop_client(agent_id)
+        existing = self._threads.get(agent_id)
+        if existing and existing.is_alive():
+            logger.warning("[DingTalk Stream] Existing thread still running for {}", agent_id)
+            return
 
         stop_event = threading.Event()
         self._stop_events[agent_id] = stop_event
@@ -593,11 +608,11 @@ class DingTalkStreamManager:
                         # Add thinking reaction immediately
                         from app.services.dingtalk_reaction import add_thinking_reaction
 
-                        _fire_and_forget(
+                        manager_self._dispatch(
                             main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
                         )
 
-                        _fire_and_forget(
+                        manager_self._dispatch(
                             main_loop,
                             process_dingtalk_message(
                                 agent_id=agent_id,
@@ -619,11 +634,11 @@ class DingTalkStreamManager:
                         # Add thinking reaction immediately
                         from app.services.dingtalk_reaction import add_thinking_reaction
 
-                        _fire_and_forget(
+                        manager_self._dispatch(
                             main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
                         )
 
-                        _fire_and_forget(
+                        manager_self._dispatch(
                             main_loop,
                             manager_self._handle_media_and_dispatch(
                                 msg_data=msg_data,
@@ -708,8 +723,9 @@ class DingTalkStreamManager:
             if stop_event.wait(timeout=delay):
                 break  # stop was requested during wait
 
-        _ = self._threads.pop(agent_id, None)
-        _ = self._stop_events.pop(agent_id, None)
+        if self._threads.get(agent_id) is threading.current_thread():
+            _ = self._threads.pop(agent_id, None)
+            _ = self._stop_events.pop(agent_id, None)
         logger.info(f"[DingTalk Stream] Client stopped for agent {agent_id}")
 
     @staticmethod
@@ -754,15 +770,29 @@ class DingTalkStreamManager:
 
     async def stop_client(self, agent_id: uuid.UUID):
         """Stop a running Stream client for an agent."""
-        stop_event = self._stop_events.pop(agent_id, None)
+        stop_event = self._stop_events.get(agent_id)
         if stop_event:
             stop_event.set()
-        thread = self._threads.pop(agent_id, None)
+        thread = self._threads.get(agent_id)
         if thread and thread.is_alive():
             logger.info(f"[DingTalk Stream] Stopping client for agent {agent_id}, waiting for thread...")
-            thread.join(timeout=5)
+            await asyncio.to_thread(thread.join, 5)
             if thread.is_alive():
                 logger.warning(f"[DingTalk Stream] Thread for {agent_id} did not exit within 5s")
+                return
+        self._threads.pop(agent_id, None)
+        self._stop_events.pop(agent_id, None)
+
+    async def stop_all(self) -> None:
+        self._closing = True
+        for stop_event in tuple(self._stop_events.values()):
+            stop_event.set()
+        results = await asyncio.gather(*(self.stop_client(aid) for aid in tuple(self._threads)), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("[DingTalk Stream] Cleanup failed: {}", result)
+        await self._children.stop()
+        self._main_loop = None
 
     async def start_all(self):
         """Start Stream clients for all configured DingTalk agents."""
