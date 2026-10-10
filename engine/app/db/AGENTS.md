@@ -11,7 +11,7 @@ Live psycopg3 data-access layer. SQLAlchemy is gone from `app/`.
 
 | Module | Role |
 |---|---|
-| `url.py` | Normalize `DATABASE_URL` (`+asyncpg`/`+psycopg`, `ssl` → `sslmode`) |
+| `url.py` | Accept native `postgresql://` / `postgres://` URLs or libpq keyword conninfo; reject driver schemes and the `ssl` query alias (use `sslmode`) |
 | `pool.py` | `init_pool` / `close_pool` / `ping_pool` |
 | `connection.py` | `DbConnection` (`execute`, `fetch*`, maps errors) |
 | `session.py` | `connection_ctx` / `get_db` / `bind_crud_connection` / `optional_connection_ctx` / `transaction` |

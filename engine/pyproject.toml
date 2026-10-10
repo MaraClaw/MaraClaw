@@ -236,7 +236,6 @@ omit = [
     "app/services/gogcli_skill_files/*",
     "app/services/clawsec_skill_files/*",
     "app/templates/*",
-    "app/scripts/test_cleanup_duplicate_feishu_users.py",
 ]
 
 [tool.coverage.report]

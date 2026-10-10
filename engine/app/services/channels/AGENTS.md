@@ -31,7 +31,7 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 
 ## Adding a channel
 
-1. Add `ChannelKind` to `types.py` and extend Postgres `channel_type_enum` in `scripts/schema_baseline.sql` + `bootstrap_db.PATCHES`.
+1. Add `ChannelKind` to `types.py` and extend Postgres `channel_type_enum` in the fresh-only `scripts/schema_baseline.sql`.
 2. Implement API under `app/api/<channel>.py` (CRUD + webhook/stream entry). Prefer `channels.config` + `channels.inbound`.
 3. Register router in `app/main.py`.
 4. If proactive send is supported, add sender under `agent_tool_exec/channel_provider_*` and register in `channel_messaging` via the outbound registry.

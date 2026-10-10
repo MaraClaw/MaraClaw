@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from psycopg import errors as pg_errors
-
-from app.db.errors import DbError
-from app.scripts.bootstrap_db import _IGNORABLE, _is_ignorable_error, _statement_bodies
+from app.scripts.bootstrap_db import _statement_bodies
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "schema_baseline.sql"
@@ -36,19 +33,8 @@ def test_users_persist_genesis_flag() -> None:
     end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
     block = sql[start:end]
     assert "is_genesis BOOLEAN NOT NULL DEFAULT false" in block
-    alter_at = sql.find("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis")
     idx_at = sql.find("ux_users_genesis_platform_admin")
-    assert 0 <= alter_at < idx_at
-
-
-def test_bootstrap_ignores_wrapped_duplicate_errors() -> None:
-    wrapped = DbError("already exists", orig=pg_errors.DuplicateTable("already exists"))
-    assert _is_ignorable_error(wrapped, _IGNORABLE)
-    missing = DbError(
-        'column "is_genesis" does not exist',
-        orig=pg_errors.UndefinedColumn('column "is_genesis" does not exist'),
-    )
-    assert not _is_ignorable_error(missing, _IGNORABLE)
+    assert 0 <= start < idx_at
 
 
 def test_tenant_not_null_columns_have_defaults() -> None:
@@ -72,15 +58,10 @@ def test_tenant_not_null_columns_have_defaults() -> None:
     assert "secondary_model_id UUID" in sql
     assert "ux_tenant_email_domains_domain" in sql
     assert "ux_users_identity_single_tenant" in sql
-    assert "WHEN unique_violation THEN" in sql
+    assert "WHEN unique_violation THEN" not in sql
 
 
-def test_patches_add_openclaw_routing_columns() -> None:
-    from app.scripts.bootstrap_db import PATCHES
-
-    joined = "\n".join(PATCHES)
-    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS selected_slot VARCHAR(20)" in joined
-    assert "ALTER TABLE gateway_messages ADD COLUMN IF NOT EXISTS guest_model_ref VARCHAR(200)" in joined
+def test_baseline_defines_openclaw_routing_columns() -> None:
     sql = BASELINE.read_text(encoding="utf-8")
     start = sql.find("CREATE TABLE IF NOT EXISTS gateway_messages")
     end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
@@ -91,24 +72,12 @@ def test_patches_add_openclaw_routing_columns() -> None:
     assert "routing_reason VARCHAR(40)" in block
 
 
-def test_patches_migrate_agents_to_openclaw() -> None:
-    from app.scripts.bootstrap_db import PATCHES
-
-    joined = "\n".join(PATCHES)
-    assert "UPDATE agents SET agent_type = 'openclaw' WHERE agent_type IS DISTINCT FROM 'openclaw'" in joined
-    assert "ALTER TABLE agents ALTER COLUMN agent_type SET DEFAULT 'openclaw'" in joined
+def test_baseline_defaults_agents_to_openclaw() -> None:
+    sql = BASELINE.read_text(encoding="utf-8")
+    assert "agent_type VARCHAR(20) NOT NULL DEFAULT 'openclaw'" in sql
 
 
-def test_patches_add_grok_subscription_columns() -> None:
-    from app.scripts.bootstrap_db import PATCHES
-
-    joined = "\n".join(PATCHES)
-    assert "ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT" in joined
-    assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key'" in joined
-    assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT" in joined
-    assert "ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS oauth_account_id VARCHAR(128)" in joined
-    assert "ux_llm_models_tenant_grok_subscription" in joined
-    assert "ux_llm_models_tenant_chatgpt_subscription" in joined
+def test_baseline_defines_subscription_columns() -> None:
     sql = BASELINE.read_text(encoding="utf-8")
     start = sql.find("CREATE TABLE IF NOT EXISTS llm_models")
     end = sql.find("CREATE TABLE IF NOT EXISTS", start + 10)
@@ -121,14 +90,12 @@ def test_patches_add_grok_subscription_columns() -> None:
     assert "ux_llm_models_tenant_chatgpt_subscription" in sql
 
 
-def test_patches_add_secondary_model_columns() -> None:
-    from app.scripts.bootstrap_db import PATCHES
-
-    joined = "\n".join(PATCHES)
-    assert "default_secondary_model_id UUID" in joined
-    assert "ALTER TABLE agents ADD COLUMN IF NOT EXISTS secondary_model_id UUID" in joined
-    assert "tenants_default_secondary_model_id_fkey" in joined
-    assert "agents_secondary_model_id_fkey" in joined
+def test_baseline_defines_secondary_model_references() -> None:
+    sql = BASELINE.read_text(encoding="utf-8")
+    assert "default_secondary_model_id UUID" in sql
+    assert "secondary_model_id UUID" in sql
+    assert "FOREIGN KEY(default_secondary_model_id) REFERENCES llm_models (id) ON DELETE SET NULL" in sql
+    assert "FOREIGN KEY(secondary_model_id) REFERENCES llm_models (id)" in sql
 
 
 def test_hot_path_indexes_are_declared() -> None:

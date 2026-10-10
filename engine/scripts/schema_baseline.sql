@@ -1,4 +1,4 @@
--- Baseline schema for fresh deploys (generated from residual ORM metadata).
+-- Authoritative current schema for fresh deploys; rerunnable, not an upgrade script.
 -- Applied by app.scripts.bootstrap_db / entrypoint bootstrap role.
 -- Do not rely on Alembic; this file is the schema source of truth for greenfield installs.
 BEGIN;
@@ -77,12 +77,6 @@ CREATE TABLE IF NOT EXISTS llm_models (
 
 CREATE INDEX IF NOT EXISTS ix_llm_models_tenant_id ON llm_models (tenant_id);
 
-ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16);
-ALTER TABLE llm_models ALTER COLUMN api_key_encrypted TYPE TEXT;
-ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS auth_kind VARCHAR(32) NOT NULL DEFAULT 'api_key';
-ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT;
-ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS oauth_account_id VARCHAR(128);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
 	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
@@ -176,6 +170,9 @@ CREATE TABLE IF NOT EXISTS tenants (
 	default_secondary_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
+	name_tsv tsvector GENERATED ALWAYS AS (
+		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
+	) STORED,
 	PRIMARY KEY (id), 
 	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
 	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
@@ -186,21 +183,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_sso_domain ON tenants (sso_domain);
 
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;
-
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default_end_user_org BOOLEAN NOT NULL DEFAULT false;
-
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_fallback_model_id UUID;
-
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS default_secondary_model_id UUID;
-
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
 	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;
-
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS name_tsv tsvector
-	GENERATED ALWAYS AS (
-		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
-	) STORED;
 
 CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv);
 
@@ -243,7 +227,7 @@ CREATE TABLE IF NOT EXISTS tools (
 	mcp_tool_name VARCHAR(200), 
 	enabled BOOLEAN NOT NULL DEFAULT true, 
 	is_default BOOLEAN NOT NULL, 
-	source VARCHAR(20) NOT NULL, 
+	source VARCHAR(20) NOT NULL DEFAULT 'builtin',
 	tenant_id UUID, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -433,25 +417,14 @@ CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 
 CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id);
 
--- CREATE TABLE IF NOT EXISTS does not add columns to an existing users table.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS is_genesis BOOLEAN NOT NULL DEFAULT false;
-
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
 	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin';
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
 	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin';
 
--- One tenant membership per identity. Dirty DBs with duplicates skip the index.
-DO $$
-BEGIN
-	CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
-		ON users (identity_id) WHERE tenant_id IS NOT NULL;
-EXCEPTION
-	WHEN unique_violation THEN
-		RAISE NOTICE 'Skipping ux_users_identity_single_tenant; duplicate tenant memberships exist';
-END
-$$;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
+	ON users (identity_id) WHERE tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 
@@ -591,7 +564,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	welcome_message TEXT, 
 	creator_id UUID NOT NULL, 
 	tenant_id UUID, 
-	agent_type VARCHAR(20) NOT NULL, 
+	agent_type VARCHAR(20) NOT NULL DEFAULT 'openclaw',
 	gogcli_enabled BOOLEAN DEFAULT 'false' NOT NULL, 
 	api_key_hash VARCHAR(128), 
 	openclaw_last_seen TIMESTAMP WITH TIME ZONE, 
@@ -626,7 +599,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	access_mode VARCHAR(20) NOT NULL, 
 	company_access_level VARCHAR(20) NOT NULL, 
 	llm_calls_today INTEGER NOT NULL DEFAULT 0, 
-	max_llm_calls_per_day INTEGER NOT NULL, 
+	max_llm_calls_per_day INTEGER NOT NULL DEFAULT 1000,
 	llm_calls_reset_at TIMESTAMP WITH TIME ZONE, 
 	template_id UUID, 
 	heartbeat_enabled BOOLEAN NOT NULL DEFAULT true, 
@@ -645,8 +618,6 @@ CREATE TABLE IF NOT EXISTS agents (
 	FOREIGN KEY(fallback_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(template_id) REFERENCES agent_templates (id)
 );
-
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS secondary_model_id UUID;
 
 CREATE INDEX IF NOT EXISTS ix_agents_tenant_id ON agents (tenant_id);
 
@@ -760,6 +731,8 @@ CREATE TABLE IF NOT EXISTS agent_permissions (
 	scope_id UUID, 
 	access_level VARCHAR(20) NOT NULL, 
 	PRIMARY KEY (id), 
+	CONSTRAINT ck_department_permission_use
+		CHECK (scope_type <> 'department' OR (scope_id IS NOT NULL AND access_level = 'use')),
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
@@ -811,7 +784,7 @@ CREATE TABLE IF NOT EXISTS agent_tools (
 	tool_id UUID NOT NULL, 
 	enabled BOOLEAN NOT NULL DEFAULT true, 
 	config JSON NOT NULL DEFAULT '{}', 
-	source VARCHAR(20) NOT NULL, 
+	source VARCHAR(20) NOT NULL DEFAULT 'system',
 	installed_by_agent_id UUID, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
@@ -958,7 +931,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	agent_id UUID NOT NULL, 
 	user_id UUID NOT NULL, 
 	title VARCHAR(200) NOT NULL, 
-	source_channel VARCHAR(20) NOT NULL, 
+	source_channel VARCHAR(20) NOT NULL DEFAULT 'web',
 	external_conv_id VARCHAR(200), 
 	is_group BOOLEAN DEFAULT 'false' NOT NULL, 
 	group_name VARCHAR(200), 
@@ -1338,10 +1311,6 @@ CREATE TABLE IF NOT EXISTS local_department_memberships (
 );
 CREATE INDEX IF NOT EXISTS ix_local_department_memberships_department
     ON local_department_memberships (tenant_id, department_id);
-DO $$ BEGIN
-    ALTER TABLE agent_permissions ADD CONSTRAINT ck_department_permission_use
-        CHECK (scope_type <> 'department' OR (scope_id IS NOT NULL AND access_level = 'use'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_permissions_department
     ON agent_permissions (agent_id, scope_id) WHERE scope_type = 'department';
 
