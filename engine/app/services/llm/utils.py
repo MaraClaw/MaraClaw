@@ -57,15 +57,12 @@ ANTHROPIC_API_PROVIDERS = {"anthropic"}
 
 
 def get_model_api_key(model: _EncryptedModel) -> str:
-    """Decrypt the model's API key, with backward compatibility for plaintext keys."""
+    """Decrypt a stored model API key; invalid ciphertext is rejected."""
     raw = model.api_key_encrypted or ""
     if not raw:
         return ""
-    try:
-        settings = get_settings()
-        return decrypt_data(raw, settings.SECRET_KEY)
-    except ValueError:
-        return raw
+    settings = get_settings()
+    return decrypt_data(raw, settings.SECRET_KEY)
 
 
 async def ensure_fresh_pool_model(model: _EncryptedModel) -> _EncryptedModel:

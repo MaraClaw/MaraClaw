@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeIs
@@ -84,9 +83,7 @@ def decrypt_sensitive_fields(
         if result.get(key):
             value = result[key]
             if isinstance(value, str) and value:
-                # Existing encrypted-config behavior treats an undecryptable value as plaintext.
-                with suppress(Exception):
-                    result[key] = decrypt_data(value, settings.SECRET_KEY)
+                result[key] = decrypt_data(value, settings.SECRET_KEY)
     return result
 
 
@@ -162,11 +159,14 @@ async def get_tool_config(
                 tenant_config = await get_tenant_tool_config(agent_tenant_id, db_tool_name, schema)
             if not isinstance(global_config, dict):
                 global_config = dict[str, Any](global_config)
-            merged: dict[str, Any] = {**global_config, **tenant_config, **agent_config}
+            merged: dict[str, Any] = {
+                **dependencies.decrypt_sensitive_fields(global_config, schema),
+                **tenant_config,
+                **dependencies.decrypt_sensitive_fields(agent_config, schema),
+            }
             if merged:
-                decrypted = dependencies.decrypt_sensitive_fields(merged, schema)
-                dependencies.set_cached_tool_config(agent_id, tool_name, decrypted)
-                return decrypted
+                dependencies.set_cached_tool_config(agent_id, tool_name, merged)
+                return merged
 
     tool = await tool_dao.get_by_name(tool_name)
     if not tool:
@@ -175,9 +175,8 @@ async def get_tool_config(
     schema = _as_tool_config_schema(tool.config_schema)
     if tool.source == "builtin":
         tenant_config = await get_tenant_tool_config(agent_tenant_id, tool.name, schema)
-    merged = {**(tool.config or {}), **tenant_config}
+    merged = {**dependencies.decrypt_sensitive_fields(tool.config or {}, schema), **tenant_config}
     if not merged:
         return None
-    decrypted = dependencies.decrypt_sensitive_fields(merged, schema)
-    dependencies.set_cached_tool_config(agent_id, tool_name, decrypted)
-    return decrypted
+    dependencies.set_cached_tool_config(agent_id, tool_name, merged)
+    return merged

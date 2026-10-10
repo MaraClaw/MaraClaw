@@ -487,12 +487,7 @@ async def update_llm_model(
     subscription = getattr(model, "auth_kind", "api_key") in {"grok_subscription", "chatgpt_subscription"}
     if hasattr(data, "base_url") and data.base_url is not None and not subscription:
         updates["base_url"] = data.base_url
-    if (
-        not subscription
-        and data.api_key
-        and data.api_key.strip()
-        and not data.api_key.startswith("****")
-    ):
+    if not subscription and data.api_key and data.api_key.strip() and not data.api_key.startswith("****"):
         updates["api_key_encrypted"] = encrypt_data(data.api_key.strip(), settings.SECRET_KEY)
     if data.temperature is not None:
         updates["temperature"] = data.temperature

@@ -71,11 +71,7 @@ def decrypt_sensitive_fields(
         value = result.get(key)
         if not isinstance(value, str) or not value:
             continue
-        try:
-            result[key] = decrypt_data(value, settings.SECRET_KEY)
-        except ValueError as exc:
-            logger.debug("Leaving unreadable tool configuration field {} unchanged: {}", key, type(exc).__name__)
-            continue
+        result[key] = decrypt_data(value, settings.SECRET_KEY)
     return result
 
 

@@ -19,7 +19,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
-from app.services.tool_config import decrypt_sensitive_fields, get_tenant_tool_config
+from app.services.tool_config import decrypt_sensitive_fields, encrypt_sensitive_fields, get_tenant_tool_config
 
 
 class ToolParameterSchema(TypedDict):
@@ -99,16 +99,16 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
     Sensitive fields in tool/AgentTool config are stored encrypted (see
     api.tools._encrypt_sensitive_fields). We must decrypt here before
     handing the value to httpx - otherwise Smithery rejects with 401.
-    Falls back to raw value when decrypt fails (e.g. legacy plaintext keys).
+    Invalid stored ciphertext leaves this optional credential unavailable.
     """
 
-    def _maybe_decrypt(raw: str) -> str:
+    def _decrypt(raw: str) -> str:
         if not raw:
             return ""
         decrypted = decrypt_sensitive_fields({"value": raw}, {"fields": [{"key": "value", "type": "password"}]}).get(
-            "value", raw
+            "value"
         )
-        return decrypted if isinstance(decrypted, str) else raw
+        return decrypted if isinstance(decrypted, str) else ""
 
     try:
         agent_tenant_id = None
@@ -120,7 +120,7 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
             for at in await agent_tool_dao.list_for_agent(agent_id):
                 value: object = at.config.get("smithery_api_key") if at.config else None
                 if isinstance(value, str) and value:
-                    return _maybe_decrypt(value)
+                    return _decrypt(value)
         for tool_name in ("discover_resources", "import_mcp_server"):
             tool = await tool_dao.get_by_name(tool_name)
             if not tool:
@@ -131,7 +131,7 @@ async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
                 return tenant_value
             stored: object = tool.config.get("smithery_api_key") if tool.config and not agent_tenant_id else None
             if isinstance(stored, str) and stored:
-                return _maybe_decrypt(stored)
+                return _decrypt(stored)
     except Exception:
         logger.warning("Unable to read Smithery API key configuration")
     return ""
@@ -189,7 +189,11 @@ async def _get_modelscope_api_token(agent_id: uuid.UUID | None = None) -> str:
                 return tenant_value
             stored: object = tool.config.get("modelscope_api_token") if tool.config and not agent_tenant_id else None
             if isinstance(stored, str) and stored:
-                return stored
+                decrypted = decrypt_sensitive_fields(
+                    {"modelscope_api_token": stored},
+                    {"fields": [{"key": "modelscope_api_token", "type": "password"}]},
+                ).get("modelscope_api_token")
+                return decrypted if isinstance(decrypted, str) else ""
     except Exception:
         logger.warning("Unable to read ModelScope API token configuration")
     return ""
@@ -401,7 +405,10 @@ async def import_mcp_from_smithery(
             _ = await agent_tool_dao.ensure_with_config(
                 agent_id,
                 tool.id,
-                config={"smithery_api_key": api_key},
+                config=encrypt_sensitive_fields(
+                    {"smithery_api_key": api_key},
+                    {"fields": [{"key": "smithery_api_key", "type": "password"}]},
+                ),
                 source="system",
             )
     except Exception:

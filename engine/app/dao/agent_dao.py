@@ -263,16 +263,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return [AgentRecord.from_row(row) for row in rows]
 
     async def get_openclaw_by_api_key(self, api_key: str) -> AgentRecord | None:
-        """Resolve an OpenClaw agent by plaintext or legacy hashed API key."""
+        """Resolve a presented gateway token against its stored SHA256 digest."""
         import hashlib
 
         async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM agents " + "WHERE api_key_hash = %(key)s LIMIT 1",
-                {"key": api_key},
-            )
-            if row:
-                return AgentRecord.from_row(row)
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents " + "WHERE api_key_hash = %(key)s LIMIT 1",

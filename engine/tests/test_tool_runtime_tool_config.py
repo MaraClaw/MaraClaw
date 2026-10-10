@@ -2,6 +2,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.json_types import JsonObject
 from app.services import agent_tools
 from app.services.tool_runtime import tool_config
@@ -102,8 +104,8 @@ async def test_tool_config_does_not_cache_an_empty_result(monkeypatch):
     assert cache_sets == []
 
 
-def test_decrypt_sensitive_fields_handles_schema_atlassian_plaintext_and_input_immutability(monkeypatch):
-    # Given: encrypted hardcoded and schema password fields plus a plaintext fallback.
+def test_decrypt_sensitive_fields_rejects_plaintext_without_mutating_input(monkeypatch):
+    # Given: encrypted hardcoded and schema password fields plus invalid stored plaintext.
     source: JsonObject = {
         "atlassian_api_key": "encrypted-atlassian",
         "schema_key": "encrypted-schema",
@@ -119,17 +121,13 @@ def test_decrypt_sensitive_fields_handles_schema_atlassian_plaintext_and_input_i
     monkeypatch.setattr(tool_config, "decrypt_data", decrypt)
 
     # When: runtime decryption receives the tool schema.
-    result = tool_config.decrypt_sensitive_fields(
-        source,
-        {"fields": [{"key": "schema_key", "type": "password"}]},
-    )
+    with pytest.raises(ValueError):
+        tool_config.decrypt_sensitive_fields(
+            source,
+            {"fields": [{"key": "schema_key", "type": "password"}]},
+        )
 
-    # Then: all sensitive values are handled while the caller's config remains unchanged.
-    assert result == {
-        "atlassian_api_key": "decrypted:encrypted-atlassian",
-        "schema_key": "decrypted:encrypted-schema",
-        "api_key": "plain",
-    }
+    # Then: no credential is returned and the caller's config remains unchanged.
     assert source == {"atlassian_api_key": "encrypted-atlassian", "schema_key": "encrypted-schema", "api_key": "plain"}
 
 

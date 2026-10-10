@@ -71,10 +71,7 @@ def _decrypt_sensitive_fields(
         if result.get(key):
             value = result[key]
             if isinstance(value, str) and value:
-                try:
-                    result[key] = decrypt_data(value, settings.SECRET_KEY)
-                except Exception:
-                    result[key] = value
+                result[key] = decrypt_data(value, settings.SECRET_KEY)
 
     return result
 

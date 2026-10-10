@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config import get_settings
+from app.core.security import encrypt_data
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import agent_manager as agent_manager_module, openclaw_routing
 from app.services.agent_manager import AgentManager, guest_model_ref
@@ -20,7 +22,7 @@ def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> S
         model=name,
         enabled=True,
         supports_vision=False,
-        api_key_encrypted=key,
+        api_key_encrypted=encrypt_data(key, get_settings().SECRET_KEY),
         label=name,
     )
 
