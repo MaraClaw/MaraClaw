@@ -1,16 +1,16 @@
 """OKR Scheduler - batch progress collection and report generation.
 
 Provides functions called by OKR Agent tools:
-  - collect_all_focus_updates(): read all Agent focus.md files and sync progress
+  - collect_all_focus_updates(): read canonical Agent focus records and sync progress
   - generate_daily_report():     build and store a daily OKR report
   - generate_weekly_report():    build and store a weekly OKR report
 
 Design decisions:
   - Direct DB writes (no HTTP round-trips) for efficiency
-  - focus.md is parsed with regex, not LLM, to avoid token cost for simple extraction
+  - Focus descriptions are parsed with regex, not LLM, for progress extraction
   - Reports are stored in WorkReport table AND returned as strings to the caller
     so the OKR Agent LLM can post to plaza / send to channels as it sees fit
-  - All errors are caught per-agent so one bad focus.md doesn't block the batch
+  - All errors are caught per-agent so one failed collection doesn't block the batch
 """
 
 import re
@@ -24,7 +24,8 @@ from app.dao.agent_dao import agent_dao
 from app.dao.okr_dao import okr_key_result_dao, okr_objective_dao, okr_progress_log_dao, work_report_dao
 from app.dao.okr_settings_dao import okr_settings_dao
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord
-from app.services.storage import agent_storage_key, get_storage_backend, store_agent_bytes
+from app.services.focus_service import list_focus_items
+from app.services.storage import store_agent_bytes
 
 type KRsByObjective = dict[str, list[OKRKeyResultRecord]]
 
@@ -40,7 +41,7 @@ class OKRAgentSettings(TypedDict, total=False):
     period_length_days: int | None
 
 
-# ─── Focus File Parsing ───────────────────────────────────────────────────────
+# ─── Focus Progress Parsing ───────────────────────────────────────────────────
 
 _KR_ID_RE = re.compile(
     r"\*\*KR ID\*\*[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
@@ -58,10 +59,10 @@ _NOTE_RE = re.compile(
 )
 
 
-def _parse_focus_md(content: str) -> list[tuple[str, float, str]]:
-    """Parse a focus.md file and extract KR updates."""
+def _parse_focus_description(content: str) -> list[tuple[str, float, str]]:
+    """Extract KR updates from a canonical focus item's description."""
     results: list[tuple[str, float, str]] = []
-    sections = re.split(r"(?m)^##\s+KR:", content)
+    sections = re.split(r"(?=\*\*KR ID\*\*)", content, flags=re.IGNORECASE)
 
     for section in sections[1:]:
         kr_id_match = _KR_ID_RE.search(section)
@@ -90,28 +91,22 @@ async def collect_all_focus_updates(
     tenant_id: uuid.UUID,
     okr_agent_id: uuid.UUID,
 ) -> str:
-    """Read every Agent's focus.md and sync KR progress to the database."""
+    """Read every Agent's canonical focus records and sync KR progress."""
     agents = await agent_dao.list_for_tenant(tenant_id)
     agents = [a for a in agents if a.id != okr_agent_id]
 
     if not agents:
-        return "No team members found. No focus files to collect."
+        return "No team members found. No focus updates to collect."
 
     updated_count = 0
     skipped_count = 0
     error_count = 0
     lines: list[str] = []
-    storage = get_storage_backend()
 
     for agent in agents:
-        focus_key = agent_storage_key(agent.id, "focus.md")
-        if not await storage.exists(focus_key):
-            skipped_count += 1
-            continue
-
         try:
-            content = await storage.read_text(focus_key, encoding="utf-8", errors="replace")
-            updates = _parse_focus_md(content)
+            items = await list_focus_items(agent.id)
+            updates = [update for item in items for update in _parse_focus_description(item["description"])]
 
             if not updates:
                 skipped_count += 1
@@ -121,7 +116,7 @@ async def collect_all_focus_updates(
                 try:
                     kr_uuid = uuid.UUID(kr_id_str)
                 except ValueError:
-                    logger.warning(f"[OKRScheduler] Invalid KR UUID '{kr_id_str}' in {focus_key}")
+                    logger.warning(f"[OKRScheduler] Invalid KR UUID '{kr_id_str}' for agent {agent.id}")
                     continue
 
                 row = await okr_key_result_dao.get_with_tenant(kr_uuid, tenant_id)
@@ -161,20 +156,20 @@ async def collect_all_focus_updates(
                         "previous_value": prev_value,
                         "new_value": value,
                         "source": "okr_agent",
-                        "note": f"[focus.md] {note}" if note else "[focus.md] Auto-collected",
+                        "note": f"[focus] {note}" if note else "[focus] Auto-collected",
                     }
                 )
                 updated_count += 1
                 lines.append(f"  - {agent.name} / {kr.title}: {prev_value} → {value} ({status})")
 
         except Exception:
-            logger.exception(f"[OKRScheduler] Failed to process focus.md for agent {agent.id}")
+            logger.exception(f"[OKRScheduler] Failed to collect focus records for agent {agent.id}")
             error_count += 1
 
     summary = (
-        "Focus file collection complete.\n"
+        "Focus collection complete.\n"
         + f"  KRs updated: {updated_count}\n"
-        + f"  Agents without focus.md: {skipped_count}\n"
+        + f"  Agents without focus updates: {skipped_count}\n"
         + f"  Errors: {error_count}\n"
     )
     if lines:
