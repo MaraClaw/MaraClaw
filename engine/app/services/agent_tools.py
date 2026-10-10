@@ -156,8 +156,6 @@ async def _call_imported_str(module_name: str, attr: str, *args: object, **kwarg
 
 _settings = get_settings()
 WORKSPACE_ROOT = Path(_settings.STORAGE_LOCAL_ROOT or _settings.AGENT_DATA_DIR)
-MAX_EXEC_STDOUT_CAPTURE_BYTES = 1_000_000
-MAX_EXEC_STDERR_CAPTURE_BYTES = 500_000
 
 # ─── Tool Config Cache ──────────────────────────────────────────
 _tool_config_cache = _tool_runtime_tool_config._tool_config_cache
@@ -804,12 +802,6 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
 # ─── Code Execution ─────────────────────────────────────────────
 
 
-def _check_code_safety(language: str, code: str, allow_network: bool = False) -> str | None:
-    from app.services.agent_tool_exec.code_exec import _check_code_safety as check_code_safety
-
-    return check_code_safety(language, code, allow_network)
-
-
 async def _execute_code(
     agent_id: uuid.UUID | None,
     ws: Path,
@@ -821,18 +813,6 @@ async def _execute_code(
     from app.services.agent_tool_exec.code_exec import _execute_code as execute_code
 
     return await execute_code(agent_id, ws, arguments, tool_name=tool_name, on_output=on_output)
-
-
-async def _execute_code_legacy(
-    ws: Path,
-    arguments: ToolParameters,
-    allow_network: bool = False,
-    max_timeout: int = 60,
-    on_output: ToolOutputCallback | None = None,
-) -> str:
-    from app.services.agent_tool_exec.code_exec import _execute_code_legacy as execute_code_legacy
-
-    return await execute_code_legacy(ws, arguments, allow_network, max_timeout, on_output)
 
 
 # ─── Resource Discovery Executors ───────────────────────────────
