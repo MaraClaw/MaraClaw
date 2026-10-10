@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
+import { useSessionCurrent } from '@/hooks/use-auth'
 import { createCompany } from '@/lib/companies-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 
@@ -32,6 +33,7 @@ type CreateCompanyFormProps = {
 
 export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
   const formId = useId()
+  const isCurrent = useSessionCurrent()
   const [formError, setFormError] = useState<string | null>(null)
   const {
     register,
@@ -58,9 +60,11 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
         admin_password: values.admin_password,
         admin_display_name: displayName || undefined,
       })
+      if (!isCurrent()) return
       reset()
       onCreated(created.company.name, created.org_admin_email)
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         if (error.status === 409) {
           setFormError(

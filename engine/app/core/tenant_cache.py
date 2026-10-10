@@ -15,7 +15,15 @@ from app.core.json_types import (
     json_object_from,
     mapping_from_row,
 )
-from app.core.redis_cache import bump_version, cache_delete, cache_get_json, cache_key, cache_set_json, read_version
+from app.core.redis_cache import (
+    bump_version,
+    cache_delete,
+    cache_get_json,
+    cache_key,
+    cache_set_json,
+    has_pending_snapshot_writes,
+    read_version,
+)
 from app.records.tenant import TenantRecord
 
 
@@ -128,7 +136,7 @@ def _load(data: object) -> TenantRecord | None:
 
 
 async def get_cached_tenant(tenant_id: UUID) -> TenantRecord | None:
-    if _ttl() <= 0:
+    if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
     cached: object = await cache_get_json(_row_key(tenant_id))
     if not is_json_object(cached):
@@ -146,7 +154,7 @@ async def peek_tenant_version(tenant_id: UUID) -> str:
 
 
 async def set_cached_tenant(tenant: TenantRecord, *, observed_ver: str | None = None) -> None:
-    if _ttl() <= 0:
+    if _ttl() <= 0 or has_pending_snapshot_writes():
         return
     ver = await read_version(_ver_key(tenant.id))
     if observed_ver is not None and ver != observed_ver:
@@ -158,4 +166,4 @@ async def bump_tenant_cache(tenant_id: UUID | None) -> None:
     if tenant_id is None or _ttl() <= 0:
         return
     await bump_version(_ver_key(tenant_id), ttl=_ttl() * 20)
-    await cache_delete(_row_key(tenant_id))
+    await cache_delete(_row_key(tenant_id), defer_until_commit=True)

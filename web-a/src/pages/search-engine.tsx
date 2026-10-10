@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
 import { useId, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
@@ -14,6 +14,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
+import { useSessionCurrent } from '@/hooks/use-auth'
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
@@ -57,6 +59,7 @@ function statusLabel(status: string): string {
 
 export function SearchEnginePage() {
   const queryClient = useQueryClient()
+  const isCurrent = useSessionCurrent()
   const formId = useId()
   const [searchParams, setSearchParams] = useSearchParams()
   const [formError, setFormError] = useState<string | null>(null)
@@ -76,7 +79,7 @@ export function SearchEnginePage() {
 
   const keys = useQuery({
     queryKey: ['admin-linkup-keys'],
-    queryFn: listLinkupKeys,
+    queryFn: ({ signal }) => listLinkupKeys(signal),
   })
 
   const {
@@ -108,10 +111,12 @@ export function SearchEnginePage() {
         label: values.label.trim(),
         api_key: values.api_key.trim(),
       })
+      if (!isCurrent()) return
       reset()
       void queryClient.invalidateQueries({ queryKey: ['admin-linkup-keys'] })
       toast.success(`Added ${created.label || 'Linkup key'}`)
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         if (error.status === 409) {
           setFormError(formatApiDetail(error.detail) ?? 'This Linkup API key is already stored.')

@@ -21,6 +21,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db.session import optional_connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
@@ -948,18 +949,19 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
     if identity_id is None:
         raise HTTPException(status_code=400, detail="Account has no identity")
 
-    await delete_tenant_and_release_identities(tenant_id)
-    await write_admin_audit(
-        actor=current_user,
-        action="tenant_delete",
-        target_type="tenant",
-        target_id=tenant_id,
-        tenant_id=tenant_id,
-        changes={"deleted": field_change(False, True)},
-        details={"tenant_name": tenant.name},
-    )
-
-    fallback = await user_dao.fallback_tenant_for_identity(identity_id, exclude_tenant_id=tenant_id)
+    async with optional_connection_ctx():
+        # Capture the actor while its membership exists; FK SET NULL retains the snapshot.
+        await write_admin_audit(
+            actor=current_user,
+            action="tenant_delete",
+            target_type="tenant",
+            target_id=tenant_id,
+            tenant_id=tenant_id,
+            changes={"deleted": field_change(False, True)},
+            details={"tenant_name": tenant.name},
+        )
+        await delete_tenant_and_release_identities(tenant_id)
+        fallback = await user_dao.fallback_tenant_for_identity(identity_id, exclude_tenant_id=tenant_id)
     fallback_tenant_id = str(fallback) if fallback else None
 
     return {"status": "deleted", "fallback_tenant_id": fallback_tenant_id}

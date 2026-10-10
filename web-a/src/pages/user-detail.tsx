@@ -23,7 +23,7 @@ export function UserDetailPage() {
 
   const detail = useQuery({
     queryKey: ['admin-user', userId],
-    queryFn: () => getUserDetail(userId!),
+    queryFn: ({ signal }) => getUserDetail(userId ?? '', signal),
     enabled: Boolean(userId),
   })
 

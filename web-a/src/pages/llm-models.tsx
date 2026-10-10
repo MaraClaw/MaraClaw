@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -14,7 +14,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { Select } from '@/components/ui/select'
-import { useAuth } from '@/hooks/use-auth'
+import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
@@ -89,6 +90,7 @@ function parseOptionalNumber(value: string | undefined): number | null {
 
 export function LlmModelsPage() {
   const { user } = useAuth()
+  const isCurrent = useSessionCurrent()
   const queryClient = useQueryClient()
   const formId = useId()
   const platformAdmin = isPlatformAdminUser(user)
@@ -100,7 +102,7 @@ export function LlmModelsPage() {
 
   const companies = useQuery({
     queryKey: ['admin-companies'],
-    queryFn: () => listCompanies(),
+    queryFn: ({ signal }) => listCompanies(undefined, signal),
     enabled: platformAdmin,
   })
 
@@ -114,12 +116,12 @@ export function LlmModelsPage() {
 
   const providers = useQuery({
     queryKey: ['admin-llm-providers'],
-    queryFn: listLlmProviders,
+    queryFn: ({ signal }) => listLlmProviders(signal),
   })
 
   const models = useQuery({
     queryKey: ['admin-llm-models', tenantId],
-    queryFn: () => listLlmModels(platformAdmin ? tenantId : undefined),
+    queryFn: ({ signal }) => listLlmModels(platformAdmin ? tenantId : undefined, signal),
     enabled: Boolean(tenantId),
   })
 
@@ -207,6 +209,7 @@ export function LlmModelsPage() {
         },
         platformAdmin ? tenantId : undefined,
       )
+      if (!isCurrent()) return
       reset({
         provider: values.provider,
         model: providerMeta?.default_model ?? '',
@@ -221,6 +224,7 @@ export function LlmModelsPage() {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
       toast.success(`Added ${created.label}`)
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         if (error.status === 403) {
           setFormError('Only an organization admin can configure LLM providers.')
@@ -425,6 +429,7 @@ function GrokSubscriptionCard({
   platformAdmin: boolean
 }) {
   const queryClient = useQueryClient()
+  const isCurrent = useSessionCurrent()
   const [session, setSession] = useState<GrokSubscriptionStart | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
 
@@ -449,7 +454,7 @@ function GrokSubscriptionCard({
 
   const status = useQuery({
     queryKey: ['admin-grok-subscription', session?.session_id],
-    queryFn: () => getGrokSubscriptionStatus(session!.session_id),
+    queryFn: ({ signal }) => getGrokSubscriptionStatus(session?.session_id ?? '', signal),
     enabled: Boolean(session?.session_id),
     refetchInterval: (query) => {
       const current = query.state.data?.status
@@ -461,11 +466,11 @@ function GrokSubscriptionCard({
   })
 
   useEffect(() => {
-    if (status.data?.status !== 'authorized') return
+    if (!isCurrent() || status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
     toast.success('Grok subscription connected. It is in the company pool.')
     setSession(null)
-  }, [status.data?.status, queryClient])
+  }, [status.data?.status, queryClient, isCurrent])
 
   const pending = session && (status.data?.status ?? 'pending') === 'pending'
   const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
@@ -533,6 +538,7 @@ function ChatGPTSubscriptionCard({
   platformAdmin: boolean
 }) {
   const queryClient = useQueryClient()
+  const isCurrent = useSessionCurrent()
   const [session, setSession] = useState<ChatGPTSubscriptionStart | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
 
@@ -557,7 +563,7 @@ function ChatGPTSubscriptionCard({
 
   const status = useQuery({
     queryKey: ['admin-chatgpt-subscription', session?.session_id],
-    queryFn: () => getChatGPTSubscriptionStatus(session!.session_id),
+    queryFn: ({ signal }) => getChatGPTSubscriptionStatus(session?.session_id ?? '', signal),
     enabled: Boolean(session?.session_id),
     refetchInterval: (query) => {
       const current = query.state.data?.status
@@ -569,11 +575,11 @@ function ChatGPTSubscriptionCard({
   })
 
   useEffect(() => {
-    if (status.data?.status !== 'authorized') return
+    if (!isCurrent() || status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
     toast.success('ChatGPT subscription connected. It is in the company pool.')
     setSession(null)
-  }, [status.data?.status, queryClient])
+  }, [status.data?.status, queryClient, isCurrent])
 
   const pending = session && (status.data?.status ?? 'pending') === 'pending'
   const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'

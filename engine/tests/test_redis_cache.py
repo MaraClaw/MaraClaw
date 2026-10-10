@@ -114,6 +114,63 @@ async def test_cache_rejects_oversized(fake_cache: FakeRedis, monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("defer_until_commit", [False, True])
+async def test_cache_delete_is_immediate_when_outside_transaction(
+    fake_cache: FakeRedis, defer_until_commit: bool
+) -> None:
+    # Given
+    fake_cache.store.update(first="old", second="old")
+    # When
+    await redis_cache.cache_delete("first", "second", defer_until_commit=defer_until_commit)
+    # Then
+    assert fake_cache.store == {}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_delete_waits_when_versions_are_deferred(fake_cache: FakeRedis) -> None:
+    # Given
+    fake_cache.store["snapshot"] = "old"
+    token = redis_cache.begin_deferred_versions()
+    try:
+        # When
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        # Then
+        assert fake_cache.store == {"snapshot": "old"}
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_delete_flushes_when_read_circuit_is_open(fake_cache: FakeRedis) -> None:
+    # Given
+    fake_cache.store["snapshot"] = "old"
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        redis_cache._trip()
+        # When
+        await redis_cache.flush_deferred_versions()
+        # Then
+        assert fake_cache.store == {}
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
+async def test_generic_delete_stays_immediate_when_versions_are_deferred(fake_cache: FakeRedis) -> None:
+    # Given
+    fake_cache.store["token"] = "old"
+    token = redis_cache.begin_deferred_versions()
+    try:
+        # When
+        await redis_cache.cache_delete("token")
+        # Then
+        assert fake_cache.store == {}
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
 async def test_deferred_version_flush(fake_cache: FakeRedis) -> None:
     token = redis_cache.begin_deferred_versions()
     await redis_cache.bump_version("ver")

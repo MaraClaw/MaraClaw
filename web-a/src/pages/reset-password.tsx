@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { AuthShell } from '@/components/layout/auth-shell'
 import { Button } from '@/components/ui/button'
 import { PasswordField } from '@/components/ui/password-field'
+import { useSessionCurrent } from '@/hooks/use-auth'
 import { resetPasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 
@@ -29,6 +30,7 @@ type FormValues = z.infer<typeof schema>
 
 export function ResetPasswordPage() {
   const formId = useId()
+  const isCurrent = useSessionCurrent()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const token = useMemo(() => searchParams.get('token')?.trim() ?? '', [searchParams])
@@ -57,9 +59,11 @@ export function ResetPasswordPage() {
         token,
         new_password: values.new_password,
       })
+      if (!isCurrent()) return
       toast.success('Password updated. Sign in with your new password.')
       navigate('/login', { replace: true })
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         setFormError(
           formatApiDetail(error.detail) ??

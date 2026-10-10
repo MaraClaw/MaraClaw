@@ -9,6 +9,7 @@ import { AuthShell } from '@/components/layout/auth-shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useSessionCurrent } from '@/hooks/use-auth'
 import { forgotPasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 
@@ -25,6 +26,7 @@ type FormValues = z.infer<typeof schema>
 
 export function ForgotPasswordPage() {
   const formId = useId()
+  const isCurrent = useSessionCurrent()
   const emailId = `${formId}-email`
   const emailErrorId = `${formId}-email-error`
   const formErrorId = `${formId}-form-error`
@@ -45,8 +47,10 @@ export function ForgotPasswordPage() {
     setFormError(null)
     try {
       await forgotPasswordRequest(values.email.trim().toLowerCase())
+      if (!isCurrent()) return
       setSent(true)
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         setFormError(
           formatApiDetail(error.detail) ??

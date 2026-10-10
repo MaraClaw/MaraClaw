@@ -9,6 +9,7 @@ import pytest
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
 
+from app.core import redis_cache
 from app.db import pool as pool_module, session as session_module
 from app.db.connection import DbConnection
 from app.db.session import (
@@ -191,6 +192,55 @@ async def test_flush_request_transaction_commits_before_request_exit(monkeypatch
         await agen.__anext__()
     assert raw.commits == 2
     assert get_connection() is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_deletes_publish_after_explicit_request_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given
+    raw = _FakeRawConnection()
+    publications: list[tuple[int, tuple[str, ...]]] = []
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def delete_now(*keys: str) -> None:
+        publications.append((raw.commits, keys))
+
+    monkeypatch.setattr(redis_cache, "_delete_now", delete_now)
+    async with connection_ctx():
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        assert publications == []
+        # When
+        await flush_request_transaction()
+        # Then
+        assert publications == [(1, ("snapshot",))]
+    assert publications == [(1, ("snapshot",))]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_deletes_are_discarded_after_request_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given
+    raw = _FakeRawConnection()
+    publications: list[str] = []
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def delete_now(*keys: str) -> None:
+        publications.extend(keys)
+
+    monkeypatch.setattr(redis_cache, "_delete_now", delete_now)
+
+    async def failing_scope() -> None:
+        async with connection_ctx():
+            await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+            raise RuntimeError("boom")
+
+    # When
+    with pytest.raises(RuntimeError, match="boom"):
+        await failing_scope()
+    async with connection_ctx():
+        pass
+    # Then
+    assert publications == []
+    assert raw.rollbacks == 1
 
 
 @pytest.mark.asyncio

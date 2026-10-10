@@ -11,6 +11,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
+import { useSessionCurrent } from '@/hooks/use-auth'
+import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
 import { isEndUserRole, type AdminUser } from '@/lib/users-api'
 import { useDepartments } from '@/pages/users-department-queries'
@@ -35,6 +37,7 @@ export function TenantUsers({
   readonly onToggle: (row: AdminUser) => void
 }) {
   const formId = useId()
+  const isCurrent = useSessionCurrent()
   const { departments, create, assign } = useDepartments(tenantId)
   const {
     register,
@@ -63,10 +66,12 @@ export function TenantUsers({
     clearErrors()
     create.mutate({ tenantId, name: values.name }, {
       onSuccess: (created) => {
+        if (!isCurrent()) return
         reset()
         toast.success(`Created department “${created.name}”`)
       },
       onError: (error) => {
+        if (!isCurrent()) return
         const duplicate = error instanceof ApiError && error.status === 409
         const message = duplicate
           ? 'A department with this name already exists. Use a different name.'
@@ -181,8 +186,8 @@ export function TenantUsers({
                       const nextDepartmentId = event.target.value || null
                       if (nextDepartmentId === departmentId) return
                       assign.mutate({ tenantId, userId: row.id, departmentId: nextDepartmentId }, {
-                        onSuccess: () => toast.success(`Department updated for ${name}`),
-                        onError: (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : 'Could not update department. Try again.'),
+                        onSuccess: fenceCallback(isCurrent, () => toast.success(`Department updated for ${name}`)),
+                        onError: fenceCallback(isCurrent, (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : 'Could not update department. Try again.')),
                       })
                     }}
                   >

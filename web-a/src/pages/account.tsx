@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { PasswordField } from '@/components/ui/password-field'
-import { useAuth } from '@/hooks/use-auth'
+import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { changePasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 
@@ -35,6 +35,7 @@ type FormValues = z.infer<typeof schema>
 
 export function AccountPage() {
   const { user, mustChangePassword, refreshUser } = useAuth()
+  const isCurrent = useSessionCurrent()
   const formId = useId()
   const formErrorId = `${formId}-form-error`
   const [formError, setFormError] = useState<string | null>(null)
@@ -61,12 +62,15 @@ export function AccountPage() {
         old_password: values.old_password,
         new_password: values.new_password,
       })
+      if (!isCurrent()) return
       reset()
       await refreshUser()
+      if (!isCurrent()) return
       toast.success(
         wasForced ? 'Password updated. You can use the admin console now.' : 'Password updated',
       )
     } catch (error) {
+      if (!isCurrent()) return
       if (error instanceof ApiError) {
         setFormError(formatApiDetail(error.detail) ?? 'Unable to update password.')
         return

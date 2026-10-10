@@ -10,13 +10,22 @@ from __future__ import annotations
 import json
 import time
 from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
 
 from app.config import get_settings
 from app.core.logging import logger
 
 _COOLDOWN_SECONDS = 2.0
 _cache_dead_until = 0.0
-_deferred_incrs: ContextVar[set[str] | None] = ContextVar("redis_cache_deferred", default=None)
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredVersions:
+    incrs: set[str] = field(default_factory=set)
+    deletes: set[str] = field(default_factory=set)
+
+
+_deferred_versions: ContextVar[_DeferredVersions | None] = ContextVar("redis_cache_deferred", default=None)
 
 
 def cache_prefix() -> str:
@@ -99,10 +108,18 @@ async def cache_set_nx(key: str, value: str, *, ttl: int) -> bool:
         return False
 
 
-async def cache_delete(*keys: str) -> None:
-    """Always attempt DELETE. Invalidation must not be swallowed by the read circuit."""
+async def cache_delete(*keys: str, defer_until_commit: bool = False) -> None:
+    """Delete outside the read circuit; optionally defer snapshots to the SQL commit."""
     if not keys:
         return
+    pending = _deferred_versions.get()
+    if defer_until_commit and pending is not None:
+        pending.deletes.update(keys)
+        return
+    await _delete_now(*keys)
+
+
+async def _delete_now(*keys: str) -> None:
     try:
         client = await _client()
         _ = await client.delete(*keys)
@@ -144,9 +161,9 @@ async def read_version(version_key: str) -> str:
 
 async def bump_version(version_key: str, *, ttl: int | None = None) -> None:
     """INCR a version token. Deferred until commit when a connection_ctx is open."""
-    pending = _deferred_incrs.get()
+    pending = _deferred_versions.get()
     if pending is not None:
-        pending.add(version_key)
+        pending.incrs.add(version_key)
         return
     await _incr_version_now(version_key, ttl=ttl)
 
@@ -167,20 +184,28 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
         logger.debug("redis_cache incr skipped: {}", type(exc).__name__)
 
 
-def begin_deferred_versions() -> Token[set[str] | None]:
-    pending: set[str] = set()
-    return _deferred_incrs.set(pending)
+def has_pending_snapshot_writes() -> bool:
+    pending = _deferred_versions.get()
+    return pending is not None and bool(pending.incrs or pending.deletes)
 
 
-def end_deferred_versions(token: Token[set[str] | None]) -> None:
-    _deferred_incrs.reset(token)
+def begin_deferred_versions() -> Token[_DeferredVersions | None]:
+    return _deferred_versions.set(_DeferredVersions())
+
+
+def end_deferred_versions(token: Token[_DeferredVersions | None]) -> None:
+    _deferred_versions.reset(token)
 
 
 async def flush_deferred_versions() -> None:
-    pending = _deferred_incrs.get()
-    if not pending:
+    pending = _deferred_versions.get()
+    if pending is None:
         return
-    keys = list(pending)
-    pending.clear()
+    keys = list(pending.incrs)
+    deletes = list(pending.deletes)
+    pending.incrs.clear()
+    pending.deletes.clear()
     for key in keys:
         await _incr_version_now(key)
+    if deletes:
+        await _delete_now(*deletes)

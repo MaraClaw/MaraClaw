@@ -16,8 +16,8 @@ export type CreateLinkupKeyInput = {
   api_key: string
 }
 
-export async function listLinkupKeys(): Promise<LinkupKey[]> {
-  return apiRequest<LinkupKey[]>('/api/admin/linkup-keys')
+export async function listLinkupKeys(signal?: AbortSignal): Promise<LinkupKey[]> {
+  return apiRequest<LinkupKey[]>('/api/admin/linkup-keys', { signal })
 }
 
 export async function createLinkupKey(input: CreateLinkupKeyInput): Promise<LinkupKey> {

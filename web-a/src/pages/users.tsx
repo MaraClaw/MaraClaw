@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
 import { useAuth } from '@/hooks/use-auth'
+import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { isGenesisAdmin, isPlatformAdminUser } from '@/lib/types/auth'
@@ -54,7 +55,7 @@ export function UsersPage() {
 
   const companies = useQuery({
     queryKey: ['admin-companies'],
-    queryFn: () => listCompanies(),
+    queryFn: ({ signal }) => listCompanies(undefined, signal),
     enabled: platformAdmin,
   })
 
@@ -74,13 +75,13 @@ export function UsersPage() {
 
   const users = useQuery({
     queryKey: ['admin-users', tenantId],
-    queryFn: () => listUsers(platformAdmin ? companyId || undefined : undefined),
+    queryFn: ({ signal }) => listUsers(platformAdmin ? companyId || undefined : undefined, signal),
     enabled: !platformAdmin || Boolean(companyId),
   })
 
   const platformAdmins = useQuery({
     queryKey: ['admin-platform-admins'],
-    queryFn: listPlatformAdmins,
+    queryFn: ({ signal }) => listPlatformAdmins(signal),
     enabled: platformAdmin,
   })
 
