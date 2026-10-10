@@ -3,14 +3,10 @@
 Architecture: "Ephemeral screenshots" pattern
 - Internal screenshots are held in a process-level memory cache.
   The tool returns a short sentinel string: "[ImageID: <uuid>]".
-  When websocket.py invokes try_inject_screenshot_vision(), it finds the ImageID,
+   When the LLM caller invokes try_inject_screenshot_vision(), it finds the ImageID,
   pops the bytes from the cache (consumed once, then gone), compresses to base64 JPEG,
   and injects a vision content array into the LLM message.
   Net result: zero disk writes, zero frontend rendering, zero DB bloat.
-
-- Legacy persistent screenshots may still be present in old chat history; file-path
-  injection remains as a compatibility path, but current screenshot tools do not
-  create workspace files.
 """
 
 from __future__ import annotations
@@ -21,7 +17,6 @@ import time
 import uuid as _uuid_mod
 from collections.abc import Mapping
 from io import BytesIO
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from app.core.logging import logger
@@ -113,11 +108,7 @@ def pop_temp_screenshot(img_id: str) -> tuple[bytes, GridOptions] | None:
 # Matches the in-memory sentinel: [ImageID: <uuid>]
 _IMAGE_ID_RE = re.compile(r"\[ImageID:\s*([0-9a-f-]{36})\]", re.IGNORECASE)
 
-# Matches legacy workspace file paths for screenshots created by older versions.
-# Handles: workspace/screenshot_1234.png, workspace/desktop-screenshot-1234.png
-_SCREENSHOT_PATH_RE = re.compile(r"workspace/(?:desktop[_-])?screenshot[_-]\d+\.png")
-
-# Tool names that can produce screenshots (either in-memory or file-based)
+# Tool names that can produce in-memory screenshots
 SCREENSHOT_TOOL_NAMES = frozenset(
     {
         "agentbay_browser_navigate",
@@ -267,48 +258,21 @@ def compress_bytes_to_base64(
         return None
 
 
-def compress_screenshot_to_base64(
-    file_path: Path,
-    *,
-    coordinate_grid: bool = False,
-    grid_options: Mapping[str, int | float] | None = None,
-) -> str | None:
-    """Read a screenshot file, compress it, and return a base64 data URL.
-
-    Used only for legacy screenshots saved to workspace/ by older versions.
-    Returns None if the file doesn't exist or processing fails.
-    """
-    if not file_path.exists():
-        logger.warning(f"[VisionInject] Screenshot file not found: {file_path}")
-        return None
-    try:
-        raw_bytes = file_path.read_bytes()
-        return compress_bytes_to_base64(raw_bytes, coordinate_grid=coordinate_grid, grid_options=grid_options)
-    except Exception as e:
-        logger.warning(f"[VisionInject] Failed to read screenshot file: {e}")
-        return None
-
-
 # ─── Main Entry Point ────────────────────────────────────────────────────────────
 
 
 def try_inject_screenshot_vision(
     tool_name: str,
     result_text: str,
-    ws_path: Path,
 ) -> list[VisionContent] | None:
     """Try to extract a screenshot from a tool result and build a vision content array.
 
-    Handles two modes:
-    1. In-memory mode: result_text contains [ImageID: <uuid>].
-       Pops the bytes from the memory cache, compresses, and injects.
-    2. Legacy file mode: result_text contains a workspace/ screenshot path.
-       Reads from disk, compresses, and injects.
+    Consumes the bytes identified by [ImageID: <uuid>] from the memory cache,
+    compresses them, and injects the image. Workspace paths are not read.
 
     Args:
         tool_name: Name of the tool that produced the result.
         result_text: Plain text result from the tool.
-        ws_path: Agent workspace root path (only needed for file mode).
 
     Returns:
         A list suitable for LLMMessage.content (with text + image_url parts),
@@ -322,7 +286,6 @@ def try_inject_screenshot_vision(
         "agentbay_computer_precision_screenshot",
     }
 
-    # ── Mode 1: In-memory ephemeral screenshot (preferred path) ──
     id_match = _IMAGE_ID_RE.search(result_text)
     if id_match:
         img_id = id_match.group(1)
@@ -344,20 +307,6 @@ def try_inject_screenshot_vision(
         logger.info(f"[VisionInject] Injected in-memory screenshot for {tool_name}")
         return [
             {"type": "text", "text": clean_text},
-            {"type": "image_url", "image_url": {"url": data_url}},
-        ]
-
-    # ── Mode 2: Legacy file-based screenshot ──
-    path_match = _SCREENSHOT_PATH_RE.search(result_text)
-    if path_match:
-        rel_path = path_match.group(0)
-        abs_path = ws_path / rel_path
-        data_url = compress_screenshot_to_base64(abs_path, coordinate_grid=add_coordinate_grid)
-        if not data_url:
-            return None
-        logger.info(f"[VisionInject] Injected file-based screenshot for {tool_name}")
-        return [
-            {"type": "text", "text": result_text},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
 

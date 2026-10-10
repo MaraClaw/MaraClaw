@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from pathlib import Path
 
-from app.config import get_settings
 from app.core.json_types import str_findall
 from app.core.logging import logger
 from app.dao.base import as_uuid
@@ -433,9 +431,7 @@ async def _process_tool_call(
             from app.services.llm.vision_content import rebuild_llm_content_parts
             from app.services.vision_inject import try_inject_screenshot_vision
 
-            settings = get_settings()
-            ws_path = Path(settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR) / str(agent_id)
-            vision_content = try_inject_screenshot_vision(tool_name, str(result), ws_path)
+            vision_content = try_inject_screenshot_vision(tool_name, str(result))
             if vision_content:
                 tool_content = rebuild_llm_content_parts(vision_content)
                 logger.info(f"[LLM] Injected screenshot vision for {tool_name}")

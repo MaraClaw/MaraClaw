@@ -1,6 +1,4 @@
 import uuid
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -18,12 +16,6 @@ TOOL_CALL: Final[LLMToolCall] = {
         "arguments": "{}",
     },
 }
-
-
-@dataclass(frozen=True, slots=True)
-class _Settings:
-    STORAGE_LOCAL_ROOT: str | None
-    AGENT_DATA_DIR: str
 
 
 def _install_fakes(
@@ -50,21 +42,15 @@ def _install_fakes(
         assert on_output is None
         return PLAIN_RESULT
 
-    def fake_get_settings() -> _Settings:
-        return _Settings(STORAGE_LOCAL_ROOT=None, AGENT_DATA_DIR="agent-data")
-
     def fake_inject_vision(
         tool_name: str,
         result_text: str,
-        workspace_path: Path,
     ) -> list[VisionContent] | None:
         assert tool_name == "agentbay_computer_screenshot"
         assert result_text == PLAIN_RESULT
-        assert workspace_path == Path("agent-data") / str(AGENT_ID)
         return injected_content
 
     monkeypatch.setattr(caller, "execute_tool", fake_execute_tool)
-    monkeypatch.setattr(caller, "get_settings", fake_get_settings)
     monkeypatch.setattr(vision_inject, "try_inject_screenshot_vision", fake_inject_vision)
 
 
