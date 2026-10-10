@@ -95,8 +95,8 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/maraclaw"
-    # Psycopg pool (new data layer). Mirrors prior SQLAlchemy pool_size=20 + max_overflow=10.
+    DATABASE_URL: str = "postgresql://localhost:5432/maraclaw"
+    # Psycopg connection pool sizing.
     DATABASE_POOL_MIN_SIZE: int = 2
     DATABASE_POOL_MAX_SIZE: int = 30
     DATABASE_POOL_TIMEOUT: float = 30.0
