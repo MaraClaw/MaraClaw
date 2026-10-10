@@ -218,6 +218,16 @@ class WeChatPollManager:
             await self.reconcile_clients()
             await asyncio.sleep(self._reconcile_interval_seconds)
 
+    async def stop_all(self) -> None:
+        results = await asyncio.gather(
+            *(self.stop_client(agent_id) for agent_id in tuple(self._tasks)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("[WeChat] Client cleanup failed: {}", result)
+        self._connected.clear()
+
     async def reconcile_clients(self) -> None:
         configured_agent_ids: set[uuid.UUID] = set()
         configs = await channel_config_dao.list_configured("wechat")
