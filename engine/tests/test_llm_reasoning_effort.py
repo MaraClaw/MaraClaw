@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.services.llm.providers.anthropic import AnthropicClient
 from app.services.llm.reasoning import (
     apply_reasoning_effort,
     native_reasoning_effort,
@@ -71,7 +72,32 @@ def test_payload_shapes():
 
 
 def test_apply_merges_nested_gemini_config():
-    payload = {"generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
+    config: dict[str, object] = {"temperature": 0.2, "maxOutputTokens": 1024}
+    payload: dict[str, object] = {"generationConfig": config}
     apply_reasoning_effort(payload, provider="gemini", effort="low")
-    assert payload["generationConfig"]["temperature"] == 0.2
-    assert payload["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "low"
+    assert config["temperature"] == 0.2
+    assert config["thinkingConfig"] == {"thinkingLevel": "low"}
+
+
+def test_apply_preserves_arbitrary_nested_options_when_merging_effort():
+    option = object()
+    config: dict[str, object] = {"custom_option": option, "effort": "low"}
+    payload: dict[str, object] = {"output_config": config}
+
+    result = apply_reasoning_effort(payload, provider="anthropic", effort="high")
+
+    assert result is payload
+    assert payload["output_config"] is config
+    assert config["custom_option"] is option
+    assert config["effort"] == "high"
+
+
+def test_anthropic_preserves_arbitrary_kwargs_when_applying_reasoning():
+    client = AnthropicClient("secret", model="claude")
+    option = object()
+
+    payload = client._build_payload([], None, None, None, reasoning_effort="high", custom_option=option)
+
+    assert payload["custom_option"] is option
+    assert payload["output_config"] == {"effort": "high"}
+    assert "reasoning_effort" not in payload

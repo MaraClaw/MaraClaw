@@ -7,8 +7,9 @@ not expose). This module is the only place those translations live.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
+from app.core.json_types import JsonObject
 from app.services.llm.registry import normalize_provider
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
@@ -63,7 +64,7 @@ def native_reasoning_effort(provider: str, effort: ReasoningEffort) -> str:
     return effort
 
 
-def reasoning_effort_fields(provider: str, effort: object) -> dict[str, Any]:
+def reasoning_effort_fields(provider: str, effort: object) -> JsonObject:
     """Return extra request fields for ``provider`` at ``effort``.
 
     Empty when the provider has no effort control or ``effort`` is unset.
@@ -97,12 +98,12 @@ def reasoning_effort_fields(provider: str, effort: object) -> dict[str, Any]:
 
 
 def apply_reasoning_effort(
-    payload: dict[str, Any],
+    payload: dict[str, object],
     *,
     provider: str,
     effort: object,
-) -> dict[str, Any]:
-    """Merge mapped effort fields into ``payload`` and return it."""
+) -> dict[str, object]:
+    """Merge typed effort fields in place, preserving arbitrary provider options."""
     extra = reasoning_effort_fields(provider, effort)
     if not extra:
         return payload
@@ -110,7 +111,7 @@ def apply_reasoning_effort(
     return payload
 
 
-def _deep_merge(target: dict[str, Any], extra: dict[str, Any]) -> None:
+def _deep_merge(target: dict[str, object], extra: JsonObject) -> None:
     for key, value in extra.items():
         existing = target.get(key)
         if isinstance(existing, dict) and isinstance(value, dict):
