@@ -39,7 +39,7 @@ RUN set -eu; set --; \
 FROM python:3.14.8-slim-trixie AS production
 
 ARG APT_MIRROR=deb.debian.org
-ARG TINI_VERSION=0.19.0-3+b7
+ARG TINI_VERSION=0.19.0-3+b8
 WORKDIR /app
 RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list.d/debian.sources; \
@@ -50,10 +50,10 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get install -y --no-install-recommends \
         "tini=${TINI_VERSION}" \
         libpq5=17.11-0+deb13u1 \
-        curl=8.14.1-2+deb13u4 \
+        curl=8.14.1-2+deb13u5 \
         shadowsocks-libev=3.3.5+ds-16 \
         gosu=1.17-3+b4 \
-        bubblewrap=0.11.0-2+deb13u1 \
+        bubblewrap=0.12.0-1~deb13u1 \
         libcairo2=1.18.4-1+b1 \
         libpango-1.0-0=1.56.3-1 \
         libpangocairo-1.0-0=1.56.3-1 \
@@ -63,7 +63,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-        chromium=151.0.7922.137-1~deb13u1 && \
+        chromium=154.0.8037.92-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 
