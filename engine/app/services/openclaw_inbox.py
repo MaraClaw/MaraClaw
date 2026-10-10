@@ -6,8 +6,9 @@ import asyncio
 import json
 import secrets
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 import httpx
@@ -195,21 +196,33 @@ def _container_ref(agent: AgentRecord) -> str | None:
     return openclaw_container_name(agent.id)
 
 
+@runtime_checkable
+class _DockerExecutor(Protocol):
+    def execute(
+        self, container: str, command: list[str], /, *, stream: bool = False
+    ) -> str | Iterable[tuple[str, bytes]] | None: ...
+
+
+@runtime_checkable
+class _DockerContainerClient(Protocol):
+    @property
+    def container(self) -> _DockerExecutor: ...
+
+
 def _docker_execute(agent: AgentRecord, argv: list[str]) -> str | None:
     """Run argv in the guest. None means success; otherwise an error string."""
     from app.services.agent_manager import agent_manager
 
-    docker_client = getattr(agent_manager, "docker_client", None)
+    docker_client = agent_manager.docker_client
     container = _container_ref(agent)
     if docker_client is None or not container:
         return "docker client or container missing"
     # python-on-whales: execute lives on DockerClient.container, same as gogcli.
-    api = getattr(docker_client, "container", docker_client)
-    execute = getattr(api, "execute", None)
-    if execute is None:
+    api = docker_client.container if isinstance(docker_client, _DockerContainerClient) else docker_client
+    if not isinstance(api, _DockerExecutor):
         return "docker execute API missing"
     try:
-        execute(container, argv, stream=False)
+        api.execute(container, argv, stream=False)
     except Exception as exc:
         return str(exc)
     return None
@@ -228,7 +241,9 @@ def _hooks_recently_refused(agent_id: UUID) -> bool:
 def _hooks_unreachable(error: str) -> bool:
     """True only for connect/DNS failures, not HTTP 4xx/5xx or a port in the URL."""
     needle = error.lower()
-    if "http " in needle and any(code in needle for code in (" 401", " 403", " 404", " 409", " 422", " 500", " 502", " 503")):
+    if "http " in needle and any(
+        code in needle for code in (" 401", " 403", " 404", " 409", " 422", " 500", " 502", " 503")
+    ):
         return False
     return any(
         token in needle

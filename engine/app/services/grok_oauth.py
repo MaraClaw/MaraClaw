@@ -12,7 +12,7 @@ from typing import Protocol
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_int, json_as_str, json_object_from
+from app.core.json_types import JsonObject, json_as_int, json_as_str, json_object_from, json_value_from_response
 
 # Shared Grok CLI / OpenClaw public client. xAI decides which subscriptions
 # can receive OAuth API tokens; ineligible accounts get 403 after login.
@@ -69,7 +69,7 @@ class HttpxGrokOAuthTransport:
     """Production transport. Isolated so tests never construct a live client."""
 
     def __init__(self, *, timeout: float = 20.0) -> None:
-        self._timeout = timeout
+        self._timeout: float = timeout
 
     async def post_form(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
@@ -80,7 +80,7 @@ class HttpxGrokOAuthTransport:
             )
             body: JsonObject = {}
             try:
-                parsed = response.json()
+                parsed = json_value_from_response(response)
             except ValueError:
                 parsed = None
             if isinstance(parsed, dict):
@@ -106,7 +106,9 @@ def get_grok_oauth_transport() -> GrokOAuthTransport:
 def parse_device_code_response(status: int, payload: JsonObject) -> DeviceCodeChallenge:
     """Parse a device-code start response. Raises ValueError on failure."""
     if status >= 400:
-        detail = json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device code failed"
+        detail = (
+            json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device code failed"
+        )
         raise ValueError(detail)
     device_code = json_as_str(payload.get("device_code")) or ""
     user_code = json_as_str(payload.get("user_code")) or ""

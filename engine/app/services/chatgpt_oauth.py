@@ -9,13 +9,19 @@ Tests inject a transport; production uses httpx and never hits OpenAI in CI.
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_int, json_as_str, json_object_from
+from app.core.json_types import (
+    JsonObject,
+    json_as_int,
+    json_as_str,
+    json_loads_object,
+    json_object_from,
+    json_value_from_response,
+)
 
 # Shared Codex CLI / OpenClaw public client. OpenAI decides which ChatGPT
 # plans can receive OAuth tokens; device-code must be enabled in ChatGPT
@@ -99,7 +105,7 @@ class HttpxChatGPTOAuthTransport:
     """Production transport. Isolated so tests never construct a live client."""
 
     def __init__(self, *, timeout: float = 20.0) -> None:
-        self._timeout = timeout
+        self._timeout: float = timeout
 
     async def post_json(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
@@ -144,7 +150,7 @@ def get_chatgpt_oauth_transport() -> ChatGPTOAuthTransport:
 def _json_body(response: httpx.Response) -> JsonObject:
     body: JsonObject = {}
     try:
-        parsed = response.json()
+        parsed = json_value_from_response(response)
     except ValueError:
         parsed = None
     if isinstance(parsed, dict):
@@ -175,10 +181,8 @@ def account_id_from_jwt(token: str) -> str:
     padded = payload + "=" * (-len(payload) % 4)
     try:
         raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-        claims = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return ""
-    if not isinstance(claims, dict):
+        claims = json_loads_object(raw.decode("utf-8"))
+    except ValueError, UnicodeDecodeError:
         return ""
     direct = json_as_str(claims.get("chatgpt_account_id"))
     if direct:
@@ -195,9 +199,7 @@ def parse_device_code_response(status: int, payload: JsonObject) -> DeviceCodeCh
     """Parse a Codex usercode start response. Raises ValueError on failure."""
     if status >= 400:
         detail = (
-            json_as_str(payload.get("error_description"))
-            or json_as_str(payload.get("error"))
-            or "device code failed"
+            json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device code failed"
         )
         raise ValueError(detail)
     device_auth_id = json_as_str(payload.get("device_auth_id")) or ""
@@ -259,9 +261,7 @@ def interpret_device_poll(status: int, payload: JsonObject, *, default_interval:
         return TokenPoll(status="pending", interval=default_interval)
     if status >= 400:
         detail = (
-            json_as_str(payload.get("error_description"))
-            or json_as_str(payload.get("error"))
-            or "device auth failed"
+            json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device auth failed"
         )
         return TokenPoll(status="error", error=detail)
     code = json_as_str(payload.get("authorization_code")) or ""

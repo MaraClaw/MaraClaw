@@ -31,7 +31,7 @@ from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.user_dao import user_dao
 from app.records.llm import LLMModelRecord
 from app.records.okr import CompanyReportRecord, MemberDailyReportRecord
-from app.services.llm.client import chat_complete
+from app.services.llm.factory import chat_complete
 from app.services.llm.utils import get_max_tokens, get_model_api_key
 
 MEMBER_DAILY_CHAR_LIMIT = 2000
@@ -162,12 +162,12 @@ async def _resolve_report_models(tenant_id: uuid.UUID) -> ResolvedReportModels:
 
     from app.services.enterprise_llm import owned_model_or_none
 
-    tenant_id = getattr(agent, "tenant_id", None)
+    agent_tenant_id = agent.tenant_id
     if agent.primary_model_id:
-        primary = owned_model_or_none(await llm_model_dao.get(agent.primary_model_id), tenant_id)
+        primary = owned_model_or_none(await llm_model_dao.get(agent.primary_model_id), agent_tenant_id)
 
     if agent.fallback_model_id:
-        fallback = owned_model_or_none(await llm_model_dao.get(agent.fallback_model_id), tenant_id)
+        fallback = owned_model_or_none(await llm_model_dao.get(agent.fallback_model_id), agent_tenant_id)
 
     if not primary and fallback:
         primary, fallback = fallback, None

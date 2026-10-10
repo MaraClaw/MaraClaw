@@ -175,9 +175,7 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
         LLMMessage(role="user", content=message),
     ]
 
-    model, client = await create_fresh_llm_client_from_model(
-        model, timeout=float(getattr(model, "request_timeout", None) or 60.0)
-    )
+    model, client = await create_fresh_llm_client_from_model(model, timeout=float(model.request_timeout or 60.0))
     try:
         response = await client.complete(
             messages=messages,

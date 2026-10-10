@@ -9,7 +9,7 @@ import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Final, Literal, cast
+from typing import ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.core.security import decrypt_data, encrypt_data
 from app.dao.llm_dao import llm_model_dao
 from app.records.llm import LLMModelRecord
+from app.records.user import UserRecord
 from app.services.enterprise_llm import (
     activate_pool_model_for_tenant,
     assert_can_manage_model,
@@ -173,7 +174,7 @@ def _get_session(session_id: str) -> GrokOAuthSession:
     return session
 
 
-def _require_session_tenant(user: Any, session: GrokOAuthSession) -> uuid.UUID:
+def _require_session_tenant(user: UserRecord, session: GrokOAuthSession) -> uuid.UUID:
     return require_llm_pool_tenant_id(user, str(session.tenant_id))
 
 
@@ -225,7 +226,7 @@ async def persist_subscription_tokens(
     return saved
 
 
-async def start_grok_subscription_handoff(user: Any, tenant_id: str | None) -> GrokSubscriptionStartOut:
+async def start_grok_subscription_handoff(user: UserRecord, tenant_id: str | None) -> GrokSubscriptionStartOut:
     """Admin-only device-code start. Invokes the shipped xAI start path."""
     tid = require_llm_pool_tenant_id(user, tenant_id)
     challenge = await request_device_code()
@@ -233,7 +234,7 @@ async def start_grok_subscription_handoff(user: Any, tenant_id: str | None) -> G
     return public_start_payload(session)
 
 
-async def grok_subscription_status(user: Any, session_id: str) -> GrokSubscriptionStatusOut:
+async def grok_subscription_status(user: UserRecord, session_id: str) -> GrokSubscriptionStatusOut:
     """Poll xAI once and, on success, persist an encrypted company pool row."""
     session = _get_session(session_id)
     _require_session_tenant(user, session)
@@ -257,7 +258,9 @@ async def grok_subscription_status(user: Any, session_id: str) -> GrokSubscripti
         session.detail = "Grok subscription connected"
         session.device_code = ""
         return public_status_payload(session)
-    next_status: GrokStatus = cast(GrokStatus, poll.status if poll.status in {"denied", "expired", "error"} else "error")
+    next_status: GrokStatus = cast(
+        GrokStatus, poll.status if poll.status in {"denied", "expired", "error"} else "error"
+    )
     session.status = next_status
     session.detail = poll.error or "Grok subscription sign-in failed"
     session.device_code = ""
@@ -296,7 +299,7 @@ async def refresh_subscription_model(model: LLMModelRecord) -> LLMModelRecord:
 
 
 def _is_fresh(model: LLMModelRecord) -> bool:
-    expires = getattr(model, "token_expires_at", None)
+    expires = model.token_expires_at
     if expires is None:
         return False
     if expires.tzinfo is None:
@@ -317,7 +320,7 @@ async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
         return model
 
 
-async def refresh_grok_subscription_for_admin(user: Any, model_id: uuid.UUID) -> GrokSubscriptionRefreshOut:
+async def refresh_grok_subscription_for_admin(user: UserRecord, model_id: uuid.UUID) -> GrokSubscriptionRefreshOut:
     """Admin refresh of one company Grok subscription row."""
     model = await llm_model_dao.get(model_id)
     if model is None:

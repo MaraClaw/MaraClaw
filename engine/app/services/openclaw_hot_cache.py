@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any
 from uuid import UUID
 
 from app.records.agent import AgentRecord
@@ -16,14 +15,16 @@ from app.services.llm.turn import ModelBundle
 
 _DEFAULT_TTL_SECONDS = 45.0
 _LAST_SEEN_TTL_SECONDS = 20.0
-_store: dict[str, tuple[float, Any]] = {}
+type CacheValue = AgentRecord | ModelBundle | str | bool
+
+_store: dict[str, tuple[float, CacheValue]] = {}
 
 
 def _now() -> float:
     return time.monotonic()
 
 
-def cache_get(key: str) -> Any | None:
+def cache_get(key: str) -> CacheValue | None:
     item = _store.get(key)
     if item is None:
         return None
@@ -34,7 +35,7 @@ def cache_get(key: str) -> Any | None:
     return value
 
 
-def cache_set(key: str, value: Any, *, ttl: float = _DEFAULT_TTL_SECONDS) -> None:
+def cache_set(key: str, value: CacheValue, *, ttl: float = _DEFAULT_TTL_SECONDS) -> None:
     if ttl <= 0:
         return
     _store[key] = (_now() + ttl, value)

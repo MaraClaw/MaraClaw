@@ -144,9 +144,7 @@ async def test_start_rejects_member_and_foreign_tenant():
     assert member.value.status_code == 403
 
     with pytest.raises(HTTPException) as foreign:
-        await enterprise_api.start_grok_subscription(
-            tenant_id=str(_OTHER), current_user=_user(role="org_admin")
-        )
+        await enterprise_api.start_grok_subscription(tenant_id=str(_OTHER), current_user=_user(role="org_admin"))
     assert foreign.value.status_code == 403
 
 
@@ -162,9 +160,7 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     monkeypatch.setattr(handoff, "activate_pool_model_for_tenant", AsyncMock())
 
     start = await enterprise_api.start_grok_subscription(current_user=_user())
-    status = await enterprise_api.get_grok_subscription_status(
-        session_id=start.session_id, current_user=_user()
-    )
+    status = await enterprise_api.get_grok_subscription_status(session_id=start.session_id, current_user=_user())
 
     assert status.status == "authorized"
     assert status.model_id == created.id
@@ -279,9 +275,7 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     obj_in = persist.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == "enc:xai-access-REFRESHED"
     refresh_calls = [
-        call
-        for call in transport.calls
-        if call[0] == XAI_TOKEN_URL and call[1].get("grant_type") == "refresh_token"
+        call for call in transport.calls if call[0] == XAI_TOKEN_URL and call[1].get("grant_type") == "refresh_token"
     ]
     assert refresh_calls, "refresh must invoke the shipped token refresh"
 
@@ -472,9 +466,7 @@ async def test_status_stays_pending_until_xai_authorizes():
     transport = FakeXaiTransport(pending_polls=1)
     set_grok_oauth_transport(transport)
     start = await enterprise_api.start_grok_subscription(current_user=_user())
-    pending = await enterprise_api.get_grok_subscription_status(
-        session_id=start.session_id, current_user=_user()
-    )
+    pending = await enterprise_api.get_grok_subscription_status(session_id=start.session_id, current_user=_user())
     assert pending.status == "pending"
     assert pending.user_code == "ABCD-EFGH"
     _assert_no_secrets(pending.model_dump())

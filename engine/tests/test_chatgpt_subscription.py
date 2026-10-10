@@ -14,6 +14,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import enterprise as enterprise_api
+from app.config import get_settings
+from app.core.security import encrypt_data
 from app.records.llm import LLMModelRecord
 from app.services import chatgpt_oauth, chatgpt_subscription as handoff, enterprise_llm as pool
 from app.services.chatgpt_oauth import (
@@ -184,9 +186,7 @@ async def test_start_rejects_member_and_foreign_tenant():
     assert member.value.status_code == 403
 
     with pytest.raises(HTTPException) as foreign:
-        await enterprise_api.start_chatgpt_subscription(
-            tenant_id=str(_OTHER), current_user=_user(role="org_admin")
-        )
+        await enterprise_api.start_chatgpt_subscription(tenant_id=str(_OTHER), current_user=_user(role="org_admin"))
     assert foreign.value.status_code == 403
 
 
@@ -202,9 +202,7 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     monkeypatch.setattr(handoff, "activate_pool_model_for_tenant", AsyncMock())
 
     start = await enterprise_api.start_chatgpt_subscription(current_user=_user())
-    status = await enterprise_api.get_chatgpt_subscription_status(
-        session_id=start.session_id, current_user=_user()
-    )
+    status = await enterprise_api.get_chatgpt_subscription_status(session_id=start.session_id, current_user=_user())
 
     assert status.status == "authorized"
     assert status.model_id == created.id
@@ -272,9 +270,7 @@ async def test_status_stays_pending_until_openai_authorizes():
     transport = FakeChatGPTTransport(pending_polls=1)
     set_chatgpt_oauth_transport(transport)
     start = await enterprise_api.start_chatgpt_subscription(current_user=_user())
-    pending = await enterprise_api.get_chatgpt_subscription_status(
-        session_id=start.session_id, current_user=_user()
-    )
+    pending = await enterprise_api.get_chatgpt_subscription_status(session_id=start.session_id, current_user=_user())
     assert pending.status == "pending"
     assert pending.user_code == "ABCD-EFGH"
     _assert_no_secrets(pending.model_dump())
@@ -307,9 +303,7 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     assert "base_url" not in obj_in
     assert "provider" not in obj_in
     refresh_calls = [
-        call
-        for call in transport.calls
-        if call[0] == OPENAI_TOKEN_URL and call[2].get("grant_type") == "refresh_token"
+        call for call in transport.calls if call[0] == OPENAI_TOKEN_URL and call[2].get("grant_type") == "refresh_token"
     ]
     assert refresh_calls, "refresh must invoke the shipped token refresh"
 
@@ -328,7 +322,7 @@ async def test_refresh_rejects_member_and_foreign_tenant(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_probe_uses_codex_responses_client(monkeypatch):
-    existing = _model(api_key_encrypted=_ACCESS, oauth_account_id="acct-live")
+    existing = _model(api_key_encrypted=encrypt_data(_ACCESS, get_settings().SECRET_KEY), oauth_account_id="acct-live")
     monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=existing))
     monkeypatch.setattr(
         "app.services.chatgpt_subscription.ensure_fresh_access_token",
@@ -507,7 +501,7 @@ def test_create_llm_client_from_model_uses_codex_responses():
     from app.services.llm.providers.openai_responses import OpenAIResponsesClient
     from app.services.llm.utils import create_llm_client_from_model
 
-    row = _model(api_key_encrypted=_ACCESS, oauth_account_id="acct-stored")
+    row = _model(api_key_encrypted=encrypt_data(_ACCESS, get_settings().SECRET_KEY), oauth_account_id="acct-stored")
     client = create_llm_client_from_model(row, timeout=9)
     assert type(client) is OpenAIResponsesClient
     assert client.stateless is True
@@ -519,9 +513,7 @@ def test_create_llm_client_from_model_uses_codex_responses():
     assert payload["store"] is False
     assert "max_output_tokens" not in payload
     assert "temperature" not in payload
-    effort_payload = client._build_payload(
-        [], None, None, 16, llm_provider="openai", reasoning_effort="high"
-    )
+    effort_payload = client._build_payload([], None, None, 16, llm_provider="openai", reasoning_effort="high")
     assert effort_payload.get("reasoning") == {"effort": "high"}
     assert "reasoning_effort" not in effort_payload
 
@@ -567,7 +559,7 @@ def test_create_llm_client_from_model_uses_codex_responses():
 @pytest.mark.asyncio
 async def test_create_fresh_refreshes_expired_chatgpt_row(monkeypatch):
     expired = _model(token_expires_at=_NOW - timedelta(minutes=1))
-    refreshed = _model(api_key_encrypted="enc-new", oauth_account_id="acct-live")
+    refreshed = _model(api_key_encrypted=encrypt_data("new", get_settings().SECRET_KEY), oauth_account_id="acct-live")
     ensure = AsyncMock(return_value=refreshed)
     monkeypatch.setattr("app.services.chatgpt_subscription.ensure_fresh_access_token", ensure)
     from app.services.llm.utils import create_fresh_llm_client_from_model

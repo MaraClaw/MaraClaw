@@ -11,6 +11,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import enterprise as enterprise_api
+from app.config import get_settings
+from app.core.security import encrypt_data
 from app.records.llm import LLMModelRecord
 from app.schemas.schemas import LLMModelCreate, LLMModelUpdate
 from app.services import enterprise_llm as pool
@@ -34,7 +36,7 @@ def _model(**kwargs) -> LLMModelRecord:
         "id": uuid.uuid4(),
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "api_key_encrypted": "enc-secret-key-9999",
+        "api_key_encrypted": encrypt_data("secret-key-9999", get_settings().SECRET_KEY),
         "label": "Claude",
         "tenant_id": _TENANT,
         "base_url": "https://api.anthropic.com",

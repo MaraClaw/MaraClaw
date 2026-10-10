@@ -9,7 +9,7 @@ import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Final, Literal, cast
+from typing import ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.core.security import decrypt_data, encrypt_data
 from app.dao.llm_dao import llm_model_dao
 from app.records.llm import LLMModelRecord
+from app.records.user import UserRecord
 from app.services.chatgpt_oauth import (
     ChatGPTOAuthTokens,
     DeviceCodeChallenge,
@@ -173,13 +174,11 @@ def _store_session(challenge: DeviceCodeChallenge, tenant_id: uuid.UUID) -> Chat
 def _get_session(session_id: str) -> ChatGPTOAuthSession:
     session = _SESSIONS.get(session_id)
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown ChatGPT subscription session"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown ChatGPT subscription session")
     return session
 
 
-def _require_session_tenant(user: Any, session: ChatGPTOAuthSession) -> uuid.UUID:
+def _require_session_tenant(user: UserRecord, session: ChatGPTOAuthSession) -> uuid.UUID:
     return require_llm_pool_tenant_id(user, str(session.tenant_id))
 
 
@@ -235,7 +234,7 @@ async def persist_subscription_tokens(
     return saved
 
 
-async def start_chatgpt_subscription_handoff(user: Any, tenant_id: str | None) -> ChatGPTSubscriptionStartOut:
+async def start_chatgpt_subscription_handoff(user: UserRecord, tenant_id: str | None) -> ChatGPTSubscriptionStartOut:
     """Admin-only device-code start. Invokes the shipped Codex start path."""
     tid = require_llm_pool_tenant_id(user, tenant_id)
     challenge = await request_device_code()
@@ -243,7 +242,7 @@ async def start_chatgpt_subscription_handoff(user: Any, tenant_id: str | None) -
     return public_start_payload(session)
 
 
-async def chatgpt_subscription_status(user: Any, session_id: str) -> ChatGPTSubscriptionStatusOut:
+async def chatgpt_subscription_status(user: UserRecord, session_id: str) -> ChatGPTSubscriptionStatusOut:
     """Poll OpenAI once and, on success, persist an encrypted company pool row."""
     session = _get_session(session_id)
     _require_session_tenant(user, session)
@@ -255,9 +254,7 @@ async def chatgpt_subscription_status(user: Any, session_id: str) -> ChatGPTSubs
         session.device_auth_id = ""
         return public_status_payload(session)
 
-    poll = await poll_device_authorization(
-        session.device_auth_id, session.user_code, interval=session.interval
-    )
+    poll = await poll_device_authorization(session.device_auth_id, session.user_code, interval=session.interval)
     if poll.interval:
         session.interval = poll.interval
     if poll.status == "pending":
@@ -312,7 +309,7 @@ async def refresh_subscription_model(model: LLMModelRecord) -> LLMModelRecord:
 
 
 def _is_fresh(model: LLMModelRecord) -> bool:
-    expires = getattr(model, "token_expires_at", None)
+    expires = model.token_expires_at
     if expires is None:
         return False
     if expires.tzinfo is None:
@@ -333,7 +330,9 @@ async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
         return model
 
 
-async def refresh_chatgpt_subscription_for_admin(user: Any, model_id: uuid.UUID) -> ChatGPTSubscriptionRefreshOut:
+async def refresh_chatgpt_subscription_for_admin(
+    user: UserRecord, model_id: uuid.UUID
+) -> ChatGPTSubscriptionRefreshOut:
     """Admin refresh of one company ChatGPT subscription row."""
     model = await llm_model_dao.get(model_id)
     if model is None:
@@ -343,5 +342,3 @@ async def refresh_chatgpt_subscription_for_admin(user: Any, model_id: uuid.UUID)
     out = ChatGPTSubscriptionRefreshOut(ok=True, model_id=updated.id, expires_at=updated.token_expires_at)
     _assert_public(out)
     return out
-
-
