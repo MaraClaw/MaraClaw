@@ -22,8 +22,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useAuth } from '@/hooks/use-auth'
+import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { StaleSessionError } from '@/lib/session-policy'
 import {
   isMultiTenantResponse,
   isTokenResponse,
@@ -88,7 +89,8 @@ function parseLoginError(error: unknown): {
 }
 
 export function LoginPage() {
-  const { status, login, isAdmin, mustChangePassword } = useAuth()
+  const { status, login, isLoginCurrent, isAdmin, mustChangePassword } = useAuth()
+  const isCurrent = useSessionCurrent()
   const navigate = useNavigate()
   const location = useLocation()
   const reduceMotion = useReducedMotion()
@@ -177,6 +179,7 @@ export function LoginPage() {
         login_identifier: values.login_identifier.trim(),
         password: values.password,
       })
+      if (!isLoginCurrent(result)) return
 
       if (isTokenResponse(result)) {
         const forceChange =
@@ -195,6 +198,7 @@ export function LoginPage() {
         return
       }
     } catch (error) {
+      if (error instanceof StaleSessionError || !isCurrent()) return
       const parsed = parseLoginError(error)
       setFormError(parsed.formMessage)
       if (parsed.field) {
@@ -224,6 +228,7 @@ export function LoginPage() {
         password: pendingPassword,
         tenant_id: tenant.tenant_id,
       })
+      if (!isLoginCurrent(result)) return
 
       if (isTokenResponse(result)) {
         const forceChange =
@@ -241,10 +246,11 @@ export function LoginPage() {
 
       setFormError('Unable to complete organization selection. Try again.')
     } catch (error) {
+      if (error instanceof StaleSessionError || !isCurrent()) return
       const parsed = parseLoginError(error)
       setFormError(parsed.formMessage)
     } finally {
-      setSelectingTenantId(null)
+      if (isCurrent()) setSelectingTenantId(null)
     }
   }
 
