@@ -9,7 +9,7 @@ test "$(id -un)" = node
 test "$(id -u)" -ne 0
 test -w "$OPENCLAW_STATE_DIR"
 test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
-test "$(node --version)" = "v26.10.0"
+test "$(node --version)" = "v26.11.1"
 test "$(node -p 'process.arch')" = "arm64"
 node --expose-internals -e 'require("internal/deps/acorn/acorn/dist/acorn").parse("export{}",{sourceType:"module"})'
 test "$(cat "$OPENCLAW_STATE_DIR/.bootstrap-tencentdb-version")" = 1.0.1
@@ -25,7 +25,7 @@ test "$OFFICECLI_SKIP_UPDATE" = 1
 test "$OFFICECLI_NO_AUTO_RESIDENT" = 1
 test -f "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md" && test ! -L "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md"
 officecli_version="$(officecli --version)"
-printf '%s\n' "$officecli_version" | grep -Eq '(^|[^0-9])v?1\\.0\\.144([^0-9]|$)'
+printf '%s\n' "$officecli_version" | grep -Eq '(^|[^0-9])v?1\\.0\\.156([^0-9]|$)'
 openclaw skills info officecli --json >/dev/null
 document="/tmp/officecli-smoke-$$.docx"
 officecli create "$document"

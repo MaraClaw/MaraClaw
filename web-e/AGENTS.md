@@ -17,7 +17,7 @@ web-e/
 ├── index.html              # SPA shell + FOUC theme (`maraclaw-theme`)
 ├── vite.config.ts          # @ alias, :5173, proxy /api /ws /p → engine
 ├── components.json         # shadcn new-york / zinc / CSS vars / rsc:false
-├── Dockerfile              # Node 26.10.0 → nginx-unprivileged :8080
+├── Dockerfile              # Node 26.11.1 → nginx-unprivileged :8080
 ├── docker/nginx.conf       # SPA fallback, /healthz, engine proxy, CSP
 ├── e2e/landing.spec.ts     # Playwright smoke (preview :4173)
 ├── public/                 # brand marks + nav-icons/ (workspace rail)
@@ -108,7 +108,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 - Custom utilities: `container-page`, `text-gradient`, `glow-orb`, `section-band`, `shadow-card`, `shadow-elevated`.
 - FOUC-safe theme: inline `index.html` script mirrors React theme (`maraclaw-theme`).
 - Button polish: `rounded-xl`, `active:scale-[0.96]`; Badge has extra `soft` variant.
-- Docker: Node **26.10.0** multi-stage → `nginxinc/nginx-unprivileged`; health `GET /healthz`.
+- Docker: Node **26.11.1** multi-stage → `nginxinc/nginx-unprivileged`; health `GET /healthz`.
 
 ## COMMANDS
 

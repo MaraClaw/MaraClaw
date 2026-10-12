@@ -25,7 +25,7 @@ engine/
 │   └── services/                # mixed flat files + runtime packages (`document_parser/`, `document_conversion/`, …)
 ├── scripts/                     # schema_baseline.sql + freeze/lint helpers
 ├── docker/openclaw/             # OpenClaw guest-image helpers (not the API)
-├── Dockerfile.openclaw          # Node 26.10.0 bookworm guest image (arm64)
+├── Dockerfile.openclaw          # Node 26.11.1 bookworm guest image (arm64)
 ├── build-openclaw-local-dockerfile.sh / publish-openclaw-local-dockerfile.sh
 ├── start-from-docker.sh         # builds/runs maraclaw-engine:local
 ├── agent_template/              # runtime workspace scaffold (copied)
@@ -60,7 +60,7 @@ No `alembic/`, no `app/models/`.
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
-| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.10.0 / gogcli 0.44.0 / OpenClaw 2026.10.1; Hub publish is `publish-openclaw-local-dockerfile.sh` |
+| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.11.1 / gogcli 0.44.0 / OpenClaw 2026.10.2; Hub publish is `publish-openclaw-local-dockerfile.sh` |
 
 ## CODE MAP
 
@@ -147,4 +147,4 @@ uv run python -m app.scripts.bootstrap_db
 - Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
 - Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
 - `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
-- Node **26.10.0** on every image: guest `node:26.10.0-bookworm-slim`, sandbox `node:26.10.0-slim`, frontends `node:26.10.0-alpine`. Smoke expects host and guest `v26.10.0`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).
+- Node **26.11.1** on every image: guest `node:26.11.1-bookworm-slim`, sandbox `node:26.11.1-slim`, frontends `node:26.11.1-alpine`. Smoke expects host and guest `v26.11.1`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).

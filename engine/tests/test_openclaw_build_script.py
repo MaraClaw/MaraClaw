@@ -7,8 +7,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = REPO_ROOT / "build-openclaw-local-dockerfile.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-OPENCLAW_VERSION = "2026.10.1"
-OPENCLAW_SHA256 = "sha256:6af9925274c60309763e1c6c9bcc9afcc3c59775c0ac4c403fe5460fe0190136"
+OPENCLAW_VERSION = "2026.10.2"
+OPENCLAW_SHA256 = "sha256:d1c979c9ff6c5fb600a4582a7d777e0ef5264f5a570d2e822323a8c508d744fe"
 GOGCLI_VERSION = "0.44.0"
 GOGCLI_SHA256 = "sha256:0346149cac6630996c69911ac7366c3c1a36d8835b23e985e90c3f8d25c7ab65"
 
@@ -175,7 +175,7 @@ def test_dockerfile_pins_node_26_7_0_base_image() -> None:
     ]
 
     # Then
-    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.10.0-bookworm-slim"]
+    assert base_image_lines == ["ARG OPENCLAW_BASE_IMAGE=node:26.11.1-bookworm-slim"]
 
 
 def test_openclaw_dockerfile_pins_bookworm_packages_without_hadolint_ignore() -> None:
