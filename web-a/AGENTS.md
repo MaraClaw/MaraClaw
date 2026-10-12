@@ -22,7 +22,7 @@ Does **not** own the end-user landing or member auth (`web-e`). Does **not** imp
 
 ```
 web-a/
-├── Dockerfile           # Node 26.10.0 → nginx-unprivileged :8080
+├── Dockerfile           # Node 26.11.1 → nginx-unprivileged :8080
 ├── docker/nginx.conf    # SPA fallback, /healthz, CSP; no /api proxy
 ├── vite.config.ts       # :5174, @ → src, /api → VITE_DEV_API_PROXY || :8000
 ├── .env.example         # VITE_API_BASE_URL (empty = same-origin)
@@ -115,7 +115,7 @@ docker build -t maraclaw-web-a .
 docker run --rm -p 8080:8080 maraclaw-web-a
 ```
 
-Prod image: Node **26.10.0** → nginx-unprivileged **8080**. Optional `--build-arg VITE_API_BASE_URL=...`. Container does **not** proxy `/api`.
+Prod image: Node **26.11.1** → nginx-unprivileged **8080**. Optional `--build-arg VITE_API_BASE_URL=...`. Container does **not** proxy `/api`.
 
 ## NOTES
 
