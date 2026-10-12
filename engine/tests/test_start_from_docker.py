@@ -29,7 +29,7 @@ def test_docker_run_exposes_host_docker_for_agent_containers() -> None:
     assert '-e "DOCKER_NETWORK=${DOCKER_NETWORK}"' in source
     assert '[ "$key" = "DOCKER_NETWORK" ] && continue' in source
     assert '[ "$key" = "STORAGE_LOCAL_ROOT" ] && continue' in source
-    assert "docker:26-cli" in source
+    assert "docker:29.9.0-cli" in source
     assert '-v "${DOCKER_CLI_HOST}:/usr/local/bin/docker:ro"' in source
     assert '-v "${SCRIPT_DIR}/entrypoint.sh:/app/entrypoint.sh:ro"' in source
 

@@ -59,7 +59,7 @@ def _production_direct_pins(source: str) -> tuple[str, ...]:
 
 def test_production_dockerfile_includes_linux_docker_cli() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
-    assert "FROM docker:26-cli AS dockercli" in content
+    assert "FROM docker:29.9.0-cli AS dockercli" in content
     assert "COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker" in content
 
 
