@@ -166,7 +166,7 @@ class Settings(BaseSettings):
     # How OpenClaw guests reach this engine on the Docker network.
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     OPENCLAW_MEMORY_TENCENTDB_ENABLED: bool = True
-    TENCENTDB_PLUGIN_VERSION: str = "1.0.1"
+    TENCENTDB_PLUGIN_VERSION: str = "1.0.3"
     GOGCLI_ENABLED: bool = True
     # Seed and default-install vendored ClawSec OpenClaw security skills.
     CLAWSEC_SKILLS_ENABLED: bool = True

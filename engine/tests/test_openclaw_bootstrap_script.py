@@ -1,8 +1,13 @@
 import os
+import re
 import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
+
+from app.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "docker" / "openclaw" / "bootstrap-memory-tencentdb.sh"
@@ -317,3 +322,67 @@ def test_missing_archive_installs_from_pinned_npm_spec_and_command_still_execs(t
     assert result.stdout == "openclaw-ok"
     assert checksum_calls(paths.checksum_log_path) == []
     assert openclaw_calls(paths.log_path) == [["plugins", "install", f"{PACKAGE_NAME}@{DEFAULT_VERSION}", "--pin"]]
+
+
+@pytest.mark.parametrize("installed_version", [None, "1.0.1"])
+def test_unset_version_installs_current_npm_default(tmp_path: Path, installed_version: str | None) -> None:
+    # Given
+    paths = create_bootstrap_paths(tmp_path, archive_present=False)
+    marker = paths.state_dir / MARKER_FILENAME
+    if installed_version is not None:
+        marker.write_text(installed_version, encoding="utf-8")
+    env = build_env(paths)
+    env.pop("TENCENTDB_PLUGIN_VERSION")
+    env["OPENCLAW_MEMORY_TENCENTDB_ENABLED"] = "true"
+
+    # When
+    result = run_bootstrap(env, "sh", "-c", "printf openclaw-ok")
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "openclaw-ok"
+    assert openclaw_calls(paths.log_path) == [["plugins", "install", f"{PACKAGE_NAME}@1.0.3", "--pin"]]
+    assert marker.read_text(encoding="utf-8").strip() == "1.0.3"
+
+
+def test_unset_version_skips_install_after_old_marker_upgrade(tmp_path: Path) -> None:
+    # Given
+    paths = create_bootstrap_paths(tmp_path, archive_present=False)
+    marker = paths.state_dir / MARKER_FILENAME
+    marker.write_text("1.0.1", encoding="utf-8")
+    env = build_env(paths)
+    env.pop("TENCENTDB_PLUGIN_VERSION")
+    env["OPENCLAW_MEMORY_TENCENTDB_ENABLED"] = "true"
+    upgrade = run_bootstrap(env, "true")
+    assert upgrade.returncode == 0, upgrade.stderr
+
+    # When
+    result = run_bootstrap(env, "sh", "-c", "printf openclaw-ok")
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "openclaw-ok"
+    assert openclaw_calls(paths.log_path) == [["plugins", "install", f"{PACKAGE_NAME}@1.0.3", "--pin"]]
+    assert marker.read_text(encoding="utf-8").strip() == "1.0.3"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "pattern"),
+    [
+        ("Dockerfile.openclaw", r"^ARG TENCENTDB_PLUGIN_VERSION=(\S+)$"),
+        ("build-openclaw-local-dockerfile.sh", r'TENCENTDB_PLUGIN_VERSION="\$\{TENCENTDB_PLUGIN_VERSION:-([^}]+)\}"'),
+        ("docker/openclaw/bootstrap-memory-tencentdb.sh", r'PLUGIN_VERSION="\$\{TENCENTDB_PLUGIN_VERSION:-([^}]+)\}"'),
+        (".env.example", r"^TENCENTDB_PLUGIN_VERSION=(\S+)$"),
+        ("../.env.example", r"^TENCENTDB_PLUGIN_VERSION=(\S+)$"),
+    ],
+)
+def test_tencent_version_defaults_stay_synchronized(relative_path: str, pattern: str) -> None:
+    # Given
+    source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+    # When
+    match = re.search(pattern, source, re.MULTILINE)
+
+    # Then
+    assert match is not None, relative_path
+    assert match.group(1) == Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "1.0.3"

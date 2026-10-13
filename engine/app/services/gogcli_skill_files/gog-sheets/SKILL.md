@@ -31,6 +31,7 @@ gog --readonly --account user@example.com sheets get SHEET_ID 'Sheet1!A1:D20' --
 | `add-tab` | Add a new tab/sheet to a spreadsheet |
 | `append` | Append values to a range |
 | `banding` | Manage alternating color banding |
+| `batch-request` | Submit an atomic structural request array (requires confirmation or --force) |
 | `batch-update` | Update values in multiple ranges with one API request |
 | `chart` | Manage spreadsheet charts |
 | `clear` | Clear values in a range |
@@ -41,6 +42,7 @@ gog --readonly --account user@example.com sheets get SHEET_ID 'Sheet1!A1:D20' --
 | `datasource` | Manage Connected Sheets data sources and extracts |
 | `delete-dimension` | Delete rows or columns while preserving intersecting tables |
 | `delete-tab` | Delete a tab/sheet from a spreadsheet (use --force to skip confirmation) |
+| `duplicate-tab` | Duplicate a tab within a spreadsheet |
 | `export` | Export a Google Sheet (pdf\|xlsx\|csv) via Drive |
 | `filter` | Manage basic filters |
 | `find-replace` | Find and replace text across a spreadsheet |
