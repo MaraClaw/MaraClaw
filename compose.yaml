@@ -1,0 +1,262 @@
+name: maraclaw
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-runtime-env: &runtime-env
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
+  DATABASE_URL: postgresql://maraclaw:${POSTGRES_PASSWORD_URLENCODED:?Percent-encode POSTGRES_PASSWORD}@postgres:5432/maraclaw
+  REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?Percent-encode REDIS_PASSWORD}@redis:6379/0
+  DEBUG: "false"
+  ALLOW_MIGRATION_FAILURE: "false"
+  SANDBOX_UNSAFE_FALLBACK: "false"
+  SANDBOX_ALLOW_UNSAFE_FALLBACK_WHEN_BWRAP_MISSING: "false"
+  CORS_ORIGINS: '["https://${API_DOMAIN:?Set API_DOMAIN}","https://${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}","https://${MEMBER_DOMAIN:?Set MEMBER_DOMAIN}"]'
+  PUBLIC_BASE_URL: https://${MEMBER_DOMAIN:?Set MEMBER_DOMAIN}
+  AGENT_DATA_DIR: ${DATA_DIR:?Set absolute DATA_DIR}/agents
+  STORAGE_LOCAL_ROOT: ${DATA_DIR:?Set absolute DATA_DIR}/agents
+  DOCKER_NETWORK: ${DOCKER_NETWORK:-maraclaw_network}
+  OPENCLAW_ENGINE_BASE_URL: http://maraclaw-engine:8000
+  LINKUP_PROXY_BASE_URL: http://maraclaw-engine:8000/api/linkup
+  PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?Set PLATFORM_ADMIN_EMAIL}
+  PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
+  INSTANCE_ID: ${INSTANCE_ID:?Set INSTANCE_ID}
+  START_COMMAND: exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+x-engine: &engine
+  build:
+    context: ./engine
+  image: maraclaw-engine:${RELEASE_TAG:-local}
+  env_file:
+    - path: ./deploy/.env
+      required: false
+  environment: *runtime-env
+  volumes:
+    - type: bind
+      source: ${DATA_DIR:?Set absolute DATA_DIR}
+      target: /data
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${DATA_DIR:?Set absolute DATA_DIR}
+      target: ${DATA_DIR:?Set absolute DATA_DIR}
+      bind:
+        create_host_path: false
+    - /var/run/docker.sock:/var/run/docker.sock
+  cap_add: [SYS_ADMIN, SETUID, SETGID, SYS_CHROOT, SETPCAP, NET_ADMIN, SYS_PTRACE]
+  security_opt: [seccomp=unconfined]
+  networks: [app, private]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    bootstrap:
+      condition: service_completed_successfully
+  restart: unless-stopped
+  stop_grace_period: 60s
+  logging: *logging
+  cpus: ${ENGINE_CPUS:-1}
+  mem_limit: ${ENGINE_MEMORY:-2g}
+  healthcheck:
+    test: [CMD, curl, -fsS, http://127.0.0.1:8000/api/health]
+    interval: 15s
+    timeout: 5s
+    retries: 6
+    start_period: 60s
+
+x-web: &web
+  restart: unless-stopped
+  stop_grace_period: 60s
+  logging: *logging
+  read_only: true
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+  networks: [app]
+  cpus: ${WEB_CPUS:-0.25}
+  mem_limit: ${WEB_MEMORY:-128m}
+  healthcheck:
+    test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_TAG:-18.6-alpine}
+    environment:
+      POSTGRES_USER: maraclaw
+      POSTGRES_DB: maraclaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql]
+    networks: [private]
+    healthcheck:
+      test: [CMD-SHELL, 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U maraclaw -d maraclaw -tAc "SELECT 1" | grep -qx 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *logging
+    cpus: ${POSTGRES_CPUS:-1.5}
+    mem_limit: ${POSTGRES_MEMORY:-3g}
+
+  redis:
+    image: redis:${REDIS_TAG:-8.10.2-alpine}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    # Hash the ACL password on stdin; the cleartext password is never a argv item.
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        hash=$$(printf '%s' "$$REDIS_PASSWORD" | sha256sum | cut -d ' ' -f 1)
+        umask 077
+        printf 'user default on #%s ~* &* +@all\n' "$$hash" > /tmp/users.acl
+        printf 'bind 0.0.0.0\nprotected-mode yes\nappendonly yes\ndir /data\naclfile /tmp/users.acl\n' > /tmp/redis.conf
+        chown redis:redis /tmp/users.acl /tmp/redis.conf
+        exec /usr/local/bin/docker-entrypoint.sh redis-server /tmp/redis.conf
+    volumes: [redis_data:/data]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks: [private]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *logging
+    cpus: ${REDIS_CPUS:-0.5}
+    mem_limit: ${REDIS_MEMORY:-1g}
+
+  bootstrap:
+    <<: *engine
+    cpus: ${BOOTSTRAP_CPUS:-1}
+    mem_limit: ${BOOTSTRAP_MEMORY:-1g}
+    environment:
+      <<: *runtime-env
+      PROCESS_ROLE: bootstrap
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?Set PLATFORM_ADMIN_EMAIL}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
+      PYTHONPATH: /app
+      START_COMMAND: exec python /deployment/bootstrap.py
+    volumes:
+      - type: bind
+        source: ./deploy/bootstrap.py
+        target: /deployment/bootstrap.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DATA_DIR:?Set absolute DATA_DIR}
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DATA_DIR:?Set absolute DATA_DIR}
+        target: ${DATA_DIR:?Set absolute DATA_DIR}
+        bind:
+          create_host_path: false
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      disable: true
+
+  engine:
+    <<: *engine
+    environment:
+      <<: *runtime-env
+      PROCESS_ROLE: api
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+
+  background:
+    <<: *engine
+    cpus: ${BACKGROUND_CPUS:-1}
+    mem_limit: ${BACKGROUND_MEMORY:-2g}
+    environment:
+      <<: *runtime-env
+      PROCESS_ROLE: worker,connector
+    deploy:
+      replicas: 1
+
+  web-a:
+    <<: *web
+    build:
+      context: ./web-a
+    image: maraclaw-web-a:${RELEASE_TAG:-local}
+    deploy:
+      replicas: ${ADMIN_REPLICAS:-2}
+
+  web-e:
+    <<: *web
+    build:
+      context: ./web-e
+    image: maraclaw-web-e:${RELEASE_TAG:-local}
+    depends_on:
+      ingress:
+        condition: service_started
+    deploy:
+      replicas: ${MEMBER_REPLICAS:-2}
+
+  ingress:
+    image: haproxy:${HAPROXY_TAG:-3.4.6-alpine}
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}
+      MEMBER_DOMAIN: ${MEMBER_DOMAIN:?Set MEMBER_DOMAIN}
+    volumes:
+      - type: bind
+        source: ./deploy/haproxy.cfg
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${TLS_PEM_PATH:?Set TLS_PEM_PATH}
+        target: /usr/local/etc/haproxy/tls.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "${HTTP_PORT:-80}:8080"
+      - "${HTTPS_PORT:-443}:8443"
+    networks:
+      app:
+        aliases: [maraclaw-engine]
+      guest:
+        aliases: [maraclaw-engine]
+    depends_on:
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8404/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *logging
+    cpus: ${INGRESS_CPUS:-0.5}
+    mem_limit: ${INGRESS_MEMORY:-256m}
+
+networks:
+  app: {}
+  private:
+    internal: true
+  guest:
+    name: ${DOCKER_NETWORK:-maraclaw_network}
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
