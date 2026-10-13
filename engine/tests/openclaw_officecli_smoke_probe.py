@@ -12,7 +12,7 @@ test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
 test "$(node --version)" = "v26.11.1"
 test "$(node -p 'process.arch')" = "arm64"
 node --expose-internals -e 'require("internal/deps/acorn/acorn/dist/acorn").parse("export{}",{sourceType:"module"})'
-test "$(cat "$OPENCLAW_STATE_DIR/.bootstrap-tencentdb-version")" = 1.0.1
+test "$(cat "$OPENCLAW_STATE_DIR/.bootstrap-tencentdb-version")" = 1.0.3
 node -e 'require(process.env.OPENCLAW_STATE_DIR + "/extensions/memory-tencentdb/node_modules/sqlite-vec")'
 gog --version
 """

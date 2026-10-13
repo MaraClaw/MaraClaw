@@ -2,7 +2,7 @@
 set -eu
 
 STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.openclaw}"
-PLUGIN_VERSION="${TENCENTDB_PLUGIN_VERSION:-1.0.1}"
+PLUGIN_VERSION="${TENCENTDB_PLUGIN_VERSION:-1.0.3}"
 PLUGIN_PACKAGE="@tencentdb-agent-memory/memory-tencentdb"
 PLUGIN_ARCHIVE="${OPENCLAW_MEMORY_TENCENTDB_ARCHIVE:-/opt/openclaw-plugin-cache/memory-tencentdb.tgz}"
 MEMORY_ENABLED="${OPENCLAW_MEMORY_TENCENTDB_ENABLED:-true}"

@@ -62,7 +62,7 @@ class RecordingDockerClient:
 
 class OpenClawMemorySettings:
     def __init__(
-        self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.1", storage_root: str | None = None
+        self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.3", storage_root: str | None = None
     ):
         self.wrapped_settings = wrapped_settings
         self.OPENCLAW_MEMORY_TENCENTDB_ENABLED = memory_enabled
@@ -78,7 +78,7 @@ def test_openclaw_tencentdb_memory_setting_defaults_to_enabled():
 
 
 def test_tencentdb_plugin_version_setting_defaults_to_pinned_version():
-    assert Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "1.0.1"
+    assert Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "1.0.3"
 
 
 def test_generate_openclaw_config_omits_tencentdb_until_plugin_is_installed(monkeypatch, tmp_path):
@@ -104,7 +104,7 @@ def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_installe
     agent = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
-    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.1", encoding="utf-8")
+    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.3", encoding="utf-8")
 
     # When
     config = manager._generate_openclaw_config(agent, model=None)
