@@ -1,4 +1,4 @@
-"""Regression coverage for gateway Feishu channel resolution."""
+"""Gateway regression coverage: Feishu channel resolution and the delivery timeout setting."""
 
 from __future__ import annotations
 
@@ -7,11 +7,20 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api import gateway
+from app.config import Settings
 from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
 from app.schemas.schemas import GatewaySendMessageRequest
+
+
+def test_delivery_timeout_setting_must_be_positive() -> None:
+    assert Settings(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=1).OPENCLAW_DELIVERY_TIMEOUT_SECONDS == 1
+    for value in (0, -5):
+        with pytest.raises(ValidationError):
+            _ = Settings(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=value)
 
 
 @pytest.mark.asyncio

@@ -165,6 +165,8 @@ class Settings(BaseSettings):
     OPENCLAW_GATEWAY_PORT: int = 18789
     # How OpenClaw guests reach this engine on the Docker network.
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
+    # Requeue a gateway message the guest took but has not reported after this many seconds.
+    OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
     OPENCLAW_MEMORY_TENCENTDB_ENABLED: bool = True
     TENCENTDB_PLUGIN_VERSION: str = "1.0.3"
     GOGCLI_ENABLED: bool = True
