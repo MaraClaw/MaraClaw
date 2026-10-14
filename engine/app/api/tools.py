@@ -221,8 +221,9 @@ async def create_tool(data: ToolCreate, current_user: UserRecord = Depends(get_c
 
 
 # NOTE: Literal path routes (/bulk, /mcp-server) MUST be defined BEFORE
-# parameterized routes (/{tool_id}) to avoid older FastAPI/Starlette versions
-# matching "bulk" as a uuid.UUID path parameter and returning 422.
+# parameterized routes (/{tool_id}). Starlette dispatches to the first matching
+# route, so a later literal is unreachable: "mcp-server" would be parsed as a
+# uuid.UUID tool_id and return 422.
 
 
 class BulkToolUpdateItem(BaseModel):
@@ -244,6 +245,52 @@ async def update_tools_bulk(updates: list[BulkToolUpdateItem], current_user: Use
             _ = await tool_dao.update(db_obj=tool, obj_in={"enabled": update.enabled})
 
     return {"ok": True}
+
+
+# ─── MCP Server-level Credential Management ────────────────
+class MCPServerUpdate(BaseModel):
+    server_name: str  # Identifies which server's tools to update
+    server_url: str  # New MCP server URL (may contain embedded key)
+    api_key: str | None = None  # Optional standalone Bearer key
+    # Target tenant (platform admins may manage another company's tools)
+    tenant_id: str | None = None
+
+
+@router.put("/mcp-server")
+async def update_mcp_server(
+    data: MCPServerUpdate, current_user: UserRecord = Depends(get_current_user)
+) -> dict[str, object]:
+    """Bulk-update the Server URL and API Key for all tools from an MCP server.
+
+    All tools sharing the same mcp_server_name under the target tenant are
+    updated atomically. The API Key is stored encrypted in tool.config so
+    the agent runner can resolve it at execution time without re-configuring
+    each tool individually.
+
+    Authentication priority at runtime (handled by MCPClient):
+    1. tool.config['api_key'] - sent as Authorization: Bearer header.
+    2. URL query param (e.g. ?tavilyApiKey=xxx) - extracted from the URL
+       and converted to Bearer by MCPClient automatically.
+    """
+    _require_catalog_manager(current_user)
+    target_tenant_id = _resolve_target_tenant_id(current_user, data.tenant_id)
+
+    tools = await tool_dao.list_by_mcp_server(data.server_name, target_tenant_id)
+    if not tools:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No tools found for server '{data.server_name}'",
+        )
+
+    for tool in tools:
+        updates: dict[str, object] = {"mcp_server_url": data.server_url}
+        if data.api_key is not None:
+            current_config = json_object_from(tool.config)
+            current_config["api_key"] = data.api_key
+            updates["config"] = _encrypt_sensitive_fields(current_config, tool.config_schema)
+        _ = await tool_dao.update(db_obj=tool, obj_in=updates)
+
+    return {"ok": True, "updated": len(tools)}
 
 
 @router.put("/{tool_id}")
@@ -419,52 +466,6 @@ async def check_mcp_connection(
         return {"ok": True, "tools": tools}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
-
-
-# ─── MCP Server-level Credential Management ────────────────
-class MCPServerUpdate(BaseModel):
-    server_name: str  # Identifies which server's tools to update
-    server_url: str  # New MCP server URL (may contain embedded key)
-    api_key: str | None = None  # Optional standalone Bearer key
-    # Target tenant (platform admins may manage another company's tools)
-    tenant_id: str | None = None
-
-
-@router.put("/mcp-server")
-async def update_mcp_server(
-    data: MCPServerUpdate, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, object]:
-    """Bulk-update the Server URL and API Key for all tools from an MCP server.
-
-    All tools sharing the same mcp_server_name under the target tenant are
-    updated atomically. The API Key is stored encrypted in tool.config so
-    the agent runner can resolve it at execution time without re-configuring
-    each tool individually.
-
-    Authentication priority at runtime (handled by MCPClient):
-    1. tool.config['api_key'] - sent as Authorization: Bearer header.
-    2. URL query param (e.g. ?tavilyApiKey=xxx) - extracted from the URL
-       and converted to Bearer by MCPClient automatically.
-    """
-    _require_catalog_manager(current_user)
-    target_tenant_id = _resolve_target_tenant_id(current_user, data.tenant_id)
-
-    tools = await tool_dao.list_by_mcp_server(data.server_name, target_tenant_id)
-    if not tools:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No tools found for server '{data.server_name}'",
-        )
-
-    for tool in tools:
-        updates: dict[str, object] = {"mcp_server_url": data.server_url}
-        if data.api_key is not None:
-            current_config = json_object_from(tool.config)
-            current_config["api_key"] = data.api_key
-            updates["config"] = _encrypt_sensitive_fields(current_config, tool.config_schema)
-        _ = await tool_dao.update(db_obj=tool, obj_in=updates)
-
-    return {"ok": True, "updated": len(tools)}
 
 
 # ─── Agent-installed Tools Management (admin) ───────────────

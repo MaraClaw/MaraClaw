@@ -344,7 +344,6 @@ async def _save_feishu_tool_call(
 
 
 @router.get("/auth/feishu/callback")
-@router.post("/auth/feishu/callback", response_model=TokenResponse)
 async def feishu_oauth_callback(code: str, state: str | None = None):
     """Handle Feishu OAuth callback - exchange code for user session."""
     from app.config import get_settings

@@ -57,7 +57,7 @@ function ChannelCard({
   const webhook = useQuery({
     queryKey: ['channel-hook', agentId, channel.path],
     queryFn: () => getChannelWebhook(agentId, channel.path),
-    enabled: Boolean(query.data),
+    enabled: channel.webhook && Boolean(query.data),
   })
   const hookUrl = webhook.data?.webhook_url ?? webhook.data?.url ?? ''
 
