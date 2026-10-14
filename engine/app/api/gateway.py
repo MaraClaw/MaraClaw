@@ -18,9 +18,8 @@ from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.chat_dao import chat_message_dao
 from app.dao.gateway_message_dao import gateway_message_dao
-from app.dao.participant_dao import participant_dao
 from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
 from app.schemas.schemas import (
@@ -31,6 +30,7 @@ from app.schemas.schemas import (
     GatewayReportRequest,
     GatewaySendMessageRequest,
 )
+from app.services.openclaw_gateway_delivery import claim_poll_batch, publish_report, record_report
 from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
@@ -54,10 +54,9 @@ async def _get_agent_by_key(api_key: str) -> AgentRecord:
 
 
 @router.get("/poll", response_model=GatewayPollResponse)
-async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")):
-    """OpenClaw agent polls for pending messages.
+async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> GatewayPollResponse:
+    """Claims pending messages and returns only the rows this call moved.
 
-    Returns all pending messages and marks them as delivered.
     Also updates openclaw_last_seen for online status tracking.
     """
     logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
@@ -74,19 +73,11 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")):
             or agent
         )
 
-    # Fetch pending messages
-    messages = await gateway_message_dao.list_pending(agent.id)
+    messages = await claim_poll_batch(agent.id)
     guest_model, guest_slot = poll_model_hint(messages)
 
-    # Mark as delivered
-    now = datetime.now(UTC)
     out = []
     for msg in messages:
-        _ = await gateway_message_dao.update(
-            db_obj=msg,
-            obj_in={"status": "delivered", "delivered_at": now},
-        )
-
         # Resolve sender names
         sender_agent_name = None
         sender_user_name = None
@@ -177,89 +168,20 @@ async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipIte
 
 
 @router.post("/report")
-async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key")):
+async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key")) -> dict[str, str]:
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
     logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
     agent = await _get_agent_by_key(x_api_key)
 
-    msg = await gateway_message_dao.get_for_agent(body.message_id, agent.id)
-    if not msg:
-        raise HTTPException(status_code=404, detail="Message not found")
-
-    _ = await gateway_message_dao.update(
-        db_obj=msg,
-        obj_in={
-            "status": "completed",
-            "result": body.result,
-            "completed_at": datetime.now(UTC),
-        },
-    )
-
-    # Update last seen
-    _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
-
-    # Save result as assistant chat message and push via WebSocket
-    # (works for both user-originated and agent-to-agent messages)
-    session = None
-    if msg.conversation_id:
-        if body.result:
-            participant = await participant_dao.get_by_type_ref("agent", agent.id)
-
-            _ = await chat_message_dao.insert_message(
-                agent_id=agent.id,
-                user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
-                role="assistant",
-                content=body.result,
-                conversation_id=msg.conversation_id,
-                participant_id=participant.id if participant else None,
-            )
-            try:
-                session = await chat_session_dao.get(uuid.UUID(msg.conversation_id))
-            except ValueError, TypeError:
-                session = None
-        try:
-            from app.api.websocket import manager
-
-            await manager.send_to_session(
-                str(agent.id),
-                msg.conversation_id,
-                {
-                    "type": "done",
-                    "role": "assistant",
-                    "content": body.result or "",
-                },
-                user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
-            )
-            logger.info(
-                "[Gateway] pushed reply to session {} agent={}",
-                msg.conversation_id,
-                agent.id,
-            )
-        except Exception as error:
-            logger.warning("[Gateway] Skipped done notification for disconnected user: {}", error)
-
-    if body.result and session is not None:
-        from app.services.channels.outbound import deliver_session_reply
-
-        await deliver_session_reply(agent=agent, session=session, content=body.result)
-
-    # If the original message was from another agent (OpenClaw-to-OpenClaw),
-    # write the reply back as a gateway_message for the sender agent to poll
-    if body.result and msg.sender_agent_id:
-        conv_id = msg.conversation_id or f"gw_agent_{msg.sender_agent_id}_{agent.id}"
-        sender = await agent_dao.get(msg.sender_agent_id)
-        if sender:
-            _ = await enqueue_openclaw_message(
-                agent=sender,
-                content=body.result,
-                sender_agent_id=agent.id,
-                conversation_id=conv_id,
-                await_wake=False,
-            )
-        logger.info(f"[Gateway] Reply routed back to sender agent {msg.sender_agent_id}")
-
+    won = await record_report(agent, body.message_id, body.result)
+    if won is None:
+        if await gateway_message_dao.get_for_agent(body.message_id, agent.id) is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        logger.info("[Gateway] Ignored duplicate report message={} agent={}", body.message_id, agent.id)
+        return {"status": "ok"}
+    await publish_report(agent, won, body.result)
     return {"status": "ok"}
 
 
