@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useLayoutEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,7 @@ export function AgentDepartmentAccess({
   disabled,
   onChange,
 }: AgentDepartmentAccessProps) {
+  const scope = useWorkspaceSession()
   const [departmentId, setDepartmentId] = useState('')
   const fieldsetRef = useRef<HTMLFieldSetElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
@@ -37,11 +38,12 @@ export function AgentDepartmentAccess({
   const chosen = available.find((department) => department.id === departmentId)
 
   useLayoutEffect(() => {
+    if (!scope.isCurrent()) return
     if (focusAfterChange.current !== departmentIds) return
     focusAfterChange.current = null
     if (selectRef.current?.disabled) fieldsetRef.current?.focus()
     else selectRef.current?.focus()
-  }, [departmentIds])
+  }, [departmentIds, scope])
 
   if (!isCustom) {
     return (
@@ -66,7 +68,7 @@ export function AgentDepartmentAccess({
             ref={selectRef}
             id="agent-department"
             value={chosen?.id ?? ''}
-            onChange={(event) => setDepartmentId(event.target.value)}
+            onChange={scope.effect((event) => setDepartmentId(event.target.value))}
             disabled={disabled || departments.isPending || departments.isError || available.length === 0}
             aria-describedby="agent-departments-description agent-departments-status"
             className="min-w-0 flex-1"
@@ -83,6 +85,7 @@ export function AgentDepartmentAccess({
             variant="outline"
             disabled={disabled || departments.isError || !chosen}
             onClick={() => {
+              if (!scope.isCurrent()) return
               if (!chosen) return
               const nextIds = [...departmentIds, chosen.id]
               focusAfterChange.current = nextIds
@@ -110,7 +113,7 @@ export function AgentDepartmentAccess({
             size="sm"
             variant="outline"
             disabled={departments.isFetching}
-            onClick={() => void departments.refetch()}
+            onClick={scope.effect(() => void departments.refetch())}
           >
             Retry departments
           </Button>
@@ -134,6 +137,7 @@ export function AgentDepartmentAccess({
                     aria-label={`Remove ${name}`}
                     disabled={disabled}
                     onClick={() => {
+                      if (!scope.isCurrent()) return
                       const nextIds = departmentIds.filter((selectedId) => selectedId !== id)
                       focusAfterChange.current = nextIds
                       onChange(nextIds)

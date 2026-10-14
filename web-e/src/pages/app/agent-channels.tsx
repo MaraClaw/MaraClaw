@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,6 +19,7 @@ import {
 } from '@/lib/workspace-api'
 
 export function AgentChannelsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
 
@@ -31,7 +33,7 @@ export function AgentChannelsPage() {
           key={channel.key}
           agentId={agent.id}
           channel={channel}
-          onChanged={() => queryClient.invalidateQueries({ queryKey: ['channel', agent.id, channel.path] })}
+          onChanged={() => scope.isCurrent() && queryClient.invalidateQueries({ queryKey: ['channel', agent.id, channel.path] })}
         />
       ))}
       <WechatCard agentId={agent.id} />
@@ -48,6 +50,7 @@ function ChannelCard({
   channel: (typeof CHANNELS)[number]
   onChanged: () => void
 }) {
+  const scope = useWorkspaceSession()
   const fields = CHANNEL_FIELDS[channel.key] ?? []
   const [values, setValues] = useState<Record<string, string>>({})
   const query = useQuery({
@@ -89,7 +92,7 @@ function ChannelCard({
             <Input
               type={field.secret ? 'password' : 'text'}
               value={values[field.key] ?? ''}
-              onChange={(event) => setValues((prev) => ({ ...prev, [field.key]: event.target.value }))}
+              onChange={scope.effect((event) => setValues((prev) => ({ ...prev, [field.key]: event.target.value })))}
             />
           </label>
         ))}
@@ -103,10 +106,11 @@ function ChannelCard({
             size="sm"
             variant="outline"
             onClick={() =>
-              void deleteChannel(agentId, channel.path).then(() => {
+              scope.isCurrent() && void deleteChannel(agentId, channel.path).then(() => {
+                if (!scope.isCurrent()) return
                 toast.success('Disconnected')
                 onChanged()
-              })
+              }).catch(scope.rethrowCurrent)
             }
           >
             Remove
@@ -121,7 +125,7 @@ function ChannelCard({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => void navigator.clipboard.writeText(hookUrl).then(() => toast.success('Copied'))}
+              onClick={() => scope.isCurrent() && void navigator.clipboard.writeText(hookUrl).then(scope.effect(() => toast.success('Copied'))).catch(scope.rethrowCurrent)}
             >
               Copy
             </Button>
@@ -133,6 +137,7 @@ function ChannelCard({
 }
 
 function WechatCard({ agentId }: { agentId: string }) {
+  const scope = useWorkspaceSession()
   const [image, setImage] = useState<string | null>(null)
   return (
     <article className="space-y-2 rounded-2xl border border-border p-4">
@@ -141,10 +146,11 @@ function WechatCard({ agentId }: { agentId: string }) {
         size="sm"
         variant="outline"
         onClick={() =>
-          void getWechatQr(agentId).then((row) => {
+          scope.isCurrent() && void getWechatQr(agentId).then((row) => {
+            if (!scope.isCurrent()) return
             setImage(row.qrcode_url ?? null)
             toast.success('QR requested')
-          })
+          }).catch(scope.rethrowCurrent)
         }
       >
         Request login QR

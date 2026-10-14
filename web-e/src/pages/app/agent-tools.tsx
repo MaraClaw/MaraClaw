@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -19,6 +20,7 @@ import {
 const BLOCKED = new Set(['allow_network', 'http_proxy', 'https_proxy', 'no_proxy'])
 
 export function AgentToolsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
@@ -44,7 +46,7 @@ export function AgentToolsPage() {
         {(tools.data ?? []).map((tool) => (
           <li key={tool.id} className="rounded-xl border border-border px-3 py-2">
             <div className="flex items-center justify-between gap-3">
-              <button type="button" className="text-left" onClick={() => setOpenId(openId === tool.id ? null : tool.id)}>
+              <button type="button" className="text-left" onClick={scope.effect(() => setOpenId(openId === tool.id ? null : tool.id))}>
                 <p className="text-sm font-medium">{tool.display_name || tool.name}</p>
                 <p className="text-xs text-muted-foreground">{tool.description}</p>
               </button>
@@ -70,6 +72,7 @@ export function AgentToolsPage() {
 }
 
 function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }) {
+  const scope = useWorkspaceSession()
   const config = useQuery({
     queryKey: ['tool-config', agentId, toolId],
     queryFn: () => getAgentToolConfig(agentId, toolId),
@@ -90,7 +93,7 @@ function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }
             className="mt-1 h-9"
             type={key.toLowerCase().includes('password') || key.toLowerCase().includes('secret') || key === 'api_key' ? 'password' : 'text'}
             value={String(merged[key] ?? '')}
-            onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))}
+            onChange={scope.effect((event) => setDraft((prev) => ({ ...prev, [key]: event.target.value })))}
           />
         </label>
       ))}
@@ -98,9 +101,9 @@ function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }
         <Button
           size="sm"
           onClick={() =>
-            void saveAgentToolConfig(agentId, toolId, { ...config.data?.merged_config, ...draft }).then(() =>
-              toast.success('Saved'),
-            )
+            scope.isCurrent() && void saveAgentToolConfig(agentId, toolId, { ...config.data?.merged_config, ...draft }).then(() =>
+              scope.isCurrent() && toast.success('Saved'),
+            ).catch(scope.rethrowCurrent)
           }
         >
           Save config
@@ -110,9 +113,9 @@ function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }
             size="sm"
             variant="outline"
             onClick={() =>
-              void testEmailConfig(merged).then((result) =>
-                toast[result.ok ? 'success' : 'error'](result.ok ? 'Email connection ok' : (result.error ?? 'Failed')),
-              )
+              scope.isCurrent() && void testEmailConfig(merged).then((result) =>
+                scope.isCurrent() && toast[result.ok ? 'success' : 'error'](result.ok ? 'Email connection ok' : (result.error ?? 'Failed')),
+              ).catch(scope.rethrowCurrent)
             }
           >
             Test email
@@ -123,9 +126,9 @@ function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }
             size="sm"
             variant="outline"
             onClick={() =>
-              void testMcpServer(String(merged.server_url || merged.url), String(merged.api_key || '')).then((result) =>
-                toast[result.ok ? 'success' : 'error'](result.ok ? 'MCP reachable' : (result.error ?? 'Failed')),
-              )
+              scope.isCurrent() && void testMcpServer(String(merged.server_url || merged.url), String(merged.api_key || '')).then((result) =>
+                scope.isCurrent() && toast[result.ok ? 'success' : 'error'](result.ok ? 'MCP reachable' : (result.error ?? 'Failed')),
+              ).catch(scope.rethrowCurrent)
             }
           >
             Test MCP

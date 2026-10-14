@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -10,6 +11,7 @@ import { listPublishedPages, publishWorkspacePage, unpublishPage } from '@/lib/c
 import { listFiles, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentPagesPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
@@ -35,7 +37,7 @@ export function AgentPagesPage() {
     <div className="grid min-h-[28rem] grid-cols-1 md:grid-cols-[240px_1fr]">
       <aside className="space-y-2 border-b border-border p-3 md:border-r md:border-b-0">
         <p className="text-xs text-muted-foreground">HTML files in the workspace</p>
-        <button type="button" className="text-xs text-primary" onClick={() => setPath('')}>
+        <button type="button" className="text-xs text-primary" onClick={scope.effect(() => setPath(''))}>
           Root
         </button>
         <ul className="space-y-1">
@@ -45,6 +47,7 @@ export function AgentPagesPage() {
                 type="button"
                 className="w-full truncate rounded-lg px-2 py-1 text-left text-sm hover:bg-muted"
                 onClick={() => {
+                  if (!scope.isCurrent()) return
                   if (file.is_dir) {
                     setPath(file.path)
                     return
@@ -84,7 +87,7 @@ export function AgentPagesPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => void navigator.clipboard.writeText(`${window.location.origin}${page.url}`).then(() => toast.success('Copied'))}
+                  onClick={() => scope.isCurrent() && void navigator.clipboard.writeText(`${window.location.origin}${page.url}`).then(scope.effect(() => toast.success('Copied'))).catch(scope.rethrowCurrent)}
                 >
                   Copy link
                 </Button>
@@ -93,10 +96,11 @@ export function AgentPagesPage() {
                     size="sm"
                     variant="ghost"
                     onClick={() =>
-                      void unpublishPage(page.id).then(() => {
+                      scope.isCurrent() && void unpublishPage(page.id).then(() => {
+                        if (!scope.isCurrent()) return
                         toast.success('Unpublished')
                         void queryClient.invalidateQueries({ queryKey: ['pages', agent.id] })
-                      })
+                      }).catch(scope.rethrowCurrent)
                     }
                   >
                     Unpublish
@@ -117,15 +121,16 @@ export function AgentPagesPage() {
 }
 
 function PublishPath({ onPublish }: { onPublish: (path: string) => void }) {
+  const scope = useWorkspaceSession()
   const [value, setValue] = useState('')
   return (
     <div className="flex gap-2">
       <Input
         value={value}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={scope.effect((event) => setValue(event.target.value))}
         placeholder="workspace/site/index.html"
       />
-      <Button size="sm" disabled={!value.trim()} onClick={() => onPublish(value.trim())}>
+      <Button size="sm" disabled={!value.trim()} onClick={scope.effect(() => onPublish(value.trim()))}>
         Publish path
       </Button>
     </div>

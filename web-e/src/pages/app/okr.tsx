@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -11,19 +11,16 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { AddKeyResult, OkrReports } from '@/components/okr-reports'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
-  createKeyResult,
   createObjective,
   getOkrSettings,
-  listCompanyReports,
   listDailyReports,
   listObjectives,
   listOkrPeriods,
-  membersWithoutOkr,
   submitDailyReport,
-  syncOkrRelationships,
-  triggerOkrOutreach,
   updateKrProgress,
   updateOkrSettings,
 } from '@/lib/okr-api'
@@ -33,6 +30,7 @@ function todayIso() {
 }
 
 export function OkrPage() {
+  const scope = useWorkspaceSession()
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const isAdmin = user?.role === 'org_admin'
@@ -43,8 +41,9 @@ export function OkrPage() {
   const selected = periods.data?.find((period) => period.start === periodStart) ?? current
 
   useEffect(() => {
+    if (!scope.isCurrent()) return
     if (!periodStart && current) setPeriodStart(current.start)
-  }, [current, periodStart])
+  }, [current, periodStart, scope])
 
   const objectives = useQuery({
     queryKey: ['okr', 'objectives', selected?.start, selected?.end],
@@ -52,17 +51,12 @@ export function OkrPage() {
     enabled: Boolean(selected),
   })
   const reports = useQuery({ queryKey: ['okr', 'daily', todayIso()], queryFn: () => listDailyReports(todayIso()) })
-  const company = useQuery({ queryKey: ['okr', 'company'], queryFn: listCompanyReports })
-  const gaps = useQuery({
-    queryKey: ['okr', 'gaps'],
-    queryFn: membersWithoutOkr,
-    enabled: Boolean(settings.data?.enabled),
-  })
 
   const [title, setTitle] = useState('')
   const [report, setReport] = useState('')
 
   function fail(error: unknown, fallback: string) {
+    if (!scope.isCurrent()) return
     toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : fallback)
   }
 
@@ -114,7 +108,7 @@ export function OkrPage() {
           fit
           className="mt-1"
           value={periodStart}
-          onChange={(event) => setPeriodStart(event.target.value)}
+          onChange={scope.effect((event) => setPeriodStart(event.target.value))}
         >
           {(periods.data ?? []).map((period) => (
             <option key={period.start} value={period.start}>
@@ -160,11 +154,12 @@ export function OkrPage() {
                         type="button"
                         className="mt-1 text-xs text-primary"
                         onClick={() => {
+                          if (!scope.isCurrent()) return
                           const next = window.prompt('New current value', String(kr.current_value))
                           if (!next) return
-                          void updateKrProgress(kr.id, Number(next)).then(() =>
+                          void updateKrProgress(kr.id, Number(next)).then(scope.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] }),
-                          )
+                          )).catch(scope.rethrowCurrent)
                         }}
                       >
                         Update progress
@@ -177,7 +172,7 @@ export function OkrPage() {
             {isAdmin && selected ? (
               <AddKeyResult
                 objectiveId={objective.id}
-                onAdded={() => queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] })}
+                onAdded={scope.effect(() => { void queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] }) })}
               />
             ) : null}
           </li>
@@ -188,6 +183,7 @@ export function OkrPage() {
         <form
           className="space-y-2 rounded-2xl border border-border p-4"
           onSubmit={(event) => {
+            if (!scope.isCurrent()) return
             event.preventDefault()
             if (!title.trim()) return
             void createObjective({
@@ -197,6 +193,7 @@ export function OkrPage() {
               period_end: selected.end,
             })
               .then(() => {
+                if (!scope.isCurrent()) return
                 setTitle('')
                 toast.success('Objective created')
                 void queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] })
@@ -206,7 +203,7 @@ export function OkrPage() {
         >
           <Label htmlFor="obj-title">New company objective</Label>
           <div className="flex gap-2">
-            <Input id="obj-title" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <Input id="obj-title" value={title} onChange={scope.effect((event) => setTitle(event.target.value))} />
             <Button type="submit" size="sm">
               Add
             </Button>
@@ -216,13 +213,14 @@ export function OkrPage() {
 
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">Today’s reports</h2>
-        <Textarea value={report} onChange={(event) => setReport(event.target.value)} placeholder="What did you finish today?" />
+        <Textarea value={report} onChange={scope.effect((event) => setReport(event.target.value))} placeholder="What did you finish today?" />
         <Button
           size="sm"
           disabled={!report.trim()}
-          onClick={() =>
+          onClick={() => scope.isCurrent() &&
             void submitDailyReport({ report_date: todayIso(), content: report.trim() })
               .then(() => {
+                if (!scope.isCurrent()) return
                 setReport('')
                 toast.success('Report submitted')
                 void queryClient.invalidateQueries({ queryKey: ['okr', 'daily'] })
@@ -243,82 +241,7 @@ export function OkrPage() {
         </ul>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="font-display text-lg font-semibold">Company reports</h2>
-        {(company.data ?? []).map((item) => (
-          <article key={item.id} className="rounded-xl border border-border p-3 text-sm">
-            <p className="font-medium">
-              {item.period_label} · {item.report_type}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {item.submitted_count} submitted · {item.missing_count} missing
-            </p>
-            <p className="mt-2 line-clamp-6 whitespace-pre-wrap text-muted-foreground">{item.content}</p>
-          </article>
-        ))}
-      </section>
-
-      {isAdmin && settings.data?.enabled ? (
-        <section className="space-y-3">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void syncOkrRelationships().then(() => toast.success('Relationships synced')).catch((error) => fail(error, 'Sync failed'))
-              }
-            >
-              Sync relationships
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void triggerOkrOutreach().then(() => toast.success('Outreach started')).catch((error) => fail(error, 'Outreach failed'))
-              }
-            >
-              Nudge missing OKRs
-            </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {gaps.data?.total ?? 0} tracked members without an OKR this period.
-          </p>
-          <ul className="space-y-1 text-sm">
-            {(gaps.data?.members_without_okr ?? []).slice(0, 20).map((member) => (
-              <li key={`${member.type}-${member.id}`}>
-                {member.display_name} <span className="text-muted-foreground">{member.type}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  )
-}
-
-function AddKeyResult({ objectiveId, onAdded }: { objectiveId: string; onAdded: () => void }) {
-  const [title, setTitle] = useState('')
-  return (
-    <div className="mt-3 flex gap-2">
-      <Input
-        className="h-9"
-        placeholder="Add a key result"
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-      />
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => {
-          if (!title.trim()) return
-          void createKeyResult(objectiveId, { title: title.trim(), target_value: 100 }).then(() => {
-            setTitle('')
-            onAdded()
-          })
-        }}
-      >
-        KR
-      </Button>
+      <OkrReports isAdmin={isAdmin} enabled={Boolean(settings.data?.enabled)} />
     </div>
   )
 }

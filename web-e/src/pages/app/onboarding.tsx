@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
@@ -23,6 +24,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 export function OnboardingPage() {
+  const scope = useWorkspaceSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const form = useForm<FormValues>({
@@ -33,8 +35,11 @@ export function OnboardingPage() {
   const mutation = useMutation({
     mutationFn: async (values: FormValues) => {
       await startOnboarding('join')
+      scope.assertCurrent()
       const created = await createPersonalAssistant(values)
+      scope.assertCurrent()
       await completeOnboarding()
+      scope.assertCurrent()
       return created.agent
     },
     onSuccess(agent) {
@@ -80,6 +85,7 @@ export function OnboardingPage() {
             type="button"
             variant="ghost"
             onClick={() => {
+              if (!scope.isCurrent()) return
               markOnboardingSkipped()
               navigate('/app/agents')
             }}

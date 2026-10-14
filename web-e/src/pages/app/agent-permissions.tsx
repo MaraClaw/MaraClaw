@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -26,6 +27,7 @@ type AccessDraft = {
 }
 
 export function AgentPermissionsPage() {
+  const session = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -65,6 +67,7 @@ export function AgentPermissionsPage() {
         queryClient.invalidateQueries({ queryKey: ['agent', agentId] }),
         queryClient.invalidateQueries({ queryKey: ['agents'] }),
       ])
+      if (!session.isCurrent()) return
       setDraft((current) => current?.agentId === agentId ? null : current)
       toast.success('Access updated')
     },
@@ -86,7 +89,7 @@ export function AgentPermissionsPage() {
       {perms.isError ? (
         <div className="space-y-2">
           <p role="alert" className="text-sm text-destructive">Unable to load current access. Reload it before saving changes.</p>
-          <Button size="sm" variant="outline" disabled={perms.isFetching} onClick={() => void perms.refetch()}>
+          <Button size="sm" variant="outline" disabled={perms.isFetching} onClick={session.effect(() => void perms.refetch())}>
             Retry access
           </Button>
         </div>
@@ -100,7 +103,7 @@ export function AgentPermissionsPage() {
               id="agent-access-scope"
               value={scope}
               disabled={save.isPending || !perms.isSuccess}
-              onChange={(event) => setDraft({ agentId: agent.id, scopeType: event.target.value, departmentIds })}
+              onChange={session.effect((event) => setDraft({ agentId: agent.id, scopeType: event.target.value, departmentIds }))}
             >
               <option value="private">Private (creator only)</option>
               <option value="company">Whole company</option>
@@ -114,12 +117,13 @@ export function AgentPermissionsPage() {
             departmentAccess={perms.data?.department_access ?? []}
             isCustom={scope === 'custom'}
             disabled={save.isPending || !perms.isSuccess}
-            onChange={(ids) => setDraft({ agentId: agent.id, scopeType: scope, departmentIds: ids })}
+            onChange={session.effect((ids) => setDraft({ agentId: agent.id, scopeType: scope, departmentIds: ids }))}
           />
           <Button
             disabled={save.isPending || !perms.isSuccess || perms.isFetching || !isDirty}
             aria-describedby="agent-access-save-status"
             onClick={() => {
+              if (!session.isCurrent()) return
               if (!perms.data || !perms.isSuccess || perms.isFetching) return
               save.mutate({
                 agentId: agent.id,
@@ -163,7 +167,7 @@ export function AgentPermissionsPage() {
           <Label htmlFor="agent-handover" className="text-sm font-semibold">
             Handover ownership
           </Label>
-          <Select id="agent-handover" value={handoverId} onChange={(event) => setHandoverId(event.target.value)}>
+          <Select id="agent-handover" value={handoverId} onChange={session.effect((event) => setHandoverId(event.target.value))}>
             <option value="">Choose a teammate</option>
             {(candidates.data ?? []).map((row) => (
               <option key={row.id} value={row.id}>
@@ -175,10 +179,11 @@ export function AgentPermissionsPage() {
             variant="outline"
             disabled={!handoverId}
             onClick={() =>
-              void handoverAgent(agent.id, handoverId).then(() => {
+              session.isCurrent() && void handoverAgent(agent.id, handoverId).then(() => {
+                if (!session.isCurrent()) return
                 toast.success('Ownership transferred')
                 void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
-              })
+              }).catch(session.rethrowCurrent)
             }
           >
             Transfer
@@ -204,9 +209,9 @@ export function AgentPermissionsPage() {
                       <Button
                         size="sm"
                         onClick={() =>
-                          void resolveAgentApproval(agent.id, item.id, 'approve').then(() =>
+                          session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'approve').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )
+                          )).catch(session.rethrowCurrent)
                         }
                       >
                         Approve
@@ -215,9 +220,9 @@ export function AgentPermissionsPage() {
                         size="sm"
                         variant="outline"
                         onClick={() =>
-                          void resolveAgentApproval(agent.id, item.id, 'reject').then(() =>
+                          session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'reject').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )
+                          )).catch(session.rethrowCurrent)
                         }
                       >
                         Reject

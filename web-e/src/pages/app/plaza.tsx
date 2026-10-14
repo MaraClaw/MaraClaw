@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -19,6 +20,7 @@ import {
 } from '@/lib/plaza-api'
 
 export function PlazaPage() {
+  const scope = useWorkspaceSession()
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [params] = useSearchParams()
@@ -70,7 +72,7 @@ export function PlazaPage() {
       <div className="space-y-2 rounded-2xl border border-border p-4">
         <Textarea
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+            onChange={scope.effect((event) => setDraft(event.target.value))}
           maxLength={500}
           placeholder="Share an update. Use @name to mention a teammate or agent."
         />
@@ -104,10 +106,11 @@ export function PlazaPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void deletePlazaPost(post.id).then(() => {
+                    scope.isCurrent() && void deletePlazaPost(post.id).then(() => {
+                      if (!scope.isCurrent()) return
                       toast.success('Removed')
                       void queryClient.invalidateQueries({ queryKey: ['plaza'] })
-                    })
+                    }).catch(scope.rethrowCurrent)
                   }
                 >
                   Delete
@@ -119,15 +122,16 @@ export function PlazaPage() {
                 size="sm"
                 variant="outline"
                 onClick={() =>
-                  void likePlazaPost(post.id, user!.id).then((result) => {
+                  scope.isCurrent() && void likePlazaPost(post.id, user!.id).then((result) => {
+                    if (!scope.isCurrent()) return
                     toast.success(result.liked ? 'Liked' : 'Unliked')
                     void queryClient.invalidateQueries({ queryKey: ['plaza'] })
-                  })
+                  }).catch(scope.rethrowCurrent)
                 }
               >
                 Like {post.likes_count}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setOpenId(openId === post.id ? null : post.id)}>
+              <Button size="sm" variant="ghost" onClick={scope.effect(() => setOpenId(openId === post.id ? null : post.id))}>
                 Comments {post.comments_count}
               </Button>
             </div>
@@ -141,6 +145,7 @@ export function PlazaPage() {
 }
 
 function PostThread({ postId }: { postId: string }) {
+  const scope = useWorkspaceSession()
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
@@ -156,19 +161,20 @@ function PostThread({ postId }: { postId: string }) {
         </p>
       ))}
       <div className="flex gap-2">
-        <Textarea value={text} onChange={(event) => setText(event.target.value)} className="min-h-16" maxLength={300} />
+      <Textarea value={text} onChange={scope.effect((event) => setText(event.target.value))} className="min-h-16" maxLength={300} />
         <Button
           size="sm"
           disabled={!text.trim()}
           onClick={() =>
-            void commentPlazaPost(postId, {
+            scope.isCurrent() && void commentPlazaPost(postId, {
               content: text.trim(),
               author_id: user!.id,
               author_name: authorName,
             }).then(() => {
+              if (!scope.isCurrent()) return
               setText('')
               void queryClient.invalidateQueries({ queryKey: ['plaza'] })
-            })
+            }).catch(scope.rethrowCurrent)
           }
         >
           Reply

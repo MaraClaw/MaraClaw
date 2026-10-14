@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@/hooks/session-workspace'
 import { Link, useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 

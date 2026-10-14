@@ -1,6 +1,6 @@
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Loader2, LogOut } from 'lucide-react'
-import { useState } from 'react'
+import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
@@ -8,6 +8,9 @@ import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
+import { useQuery, useWorkspaceSession, WorkspaceSessionContext } from '@/hooks/session-workspace'
+import { createSessionQueryScope } from '@/hooks/session-query-scope'
+import { authSession, type SessionOwner } from '@/lib/auth-session'
 import { fetchMyTenant } from '@/lib/auth-api'
 import { unreadNotificationCount } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
@@ -84,6 +87,7 @@ function WorkspaceNavLink({
 }
 
 function AppShellFrame() {
+  const scope = useWorkspaceSession()
   const { user, logout } = useAuth()
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
   const unreadQuery = useQuery({
@@ -114,7 +118,7 @@ function AppShellFrame() {
           <p className="truncate px-2 text-xs text-muted-foreground">{user?.email}</p>
           <div className="mt-2 flex items-center gap-1">
             <ThemeToggle />
-            <Button variant="ghost" size="sm" className="flex-1" onClick={logout}>
+            <Button variant="ghost" size="sm" className="flex-1" onClick={scope.effect(logout)}>
               <LogOut className="size-3.5" aria-hidden />
               Sign out
             </Button>
@@ -155,6 +159,16 @@ function AppShellFrame() {
 }
 
 export function AppShell() {
+  const snapshot = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot, authSession.getSnapshot)
+  const [identity, setIdentity] = useState({ owner: snapshot.owner, key: 0 })
+  if (identity.owner !== snapshot.owner) {
+    setIdentity({ owner: snapshot.owner, key: identity.key + 1 })
+    return null
+  }
+  return <OwnerWorkspace key={identity.key} owner={snapshot.owner} />
+}
+
+function OwnerWorkspace({ owner }: { owner: SessionOwner }) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -167,10 +181,14 @@ export function AppShell() {
         },
       }),
   )
+  const [scope] = useState(() => createSessionQueryScope(authSession, owner, queryClient))
+  useLayoutEffect(() => scope.subscribe(), [scope])
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AppShellFrame />
+      <WorkspaceSessionContext value={scope}>
+        <AppShellFrame />
+      </WorkspaceSessionContext>
     </QueryClientProvider>
   )
 }

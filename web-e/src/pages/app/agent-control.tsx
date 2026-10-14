@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -20,6 +20,7 @@ import {
 import { listSessions, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentControlPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const [params, setParams] = useSearchParams()
   const sessions = useQuery({ queryKey: ['sessions', agent.id], queryFn: () => listSessions(agent.id, 'mine') })
@@ -34,15 +35,21 @@ export function AgentControlPage() {
   const imgRef = useRef<HTMLImageElement | null>(null)
 
   useEffect(() => {
+    if (!scope.isCurrent()) return
     if (!sessionId && sessions.data?.[0]) setSessionId(sessions.data[0].id)
-  }, [sessionId, sessions.data])
+  }, [sessionId, sessions.data, scope])
 
   useEffect(() => {
-    if (!locked || !sessionId) return
+    if (!scope.isCurrent() || !locked || !sessionId) return
     let cancelled = false
     async function tick() {
-      const result = await controlScreenshot(agent.id, sessionId)
-      if (!cancelled && result.screenshot) setScreenshot(result.screenshot)
+      if (cancelled || !scope.isCurrent()) return
+      try {
+        const result = await controlScreenshot(agent.id, sessionId)
+        if (!cancelled && scope.isCurrent() && result.screenshot) setScreenshot(result.screenshot)
+      } catch (error) {
+        if (!cancelled && scope.isCurrent()) throw error
+      }
     }
     void tick()
     const timer = window.setInterval(() => void tick(), 2500)
@@ -50,7 +57,7 @@ export function AgentControlPage() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [agent.id, locked, sessionId])
+  }, [agent.id, locked, sessionId, scope])
 
   function mapPoint(event: MouseEvent<HTMLImageElement>) {
     const img = imgRef.current
@@ -62,10 +69,12 @@ export function AgentControlPage() {
   }
 
   async function lock() {
+    if (!scope.isCurrent()) return
     if (!sessionId) return
     setBusy(true)
     try {
       const result = await controlLock(agent.id, sessionId, envType)
+      if (!scope.isCurrent()) return
       if (result.status === 'already_locked') {
         toast.error('Someone else is controlling this session')
         return
@@ -73,6 +82,7 @@ export function AgentControlPage() {
       setLocked(true)
       setParams({ session: sessionId, env: envType })
       const url = await controlCurrentUrl(agent.id, sessionId)
+      if (!scope.isCurrent()) return
       if (url.url) {
         try {
           setDomain(new URL(url.url).hostname)
@@ -82,13 +92,15 @@ export function AgentControlPage() {
       }
       toast.success('Take Control locked. Agent tools pause until you unlock.')
     } catch {
+      if (!scope.isCurrent()) return
       toast.error('Unable to lock the session')
     } finally {
-      setBusy(false)
+      if (scope.isCurrent()) setBusy(false)
     }
   }
 
   async function unlock() {
+    if (!scope.isCurrent()) return
     if (!sessionId) return
     setBusy(true)
     try {
@@ -96,14 +108,16 @@ export function AgentControlPage() {
         export_cookies: Boolean(domain),
         platform_hint: domain || undefined,
       })
+      if (!scope.isCurrent()) return
       setLocked(false)
       toast.success(
         result.cookies_exported ? `Unlocked. Exported ${result.cookie_count ?? 0} cookies.` : 'Unlocked',
       )
     } catch {
+      if (!scope.isCurrent()) return
       toast.error('Unable to unlock')
     } finally {
-      setBusy(false)
+      if (scope.isCurrent()) setBusy(false)
     }
   }
 
@@ -121,7 +135,7 @@ export function AgentControlPage() {
           <Select
             className="mt-1"
             value={sessionId}
-            onChange={(event) => setSessionId(event.target.value)}
+            onChange={scope.effect((event) => setSessionId(event.target.value))}
             disabled={locked}
           >
             {(sessions.data ?? []).map((session) => (
@@ -136,7 +150,7 @@ export function AgentControlPage() {
           <Select
             className="mt-1"
             value={envType}
-            onChange={(event) => setEnvType(event.target.value)}
+            onChange={scope.effect((event) => setEnvType(event.target.value))}
             disabled={locked}
           >
             <option value="browser">Browser</option>
@@ -146,7 +160,7 @@ export function AgentControlPage() {
         </label>
         <label className="text-xs">
           <span className="text-muted-foreground">Cookie domain on unlock</span>
-          <Input className="mt-1 h-10" value={domain} onChange={(event) => setDomain(event.target.value)} />
+          <Input className="mt-1 h-10" value={domain} onChange={scope.effect((event) => setDomain(event.target.value))} />
         </label>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -165,7 +179,7 @@ export function AgentControlPage() {
             size="sm"
             variant="outline"
             disabled={!locked}
-            onClick={() => void controlPressKeys(agent.id, sessionId, [key.toLowerCase()])}
+            onClick={() => scope.isCurrent() && void controlPressKeys(agent.id, sessionId, [key.toLowerCase()]).catch(scope.rethrowCurrent)}
           >
             {key}
           </Button>
@@ -174,7 +188,7 @@ export function AgentControlPage() {
       <div className="flex gap-2">
         <Input
           value={typed}
-          onChange={(event) => setTyped(event.target.value)}
+          onChange={scope.effect((event) => setTyped(event.target.value))}
           placeholder="Type into the remote session"
           disabled={!locked}
         />
@@ -182,7 +196,8 @@ export function AgentControlPage() {
           size="sm"
           disabled={!locked || !typed}
           onClick={() => {
-            void controlType(agent.id, sessionId, typed).then(() => setTyped(''))
+            if (!scope.isCurrent()) return
+            void controlType(agent.id, sessionId, typed).then(scope.effect(() => setTyped(''))).catch(scope.rethrowCurrent)
           }}
         >
           Send
@@ -196,20 +211,23 @@ export function AgentControlPage() {
             alt="Live AgentBay session"
             className="max-h-[70vh] w-full cursor-crosshair object-contain"
             onClick={(event) => {
+              if (!scope.isCurrent()) return
               if (!locked) return
               const point = mapPoint(event)
-              if (point) void controlClick(agent.id, sessionId, point.x, point.y)
+              if (point) void controlClick(agent.id, sessionId, point.x, point.y).catch(scope.rethrowCurrent)
             }}
             onMouseDown={(event) => {
+              if (!scope.isCurrent()) return
               dragFrom.current = mapPoint(event)
             }}
             onMouseUp={(event) => {
+              if (!scope.isCurrent()) return
               const from = dragFrom.current
               const to = mapPoint(event)
               dragFrom.current = null
               if (!locked || !from || !to) return
               if (Math.hypot(to.x - from.x, to.y - from.y) < 8) return
-              void controlDrag(agent.id, sessionId, from, to)
+              void controlDrag(agent.id, sessionId, from, to).catch(scope.rethrowCurrent)
             }}
           />
         ) : (

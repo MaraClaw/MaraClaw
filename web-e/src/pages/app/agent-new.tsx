@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
@@ -25,6 +26,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 export function AgentNewPage() {
+  const scope = useWorkspaceSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const templates = useQuery({ queryKey: ['agent-templates'], queryFn: listTemplates })
@@ -60,6 +62,7 @@ export function AgentNewPage() {
   })
 
   function goBack() {
+    if (!scope.isCurrent()) return
     if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
       navigate(-1)
       return

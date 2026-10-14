@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,7 @@ function memberLink(link?: string | null): string | null {
 }
 
 export function NotificationsPage() {
+  const scope = useWorkspaceSession()
   const queryClient = useQueryClient()
   const query = useQuery({ queryKey: ['notifications'], queryFn: listNotifications })
 
@@ -48,9 +50,9 @@ export function NotificationsPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void markNotificationRead(item.id).then(() =>
+                    scope.isCurrent() && void markNotificationRead(item.id).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['notifications'] }),
-                    )
+                    )).catch(scope.rethrowCurrent)
                   }
                 >
                   Read

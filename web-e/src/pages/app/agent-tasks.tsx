@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -21,6 +22,7 @@ import {
 } from '@/lib/workspace-api'
 
 export function AgentTasksPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const [title, setTitle] = useState('')
@@ -59,22 +61,23 @@ export function AgentTasksPage() {
         <form
           className="flex gap-2"
           onSubmit={(event) => {
+            if (!scope.isCurrent()) return
             event.preventDefault()
             if (title.trim()) addTask.mutate()
           }}
         >
-          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="New todo" />
+          <Input value={title} onChange={scope.effect((event) => setTitle(event.target.value))} placeholder="New todo" />
           <Button type="submit">Add</Button>
         </form>
         <ul className="space-y-2">
           {(tasks.data ?? []).map((task) => (
             <li key={task.id} className="rounded-xl border border-border px-3 py-2">
               <div className="flex items-center justify-between gap-2">
-                <button type="button" className="text-left" onClick={() => setOpenTask(task.id)}>
+                <button type="button" className="text-left" onClick={scope.effect(() => setOpenTask(task.id))}>
                   <p className="text-sm font-medium">{task.title}</p>
                   <p className="text-xs text-muted-foreground">{task.status ?? task.type}</p>
                 </button>
-                <Button size="sm" variant="outline" onClick={() => void triggerTask(agent.id, task.id)}>
+                <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void triggerTask(agent.id, task.id).catch(scope.rethrowCurrent)}>
                   Run
                 </Button>
               </div>
@@ -98,18 +101,20 @@ export function AgentTasksPage() {
           onSubmit={(event) => {
             event.preventDefault()
             if (!focusTitle.trim()) return
+            if (!scope.isCurrent()) return
             void upsertFocus(agent.id, {
               key: focusTitle.toLowerCase().replace(/\s+/g, '-'),
               title: focusTitle,
               status: 'in_progress',
               kind: 'normal',
             }).then(() => {
+              if (!scope.isCurrent()) return
               setFocusTitle('')
               void queryClient.invalidateQueries({ queryKey: ['focus', agent.id] })
-            })
+            }).catch(scope.rethrowCurrent)
           }}
         >
-          <Input value={focusTitle} onChange={(event) => setFocusTitle(event.target.value)} placeholder="Focus item" />
+          <Input value={focusTitle} onChange={scope.effect((event) => setFocusTitle(event.target.value))} placeholder="Focus item" />
           <Button type="submit">Add</Button>
         </form>
         <ul className="space-y-2">
@@ -124,9 +129,9 @@ export function AgentTasksPage() {
                   size="sm"
                   variant="outline"
                   onClick={() =>
-                    void completeFocus(agent.id, item.key).then(() =>
+                    scope.isCurrent() && void completeFocus(agent.id, item.key).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['focus', agent.id] }),
-                    )
+                    )).catch(scope.rethrowCurrent)
                   }
                 >
                   Complete
@@ -147,9 +152,9 @@ export function AgentTasksPage() {
                     type="checkbox"
                     checked={trigger.is_enabled}
                     onChange={(event) =>
-                      void patchTrigger(agent.id, trigger.id, { is_enabled: event.target.checked }).then(() =>
+                      scope.isCurrent() && void patchTrigger(agent.id, trigger.id, { is_enabled: event.target.checked }).then(scope.effect(() =>
                         queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
-                      )
+                      )).catch(scope.rethrowCurrent)
                     }
                   />
                   Enabled
@@ -158,9 +163,9 @@ export function AgentTasksPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void deleteTrigger(agent.id, trigger.id).then(() =>
+                    scope.isCurrent() && void deleteTrigger(agent.id, trigger.id).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
-                    )
+                    )).catch(scope.rethrowCurrent)
                   }
                 >
                   Delete

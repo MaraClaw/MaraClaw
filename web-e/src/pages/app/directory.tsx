@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PersonCard, PersonCardList } from '@/components/directory-people'
 import { Input } from '@/components/ui/input'
 import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
 import { ApiError } from '@/lib/http'
@@ -23,12 +23,14 @@ function isDirectoryTab(value: string | null): value is DirectoryTab {
 }
 
 export function DirectoryPage() {
+  const scope = useWorkspaceSession()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab: DirectoryTab = isDirectoryTab(requestedTab) ? requestedTab : 'people'
   const search = searchParams.get('q') ?? ''
 
   function setTab(next: DirectoryTab) {
+    if (!scope.isCurrent()) return
     const copy = new URLSearchParams(searchParams)
     if (next === 'people') copy.delete('tab')
     else copy.set('tab', next)
@@ -36,6 +38,7 @@ export function DirectoryPage() {
   }
 
   function setSearch(value: string) {
+    if (!scope.isCurrent()) return
     const copy = new URLSearchParams(searchParams)
     if (value) copy.set('q', value)
     else copy.delete('q')
@@ -168,105 +171,6 @@ export function DirectoryPage() {
   )
 }
 
-function PersonCardList({
-  loading,
-  error,
-  count,
-  empty,
-  errorFallback,
-  children,
-}: {
-  loading: boolean
-  error: unknown
-  count: number
-  empty: string
-  errorFallback: string
-  children: ReactNode
-}) {
-  if (loading) {
-    return (
-      <div className="flex h-24 items-center justify-center text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" />
-      </div>
-    )
-  }
-  if (error) {
-    return (
-      <p className="text-sm text-destructive">
-        {error instanceof ApiError ? error.message : errorFallback}
-      </p>
-    )
-  }
-  if (count === 0) {
-    return <p className="text-sm text-muted-foreground">{empty}</p>
-  }
-  return <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
-}
-
-function PersonCard({
-  name,
-  avatarUrl,
-  description,
-  badge,
-  detail,
-}: {
-  name: string
-  avatarUrl?: string | null
-  description?: string | null
-  badge: string
-  detail?: string | null
-}) {
-  return (
-    <Card className="h-full min-w-0 transition-colors hover:bg-muted/40">
-      <CardHeader className="flex flex-row items-start justify-between gap-3">
-        <div className="min-w-0">
-          <CardTitle className="flex min-w-0 items-center gap-2.5">
-            <PersonAvatar name={name} src={avatarUrl} />
-            <span className="min-w-0 wrap-break-word">{name}</span>
-          </CardTitle>
-          {description ? (
-            <CardDescription className="wrap-break-word">{description}</CardDescription>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Badge variant="secondary">{badge}</Badge>
-        </div>
-      </CardHeader>
-      {detail ? (
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-muted-foreground">{detail}</span>
-        </CardContent>
-      ) : null}
-    </Card>
-  )
-}
-
-function PersonAvatar({ name, src }: { name: string; src?: string | null }) {
-  const [failed, setFailed] = useState(false)
-  if (src && !failed) {
-    return (
-      <img
-        src={src}
-        alt=""
-        width={28}
-        height={28}
-        aria-hidden
-        draggable={false}
-        onError={() => setFailed(true)}
-        className="size-7 shrink-0 rounded-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-      />
-    )
-  }
-  return (
-    <span
-      aria-hidden
-      className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[0.65rem] font-medium text-muted-foreground"
-    >
-      {initialsFromName(name)}
-    </span>
-  )
-}
-
 function roleLabel(role: string): string {
   if (role === 'org_admin') return 'Org admin'
   if (role === 'platform_admin') return 'Platform admin'
@@ -287,15 +191,4 @@ function joinDetail(...values: Array<string | null | undefined>): string | undef
   const parts = values.filter((value): value is string => Boolean(value))
   const unique = parts.filter((value, index) => parts.indexOf(value) === index)
   return unique.length ? unique.join(' · ') : undefined
-}
-
-function initialsFromName(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  if (parts.length === 1) {
-    const [first] = parts
-    return first.slice(0, 2).toUpperCase()
-  }
-  const [first, last] = [parts[0], parts[parts.length - 1]]
-  return `${first[0] ?? ''}${last[0] ?? ''}`.toUpperCase()
 }

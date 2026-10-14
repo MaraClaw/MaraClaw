@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,6 +19,7 @@ import {
 import { useAuth } from '@/hooks/use-auth'
 
 export function AgentSchedulesPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { user } = useAuth()
   const isCreator = user?.id === agent.creator_id
@@ -53,25 +55,27 @@ export function AgentSchedulesPage() {
           className="grid max-w-xl gap-2"
           onSubmit={(event) => {
             event.preventDefault()
+            if (!scope.isCurrent()) return
             if (editingId) {
               void updateSchedule(agent.id, editingId, {
                 name,
                 cron_expr: cron,
                 instruction,
               }).then(() => {
+                if (!scope.isCurrent()) return
                 setEditingId(null)
                 setName('')
                 setInstruction('')
                 void queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] })
-              })
+              }).catch(scope.rethrowCurrent)
               return
             }
             create.mutate()
           }}
         >
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" />
-          <Input value={cron} onChange={(event) => setCron(event.target.value)} placeholder="Cron" />
-          <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Instruction" />
+          <Input value={name} onChange={scope.effect((event) => setName(event.target.value))} placeholder="Name" />
+          <Input value={cron} onChange={scope.effect((event) => setCron(event.target.value))} placeholder="Cron" />
+          <Textarea value={instruction} onChange={scope.effect((event) => setInstruction(event.target.value))} placeholder="Instruction" />
           <Button type="submit">{editingId ? 'Save schedule' : 'Add schedule'}</Button>
         </form>
       ) : (
@@ -88,13 +92,14 @@ export function AgentSchedulesPage() {
             </div>
             {isCreator ? (
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => void runSchedule(agent.id, item.id)}>
+                <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void runSchedule(agent.id, item.id).catch(scope.rethrowCurrent)}>
                   Run
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
+                    if (!scope.isCurrent()) return
                     setEditingId(item.id)
                     setName(item.name)
                     setCron(item.cron_expr)
@@ -103,16 +108,16 @@ export function AgentSchedulesPage() {
                 >
                   Edit
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setHistoryId(item.id)}>
+                <Button size="sm" variant="outline" onClick={scope.effect(() => setHistoryId(item.id))}>
                   History
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void deleteSchedule(agent.id, item.id).then(() =>
+                    scope.isCurrent() && void deleteSchedule(agent.id, item.id).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] }),
-                    )
+                    )).catch(scope.rethrowCurrent)
                   }
                 >
                   Delete
