@@ -160,32 +160,49 @@ async def _read_webpage(arguments: ToolArguments) -> str:
     }
 
     try:
-        async with (
-            _httpx_client(follow_redirects=True, timeout=15) as client,
-            client.stream("GET", url, headers=headers) as streamed,
-        ):
-            resp: Response = streamed
-            content_length = cast(str | None, resp.headers.get("content-length"))
-            if isinstance(content_length, str) and content_length.isdigit() and int(content_length) > max_bytes:
-                return f"❌ Page is too large to read safely ({content_length} bytes, limit {max_bytes} bytes)"
+        async with _httpx_client(follow_redirects=False, timeout=15) as client:
+            redirects = 0
+            while True:
+                async with client.stream("GET", url, headers=headers) as streamed:
+                    resp: Response = streamed
+                    location: str | None = None
+                    if "location" in resp.headers:
+                        location = resp.headers["location"]
+                    if resp.status_code in {301, 302, 303, 307, 308} and location is not None:
+                        if redirects >= 10:
+                            return "❌ Too many webpage redirects (limit 10)"
+                        redirect_url = urljoin(url, location)
+                        if urlparse(redirect_url).scheme not in {"http", "https"}:
+                            return "❌ Only HTTP and HTTPS URLs are supported"
+                        next_url, validation_error = await _validate_public_http_url(redirect_url)
+                        if validation_error or next_url is None:
+                            return validation_error or "❌ Please provide a URL"
+                        url = next_url
+                        redirects += 1
+                        continue
 
-            chunks: list[bytes] = []
-            total = 0
-            truncated_bytes = False
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    remaining = max_bytes - sum(len(part) for part in chunks)
-                    if remaining > 0:
-                        chunks.append(chunk[:remaining])
-                    truncated_bytes = True
+                    content_length = cast(str | None, resp.headers.get("content-length"))
+                    if isinstance(content_length, str) and content_length.isdigit() and int(content_length) > max_bytes:
+                        return f"❌ Page is too large to read safely ({content_length} bytes, limit {max_bytes} bytes)"
+
+                    chunks: list[bytes] = []
+                    total = 0
+                    truncated_bytes = False
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            remaining = max_bytes - sum(len(part) for part in chunks)
+                            if remaining > 0:
+                                chunks.append(chunk[:remaining])
+                            truncated_bytes = True
+                            break
+                        chunks.append(chunk)
+
+                    status_code = resp.status_code
+                    final_url = url
+                    content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                    encoding = resp.encoding or "utf-8"
                     break
-                chunks.append(chunk)
-
-            status_code = resp.status_code
-            final_url = str(resp.url)
-            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-            encoding = resp.encoding or "utf-8"
 
         if status_code >= 400:
             return f"❌ Webpage fetch failed HTTP {status_code}: {final_url}"
