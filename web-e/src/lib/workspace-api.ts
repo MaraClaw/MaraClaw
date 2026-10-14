@@ -505,15 +505,15 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
 }
 
 export const CHANNELS = [
-  { key: 'feishu', path: 'channel', label: 'Feishu' },
-  { key: 'slack', path: 'slack-channel', label: 'Slack' },
-  { key: 'discord', path: 'discord-channel', label: 'Discord' },
-  { key: 'teams', path: 'teams-channel', label: 'Microsoft Teams' },
-  { key: 'google-chat', path: 'google-chat-channel', label: 'Google Chat' },
-  { key: 'wecom', path: 'wecom-channel', label: 'WeCom' },
-  { key: 'dingtalk', path: 'dingtalk-channel', label: 'DingTalk' },
-  { key: 'atlassian', path: 'atlassian-channel', label: 'Atlassian' },
-  { key: 'whatsapp', path: 'whatsapp-channel', label: 'WhatsApp' },
+  { key: 'feishu', path: 'channel', webhook: true, label: 'Feishu' },
+  { key: 'slack', path: 'slack-channel', webhook: true, label: 'Slack' },
+  { key: 'discord', path: 'discord-channel', webhook: true, label: 'Discord' },
+  { key: 'teams', path: 'teams-channel', webhook: true, label: 'Microsoft Teams' },
+  { key: 'google-chat', path: 'google-chat-channel', webhook: true, label: 'Google Chat' },
+  { key: 'wecom', path: 'wecom-channel', webhook: true, label: 'WeCom' },
+  { key: 'dingtalk', path: 'dingtalk-channel', webhook: false, label: 'DingTalk' },
+  { key: 'atlassian', path: 'atlassian-channel', webhook: false, label: 'Atlassian' },
+  { key: 'whatsapp', path: 'whatsapp-channel', webhook: true, label: 'WhatsApp' },
 ] as const
 
 export async function getChannel(agentId: string, path: string): Promise<ChannelConfig | null> {
