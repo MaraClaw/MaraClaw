@@ -1,6 +1,6 @@
 [project]
 name = "maraclaw"
-version = "2.2.1"
+version = "2.2.2"
 description = "Backend workspace for the MaraClaw enterprise digital employee platform."
 requires-python = ">=3.14.8"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.54.0",
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
-    "pydantic>=2.14.0",
+    "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
@@ -28,10 +28,10 @@ dependencies = [
     "python-docx>=1.2.0",
     "openpyxl>=3.1.5",
     "python-pptx>=1.0.2",
-    "lark-oapi>=1.7.3",
+    "lark-oapi>=1.7.4",
     "dingtalk-stream>=0.24.3",
     "wecom-aibot-sdk-python>=0.1.7",
-    "pycryptodome>=3.24.0",
+    "pycryptodome>=3.24.1",
     "loguru>=0.7.3",
     "discord.py>=2.7.1",
     "wuying-agentbay-sdk>=0.22.3",
@@ -39,13 +39,13 @@ dependencies = [
     "anyascii>=0.3.3",
     "Pillow>=12.3.0",
     "weasyprint>=70.0",
-    "markdown>=3.11",
+    "markdown>=3.11.1",
     "beautifulsoup4>=4.15.0",
     "boto3",
     "aioboto3>=15.5.0",
     "uvloop>=0.23.0",
     "httptools>=0.9.0",
-    "starlette>=1.7.0",
+    "starlette>=1.8.0",
     "jinja2>=3.1.6",
     "h2>=4.4.1",
     "hpack>=4.2.0",
@@ -67,7 +67,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "httpx>=0.28.1",
     "ruff>=0.17.0",
-    "ty>=0.0.86",
+    "ty>=0.0.87",
     "basedpyright>=1.40.2",
 ]
 
