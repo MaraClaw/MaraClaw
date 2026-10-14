@@ -238,6 +238,33 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
             )
             return [uuid_from_row(row["id"]) for row in rows]
 
+    async def fail_expired_for_disabled_triggers(self, *, now: datetime, error_text: str) -> list[UUID]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                UPDATE trigger_executions
+                SET status = 'failed',
+                    finished_at = %(now)s,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    last_error = %(error_text)s
+                WHERE id IN (
+                    SELECT e.id
+                    FROM trigger_executions AS e
+                    JOIN agent_triggers AS t ON t.id = e.trigger_id
+                    WHERE e.status = 'processing'
+                      AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
+                      AND t.is_enabled IS NOT TRUE
+                      AND t.type <> 'once'
+                      AND (t.max_fires IS NULL OR t.fire_count < t.max_fires)
+                    FOR UPDATE OF e SKIP LOCKED
+                )
+                RETURNING id
+                """,
+                {"now": now, "error_text": error_text},
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
+
     async def try_enqueue(self, *, obj_in: Mapping[str, object]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
 
@@ -288,13 +315,16 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                 SELECT {exec_cols}, {trig_cols}
                 FROM trigger_executions e
                 JOIN agent_triggers t ON t.id = e.trigger_id
-                WHERE e.source = ANY(%(sources)s)
-                  AND t.is_enabled IS TRUE
-                  AND (
-                        e.status = 'pending'
+                WHERE (
+                        (e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)
                         OR (
                             e.status = 'processing'
                             AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
+                            AND (
+                                t.is_enabled IS TRUE
+                                OR t.type = 'once'
+                                OR (t.max_fires IS NOT NULL AND t.fire_count >= t.max_fires)
+                            )
                         )
                   )
                 ORDER BY e.scheduled_at ASC

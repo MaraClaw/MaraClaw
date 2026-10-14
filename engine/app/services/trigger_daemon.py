@@ -111,8 +111,6 @@ async def _tick():
     now = datetime.now(UTC)
 
     all_triggers = await agent_trigger_dao.list_enabled()
-    if not all_triggers:
-        return
 
     # Evaluate and enqueue due triggers. Agent invocation happens only after
     # executions are claimed through the distributed execution queue.

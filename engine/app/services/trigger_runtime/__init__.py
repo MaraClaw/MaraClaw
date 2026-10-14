@@ -7,10 +7,12 @@ from app.services.trigger_runtime.dispatch import (
 )
 from app.services.trigger_runtime.executions import (
     LEASE_DURATION,
+    LEASE_EXPIRED_ERROR,
     LEASE_RENEW_INTERVAL,
     ExecutionLease,
     build_execution_runtime_trigger,
     claim_pending_trigger_executions,
+    fail_abandoned_trigger_executions,
     hold_trigger_execution_leases,
     mark_trigger_executions_completed,
     mark_trigger_executions_failed,
@@ -23,6 +25,7 @@ from app.services.trigger_runtime.queue import enqueue_trigger_execution, enqueu
 
 __all__ = [
     "LEASE_DURATION",
+    "LEASE_EXPIRED_ERROR",
     "LEASE_RENEW_INTERVAL",
     "ExecutionLease",
     "build_execution_runtime_trigger",
@@ -32,6 +35,7 @@ __all__ = [
     "enqueue_due_trigger",
     "enqueue_trigger_execution",
     "enqueue_webhook_execution",
+    "fail_abandoned_trigger_executions",
     "hold_trigger_execution_leases",
     "mark_trigger_executions_completed",
     "mark_trigger_executions_failed",

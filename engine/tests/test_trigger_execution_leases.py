@@ -375,16 +375,73 @@ async def test_second_cancellation_waits_for_heartbeat_cleanup(table, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_dispatch_protects_payload(table, monkeypatch):
+async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
+    await trigger_execution_dao.claim_pending(sources=["once"], now=datetime.now(UTC), limit=10)
+    query = table.connections[0].executed[0][0]
+    assert "(e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)" in query
+    assert query.count("e.source = ANY") == 1
+    assert "OR t.type = 'once'" in query
+    assert "OR (t.max_fires IS NOT NULL AND t.fire_count >= t.max_fires)" in query
+    # Recovery uses a subquery; capture it with the original recording cursor.
+    recording_raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(recording_raw))
+    await executions.fail_abandoned_trigger_executions()
+    query, params = recording_raw.executed[0]
+    assert "FOR UPDATE OF e SKIP LOCKED" in query
+    assert "AND t.is_enabled IS NOT TRUE" in query
+    assert "AND t.type <> 'once'" in query
+    assert "AND (t.max_fires IS NULL OR t.fire_count < t.max_fires)" in query
+    assert params["error_text"] == executions.LEASE_EXPIRED_ERROR
+
+
+@pytest.mark.asyncio
+async def test_dispatch_recovers_first_and_protects_payload(table, monkeypatch):
     execution, trigger = queued(table)
     execution.lease_owner = "trusted"
     execution.payload = {"_execution_id": str(uuid4()), "_lease_token": "untrusted"}
+    order = []
+
+    async def fail():
+        order.append("recover")
+        return []
 
     async def claim():
+        order.append("claim")
         return [(execution, trigger)]
 
+    monkeypatch.setattr(dispatch, "fail_abandoned_trigger_executions", fail, raising=False)
     monkeypatch.setattr(dispatch, "claim_pending_trigger_executions", claim)
     grouped, forced = await dispatch.claim_ready_trigger_invocations(datetime.now(UTC))
+    assert order == ["recover", "claim"]
     assert forced == {trigger.agent_id}
     leases = executions.trigger_execution_leases(grouped[trigger.agent_id])
     assert leases == [executions.ExecutionLease("trusted", (execution.id,))]
+
+
+@pytest.mark.asyncio
+async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monkeypatch):
+    from app.services import trigger_daemon
+
+    _, trigger = await claimed_lease(monkeypatch, table)
+    launched = asyncio.Event()
+
+    async def enabled():
+        return []
+
+    async def claim(_now):
+        return {trigger.agent_id: [trigger]}, {trigger.agent_id}
+
+    async def invoke(_id, _triggers):
+        assert session_module.get_connection() is None
+        launched.set()
+
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled", enabled)
+    monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
+    monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invoke)
+    monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
+    async with connection_ctx():
+        await trigger_daemon._tick()
+        await asyncio.wait_for(launched.wait(), 1)
+        await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS)
+        await asyncio.sleep(0)
+    assert not trigger_daemon._BACKGROUND_TASKS

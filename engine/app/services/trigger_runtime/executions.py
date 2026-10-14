@@ -20,6 +20,7 @@ from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 settings = get_settings()
 LEASE_DURATION = timedelta(minutes=5)
 LEASE_RENEW_INTERVAL = timedelta(seconds=60)
+LEASE_EXPIRED_ERROR = "Execution lease expired after its trigger was disabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,15 @@ async def mark_trigger_executions_failed(leases: Sequence[ExecutionLease], error
         if lost:
             logger.warning(f"Execution lease lost; failure skipped for {list(lost)}")
         failed.extend(changed)
+    return failed
+
+
+async def fail_abandoned_trigger_executions() -> list[uuid.UUID]:
+    failed = await trigger_execution_dao.fail_expired_for_disabled_triggers(
+        now=datetime.now(UTC), error_text=LEASE_EXPIRED_ERROR
+    )
+    if failed:
+        logger.warning(f"Failed expired executions for disabled triggers: {failed}")
     return failed
 
 

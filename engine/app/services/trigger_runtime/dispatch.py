@@ -10,6 +10,7 @@ from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime.executions import (
     build_execution_runtime_trigger,
     claim_pending_trigger_executions,
+    fail_abandoned_trigger_executions,
 )
 from app.services.trigger_runtime.keys import build_scheduled_execution_key
 from app.services.trigger_runtime.queue import enqueue_trigger_execution
@@ -51,6 +52,7 @@ async def claim_ready_trigger_invocations(
     fired_by_agent: dict[uuid.UUID, list[AgentTriggerRecord]] = {}
     force_invoke_agents: set[uuid.UUID] = set()
 
+    _ = await fail_abandoned_trigger_executions()
     claimed_executions = await claim_pending_trigger_executions()
 
     for execution, trigger in claimed_executions:
