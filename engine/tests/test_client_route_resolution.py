@@ -1,5 +1,6 @@
 """Fail-closed extraction of frontend engine calls and dispatch-order resolution."""
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -20,6 +21,7 @@ HELPERS: Final = {"apiRequest", "apiFormRequest", "wsUrl"}
 class Part:
     text: str
     expression: bool = False
+    tokens: tuple[Token, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +34,7 @@ class Token:
     parts: tuple[Part, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ExtractionError(ValueError):
     file: str
     line: int
@@ -44,7 +46,7 @@ class ExtractionError(ValueError):
 
 
 class Lexer:
-    """A cursor tokenizer; recursive scans keep template expressions opaque to outer text."""
+    """A cursor tokenizer; template-expression tokens stay on their Part, outside the outer stream."""
 
     def __init__(self, source: str, file: str) -> None:
         self.source = source
@@ -77,8 +79,8 @@ class Lexer:
                 text = ""
                 self.pos += 2
                 start = self.pos
-                self.scan(expression=True)
-                parts.append(Part(self.source[start : self.pos - 1], True))
+                tokens = self.scan(expression=True)
+                parts.append(Part(self.source[start : self.pos - 1], True, tuple(tokens)))
                 continue
             text += char
             self.pos += 1
@@ -188,7 +190,7 @@ def split_tokens(tokens: list[Token], delimiter: str) -> list[list[Token]]:
 def statement(tokens: list[Token], start: int, end: int) -> list[Token]:
     index = start
     while index < end:
-        if tokens[index].text == ";":
+        if tokens[index].text in {";", ")", "]", "}"}:
             break
         if (
             index > start
@@ -201,6 +203,23 @@ def statement(tokens: list[Token], start: int, end: int) -> list[Token]:
             index = group_end(tokens, index)
         index += 1
     return tokens[start:index]
+
+
+def static_text(token: Token) -> str:
+    return "".join(part.text for part in token.parts if not part.expression)
+
+
+def trim_empty_tail(parts: list[Part]) -> None:
+    while parts and not parts[-1].expression and parts[-1].text == "":
+        parts.pop()
+
+
+def template_tokens(tokens: Iterable[Token]) -> Iterator[Token]:
+    """Every token inside template expressions, at any nesting depth."""
+    for token in tokens:
+        for part in token.parts:
+            yield from part.tokens
+            yield from template_tokens(part.tokens)
 
 
 def literal_alternatives(tokens: list[Token]) -> list[Token] | None:
@@ -298,50 +317,72 @@ class Extractor:
         candidates = [fn for fn in self.functions if fn.body < index < fn.end]
         return max(candidates, key=lambda fn: fn.body) if candidates else None
 
-    def query_suffix(self, expression: str, index: int) -> bool:
-        expr = Lexer(expression, self.file).scan()
-        value: list[list[Token]] | None = None
+    def const_value(self, name: str, fn: Function, index: int) -> list[Token] | None:
+        """Initializer of the const binding of name visible at index; None when there is none."""
+        tokens = self.tokens
+        scopes = [
+            (opening, group_end(tokens, opening)) for opening in range(fn.body, index) if tokens[opening].text == "{"
+        ]
+        declarations = [
+            cursor
+            for cursor in range(fn.body + 1, index)
+            if tokens[cursor].text == "const"
+            and [t.text for t in tokens[cursor + 1 : cursor + 3]] == [name, "="]
+            and self.enclosing(cursor) == fn
+            and not any(opening < cursor < end and not opening < index < end for opening, end in scopes)
+        ]
+        if not declarations:
+            return None
+        references = [
+            cursor
+            for cursor in range(fn.body + 1, fn.end)
+            if tokens[cursor].kind == "word"
+            and tokens[cursor].text == name
+            and tokens[cursor - 1].text not in {".", "?."}
+        ]
+        if references != [declarations[-1] + 1]:
+            raise self.error(tokens[index], f"query suffix {name!r} must be one const binding read only in templates")
+        return statement(tokens, declarations[-1] + 3, index)
+
+    def returned_values(self, name: str, index: int) -> list[list[Token]] | None:
+        """Every value a local function can return; None when name is not declared in this file."""
+        declared = [fn for fn in self.functions if fn.name == name]
+        if not declared:
+            return None
+        if len(declared) > 1:
+            raise self.error(self.tokens[index], f"query suffix function {name!r} is declared more than once")
+        fn = declared[0]
+        body = self.tokens[fn.body + 1 : fn.end]
+        if not any(body[cursor].text == "return" for cursor in top_level(body)):
+            raise self.error(self.tokens[index], f"query suffix function {name!r} may fall through without returning")
+        return [
+            statement(self.tokens, cursor + 1, fn.end)
+            for cursor in range(fn.body + 1, fn.end)
+            if self.tokens[cursor].text == "return" and self.enclosing(cursor) == fn
+        ]
+
+    def query_suffix(self, part: Part, index: int) -> bool:
+        """Whether a trailing expression provably adds only a query; False when its value is not literal."""
+        expr = list(part.tokens)
         fn = self.enclosing(index)
+        value: list[list[Token]] | None = None
         if len(expr) == 1 and expr[0].kind == "word" and fn is not None:
-            for cursor in range(fn.body + 1, index):
-                if self.tokens[cursor].text not in {"const", "let"}:
-                    continue
-                if [t.text for t in self.tokens[cursor + 1 : cursor + 3]] != [expr[0].text, "="]:
-                    continue
-                if self.enclosing(cursor) != fn:
-                    continue
-                scopes = [
-                    (opening, group_end(self.tokens, opening))
-                    for opening in range(fn.body, cursor)
-                    if self.tokens[opening].text == "{"
-                ]
-                if any(opening < cursor < end and not opening < index < end for opening, end in scopes):
-                    continue
-                value = [statement(self.tokens, cursor + 3, index)]
+            initializer = self.const_value(expr[0].text, fn, index)
+            value = None if initializer is None else [initializer]
         elif len(expr) >= 3 and expr[0].kind == "word" and expr[1].text == "(" and group_end(expr, 1) == len(expr) - 1:
-            declared = next((item for item in self.functions if item.name == expr[0].text), None)
-            if declared is not None:
-                body = self.tokens[declared.body + 1 : declared.end]
-                value = [
-                    statement(body, cursor + 1, len(body))
-                    for cursor in top_level(body)
-                    if body[cursor].text == "return"
-                ]
-        if value is None:
+            value = self.returned_values(expr[0].text, index)
+        alternatives = [literal_alternatives(item) for item in value or []]
+        if not alternatives or any(item is None for item in alternatives):
             return False
-        alternatives = [literal_alternatives(item) for item in value]
-        if not value or any(item is None for item in alternatives):
-            raise self.error(self.tokens[index], f"query suffix {expression!r} is not literal/conditional")
         for items in alternatives:
             assert items is not None
             for token in items:
-                text = "".join(part.text for part in token.parts if not part.expression)
-                if text != "" and not text.startswith("?"):
+                # parts[0] is always the static text before any interpolation.
+                if not token.parts[0].text.startswith("?") and token.parts != (Part(""),):
                     raise self.error(
-                        self.tokens[index], f"query suffix {expression!r} has a non-query alternative {token.text}"
+                        self.tokens[index],
+                        f"query suffix {part.text.strip()!r} has a non-query alternative {token.text}",
                     )
-                if text == "" and any(part.expression for part in token.parts):
-                    raise self.error(self.tokens[index], f"query suffix {expression!r} is not provably empty")
         return True
 
     def channels(self) -> list[tuple[str, bool]]:
@@ -379,16 +420,21 @@ class Extractor:
                 parts.append(Part(part.text.split("?", 1)[0]))
                 break
             parts.append(part)
-        while parts and not parts[-1].expression and parts[-1].text == "":
+        trim_empty_tail(parts)
+        if parts and parts[-1].expression and self.query_suffix(parts[-1], index):
             parts.pop()
-        if parts and parts[-1].expression and self.query_suffix(parts[-1].text.strip(), index):
-            parts.pop()
+            trim_empty_tail(parts)
         fn = self.enclosing(index)
         paths = [""]
         reason = ""
-        for part in parts:
+        for position, part in enumerate(parts):
             values = [part.text]
             if part.expression:
+                following = parts[position + 1].text if position + 1 < len(parts) else "/"
+                if not parts[position - 1].text.endswith("/") or not following.startswith("/"):
+                    raise self.error(
+                        token, f"${{{part.text.strip()}}} is neither a whole path segment nor a provable query suffix"
+                    )
                 values = [PLACEHOLDER]
                 if (
                     self.file == CHANNEL_EXPANSION.file
@@ -417,8 +463,22 @@ class Extractor:
                 continue
             if prop[0].text == "...":
                 raise self.error(token, "top-level spread in request options")
-            key = "".join(p.text for p in prop[0].parts) if prop[0].kind == "literal" else prop[0].text
-            value = prop[2:] if len(prop) > 1 and prop[1].text == ":" else prop
+            if prop[0].text == "[":
+                close = group_end(prop, 0)
+                computed = prop[1:close]
+                if len(computed) != 1 or computed[0].kind != "literal" or len(computed[0].parts) != 1:
+                    raise self.error(token, "computed request option keys must be static string literals")
+                key, rest = static_text(computed[0]), prop[close + 1 :]
+            elif prop[0].kind in {"word", "literal"}:
+                key, rest = static_text(prop[0]) if prop[0].kind == "literal" else prop[0].text, prop[1:]
+            else:
+                raise self.error(token, f"unsupported request option key {prop[0].text}")
+            if rest and rest[0].text == ":":
+                value = rest[1:]
+            elif not rest and prop[0].kind == "word":
+                value = prop
+            else:
+                raise self.error(token, f"unsupported request option property {key!r}")
             if key == "method":
                 alternatives = literal_alternatives(value)
                 if alternatives is None or any(t.text.startswith("`") for t in alternatives):
@@ -428,20 +488,45 @@ class Extractor:
                 body = [t.text for t in value] != ["undefined"]
         return method if method is not None else ["POST" if body else default]
 
+    def specifier(self, index: int) -> bool:
+        """Whether tokens[index] is a plain name in an import/export specifier list."""
+        tokens = self.tokens
+        if not 0 < index < len(tokens) - 1:
+            return False
+        if tokens[index - 1].text not in {"{", ","} or tokens[index + 1].text not in {",", "}", "as"}:
+            return False
+        cursor = index - 1
+        while cursor > 0 and tokens[cursor].text != "{":
+            if tokens[cursor].kind != "word" and tokens[cursor].text != ",":
+                return False
+            cursor -= 1
+        if cursor == 0 or tokens[cursor - 1].text not in {"import", "export", "type", ","}:
+            return False
+        if next(token for token in tokens if token.line == tokens[cursor].line).text not in {"import", "export"}:
+            return False
+        if tokens[index + 1].text == "as":
+            raise self.error(tokens[index], f"aliasing {tokens[index].text} hides its calls")
+        return True
+
     def calls(self) -> list[ClientCall]:
         tokens = self.tokens
+        for inner in template_tokens(tokens):
+            if inner.text in HELPERS or (inner.kind == "literal" and static_text(inner).startswith(("/api/", "/ws/"))):
+                raise self.error(inner, "engine call inside a template expression is unsupported")
         consumed = set()
         calls = []
         for index, token in enumerate(tokens):
-            if token.text not in HELPERS:
+            if token.kind != "word" or token.text not in HELPERS:
                 continue
-            if index > 0 and tokens[index - 1].text == "function":
+            if index > 0 and tokens[index - 1].text in {"function", "const", "let", "var"}:
+                continue
+            if self.specifier(index):
                 continue
             cursor = index + 1
             if cursor < len(tokens) and tokens[cursor].text == "<":
                 cursor = group_end(tokens, cursor) + 1
             if cursor >= len(tokens) or tokens[cursor].text != "(":
-                continue
+                raise self.error(token, f"{token.text} is referenced without a direct call")
             end = group_end(tokens, cursor)
             args = split_tokens(tokens[cursor + 1 : end], ",")
             if not args or len(args[0]) != 1 or args[0][0].kind != "literal":
@@ -468,7 +553,7 @@ class Extractor:
         for index, token in enumerate(tokens):
             if token.kind != "literal" or index in consumed:
                 continue
-            text = "".join(p.text for p in token.parts if not p.expression)
+            text = static_text(token)
             if not text.startswith(("/api/", "/ws/")):
                 continue
             if index == 0 or tokens[index - 1].text != "return" or tokens[index - 1].line != token.line:
@@ -573,6 +658,10 @@ def test_extractor_supported_shapes() -> None:
     source = r"""
 export async function apiRequest<T>(path: string, options = {}) { return null }
 export const apiFormRequest = createApiRequest()
+import {
+  apiFormRequest, apiRequest,
+} from '@/lib/http'
+export async function load() { return apiRequest<{ id: string }>('/api/exported') }
 // apiRequest('/api/commented')
 /* apiRequest('/api/block-commented') */
 function querySuffix(id?: string): string { return id ? `?id=${id}` : '' }
@@ -584,8 +673,11 @@ function requests() {
   }>('/api/generic', { body })
   apiRequest(`/api/literal?${nested({value: `a${"?"}`})}`)
   apiRequest(`/api/suffix${suffix}`)
+  apiRequest(`/api/aligned/${suffix}`)
+  apiRequest(`/api/segment/${id}${suffix}`)
   apiRequest(`/api/function${querySuffix(id)}`)
   apiRequest('/api/method', { method: 'put', body: undefined })
+  apiRequest('/api/computed', { ['method']: 'patch' })
   apiRequest('/api/conditional', { method: enabled ? 'POST' : 'DELETE' })
   apiFormRequest('/api/form', form)
   apiFormRequest('/api/form-options', form, { method: 'PATCH' })
@@ -596,11 +688,15 @@ function requests() {
 """
     assert sorted((call.protocol, call.method, call.path) for call in extract_calls(source)) == sorted(
         [
+            ("http", "GET", "/api/exported"),
             ("http", "POST", "/api/generic"),
             ("http", "GET", "/api/literal"),
             ("http", "GET", "/api/suffix"),
+            ("http", "GET", "/api/aligned/"),
+            ("http", "GET", f"/api/segment/{PLACEHOLDER}"),
             ("http", "GET", "/api/function"),
             ("http", "PUT", "/api/method"),
+            ("http", "PATCH", "/api/computed"),
             ("http", "POST", "/api/conditional"),
             ("http", "DELETE", "/api/conditional"),
             ("http", "POST", "/api/form"),
@@ -623,8 +719,38 @@ function requests() {
             "function f() { const suffix = ok ? '?x=1' : '/bad'; apiRequest(`/api/x${suffix}`) }",
             "non-query alternative",
         ),
-        ("function f() { const suffix = compute(); apiRequest(`/api/x${suffix}`) }", "not literal/conditional"),
+        ("function f() { const suffix = compute(); apiRequest(`/api/x${suffix}`) }", "neither a whole path segment"),
         ("const url = '/api/unclassified'", "unclassified engine path literal"),
+        (
+            'function f() { const suffix = `${"/bad"}?q=1`; apiRequest(`/api/health${suffix}`) }',
+            "non-query alternative",
+        ),
+        ('const suffix = `${"/bad"}?q=1`; apiRequest(`/api/health${suffix}`)', "neither a whole path segment"),
+        (
+            "function f() { let suffix = '?q=1'; suffix = '/bad'; apiRequest(`/api/health${suffix}`) }",
+            "neither a whole path segment",
+        ),
+        (
+            "function f() { const suffix = '?q=1'; for (const suffix of ['/bad']) apiRequest(`/api/x${suffix}`) }",
+            "one const binding",
+        ),
+        (
+            "function q() { if (x) { return '/bad' } return '' } function f() { apiRequest(`/api/x${q()}`) }",
+            "non-query alternative",
+        ),
+        (
+            "function q() { if (x) { return '?a=1' } } function f() { apiRequest(`/api/x${q()}`) }",
+            "may fall through",
+        ),
+        ("function f(suffix: string) { apiRequest(`/api/health${suffix}`) }", "neither a whole path segment"),
+        ("apiRequest(`/api/agents/x-${id}`)", "neither a whole path segment"),
+        ("apiRequest('/api/x', { [key]: 'POST' })", "computed request option keys"),
+        ("apiRequest('/api/x', { get method() { return 'POST' } })", "unsupported request option property"),
+        ('function f() { return `value=${apiRequest("/api/not-a-route")}` }', "inside a template expression"),
+        ("const url = `${'/api/hidden'}`", "inside a template expression"),
+        ("load().then(apiRequest)", "without a direct call"),
+        ("export function f() { return { apiRequest } }", "without a direct call"),
+        ("import { apiRequest as request } from '@/lib/http'", "aliasing apiRequest"),
     ],
 )
 def test_extractor_rejects_unprovable_shapes(source: str, reason: str) -> None:
