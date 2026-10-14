@@ -175,17 +175,32 @@ async def enqueue_openclaw_message(
 
 
 async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
+    claimed: GatewayMessageRecord | None = None
     try:
         from app.services.openclaw_inbox import wake_openclaw_inbox
 
-        woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
-        if not woke:
-            logger.info("[OpenClaw] inbox left pending for {}; guest gateway will pick it up", agent.id)
-            return
         if message_id is not None:
-            _ = await gateway_message_dao.mark_delivered(message_id, agent.id)
+            claimed = await gateway_message_dao.mark_delivered(message_id, agent.id)
+            if claimed is None:
+                logger.info("[OpenClaw] inbox message {} already taken or completed for {}", message_id, agent.id)
+                return
+        woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
     except Exception as exc:
         logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
+        await _release_wake_claim(agent, claimed)
+        return
+    if not woke:
+        await _release_wake_claim(agent, claimed)
+        logger.info("[OpenClaw] inbox left pending for {}; guest gateway will pick it up", agent.id)
+
+
+async def _release_wake_claim(agent: AgentRecord, claimed: GatewayMessageRecord | None) -> None:
+    if claimed is None:
+        return
+    try:
+        _ = await gateway_message_dao.release_delivery(claimed)
+    except Exception as exc:
+        logger.warning("[OpenClaw] inbox claim release error for {}: {}", agent.id, exc)
 
 
 _wake_tasks: set[asyncio.Task[None]] = set()
