@@ -2,54 +2,128 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import uuid
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from app.config import get_settings
-from app.core.json_types import json_object_from
+from app.core.json_types import json_as_str, json_object_from
+from app.core.logging import get_trace_id, logger, set_trace_id
 from app.dao.trigger_dao import trigger_execution_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 
 settings = get_settings()
+LEASE_DURATION = timedelta(minutes=5)
+LEASE_RENEW_INTERVAL = timedelta(seconds=60)
 
 
-async def mark_trigger_executions_completed(execution_ids: list[uuid.UUID]) -> None:
-    if not execution_ids:
-        return
-    now = datetime.now(UTC)
-    async with connection_ctx() as db:
-        await db.execute(
-            """
-            UPDATE trigger_executions
-            SET status = 'completed',
-                finished_at = %(now)s,
-                lease_owner = NULL,
-                lease_expires_at = NULL,
-                last_error = NULL
-            WHERE id = ANY(%(ids)s)
-            """,
-            {"now": now, "ids": execution_ids},
+@dataclass(frozen=True, slots=True)
+class ExecutionLease:
+    token: str
+    execution_ids: tuple[uuid.UUID, ...]
+
+
+def new_lease_token() -> str:
+    return f"{settings.INSTANCE_ID[:95]}:{uuid.uuid4().hex}"
+
+
+def trigger_execution_leases(triggers: Sequence[AgentTriggerRecord]) -> list[ExecutionLease]:
+    grouped: dict[str, list[uuid.UUID]] = {}
+    for trigger in triggers:
+        cfg = json_object_from(trigger.config)
+        execution_id = json_as_str(cfg.get("_execution_id"))
+        token = json_as_str(cfg.get("_lease_token"))
+        if execution_id and token:
+            grouped.setdefault(token, []).append(uuid.UUID(execution_id))
+    return [ExecutionLease(token, tuple(ids)) for token, ids in grouped.items()]
+
+
+async def renew_trigger_execution_lease(lease: ExecutionLease) -> list[uuid.UUID]:
+    async with connection_ctx():
+        renewed = await trigger_execution_dao.renew_lease(
+            lease.execution_ids, lease_token=lease.token, lease_until=datetime.now(UTC) + LEASE_DURATION
         )
+    lost = set(lease.execution_ids) - set(renewed)
+    if lost:
+        logger.warning(f"Execution lease lost; renewal skipped for {list(lost)}")
+    return renewed
 
 
-async def mark_trigger_executions_failed(execution_ids: list[uuid.UUID], error_text: str) -> None:
-    if not execution_ids:
-        return
+async def mark_trigger_executions_completed(leases: Sequence[ExecutionLease]) -> list[uuid.UUID]:
     now = datetime.now(UTC)
-    async with connection_ctx() as db:
-        await db.execute(
-            """
-            UPDATE trigger_executions
-            SET status = 'failed',
-                finished_at = %(now)s,
-                lease_owner = NULL,
-                lease_expires_at = NULL,
-                last_error = %(error_text)s
-            WHERE id = ANY(%(ids)s)
-            """,
-            {"now": now, "ids": execution_ids, "error_text": error_text},
+    completed: list[uuid.UUID] = []
+    for lease in leases:
+        changed = await trigger_execution_dao.finish(
+            lease.execution_ids, lease_token=lease.token, status="completed", error_text=None, now=now
         )
+        lost = set(lease.execution_ids) - set(changed)
+        if lost:
+            logger.warning(f"Execution lease lost; completion skipped for {list(lost)}")
+        completed.extend(changed)
+    return completed
+
+
+async def mark_trigger_executions_failed(leases: Sequence[ExecutionLease], error_text: str) -> list[uuid.UUID]:
+    now = datetime.now(UTC)
+    failed: list[uuid.UUID] = []
+    for lease in leases:
+        changed = await trigger_execution_dao.finish(
+            lease.execution_ids, lease_token=lease.token, status="failed", error_text=error_text, now=now
+        )
+        lost = set(lease.execution_ids) - set(changed)
+        if lost:
+            logger.warning(f"Execution lease lost; failure skipped for {list(lost)}")
+        failed.extend(changed)
+    return failed
+
+
+async def _renew_until_lost(leases: list[ExecutionLease], trace_id: str | None) -> None:
+    if trace_id:
+        set_trace_id(trace_id)
+    held = leases
+    while held:
+        await asyncio.sleep(LEASE_RENEW_INTERVAL.total_seconds())
+        remaining: list[ExecutionLease] = []
+        for lease in held:
+            try:
+                renewed = await renew_trigger_execution_lease(lease)
+            except Exception as exc:
+                logger.warning(f"Execution lease renewal failed for {lease.execution_ids}: {exc}")
+                remaining.append(lease)
+                continue
+            lost = set(lease.execution_ids) - set(renewed)
+            if lost:
+                logger.warning(f"Execution lease lost; stop renewing {list(lost)}")
+            if renewed:
+                remaining.append(ExecutionLease(lease.token, tuple(renewed)))
+        held = remaining
+
+
+@asynccontextmanager
+async def hold_trigger_execution_leases(leases: Sequence[ExecutionLease]) -> AsyncIterator[None]:
+    if not leases:
+        yield
+        return
+    task = asyncio.create_task(_renew_until_lost(list(leases), get_trace_id()), context=contextvars.Context())
+    try:
+        yield
+    finally:
+        task.cancel()
+        joined = asyncio.gather(task, return_exceptions=True)
+        interrupted: asyncio.CancelledError | None = None
+        while True:
+            try:
+                _ = await asyncio.shield(joined)
+                break
+            except asyncio.CancelledError as exc:
+                interrupted = exc
+        if interrupted is not None:
+            raise interrupted
 
 
 async def claim_pending_trigger_executions(
@@ -58,7 +132,8 @@ async def claim_pending_trigger_executions(
     limit: int = 100,
 ) -> list[tuple[TriggerExecutionRecord, AgentTriggerRecord]]:
     now = datetime.now(UTC)
-    lease_until = now + timedelta(minutes=5)
+    lease_until = now + LEASE_DURATION
+    lease_token = new_lease_token()
     sources = sources or ["webhook", "cron", "once", "interval", "poll", "on_message"]
     claimed_pairs: list[tuple[TriggerExecutionRecord, AgentTriggerRecord]] = []
 
@@ -80,7 +155,7 @@ async def claim_pending_trigger_executions(
             """,
             {
                 "now": now,
-                "owner": settings.INSTANCE_ID,
+                "owner": lease_token,
                 "lease_until": lease_until,
                 "ids": [execution.id for execution, _trigger in rows],
             },
@@ -90,7 +165,7 @@ async def claim_pending_trigger_executions(
             execution.status = "processing"
             execution.started_at = started_at
             execution.finished_at = None
-            execution.lease_owner = settings.INSTANCE_ID
+            execution.lease_owner = lease_token
             execution.lease_expires_at = lease_until
             claimed_pairs.append((execution, trigger))
     return claimed_pairs
@@ -101,13 +176,15 @@ def build_execution_runtime_trigger(
     execution: TriggerExecutionRecord,
 ) -> AgentTriggerRecord:
     runtime_cfg = dict(json_object_from(trigger.config))
-    runtime_cfg["_execution_id"] = str(execution.id)
     payload = json_object_from(execution.payload)
     if payload:
         runtime_cfg.update(payload)
     payload_text = execution.payload_text
     if payload_text:
         runtime_cfg["_webhook_payload"] = payload_text
+    runtime_cfg["_execution_id"] = str(execution.id)
+    if execution.lease_owner:
+        runtime_cfg["_lease_token"] = execution.lease_owner
     return AgentTriggerRecord(
         id=trigger.id,
         agent_id=trigger.agent_id,

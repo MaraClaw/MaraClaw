@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import int_from_row
+from app.core.json_types import int_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.db.errors import UniqueViolationError
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
@@ -150,6 +150,60 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     table: ClassVar[str] = "trigger_executions"
     columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
     record_factory = staticmethod(TriggerExecutionRecord.from_row)
+
+    async def renew_lease(
+        self, execution_ids: Sequence[UUID], *, lease_token: str, lease_until: datetime
+    ) -> list[UUID]:
+        if not execution_ids:
+            return []
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                UPDATE trigger_executions
+                SET lease_expires_at = %(lease_until)s
+                WHERE id = ANY(%(ids)s)
+                  AND status = 'processing'
+                  AND lease_owner = %(lease_token)s
+                RETURNING id
+                """,
+                {"ids": list(execution_ids), "lease_token": lease_token, "lease_until": lease_until},
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
+
+    async def finish(
+        self,
+        execution_ids: Sequence[UUID],
+        *,
+        lease_token: str,
+        status: str,
+        error_text: str | None,
+        now: datetime,
+    ) -> list[UUID]:
+        if not execution_ids:
+            return []
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                UPDATE trigger_executions
+                SET status = %(status)s,
+                    finished_at = %(now)s,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    last_error = %(error_text)s
+                WHERE id = ANY(%(ids)s)
+                  AND status = 'processing'
+                  AND lease_owner = %(lease_token)s
+                RETURNING id
+                """,
+                {
+                    "ids": list(execution_ids),
+                    "lease_token": lease_token,
+                    "status": status,
+                    "error_text": error_text,
+                    "now": now,
+                },
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
 
     async def try_enqueue(self, *, obj_in: Mapping[str, object]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.

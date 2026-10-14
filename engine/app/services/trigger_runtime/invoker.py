@@ -20,8 +20,10 @@ from app.services.llm.base import ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
 from app.services.trigger_runtime import (
+    hold_trigger_execution_leases,
     mark_trigger_executions_completed,
     mark_trigger_executions_failed,
+    trigger_execution_leases,
 )
 
 
@@ -98,35 +100,34 @@ async def resolve_trigger_delivery_target(
     return None
 
 
-async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]):
+async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
+    leases = trigger_execution_leases(triggers)
+    async with hold_trigger_execution_leases(leases):
+        error_text = await _run_trigger_invocation(agent_id, triggers)
+    if error_text is None:
+        _ = await mark_trigger_executions_completed(leases)
+    else:
+        _ = await mark_trigger_executions_failed(leases, error_text)
+
+
+async def _run_trigger_invocation(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> str | None:
     from app.services.audit_logger import write_audit_log
     from app.services.llm import call_llm
 
     try:
-        execution_ids = [
-            uuid.UUID(str((t.config or {}).get("_execution_id")))
-            for t in triggers
-            if (t.config or {}).get("_execution_id")
-        ]
         agent = await agent_dao.get(agent_id)
         if not agent or agent.is_expired:
-            if execution_ids:
-                await mark_trigger_executions_failed(execution_ids, "Agent not found or is expired")
-            return
+            return "Agent not found or is expired"
 
         if not agent.primary_model_id:
             logger.warning(f"Agent {agent.name} has no LLM model, skipping trigger invocation")
-            if execution_ids:
-                await mark_trigger_executions_failed(execution_ids, "Agent has no LLM model configured")
-            return
+            return "Agent has no LLM model configured"
         model = await llm_model_dao.get(agent.primary_model_id)
         from app.services.enterprise_llm import model_usable_in_tenant
 
         if not model or not model_usable_in_tenant(model, getattr(agent, "tenant_id", None)):
             logger.warning(f"Agent {agent.name}'s model is unavailable, skipping trigger invocation")
-            if execution_ids:
-                await mark_trigger_executions_failed(execution_ids, "Agent primary model is unavailable or disabled")
-            return
+            return "Agent primary model is unavailable or disabled"
 
         context_parts = []
         trigger_names = []
@@ -383,17 +384,10 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
             agent_id=agent_id,
         )
 
-        if execution_ids:
-            await mark_trigger_executions_completed(execution_ids)
+        return None
     except Exception as e:
         logger.error(f"Failed to invoke agent {agent_id} for triggers: {e}")
         import traceback
 
         traceback.print_exc()
-        execution_ids = [
-            uuid.UUID(str((t.config or {}).get("_execution_id")))
-            for t in triggers
-            if (t.config or {}).get("_execution_id")
-        ]
-        if execution_ids:
-            await mark_trigger_executions_failed(execution_ids, str(e)[:2000])
+        return str(e)[:2000]

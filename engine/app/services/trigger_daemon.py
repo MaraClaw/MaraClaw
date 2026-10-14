@@ -6,6 +6,7 @@ and distributed claim/invoke flow.
 """
 
 import asyncio
+import contextvars
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -195,7 +196,7 @@ async def _tick():
         except Exception as e:
             logger.warning(f"Failed to pre-update trigger state: {e}")
 
-        task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, agent_triggers))
+        task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, agent_triggers), context=contextvars.Context())
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_observe_background_task)
 
