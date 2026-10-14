@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.gateway_message import GatewayMessageRecord
 
@@ -47,14 +48,64 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
 
+    async def claim_pending(self, agent_id: UUID, *, now: datetime) -> list[GatewayMessageRecord]:
+        """Move every pending row to delivered and return only the rows this call moved."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "WITH claimed AS ("
+                + "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
+                + "WHERE agent_id = %(agent_id)s AND status = 'pending' "
+                + f"RETURNING {self._select_list()}"
+                + f") SELECT {self._select_list()} FROM claimed ORDER BY created_at ASC",
+                {"agent_id": agent_id, "now": now},
+            )
+            return [GatewayMessageRecord.from_row(row) for row in rows]
+
     async def mark_delivered(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
-        """Take a pending row off the poll queue after a successful wake."""
+        """Claim one pending row for a wake; ``None`` when a poll or another wake already took it."""
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
                 + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' "
                 + f"RETURNING {self._select_list()}",
                 {"id": message_id, "agent_id": agent_id, "now": datetime.now(UTC)},
+            )
+            return GatewayMessageRecord.from_row(row) if row else None
+
+    async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        """Return a claimed row to pending, unless a newer claim or a report has moved it since."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE gateway_messages SET status = 'pending', delivered_at = NULL "
+                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'delivered' "
+                + "AND delivered_at = %(delivered_at)s "
+                + f"RETURNING {self._select_list()}",
+                {"id": claimed.id, "agent_id": claimed.agent_id, "delivered_at": claimed.delivered_at},
+            )
+            return GatewayMessageRecord.from_row(row) if row else None
+
+    async def requeue_stale_deliveries(self, agent_id: UUID, *, stale_before: datetime) -> list[UUID]:
+        """Return delivered rows with no report since ``stale_before`` (or no ``delivered_at``) to pending."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "UPDATE gateway_messages SET status = 'pending', delivered_at = NULL "
+                + "WHERE agent_id = %(agent_id)s AND status = 'delivered' "
+                + "AND (delivered_at IS NULL OR delivered_at < %(stale_before)s) "
+                + "RETURNING id",
+                {"agent_id": agent_id, "stale_before": stale_before},
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
+
+    async def complete(
+        self, message_id: UUID, agent_id: UUID, *, result: str, now: datetime
+    ) -> GatewayMessageRecord | None:
+        """Record the first report for a row; ``None`` when it is unknown or already completed."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE gateway_messages SET status = 'completed', result = %(result)s, completed_at = %(now)s "
+                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered') "
+                + f"RETURNING {self._select_list()}",
+                {"id": message_id, "agent_id": agent_id, "result": result, "now": now},
             )
             return GatewayMessageRecord.from_row(row) if row else None
 
