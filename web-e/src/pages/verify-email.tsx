@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { resendVerificationRequest, verifyEmailRequest } from '@/lib/auth-api'
+import type { SessionOwner } from '@/lib/auth-session'
 import { ApiError, formatApiDetail } from '@/lib/http'
 
 const schema = z.object({
@@ -28,7 +29,8 @@ export function VerifyEmailPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  const { applySession } = useAuth()
+  const { owner, capture, isCurrent, applySession } = useAuth()
+  const [mountedOwner] = useState(() => owner)
   const emailFromState = (location.state as VerifyState | null)?.email
   const codeFromQuery = useMemo(() => searchParams.get('code')?.trim() ?? '', [searchParams])
   const [email, setEmail] = useState(emailFromState ?? '')
@@ -49,25 +51,29 @@ export function VerifyEmailPage() {
     if (codeFromQuery) setValue('token', codeFromQuery)
   }, [codeFromQuery, setValue])
 
-  async function consume(token: string) {
-    const session = await verifyEmailRequest(token)
-    applySession(session)
+  async function consume(expectedOwner: SessionOwner, token: string) {
+    const session = await verifyEmailRequest(token, undefined, expectedOwner)
+    if (!applySession(expectedOwner, session)) return
+    const installedOwner = capture()
+    if (!isCurrent(installedOwner)) return
     toast.success('Email verified')
     navigate(session.needs_org_confirm ? '/join' : '/app', { replace: true })
   }
 
   useEffect(() => {
-    if (!codeFromQuery) return
+    const expectedOwner = mountedOwner
+    if (!codeFromQuery || !isCurrent(expectedOwner)) return
     let cancelled = false
-    void verifyEmailRequest(codeFromQuery)
+    void verifyEmailRequest(codeFromQuery, undefined, expectedOwner)
       .then((session) => {
-        if (cancelled) return
-        applySession(session)
+        if (cancelled || !applySession(expectedOwner, session)) return
+        const installedOwner = capture()
+        if (!isCurrent(installedOwner)) return
         toast.success('Email verified')
         navigate(session.needs_org_confirm ? '/join' : '/app', { replace: true })
       })
       .catch((error: unknown) => {
-        if (cancelled) return
+        if (cancelled || !isCurrent(expectedOwner)) return
         setFormError(
           error instanceof ApiError
             ? (formatApiDetail(error.detail) ?? 'This verification code is invalid or expired.')
@@ -77,13 +83,16 @@ export function VerifyEmailPage() {
     return () => {
       cancelled = true
     }
-  }, [applySession, codeFromQuery, navigate])
+  }, [applySession, codeFromQuery, navigate, mountedOwner, capture, isCurrent])
 
   async function onSubmit(values: FormValues) {
+    const expectedOwner = mountedOwner
+    if (!isCurrent(expectedOwner)) return
     setFormError(null)
     try {
-      await consume(values.token)
+      await consume(expectedOwner, values.token)
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       setFormError(
         error instanceof ApiError
           ? (formatApiDetail(error.detail) ?? 'This verification code is invalid or expired.')
@@ -93,6 +102,8 @@ export function VerifyEmailPage() {
   }
 
   async function resend() {
+    const expectedOwner = mountedOwner
+    if (!isCurrent(expectedOwner)) return
     if (!email.trim()) {
       setFormError('Enter the email you registered with, then resend.')
       return
@@ -100,12 +111,14 @@ export function VerifyEmailPage() {
     setResending(true)
     setFormError(null)
     try {
-      await resendVerificationRequest(email.trim())
+      await resendVerificationRequest(email.trim(), expectedOwner)
+      if (!isCurrent(expectedOwner)) return
       toast.success('If that account exists, a new code is on the way.')
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       setFormError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to resend.')
     } finally {
-      setResending(false)
+      if (isCurrent(expectedOwner)) setResending(false)
     }
   }
 

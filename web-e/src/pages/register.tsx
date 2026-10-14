@@ -46,7 +46,7 @@ const highlights = [
 ]
 
 export function RegisterPage() {
-  const { status, applySession, needsOrgConfirm } = useAuth()
+  const { status, owner, capture, isCurrent, applySession, needsOrgConfirm } = useAuth()
   const navigate = useNavigate()
   const formId = useId()
   const [showPassword, setShowPassword] = useState(false)
@@ -54,10 +54,17 @@ export function RegisterPage() {
   const [inviteRequired, setInviteRequired] = useState(false)
 
   useEffect(() => {
-    void fetchRegistrationConfig()
-      .then((config) => setInviteRequired(Boolean(config.invitation_code_required)))
-      .catch(() => setInviteRequired(false))
-  }, [])
+    const expectedOwner = owner
+    let cancelled = false
+    void fetchRegistrationConfig(expectedOwner)
+      .then((config) => {
+        if (!cancelled && isCurrent(expectedOwner)) setInviteRequired(Boolean(config.invitation_code_required))
+      })
+      .catch(() => {
+        if (!cancelled && isCurrent(expectedOwner)) setInviteRequired(false)
+      })
+    return () => { cancelled = true }
+  }, [owner, isCurrent])
 
   const {
     register,
@@ -73,6 +80,8 @@ export function RegisterPage() {
   }
 
   async function onSubmit(values: RegisterFormValues) {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     setFormError(null)
     try {
       const result = await registerRequest({
@@ -80,8 +89,10 @@ export function RegisterPage() {
         username: values.username?.trim() || values.email.split('@')[0] || 'member',
         password: values.password,
         invitation_code: values.invitation_code?.trim() || undefined,
-      })
-      applySession(result)
+      }, undefined, expectedOwner)
+      if (!applySession(expectedOwner, result)) return
+      const installedOwner = capture()
+      if (!isCurrent(installedOwner)) return
       toast.success('Account created')
       if (!result.user.email_verified) {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
@@ -92,6 +103,7 @@ export function RegisterPage() {
         state: { suggested: result.suggested_org },
       })
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
         return
@@ -130,13 +142,16 @@ export function RegisterPage() {
               className="pl-10"
               {...register('email', {
                 onBlur: (event) => {
+                  const expectedOwner = owner
+                  if (!isCurrent(expectedOwner)) return
                   const email = event.target.value.trim()
                   if (!email) {
                     setFormError((current) => (current === duplicateEmailMessage ? null : current))
                     return
                   }
-                  void checkDuplicate({ email })
+                  void checkDuplicate({ email }, expectedOwner)
                     .then((result) => {
+                      if (!isCurrent(expectedOwner)) return
                       setFormError((current) => {
                         if (result.email_exists) return duplicateEmailMessage
                         return current === duplicateEmailMessage ? null : current

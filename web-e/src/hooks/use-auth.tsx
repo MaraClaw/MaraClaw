@@ -1,174 +1,72 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
 import { fetchCurrentUser, loginRequest } from '@/lib/auth-api'
-import { clearStoredToken, getStoredToken, setStoredToken } from '@/lib/auth-storage'
-import { ApiError } from '@/lib/http'
-import {
-  isMultiTenantResponse,
-  isPlatformAdminUser,
-  isTokenResponse,
-  sessionMustChangePassword,
-  userMustChangePassword,
-  type LoginRequest,
-  type MultiTenantResponse,
-  type TokenResponse,
-  type UserOut,
-} from '@/lib/types/auth'
+import { authSession, type AuthSnapshot, type SessionOwner } from '@/lib/auth-session'
+import { createAuthSessionController } from '@/lib/auth-session-controller'
+import { getStoredToken } from '@/lib/auth-storage'
+import { ApiError, StaleSessionError } from '@/lib/http'
+import { isMultiTenantResponse, isPlatformAdminUser, isTokenResponse, userMustChangePassword } from '@/lib/types/auth'
+import type { LoginRequest, MultiTenantResponse, TokenResponse } from '@/lib/types/auth'
 
-type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
-
-type AuthContextValue = {
-  status: AuthStatus
-  user: UserOut | null
-  token: string | null
-  needsOrgConfirm: boolean
-  mustChangePassword: boolean
-  login: (input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
-  applySession: (session: TokenResponse) => void
-  logout: () => void
-  refreshUser: (replacementToken?: string | null) => Promise<boolean>
+type AuthContextValue = AuthSnapshot & {
+  readonly needsOrgConfirm: boolean
+  readonly mustChangePassword: boolean
+  readonly capture: typeof authSession.capture
+  readonly isCurrent: typeof authSession.isCurrent
+  readonly login: (owner: SessionOwner, input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
+  readonly applySession: typeof authSession.applySession
+  readonly logout: () => void
+  readonly refreshUser: (owner: SessionOwner, replacementToken?: string | null) => Promise<boolean>
+  readonly refreshReplacement: (owner: SessionOwner, token: string | null) => Promise<SessionOwner | null>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>('loading')
-  const [user, setUser] = useState<UserOut | null>(null)
-  const [token, setToken] = useState<string | null>(() => getStoredToken())
-  const refreshRequest = useRef<AbortController | null>(null)
-
-  const cancelRefresh = useCallback(() => {
-    refreshRequest.current?.abort()
-    refreshRequest.current = null
-  }, [])
-
-  const clearSession = useCallback(() => {
-    cancelRefresh()
-    clearStoredToken()
-    setToken(null)
-    setUser(null)
-    setStatus('anonymous')
-  }, [cancelRefresh])
-
-  const applySession = useCallback((session: TokenResponse) => {
-    cancelRefresh()
-    if (isPlatformAdminUser(session.user)) {
-      clearStoredToken()
-      setToken(null)
-      setUser(null)
-      setStatus('anonymous')
-      throw new ApiError(
-        403,
-        'Platform operators sign in on the admin console, not this member site.',
-      )
-    }
-    const nextUser: UserOut = {
-      ...session.user,
-      must_change_password: sessionMustChangePassword(session),
-    }
-    setStoredToken(session.access_token)
-    setToken(session.access_token)
-    setUser(nextUser)
-    setStatus('authenticated')
-  }, [cancelRefresh])
-
-  const refreshUser = useCallback(async (replacementToken?: string | null) => {
-    if (replacementToken === null || replacementToken === '') {
-      throw new ApiError(500, 'Unexpected organization response')
-    }
-    cancelRefresh()
-    const stored = replacementToken ?? getStoredToken()
-    if (!stored) {
-      clearSession()
-      return false
-    }
-    const controller = new AbortController()
-    refreshRequest.current = controller
-    if (replacementToken !== undefined) {
-      setStoredToken(stored)
-      setToken(stored)
-      setUser(null)
-      setStatus('loading')
-    }
-    try {
-      const me = await fetchCurrentUser(stored, controller.signal)
-      if (controller.signal.aborted || refreshRequest.current !== controller || getStoredToken() !== stored) {
-        return false
-      }
-      if (isPlatformAdminUser(me)) {
-        clearSession()
-        return false
-      }
-      setToken(stored)
-      setUser(me)
-      setStatus('authenticated')
-      return true
-    } catch {
-      if (controller.signal.aborted || refreshRequest.current !== controller) return false
-      const currentToken = getStoredToken()
-      if (currentToken !== null && currentToken !== stored) return false
-      clearSession()
-      return false
-    } finally {
-      if (refreshRequest.current === controller) refreshRequest.current = null
-    }
-  }, [cancelRefresh, clearSession])
+  const snapshot = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot, authSession.getSnapshot)
+  const controller = useMemo(() => createAuthSessionController(authSession, (token, owner, signal) =>
+    fetchCurrentUser(token, signal, owner)), [])
 
   useEffect(() => {
-    void refreshUser()
-    return cancelRefresh
-  }, [cancelRefresh, refreshUser])
+    const unsubscribe = controller.subscribeStorage()
+    if (getStoredToken() !== authSession.getSnapshot().token) authSession.adoptStoredSession(authSession.capture())
+    if (authSession.getSnapshot().status === 'loading') void controller.refreshUser(authSession.capture())
+    return () => {
+      unsubscribe()
+      controller.cancelRefresh()
+    }
+  }, [controller])
 
-  const login = useCallback(
-    async (input: LoginRequest) => {
-      const result = await loginRequest(input)
-      if (isTokenResponse(result)) {
-        applySession(result)
-        return result
-      }
-      if (isMultiTenantResponse(result)) {
-        return result
-      }
-      throw new ApiError(500, 'Unexpected login response')
-    },
-    [applySession],
-  )
+  const login = useCallback(async (owner: SessionOwner, input: LoginRequest) => {
+    if (!authSession.isCurrent(owner)) throw new StaleSessionError(owner)
+    const result = await loginRequest(input, undefined, owner)
+    if (!authSession.isCurrent(owner)) throw new StaleSessionError(owner)
+    if (isTokenResponse(result) && isPlatformAdminUser(result.user)) {
+      throw new ApiError(403, 'Platform operators sign in on the admin console, not this member site.')
+    }
+    if (isTokenResponse(result) || isMultiTenantResponse(result)) return result
+    throw new ApiError(500, 'Unexpected login response')
+  }, [])
 
-  const logout = useCallback(() => {
-    clearSession()
-  }, [clearSession])
-
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      status,
-      user,
-      token,
-      needsOrgConfirm: Boolean(user && user.tenant_id == null),
-      mustChangePassword: userMustChangePassword(user),
-      login,
-      applySession,
-      logout,
-      refreshUser,
-    }),
-    [status, user, token, login, applySession, logout, refreshUser],
-  )
+  const logout = useCallback(() => { authSession.logout(snapshot.owner) }, [snapshot.owner])
+  const value = useMemo<AuthContextValue>(() => ({
+    ...snapshot,
+    needsOrgConfirm: Boolean(snapshot.user && snapshot.user.tenant_id == null),
+    mustChangePassword: userMustChangePassword(snapshot.user),
+    capture: authSession.capture,
+    isCurrent: authSession.isCurrent,
+    login,
+    applySession: authSession.applySession,
+    logout,
+    refreshUser: controller.refreshUser,
+    refreshReplacement: controller.refreshReplacement,
+  }), [snapshot, login, logout, controller])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
   const ctx = useContext(AuthContext)
-  if (!ctx) {
-    throw new Error('useAuth must be used within AuthProvider')
-  }
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
   return ctx
 }
