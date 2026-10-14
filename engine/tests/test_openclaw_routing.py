@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.config import get_settings
 from app.core.security import encrypt_data
+from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import agent_manager as agent_manager_module, openclaw_routing
 from app.services.agent_manager import AgentManager, guest_model_ref
@@ -505,19 +509,274 @@ async def test_enqueue_does_not_cache_empty_bundle(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_successful_wake_marks_inbox_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
-    agent = SimpleNamespace(id=uuid.uuid4())
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
     message_id = uuid.uuid4()
-    marked: list[tuple[object, object]] = []
+    marked: list[tuple[uuid.UUID, uuid.UUID]] = []
+    order: list[str] = []
+    claimed = GatewayMessageRecord(id=message_id, agent_id=agent.id, content="hello", status="delivered")
 
-    async def fake_wake(_agent, *, content, message_id):
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
         del content, message_id
+        order.append("wake")
         return True
 
-    async def fake_mark(mid, agent_id):
+    async def fake_mark(mid: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord:
+        order.append("claim")
         marked.append((mid, agent_id))
+        return claimed
+
+    async def fake_release(row: GatewayMessageRecord) -> None:
+        pytest.fail(f"successful wake released {row.id}")
 
     monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "mark_delivered", fake_mark)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "release_delivery", fake_release)
 
     await openclaw_routing._run_inbox_wake(agent, "hello", message_id)
     assert marked == [(message_id, agent.id)]
+    assert order == ["claim", "wake"]
+
+
+class _InboxStore:
+    """Mutable queue with SQL-equivalent guards and detached claim snapshots."""
+
+    def __init__(self, agent: AgentRecord) -> None:
+        self.row = GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent.id, content="hello")
+        self.now = datetime(2026, 10, 14, tzinfo=UTC)
+        self.claims: list[GatewayMessageRecord] = []
+        self.releases: list[GatewayMessageRecord] = []
+
+    async def mark_delivered(self, message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
+        if self.row.id != message_id or self.row.agent_id != agent_id or self.row.status != "pending":
+            return None
+        self.now += timedelta(seconds=1)
+        self.row = replace(self.row, status="delivered", delivered_at=self.now)
+        self.claims.append(self.row)
+        return self.row
+
+    async def claim_pending(self, agent_id: uuid.UUID, *, now: datetime) -> list[GatewayMessageRecord]:
+        if self.row.agent_id != agent_id or self.row.status != "pending":
+            return []
+        self.row = replace(self.row, status="delivered", delivered_at=now)
+        return [self.row]
+
+    async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        self.releases.append(claimed)
+        if (
+            self.row.id != claimed.id
+            or self.row.agent_id != claimed.agent_id
+            or self.row.status != "delivered"
+            or claimed.delivered_at is None
+            or self.row.delivered_at != claimed.delivered_at
+        ):
+            return None
+        self.row = replace(self.row, status="pending", delivered_at=None)
+        return self.row
+
+    def patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(openclaw_routing.gateway_message_dao, "mark_delivered", self.mark_delivered)
+        monkeypatch.setattr(openclaw_routing.gateway_message_dao, "claim_pending", self.claim_pending)
+        monkeypatch.setattr(openclaw_routing.gateway_message_dao, "release_delivery", self.release_delivery)
+
+
+async def test_wake_skips_lost_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    polled = await store.claim_pending(agent.id, now=store.now)
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        pytest.fail("wake dispatched a message already claimed by a poll")
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert polled == [store.row]
+    assert store.claims == store.releases == []
+
+
+@pytest.mark.parametrize("raises", [False, True])
+async def test_failed_wake_releases_claim(monkeypatch: pytest.MonkeyPatch, raises: bool) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        if raises:
+            raise RuntimeError("dispatch failed")
+        return False
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert len(store.claims) == 1
+    assert store.releases == store.claims
+    assert store.releases[0] is store.claims[0]
+    assert store.row.status == "pending"
+    assert await store.claim_pending(agent.id, now=store.now) == [store.row]
+
+
+async def test_wake_and_release_errors_are_both_logged(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    warnings: list[tuple[object, ...]] = []
+    dispatch_error = RuntimeError("dispatch failed")
+    release_error = RuntimeError("release failed")
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        raise dispatch_error
+
+    async def fake_release(claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        store.releases.append(claimed)
+        raise release_error
+
+    def fake_warning(message: str, *args: object) -> None:
+        warnings.append(args)
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "release_delivery", fake_release)
+    monkeypatch.setattr(openclaw_routing.logger, "warning", fake_warning)
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert store.releases == store.claims
+    assert len(store.releases) == 1
+    assert warnings == [(agent.id, dispatch_error), (agent.id, release_error)]
+
+
+async def test_completed_during_gateway_wait_skips_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from app.dao.gateway_message_dao import gateway_message_dao
+    from app.services import openclaw_inbox
+
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    row = GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent.id, content="hello")
+    dispatches: list[str] = []
+
+    def fake_agent_dir(agent_id: uuid.UUID) -> Path:
+        return tmp_path
+
+    def fake_tokens(agent_dir: Path) -> tuple[str, str]:
+        return "gateway-token", "hooks-token"
+
+    def fake_skill(agent_dir: Path) -> None:
+        return None
+
+    def fake_recently_refused(agent_id: uuid.UUID) -> bool:
+        return True
+
+    def fake_mark_down(agent_id: uuid.UUID, error: str) -> None:
+        return None
+
+    def fake_mark_up(agent_id: uuid.UUID) -> None:
+        return None
+
+    async def fake_get(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord:
+        return row
+
+    async def fake_http(_agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str:
+        dispatches.append("http")
+        return "ECONNREFUSED"
+
+    def fake_wait(_agent: AgentRecord) -> bool:
+        nonlocal row
+        row = replace(row, status="completed")
+        return True
+
+    def fake_exec(_agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> None:
+        dispatches.append("exec")
+
+    monkeypatch.setattr(openclaw_routing.agent_manager, "_agent_dir", fake_agent_dir)
+    monkeypatch.setattr(openclaw_inbox, "ensure_openclaw_tokens", fake_tokens)
+    monkeypatch.setattr(openclaw_inbox, "write_maraclaw_sync_skill", fake_skill)
+    monkeypatch.setattr(openclaw_inbox, "_hooks_recently_refused", fake_recently_refused)
+    monkeypatch.setattr(openclaw_inbox, "_mark_hooks_down", fake_mark_down)
+    monkeypatch.setattr(openclaw_inbox, "_mark_hooks_up", fake_mark_up)
+    monkeypatch.setattr(gateway_message_dao, "get_for_agent", fake_get)
+    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", fake_http)
+    monkeypatch.setattr(openclaw_inbox, "_wait_for_guest_gateway", fake_wait)
+    monkeypatch.setattr(openclaw_inbox, "_exec_in_guest_hooks", fake_exec)
+    assert await openclaw_inbox.wake_openclaw_inbox(agent, content="hello", message_id=row.id) is True
+    assert dispatches == ["http"]
+
+
+async def test_poll_during_wake_cannot_claim_same_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    polled: list[GatewayMessageRecord] = []
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        polled.extend(await store.claim_pending(agent.id, now=store.now))
+        store.row = replace(store.row, status="completed")
+        return True
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert polled == []
+    assert len(store.claims) == 1
+    assert await store.mark_delivered(store.row.id, agent.id) is None
+    assert await store.release_delivery(store.claims[0]) is None
+    assert store.row.status == "completed"
+
+
+@pytest.mark.parametrize("completed", [False, True])
+async def test_failed_wake_stale_release_preserves_newer_state(
+    monkeypatch: pytest.MonkeyPatch, completed: bool
+) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        store.row = replace(store.row, status="pending", delivered_at=None)
+        assert await store.claim_pending(agent.id, now=store.now + timedelta(seconds=1)) == [store.row]
+        if completed:
+            store.row = replace(store.row, status="completed")
+        return False
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert len(store.claims) == 1
+    assert store.releases == store.claims
+    assert store.row.status == ("completed" if completed else "delivered")
+    assert store.row.delivered_at != store.claims[0].delivered_at
+
+
+async def test_inbox_only_completed_is_handled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.dao.gateway_message_dao import gateway_message_dao
+    from app.services.openclaw_inbox import _inbox_already_handled
+
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    row: GatewayMessageRecord | None = GatewayMessageRecord(
+        id=uuid.uuid4(), agent_id=agent.id, content="hello", status="delivered"
+    )
+    message_id = row.id
+
+    async def fake_get(mid: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
+        assert (mid, agent_id) == (message_id, agent.id)
+        return row
+
+    monkeypatch.setattr(gateway_message_dao, "get_for_agent", fake_get)
+    assert await _inbox_already_handled(agent, message_id) is False
+    row = replace(row, status="completed")
+    assert await _inbox_already_handled(agent, message_id) is True
+    row = None
+    assert await _inbox_already_handled(agent, message_id) is False
+
+
+async def test_generic_wake_never_claims_or_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    wakes: list[uuid.UUID | None] = []
+
+    async def fake_wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        wakes.append(message_id)
+        if message_id is not None:
+            assert len(store.claims) == 1
+        return True
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", fake_wake)
+    await openclaw_routing._run_inbox_wake(agent, "hello")
+    assert wakes == [None]
+    assert store.claims == store.releases == []
+    await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
+    assert len(store.claims) == 1
+    assert store.releases == []

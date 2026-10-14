@@ -347,7 +347,7 @@ async def _inbox_already_handled(agent: AgentRecord, message_id: UUID | None) ->
     from app.dao.gateway_message_dao import gateway_message_dao
 
     row = await gateway_message_dao.get_for_agent(message_id, agent.id)
-    return row is not None and (row.status or "") in {"delivered", "completed"}
+    return row is not None and row.status == "completed"
 
 
 async def wake_openclaw_inbox(
@@ -399,6 +399,9 @@ async def wake_openclaw_inbox(
     if last_error and _hooks_unreachable(last_error):
         _mark_hooks_down(agent.id, last_error)
         if await run_sync(_wait_for_guest_gateway, agent):
+            if await _inbox_already_handled(agent, message_id):
+                logger.info("[OpenClaw] inbox reported while waiting for gateway {}", agent.id)
+                return True
             _mark_hooks_up(agent.id)
             hook_error = await run_sync(_exec_in_guest_hooks, agent, agent_dir, body)
             if hook_error is None:

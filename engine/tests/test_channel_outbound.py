@@ -33,8 +33,11 @@ def test_routing_history_limit_caps_long_windows() -> None:
 
 @pytest.mark.asyncio
 async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextlib import asynccontextmanager
+
     from app.api import gateway
     from app.schemas.schemas import GatewayReportRequest
+    from app.services import openclaw_gateway_delivery as delivery
 
     agent = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Bot", tenant_id=uuid.uuid4())
     session = ChatSessionRecord(
@@ -58,8 +61,15 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     async def get_agent(_key: str) -> AgentRecord:
         return agent
 
-    async def get_for_agent(_message_id, _agent_id):
+    async def complete(_message_id, _agent_id, *, result, now):
+        if msg.status == "completed":
+            return None
+        msg.status, msg.result, msg.completed_at = "completed", result, now
         return msg
+
+    @asynccontextmanager
+    async def connection_ctx():
+        yield
 
     async def update(*, db_obj, obj_in):
         return db_obj
@@ -83,12 +93,12 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
         delivered.append((agent, session, content))
 
     monkeypatch.setattr(gateway, "_get_agent_by_key", get_agent)
-    monkeypatch.setattr(gateway.gateway_message_dao, "get_for_agent", get_for_agent)
-    monkeypatch.setattr(gateway.gateway_message_dao, "update", update)
+    monkeypatch.setattr(delivery, "connection_ctx", connection_ctx)
+    monkeypatch.setattr(gateway.gateway_message_dao, "complete", complete)
     monkeypatch.setattr(gateway.agent_dao, "update", update)
     monkeypatch.setattr(gateway.chat_message_dao, "insert_message", insert_message)
-    monkeypatch.setattr(gateway.chat_session_dao, "get", get_session)
-    monkeypatch.setattr(gateway.participant_dao, "get_by_type_ref", get_participant)
+    monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", get_participant)
     monkeypatch.setattr("app.api.websocket.manager", _Manager())
     monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", deliver_session_reply)
 
