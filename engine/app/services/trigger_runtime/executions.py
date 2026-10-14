@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_object_from
 from app.core.logging import get_trace_id, logger, set_trace_id
-from app.dao.trigger_dao import trigger_execution_dao
+from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 
@@ -142,6 +142,7 @@ async def claim_pending_trigger_executions(
         rows = await trigger_execution_dao.claim_pending(sources=sources, now=now, limit=limit)
         if not rows:
             return []
+        first_start_ids = [execution.id for execution, _trigger in rows if execution.started_at is None]
         await db.execute(
             """
             UPDATE trigger_executions
@@ -160,6 +161,7 @@ async def claim_pending_trigger_executions(
                 "ids": [execution.id for execution, _trigger in rows],
             },
         )
+        await agent_trigger_dao.record_first_starts(first_start_ids, now=now)
         for execution, trigger in rows:
             started_at = execution.started_at or now
             execution.status = "processing"
@@ -202,23 +204,3 @@ def build_execution_runtime_trigger(
         created_at=getattr(trigger, "created_at", None),
         expires_at=getattr(trigger, "expires_at", None),
     )
-
-
-async def mark_base_triggers_fired(trigger_ids: list[uuid.UUID], now: datetime) -> None:
-    if not trigger_ids:
-        return
-    async with connection_ctx() as db:
-        await db.execute(
-            """
-            UPDATE agent_triggers
-            SET last_fired_at = %(now)s,
-                fire_count = fire_count + 1,
-                is_enabled = CASE
-                    WHEN type = 'once' THEN FALSE
-                    WHEN max_fires IS NOT NULL AND fire_count + 1 >= max_fires THEN FALSE
-                    ELSE is_enabled
-                END
-            WHERE id = ANY(%(ids)s)
-            """,
-            {"now": now, "ids": trigger_ids},
-        )

@@ -184,6 +184,26 @@ async def test_takeover_fences_stale_owner(table, monkeypatch):
     assert executions.trigger_execution_leases([AgentTriggerRecord(uuid4(), trigger.agent_id)]) == []
 
 
+@pytest.mark.asyncio
+async def test_first_starts_count_inside_claim_transaction(table, monkeypatch):
+    first, reclaim = queued(table), queued(table, started=True)
+    claim_snapshots(monkeypatch, table, [first, reclaim])
+    await executions.claim_pending_trigger_executions()
+    raw = table.connections[0]
+    sql = [(q, p) for q, p in raw.executed]
+    updates = [(q, p) for q, p in sql if q.lstrip().startswith("UPDATE agent_triggers")]
+    assert len(updates) == 1
+    assert updates[0][1]["ids"] == [first[0].id]
+    lock_index = next(i for i, (q, _) in enumerate(sql) if "FOR NO KEY UPDATE OF t" in q)
+    assert "ORDER BY t.id" in sql[lock_index][0]
+    assert lock_index < next(i for i, (q, _) in enumerate(sql) if q == updates[0][0])
+    assert all(commits == 0 for conn, _q, _p, commits in table.events if conn is raw)
+    assert raw.commits == 1
+    assert sum(q.lstrip().startswith("UPDATE trigger_executions") for q, _ in sql) == 1
+    await executions.claim_pending_trigger_executions()
+    assert not any(q.lstrip().startswith("UPDATE agent_triggers") for q, _ in table.connections[1].executed)
+
+
 class Warnings:
     def __init__(self):
         self.messages = []

@@ -57,6 +57,39 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     columns: ClassVar[tuple[str, ...]] = _TRIGGER_COLUMNS
     record_factory = staticmethod(AgentTriggerRecord.from_row)
 
+    async def record_first_starts(self, execution_ids: Sequence[UUID], *, now: datetime) -> None:
+        if not execution_ids:
+            return
+        async with self.session() as db:
+            _ = await db.fetchall(
+                """
+                SELECT t.id FROM agent_triggers AS t
+                WHERE t.id IN (
+                    SELECT e.trigger_id FROM trigger_executions AS e WHERE e.id = ANY(%(ids)s)
+                )
+                ORDER BY t.id FOR NO KEY UPDATE OF t
+                """,
+                {"ids": list(execution_ids)},
+            )
+            await db.execute(
+                """
+                UPDATE agent_triggers AS t
+                SET last_fired_at = %(now)s,
+                    fire_count = t.fire_count + f.fires,
+                    is_enabled = CASE
+                        WHEN t.type = 'once' THEN FALSE
+                        WHEN t.max_fires IS NOT NULL AND t.fire_count + f.fires >= t.max_fires THEN FALSE
+                        ELSE t.is_enabled
+                    END
+                FROM (
+                    SELECT trigger_id, COUNT(*) AS fires FROM trigger_executions
+                    WHERE id = ANY(%(ids)s) GROUP BY trigger_id
+                ) AS f
+                WHERE t.id = f.trigger_id
+                """,
+                {"ids": list(execution_ids), "now": now},
+            )
+
     async def list_for_agent(self, agent_id: UUID) -> list[AgentTriggerRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
