@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
 import { lookupOrgByEmail, transferOrg } from '@/lib/auth-api'
+import type { SessionOwner } from '@/lib/auth-session'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import type { SuggestedOrg } from '@/lib/types/auth'
 
@@ -41,7 +42,7 @@ const highlights = [
 ]
 
 export function TransferPage() {
-  const { status, user, refreshUser } = useAuth()
+  const { status, user, owner, isCurrent, refreshReplacement } = useAuth()
   const navigate = useNavigate()
   const formId = useId()
   const [match, setMatch] = useState<SuggestedOrg | null>(null)
@@ -60,35 +61,42 @@ export function TransferPage() {
   })
 
   useEffect(() => {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     if (status === 'anonymous') {
       navigate('/login', { replace: true })
       return
     }
     if (status !== 'authenticated' || !user?.email) return
     let cancelled = false
-    void lookupOrgByEmail(user.email)
+    void lookupOrgByEmail(user.email, expectedOwner)
       .then((lookup) => {
-        if (cancelled) return
+        if (cancelled || !isCurrent(expectedOwner)) return
         setMatch(lookup.match)
         setFallback(lookup.fallback)
       })
       .catch((err: unknown) => {
-        if (err instanceof ApiError && err.status === 401) navigate('/login', { replace: true })
+        if (!cancelled && isCurrent(expectedOwner) && err instanceof ApiError && err.status === 401) navigate('/login', { replace: true })
       })
     return () => {
       cancelled = true
     }
-  }, [navigate, status, user])
+  }, [navigate, status, user, owner, isCurrent])
 
-  async function runTransfer(body: { password: string; invitation_code?: string; tenant_id?: string }) {
+  async function runTransfer(expectedOwner: SessionOwner, body: { password: string; invitation_code?: string; tenant_id?: string }) {
+    if (!isCurrent(expectedOwner)) return
     setFormError(null)
-    const result = await transferOrg(body)
-    if (!await refreshUser(result.access_token)) return
+    const result = await transferOrg(body, expectedOwner)
+    if (!isCurrent(expectedOwner)) return
+    const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
+    if (!installedOwner || !isCurrent(installedOwner)) return
     toast.success('Organization updated')
     navigate('/app', { replace: true })
   }
 
   async function onSubmit(values: TransferFormValues) {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     const code = values.invitation_code?.trim()
     if (!code) {
       setFormError('Enter an invitation code, or choose a destination below.')
@@ -96,17 +104,20 @@ export function TransferPage() {
     }
     setPendingTarget('invite')
     try {
-      await runTransfer({ password: values.password, invitation_code: code })
+      await runTransfer(expectedOwner, { password: values.password, invitation_code: code })
     } catch (err) {
+      if (!isCurrent(expectedOwner)) return
       setFormError(
         err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Transfer failed',
       )
     } finally {
-      setPendingTarget(null)
+      if (isCurrent(expectedOwner)) setPendingTarget(null)
     }
   }
 
   async function transferTo(org: SuggestedOrg) {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     const password = getValues('password')
     if (!password) {
       setFormError('Enter your current password first.')
@@ -114,13 +125,14 @@ export function TransferPage() {
     }
     setPendingTarget(org.id)
     try {
-      await runTransfer({ password, tenant_id: org.id })
+      await runTransfer(expectedOwner, { password, tenant_id: org.id })
     } catch (err) {
+      if (!isCurrent(expectedOwner)) return
       setFormError(
         err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Transfer failed',
       )
     } finally {
-      setPendingTarget(null)
+      if (isCurrent(expectedOwner)) setPendingTarget(null)
     }
   }
 

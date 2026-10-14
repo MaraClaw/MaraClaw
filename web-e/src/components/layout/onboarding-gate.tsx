@@ -1,10 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { getOnboardingStatus, listAgents, wasOnboardingSkipped } from '@/lib/workspace-api'
 
 export function OnboardingGate() {
+  const scope = useWorkspaceSession()
   const location = useLocation()
   const agents = useQuery({ queryKey: ['agents'], queryFn: listAgents })
   const onboarding = useQuery({ queryKey: ['onboarding'], queryFn: getOnboardingStatus })
@@ -21,7 +22,7 @@ export function OnboardingGate() {
   const completed = onboarding.data?.status === 'completed'
   const skip = wasOnboardingSkipped()
   const onOnboarding = location.pathname.startsWith('/app/onboarding')
-  if (!hasAgents && !completed && !skip && !onOnboarding) {
+  if (scope.isCurrent() && !hasAgents && !completed && !skip && !onOnboarding) {
     return <Navigate to="/app/onboarding" replace />
   }
 

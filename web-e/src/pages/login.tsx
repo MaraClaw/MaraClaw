@@ -47,7 +47,7 @@ const highlights = [
 ]
 
 export function LoginPage() {
-  const { status, login, needsOrgConfirm } = useAuth()
+  const { status, owner, capture, isCurrent, login, applySession, needsOrgConfirm } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const formId = useId()
@@ -98,14 +98,20 @@ export function LoginPage() {
   }
 
   async function onSubmit(values: LoginFormValues) {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     setFormError(null)
     setTenantChoices(null)
     try {
-      const result = await login({
+      const result = await login(expectedOwner, {
         login_identifier: values.login_identifier.trim(),
         password: values.password,
       })
+      if (!isCurrent(expectedOwner)) return
       if (isTokenResponse(result)) {
+        if (!applySession(expectedOwner, result)) return
+        const installedOwner = capture()
+        if (!isCurrent(installedOwner)) return
         toast.success('Signed in')
         navigate(result.needs_org_confirm ? '/join' : from, {
           replace: true,
@@ -119,6 +125,7 @@ export function LoginPage() {
         setPendingIdentifier(result.login_identifier)
       }
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
         navigate('/verify-email', {
           replace: true,
@@ -136,27 +143,34 @@ export function LoginPage() {
   }
 
   async function chooseTenant(tenant: TenantChoice) {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     if (!pendingIdentifier || !pendingPassword || !tenant.tenant_id) {
       setFormError('This account needs a company. Create or join one first.')
       return
     }
     setSelectingTenantId(tenant.tenant_id)
     try {
-      const result = await login({
+      const result = await login(expectedOwner, {
         login_identifier: pendingIdentifier,
         password: pendingPassword,
         tenant_id: tenant.tenant_id,
       })
+      if (!isCurrent(expectedOwner)) return
       if (isTokenResponse(result)) {
+        if (!applySession(expectedOwner, result)) return
+        const installedOwner = capture()
+        if (!isCurrent(installedOwner)) return
         toast.success(`Signed in to ${tenant.tenant_name}`)
         navigate(result.needs_org_confirm ? '/join' : from, { replace: true })
         return
       }
       setFormError('Unable to complete organization selection. Try again.')
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       setFormError(userFacingRequestError(error, 'Unable to sign in. Try again.'))
     } finally {
-      setSelectingTenantId(null)
+      if (isCurrent(expectedOwner)) setSelectingTenantId(null)
     }
   }
 

@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { Outlet, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -27,9 +28,11 @@ const tabs = [
 ] as const satisfies readonly SectionRailItem[]
 
 function AgentsListButton() {
+  const scope = useWorkspaceSession()
   const navigate = useNavigate()
 
   function goBack() {
+    if (!scope.isCurrent()) return
     if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
       navigate(-1)
       return

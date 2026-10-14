@@ -40,17 +40,25 @@ type PasswordValues = z.infer<typeof passwordSchema>
 type ProfileValues = z.infer<typeof profileSchema>
 
 export function AccountPage() {
-  const { user, mustChangePassword, refreshUser } = useAuth()
+  const { user, owner, isCurrent, mustChangePassword, refreshUser } = useAuth()
+  const [mountedOwner] = useState(() => owner)
   const formId = useId()
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [providers, setProviders] = useState<AuthProvider[]>([])
 
   useEffect(() => {
-    void listAuthProviders()
-      .then((rows) => setProviders(rows.filter((row) => row.is_active)))
-      .catch(() => setProviders([]))
-  }, [])
+    const expectedOwner = mountedOwner
+    let cancelled = false
+    void listAuthProviders(undefined, expectedOwner)
+      .then((rows) => {
+        if (!cancelled && isCurrent(expectedOwner)) setProviders(rows.filter((row) => row.is_active))
+      })
+      .catch(() => {
+        if (!cancelled && isCurrent(expectedOwner)) setProviders([])
+      })
+    return () => { cancelled = true }
+  }, [mountedOwner, isCurrent])
 
   const passwordForm = useForm<PasswordValues>({
     resolver: zodResolver(passwordSchema),
@@ -62,30 +70,36 @@ export function AccountPage() {
   })
 
   async function onPassword(values: PasswordValues) {
+    const expectedOwner = mountedOwner
+    if (!isCurrent(expectedOwner)) return
     setPasswordError(null)
     try {
       await changePasswordRequest({
         old_password: values.old_password,
         new_password: values.new_password,
-      })
+      }, expectedOwner)
+      if (!isCurrent(expectedOwner) || !await refreshUser(expectedOwner) || !isCurrent(expectedOwner)) return
       passwordForm.reset()
-      await refreshUser()
       toast.success(mustChangePassword ? 'Password updated. You can use the workspace now.' : 'Password updated')
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       setPasswordError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to update password.')
     }
   }
 
   async function onProfile(values: ProfileValues) {
+    const expectedOwner = mountedOwner
+    if (!isCurrent(expectedOwner)) return
     setProfileError(null)
     try {
       await updateCurrentUser({
         display_name: values.display_name,
         username: values.username || undefined,
-      })
-      await refreshUser()
+      }, expectedOwner)
+      if (!isCurrent(expectedOwner) || !await refreshUser(expectedOwner) || !isCurrent(expectedOwner)) return
       toast.success('Profile updated')
     } catch (error) {
+      if (!isCurrent(expectedOwner)) return
       setProfileError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to update profile.')
     }
   }
@@ -159,13 +173,18 @@ export function AccountPage() {
                     size="sm"
                     variant="outline"
                     onClick={() => {
+                      const expectedOwner = mountedOwner
+                      if (!isCurrent(expectedOwner)) return
                       const state = crypto.randomUUID()
-                      sessionStorage.setItem(SSO_STATE_KEY, state)
-                      sessionStorage.setItem(SSO_PROVIDER_KEY, provider.provider_type)
-                      sessionStorage.setItem(SSO_INTENT_KEY, 'bind')
                       const redirectUri = `${window.location.origin}/sso/callback`
-                      void authorizeProvider(provider.provider_type, redirectUri, state).then((result) => {
+                      void authorizeProvider(provider.provider_type, redirectUri, { state, owner: expectedOwner }).then((result) => {
+                        if (!isCurrent(expectedOwner)) return
+                        sessionStorage.setItem(SSO_STATE_KEY, state)
+                        sessionStorage.setItem(SSO_PROVIDER_KEY, provider.provider_type)
+                        sessionStorage.setItem(SSO_INTENT_KEY, 'bind')
                         window.location.assign(result.authorization_url)
+                      }).catch(() => {
+                        if (isCurrent(expectedOwner)) toast.error('Unable to link this provider.')
                       })
                     }}
                   >
@@ -174,9 +193,15 @@ export function AccountPage() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() =>
-                      void unbindProvider(provider.provider_type).then(() => toast.success('Unlinked'))
-                    }
+                    onClick={() => {
+                      const expectedOwner = mountedOwner
+                      if (!isCurrent(expectedOwner)) return
+                      void unbindProvider(provider.provider_type, expectedOwner).then(() => {
+                        if (isCurrent(expectedOwner)) toast.success('Unlinked')
+                      }).catch(() => {
+                        if (isCurrent(expectedOwner)) toast.error('Unable to unlink this provider.')
+                      })
+                    }}
                   >
                     Remove
                   </Button>

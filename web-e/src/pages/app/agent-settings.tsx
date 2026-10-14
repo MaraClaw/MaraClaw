@@ -1,4 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -11,6 +12,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { deleteAgent, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentSettingsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -55,11 +57,11 @@ export function AgentSettingsPage() {
         {canManage ? (
           <>
             {agent.status !== 'running' ? (
-              <Button size="sm" variant="outline" onClick={() => void startAgent(agent.id).then(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))}>
+              <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void startAgent(agent.id).then(scope.effect(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))).catch(scope.rethrowCurrent)}>
                 Start
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" onClick={() => void stopAgent(agent.id).then(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))}>
+            <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void stopAgent(agent.id).then(scope.effect(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))).catch(scope.rethrowCurrent)}>
               Stop
             </Button>
           </>
@@ -69,11 +71,13 @@ export function AgentSettingsPage() {
             size="sm"
             variant="outline"
             onClick={() => {
+              if (!scope.isCurrent()) return
               if (!window.confirm(`Delete ${agent.name}?`)) return
               void deleteAgent(agent.id).then(() => {
+                if (!scope.isCurrent()) return
                 toast.success('Deleted')
                 navigate('/app/agents')
-              })
+              }).catch(scope.rethrowCurrent)
             }}
           >
             Delete
@@ -83,22 +87,22 @@ export function AgentSettingsPage() {
 
       <div className="space-y-2">
         <Label htmlFor="agent-name">Name</Label>
-        <Input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} disabled={!isCreator} />
+          <Input id="agent-name" value={name} onChange={scope.effect((event) => setName(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
         <Label htmlFor="agent-bio">Bio</Label>
-        <Textarea id="agent-bio" value={bio} onChange={(event) => setBio(event.target.value)} disabled={!isCreator} />
+          <Textarea id="agent-bio" value={bio} onChange={scope.effect((event) => setBio(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
         <Label htmlFor="agent-welcome">Welcome message</Label>
-        <Textarea id="agent-welcome" value={welcome} onChange={(event) => setWelcome(event.target.value)} disabled={!isCreator} />
+          <Textarea id="agent-welcome" value={welcome} onChange={scope.effect((event) => setWelcome(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
         <Label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={heartbeatEnabled}
-            onChange={(event) => setHeartbeatEnabled(event.target.checked)}
+            onChange={scope.effect((event) => setHeartbeatEnabled(event.target.checked))}
             disabled={!isCreator}
           />
           Heartbeat enabled
@@ -107,18 +111,18 @@ export function AgentSettingsPage() {
         <Input
           id="hb-min"
           value={heartbeatMinutes}
-          onChange={(event) => setHeartbeatMinutes(event.target.value)}
+            onChange={scope.effect((event) => setHeartbeatMinutes(event.target.value))}
           disabled={!isCreator}
         />
         <Label htmlFor="hb-hours">Active hours</Label>
         <Input
           id="hb-hours"
           value={activeHours}
-          onChange={(event) => setActiveHours(event.target.value)}
+            onChange={scope.effect((event) => setActiveHours(event.target.value))}
           disabled={!isCreator}
         />
         <Label htmlFor="tz">Timezone</Label>
-        <Input id="tz" value={timezone} onChange={(event) => setTimezone(event.target.value)} disabled={!isCreator} />
+          <Input id="tz" value={timezone} onChange={scope.effect((event) => setTimezone(event.target.value))} disabled={!isCreator} />
       </div>
       {clamped.length > 0 ? (
         <p className="text-xs text-muted-foreground">

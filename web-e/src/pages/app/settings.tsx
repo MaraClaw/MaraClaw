@@ -6,21 +6,23 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
-import { fetchCurrentUser, fetchMyTenants, switchTenant } from '@/lib/auth-api'
+import { fetchMyTenants, switchTenant } from '@/lib/auth-api'
 
 export function SettingsPage() {
-  const { user, applySession, refreshUser, logout } = useAuth()
-  const tenants = useQuery({ queryKey: ['my-tenants'], queryFn: fetchMyTenants })
+  const { user, owner, isCurrent, refreshReplacement, logout } = useAuth()
+  const tenants = useQuery({ queryKey: ['my-tenants'], queryFn: () => fetchMyTenants(owner) })
 
   async function onSwitch(tenantId: string | null) {
-    if (!tenantId) return
+    const expectedOwner = owner
+    if (!tenantId || !isCurrent(expectedOwner)) return
     try {
-      const result = await switchTenant(tenantId)
-      const user = await fetchCurrentUser(result.access_token)
-      applySession({ access_token: result.access_token, user })
-      await refreshUser()
+      const result = await switchTenant(tenantId, expectedOwner)
+      if (!isCurrent(expectedOwner)) return
+      const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
+      if (!installedOwner || !isCurrent(installedOwner)) return
       toast.success('Switched organization')
     } catch {
+      if (!isCurrent(expectedOwner)) return
       toast.error('Unable to switch organization')
     }
   }

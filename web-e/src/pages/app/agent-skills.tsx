@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -17,6 +18,7 @@ import {
 } from '@/lib/workspace-api'
 
 export function AgentSkillsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const [query, setQuery] = useState('')
@@ -59,7 +61,7 @@ export function AgentSkillsPage() {
       </section>
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">ClawHub</h2>
-        <Input placeholder="Search ClawHub" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <Input placeholder="Search ClawHub" value={query} onChange={scope.effect((event) => setQuery(event.target.value))} />
         <ul className="space-y-2">
           {(clawhub.data ?? []).map((row) => (
             <li key={row.slug} className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
@@ -71,7 +73,7 @@ export function AgentSkillsPage() {
                 size="sm"
                 variant="outline"
                 onClick={() =>
-                  void installClawhub(row.slug).then(() => toast.success('Installed from ClawHub'))
+                  scope.isCurrent() && void installClawhub(row.slug).then(scope.effect(() => toast.success('Installed from ClawHub'))).catch(scope.rethrowCurrent)
                 }
               >
                 Add
@@ -83,15 +85,17 @@ export function AgentSkillsPage() {
           className="flex gap-2"
           onSubmit={(event) => {
             event.preventDefault()
+            if (!scope.isCurrent()) return
             if (!skillUrl.trim()) return
             void importSkillFromUrl(skillUrl.trim()).then(() => {
+              if (!scope.isCurrent()) return
               toast.success('Imported from URL')
               setSkillUrl('')
               void queryClient.invalidateQueries({ queryKey: ['skills'] })
-            })
+            }).catch(scope.rethrowCurrent)
           }}
         >
-          <Input placeholder="https://…/skill.md" value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} />
+        <Input placeholder="https://…/skill.md" value={skillUrl} onChange={scope.effect((event) => setSkillUrl(event.target.value))} />
           <Button type="submit" size="sm" variant="outline">
             Import URL
           </Button>
@@ -100,7 +104,7 @@ export function AgentSkillsPage() {
       <section className="space-y-3 lg:col-span-2">
         <h2 className="font-display text-lg font-semibold">Browse skill files</h2>
         <div className="flex gap-2 text-xs">
-          <button type="button" className="text-primary" onClick={() => setBrowsePath('')}>
+        <button type="button" className="text-primary" onClick={scope.effect(() => setBrowsePath(''))}>
             Root
           </button>
           {browsePath ? <span className="text-muted-foreground">{browsePath}</span> : null}
@@ -112,12 +116,13 @@ export function AgentSkillsPage() {
                 type="button"
                 className="w-full truncate rounded-xl border border-border px-3 py-2 text-left text-sm hover:bg-muted"
                 onClick={() => {
+                  if (!scope.isCurrent()) return
                   if (entry.is_dir) {
                     setBrowsePath(entry.path)
                     setBrowseContent('')
                     return
                   }
-                  void browseSkillRead(entry.path).then((row) => setBrowseContent(row.content))
+                  void browseSkillRead(entry.path).then(scope.effect((row) => setBrowseContent(row.content))).catch(scope.rethrowCurrent)
                 }}
               >
                 {entry.is_dir ? '▸ ' : ''}

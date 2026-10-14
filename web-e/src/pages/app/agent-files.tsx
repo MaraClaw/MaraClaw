@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
@@ -23,6 +24,7 @@ import {
 } from '@/lib/workspace-api'
 
 export function AgentFilesPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { token } = useAuth()
   const queryClient = useQueryClient()
@@ -70,21 +72,24 @@ export function AgentFilesPage() {
     <div className="grid min-h-[28rem] grid-cols-1 md:grid-cols-[240px_1fr]">
       <aside className="border-b border-border p-3 md:border-r md:border-b-0">
         <div className="mb-2 flex items-center justify-between text-xs">
-          <button type="button" className="text-primary" onClick={() => setPath('')}>
+        <button type="button" className="text-primary" onClick={scope.effect(() => setPath(''))}>
             Root
           </button>
           <input
             type="file"
             className="w-24 text-[10px]"
             onChange={(event) => {
+              if (!scope.isCurrent()) return
               const file = event.target.files?.[0]
               if (!file) return
               void uploadWorkspaceFile(agent.id, file, path || 'workspace/knowledge_base')
                 .then(() => {
+                  if (!scope.isCurrent()) return
                   toast.success('Uploaded')
                   void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
                 })
                 .catch((error: unknown) => {
+                  if (!scope.isCurrent()) return
                   toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? 'Upload failed') : 'Upload failed')
                 })
               event.target.value = ''
@@ -99,6 +104,7 @@ export function AgentFilesPage() {
                 type="button"
                 className="w-full truncate rounded-lg px-2 py-1 text-left text-xs hover:bg-muted"
                 onClick={() => {
+                  if (!scope.isCurrent()) return
                   if (entry.is_dir) setPath(entry.path)
                   else openFile.mutate(entry.path)
                 }}
@@ -123,10 +129,10 @@ export function AgentFilesPage() {
                         Download
                       </a>
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => void lockFile(agent.id, selected).then(() => toast.success('Locked for edit'))}>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success('Locked for edit'))).catch(scope.rethrowCurrent)}>
                       Lock
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => void unlockFile(agent.id, selected).then(() => toast.success('Unlocked'))}>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void unlockFile(agent.id, selected).then(scope.effect(() => toast.success('Unlocked'))).catch(scope.rethrowCurrent)}>
                       Unlock
                     </Button>
                   </>
@@ -139,10 +145,12 @@ export function AgentFilesPage() {
                     size="sm"
                     variant="outline"
                     onClick={() => {
+                      if (!scope.isCurrent()) return
                       void deleteFileContent(agent.id, selected).then(() => {
+                        if (!scope.isCurrent()) return
                         setSelected(null)
                         void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
-                      })
+                      }).catch(scope.rethrowCurrent)
                     }}
                   >
                     Delete
@@ -157,7 +165,7 @@ export function AgentFilesPage() {
                 className="mb-3 max-h-72 rounded-xl border border-border object-contain"
               />
             ) : null}
-            <Textarea className="min-h-[22rem] font-mono text-xs" value={draft} onChange={(event) => setDraft(event.target.value)} />
+            <Textarea className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">
                 <p className="text-xs font-medium">Revisions</p>
@@ -171,10 +179,11 @@ export function AgentFilesPage() {
                         size="sm"
                         variant="ghost"
                         onClick={() =>
-                          void restoreFileRevision(agent.id, rev.id).then(() => {
+                          scope.isCurrent() && void restoreFileRevision(agent.id, rev.id).then(() => {
+                            if (!scope.isCurrent()) return
                             toast.success('Restored')
                             openFile.mutate(selected)
-                          })
+                          }).catch(scope.rethrowCurrent)
                         }
                       >
                         Restore

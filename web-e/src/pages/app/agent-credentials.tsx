@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -20,6 +21,7 @@ import {
 import { updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentCredentialsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
@@ -41,6 +43,7 @@ export function AgentCredentialsPage() {
   const [email, setEmail] = useState('')
 
   function fail(error: unknown, fallback: string) {
+    if (!scope.isCurrent()) return
     toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : fallback)
   }
 
@@ -92,10 +95,11 @@ export function AgentCredentialsPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void deleteCredential(agent.id, item.id).then(() => {
+                    scope.isCurrent() && void deleteCredential(agent.id, item.id).then(() => {
+                      if (!scope.isCurrent()) return
                       toast.success('Removed')
                       void queryClient.invalidateQueries({ queryKey: ['credentials', agent.id] })
-                    })
+                    }).catch(scope.rethrowCurrent)
                   }
                 >
                   Delete
@@ -107,11 +111,11 @@ export function AgentCredentialsPage() {
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
             <Label htmlFor="plat">Domain</Label>
-            <Input id="plat" value={platform} onChange={(event) => setPlatform(event.target.value)} placeholder="example.com" />
+            <Input id="plat" value={platform} onChange={scope.effect((event) => setPlatform(event.target.value))} placeholder="example.com" />
           </div>
           <div>
             <Label htmlFor="clabel">Label</Label>
-            <Input id="clabel" value={label} onChange={(event) => setLabel(event.target.value)} />
+            <Input id="clabel" value={label} onChange={scope.effect((event) => setLabel(event.target.value))} />
           </div>
         </div>
         <div>
@@ -120,7 +124,7 @@ export function AgentCredentialsPage() {
             id="cookies"
             className="font-mono text-xs"
             value={cookies}
-            onChange={(event) => setCookies(event.target.value)}
+            onChange={scope.effect((event) => setCookies(event.target.value))}
             placeholder='[{"name":"sid","value":"...","domain":"example.com"}]'
           />
         </div>
@@ -140,10 +144,11 @@ export function AgentCredentialsPage() {
               type="checkbox"
               checked={Boolean(agent.gogcli_enabled)}
               onChange={(event) =>
-                void updateAgent(agent.id, { gogcli_enabled: event.target.checked }).then(() => {
+                scope.isCurrent() && void updateAgent(agent.id, { gogcli_enabled: event.target.checked }).then(() => {
+                  if (!scope.isCurrent()) return
                   toast.success(event.target.checked ? 'gogcli enabled' : 'gogcli disabled')
                   void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
-                })
+                }).catch(scope.rethrowCurrent)
               }
             />
             Enabled
@@ -157,11 +162,11 @@ export function AgentCredentialsPage() {
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
                 <Label htmlFor="kr">Keyring password</Label>
-                <Input id="kr" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+            <Input id="kr" type="password" value={password} onChange={scope.effect((event) => setPassword(event.target.value))} />
               </div>
               <div>
                 <Label htmlFor="gemail">Google account</Label>
-                <Input id="gemail" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <Input id="gemail" value={email} onChange={scope.effect((event) => setEmail(event.target.value))} />
               </div>
             </div>
             <div className="flex gap-2">
@@ -170,8 +175,8 @@ export function AgentCredentialsPage() {
                 variant="outline"
                 disabled={!password}
                 onClick={() =>
-                  void setGogcliKeyring(agent.id, password)
-                    .then(() => toast.success('Keyring saved'))
+                  scope.isCurrent() && void setGogcliKeyring(agent.id, password)
+                    .then(scope.effect(() => toast.success('Keyring saved')))
                     .catch((error) => fail(error, 'Keyring failed'))
                 }
               >
@@ -181,8 +186,9 @@ export function AgentCredentialsPage() {
                 size="sm"
                 disabled={!email}
                 onClick={() =>
-                  void startGogcliAuth(agent.id, email)
+                  scope.isCurrent() && void startGogcliAuth(agent.id, email)
                     .then((result) => {
+                      if (!scope.isCurrent()) return
                       toast.success(result.detail)
                       window.open(result.auth_url, '_blank', 'noopener')
                     })

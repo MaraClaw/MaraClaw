@@ -1,5 +1,7 @@
-import { apiRequest } from '@/lib/http'
-import { joinOrgResponseSchema } from '@/lib/types/auth'
+import { apiRequest } from './http.ts'
+import { z } from 'zod'
+import type { SessionOwner } from './auth-session.ts'
+import { joinOrgResponseSchema } from './types/auth.ts'
 import type {
   AuthProvider,
   ChangePasswordResponse,
@@ -12,17 +14,25 @@ import type {
   TenantSwitchResponse,
   TokenResponse,
   UserOut,
-} from '@/lib/types/auth'
+} from './types/auth.ts'
+
+function requestContext(owner?: SessionOwner, signal?: AbortSignal) {
+  return {
+    ...(owner === undefined ? {} : { owner }),
+    ...(signal === undefined ? {} : { signal }),
+  }
+}
 
 export async function loginRequest(
   body: LoginRequest,
   signal?: AbortSignal,
+  owner?: SessionOwner,
 ): Promise<TokenResponse | MultiTenantResponse> {
   return apiRequest<TokenResponse | MultiTenantResponse>('/api/auth/login', {
     method: 'POST',
     body,
     token: null,
-    signal,
+    ...requestContext(owner, signal),
   })
 }
 
@@ -34,48 +44,54 @@ export async function registerRequest(
     invitation_code?: string
   },
   signal?: AbortSignal,
+  owner?: SessionOwner,
 ): Promise<TokenResponse> {
   return apiRequest<TokenResponse>('/api/auth/register/init', {
     method: 'POST',
     body,
     token: null,
-    signal,
+    ...requestContext(owner, signal),
   })
 }
 
-export async function fetchCurrentUser(token: string, signal?: AbortSignal): Promise<UserOut> {
+export async function fetchCurrentUser(token: string, signal?: AbortSignal, owner?: SessionOwner): Promise<UserOut> {
   return apiRequest<UserOut>('/api/auth/me', {
     method: 'GET',
     token,
-    signal,
+    ...requestContext(owner, signal),
   })
 }
 
 export async function updateCurrentUser(
   body: { display_name?: string; username?: string; email?: string },
+  owner?: SessionOwner,
 ): Promise<UserOut> {
   return apiRequest<UserOut>('/api/auth/me', {
     method: 'PATCH',
     body,
+    ...requestContext(owner),
   })
 }
 
-export async function lookupOrgByEmail(email: string): Promise<EmailLookupResponse> {
+export async function lookupOrgByEmail(email: string, owner?: SessionOwner): Promise<EmailLookupResponse> {
   return apiRequest<EmailLookupResponse>(
     `/api/tenants/lookup-by-email?email=${encodeURIComponent(email)}`,
+    requestContext(owner),
   )
 }
 
-export async function joinSuggestedOrg(tenantId: string): Promise<JoinOrgResponse> {
+export async function joinSuggestedOrg(tenantId: string, owner?: SessionOwner): Promise<JoinOrgResponse> {
   return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-suggested', {
     method: 'POST',
     body: { tenant_id: tenantId },
+    ...requestContext(owner),
   }))
 }
 
-export async function joinDefaultOrg(): Promise<JoinOrgResponse> {
+export async function joinDefaultOrg(owner?: SessionOwner): Promise<JoinOrgResponse> {
   return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-default', {
     method: 'POST',
+    ...requestContext(owner),
   }))
 }
 
@@ -83,10 +99,11 @@ export async function transferOrg(body: {
   password: string
   invitation_code?: string
   tenant_id?: string
-}): Promise<JoinOrgResponse> {
+}, owner?: SessionOwner): Promise<JoinOrgResponse> {
   return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/transfer', {
     method: 'POST',
     body,
+    ...requestContext(owner),
   }))
 }
 
@@ -95,7 +112,7 @@ export async function forgotPasswordRequest(email: string, signal?: AbortSignal)
     method: 'POST',
     body: { email },
     token: null,
-    signal,
+    ...requestContext(undefined, signal),
   })
 }
 
@@ -107,103 +124,119 @@ export async function resetPasswordRequest(
     method: 'POST',
     body,
     token: null,
-    signal,
+    ...requestContext(undefined, signal),
   })
 }
 
 export async function changePasswordRequest(body: {
   old_password: string
   new_password: string
-}): Promise<ChangePasswordResponse> {
+}, owner?: SessionOwner): Promise<ChangePasswordResponse> {
   return apiRequest<ChangePasswordResponse>('/api/auth/me/password', {
     method: 'PUT',
     body,
+    ...requestContext(owner),
   })
 }
 
-export async function verifyEmailRequest(token: string, signal?: AbortSignal): Promise<TokenResponse> {
+export async function verifyEmailRequest(token: string, signal?: AbortSignal, owner?: SessionOwner): Promise<TokenResponse> {
   return apiRequest<TokenResponse>('/api/auth/verify-email', {
     method: 'POST',
     body: { token },
     token: null,
-    signal,
+    ...requestContext(owner, signal),
   })
 }
 
-export async function resendVerificationRequest(email: string): Promise<OkMessageResponse> {
+export async function resendVerificationRequest(email: string, owner?: SessionOwner): Promise<OkMessageResponse> {
   return apiRequest<OkMessageResponse>('/api/auth/resend-verification', {
     method: 'POST',
     body: { email },
     token: null,
+    ...requestContext(owner),
   })
 }
 
-export async function fetchRegistrationConfig(): Promise<{ invitation_code_required: boolean }> {
+export async function fetchRegistrationConfig(owner?: SessionOwner): Promise<{ invitation_code_required: boolean }> {
   return apiRequest<{ invitation_code_required: boolean }>('/api/auth/registration-config', {
     token: null,
+    ...requestContext(owner),
   })
 }
 
 export async function checkDuplicate(params: {
   email?: string
   username?: string
-}): Promise<{ email_exists: boolean; username_exists: boolean; has_conflict: boolean }> {
+}, owner?: SessionOwner): Promise<{ email_exists: boolean; username_exists: boolean; has_conflict: boolean }> {
   const query = new URLSearchParams()
   if (params.email) query.set('email', params.email)
   if (params.username) query.set('username', params.username)
-  return apiRequest(`/api/auth/check-duplicate?${query.toString()}`, { token: null })
+  return apiRequest(`/api/auth/check-duplicate?${query.toString()}`, { token: null, ...requestContext(owner) })
 }
 
-export async function listAuthProviders(tenantId?: string | null): Promise<AuthProvider[]> {
+export async function listAuthProviders(tenantId?: string | null, owner?: SessionOwner): Promise<AuthProvider[]> {
   const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  return apiRequest<AuthProvider[]>(`/api/auth/providers${query}`, { token: null })
+  return apiRequest<AuthProvider[]>(`/api/auth/providers${query}`, { token: null, ...requestContext(owner) })
 }
 
 export async function authorizeProvider(
   provider: string,
   redirectUri: string,
-  state: string,
+  authorization: string | { readonly state: string; readonly owner: SessionOwner },
 ): Promise<{ authorization_url: string }> {
+  const state = typeof authorization === 'string' ? authorization : authorization.state
+  const owner = typeof authorization === 'string' ? undefined : authorization.owner
   const query = new URLSearchParams({ redirect_uri: redirectUri, state })
   return apiRequest(`/api/auth/${encodeURIComponent(provider)}/authorize?${query.toString()}`, {
     token: null,
+    ...requestContext(owner),
   })
 }
 
 export async function oauthCallback(
   provider: string,
   body: { code?: string; pending_token?: string; tenant_id?: string },
+  owner?: SessionOwner,
 ): Promise<TokenResponse | MultiTenantResponse> {
   return apiRequest(`/api/auth/${encodeURIComponent(provider)}/callback`, {
     method: 'POST',
     body,
     token: null,
+    ...requestContext(owner),
   })
 }
 
-export async function bindProvider(provider: string, code: string): Promise<UserOut> {
+export async function bindProvider(provider: string, code: string, owner?: SessionOwner): Promise<UserOut> {
   return apiRequest(`/api/auth/${encodeURIComponent(provider)}/bind`, {
     method: 'POST',
     body: { provider_type: provider, code },
+    ...requestContext(owner),
   })
 }
 
-export async function unbindProvider(provider: string): Promise<UserOut> {
+export async function unbindProvider(provider: string, owner?: SessionOwner): Promise<UserOut> {
   return apiRequest(`/api/auth/${encodeURIComponent(provider)}/unbind`, {
     method: 'POST',
     body: { provider_type: provider },
+    ...requestContext(owner),
   })
 }
 
-export async function fetchMyTenants(): Promise<TenantChoice[]> {
-  return apiRequest<TenantChoice[]>('/api/auth/my-tenants')
+export async function fetchMyTenants(owner?: SessionOwner): Promise<TenantChoice[]> {
+  return apiRequest<TenantChoice[]>('/api/auth/my-tenants', requestContext(owner))
 }
 
-export async function switchTenant(tenantId: string): Promise<TenantSwitchResponse> {
-  return apiRequest<TenantSwitchResponse>('/api/auth/switch-tenant', {
+export async function switchTenant(tenantId: string, owner?: SessionOwner): Promise<TenantSwitchResponse> {
+  const result = z.object({ access_token: z.string().min(1), redirect_url: z.string().nullable().optional(), message: z.string().optional() }).parse(await apiRequest<unknown>('/api/auth/switch-tenant', {
     method: 'POST',
     body: { tenant_id: tenantId },
-  })
+    ...requestContext(owner),
+  }))
+  return {
+    access_token: result.access_token,
+    ...(result.redirect_url === undefined ? {} : { redirect_url: result.redirect_url }),
+    ...(result.message === undefined ? {} : { message: result.message }),
+  }
 }
 
 export async function fetchMyTenant(): Promise<{

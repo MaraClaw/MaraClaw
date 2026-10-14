@@ -31,7 +31,7 @@ const highlights = [
 ]
 
 export function JoinOrgPage() {
-  const { status, user, refreshUser } = useAuth()
+  const { status, user, owner, isCurrent, refreshReplacement } = useAuth()
   const navigate = useNavigate()
   const fromState = (useLocation().state as JoinState | null)?.suggested ?? null
   const formId = useId()
@@ -43,6 +43,8 @@ export function JoinOrgPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     if (status === 'anonymous') {
       navigate('/login', { replace: true })
       return
@@ -59,44 +61,49 @@ export function JoinOrgPage() {
       try {
         if (member.email_verified === false) setNeedsVerify(true)
         if (member.email) {
-          const lookup = await lookupOrgByEmail(member.email)
-          if (cancelled) return
+          const lookup = await lookupOrgByEmail(member.email, expectedOwner)
+          if (cancelled || !isCurrent(expectedOwner)) return
           setSuggested(lookup.match ?? fromState)
           setFallback(lookup.fallback)
         }
       } catch (err) {
-        if (!cancelled && err instanceof ApiError && err.status === 401) {
+        if (!cancelled && isCurrent(expectedOwner) && err instanceof ApiError && err.status === 401) {
           navigate('/login', { replace: true })
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && isCurrent(expectedOwner)) setLoading(false)
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [fromState, navigate, status, user])
+  }, [fromState, navigate, status, user, owner, isCurrent])
 
   async function choose(kind: 'suggested' | 'default') {
+    const expectedOwner = owner
+    if (!isCurrent(expectedOwner)) return
     setError(null)
     setPending(true)
     try {
       const result =
         kind === 'suggested' && suggested
-          ? await joinSuggestedOrg(suggested.id)
-          : await joinDefaultOrg()
-      if (!await refreshUser(result.access_token)) return
+          ? await joinSuggestedOrg(suggested.id, expectedOwner)
+          : await joinDefaultOrg(expectedOwner)
+      if (!isCurrent(expectedOwner)) return
+      const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
+      if (!installedOwner || !isCurrent(installedOwner)) return
       toast.success('Organization joined')
       navigate('/app', { replace: true })
     } catch (err) {
+      if (!isCurrent(expectedOwner)) return
       setError(
         err instanceof ApiError
           ? (formatApiDetail(err.detail) ?? err.message)
           : 'Could not join organization',
       )
     } finally {
-      setPending(false)
+      if (isCurrent(expectedOwner)) setPending(false)
     }
   }
 

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery } from '@/hooks/session-workspace'
 import { Loader2, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 

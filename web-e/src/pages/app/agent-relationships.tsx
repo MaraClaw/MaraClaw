@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -17,6 +18,7 @@ import {
 const RELATIONS = ['collaborator', 'direct_leader', 'team_member', 'stakeholder', 'subordinate', 'mentor', 'other']
 
 export function AgentRelationshipsPage() {
+  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const canManage = agent.access_level === 'manage'
   const queryClient = useQueryClient()
@@ -56,6 +58,7 @@ export function AgentRelationshipsPage() {
         <form
           className="flex flex-wrap gap-2"
           onSubmit={(event) => {
+            if (!scope.isCurrent()) return
             event.preventDefault()
             if (memberId) add.mutate()
           }}
@@ -64,7 +67,7 @@ export function AgentRelationshipsPage() {
             className="min-w-48 flex-1"
             aria-label="Choose a person"
             value={memberId}
-            onChange={(event) => setMemberId(event.target.value)}
+            onChange={scope.effect((event) => setMemberId(event.target.value))}
           >
             <option value="">Choose a person</option>
             {(candidates.data ?? []).map((row) => (
@@ -73,7 +76,7 @@ export function AgentRelationshipsPage() {
               </option>
             ))}
           </Select>
-          <Select fit aria-label="Relationship" value={relation} onChange={(event) => setRelation(event.target.value)}>
+          <Select fit aria-label="Relationship" value={relation} onChange={scope.effect((event) => setRelation(event.target.value))}>
             {RELATIONS.map((item) => (
               <option key={item} value={item}>
                 {item.replaceAll('_', ' ')}
@@ -97,9 +100,9 @@ export function AgentRelationshipsPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    void deleteRelationship(agent.id, row.id).then(() =>
+                    scope.isCurrent() && void deleteRelationship(agent.id, row.id).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['rels', agent.id] }),
-                    )
+                    )).catch(scope.rethrowCurrent)
                   }
                 >
                   Remove

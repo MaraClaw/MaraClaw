@@ -1,5 +1,5 @@
 import { Building2, Loader2 } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -13,6 +13,8 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   isMultiTenantResponse,
   isTokenResponse,
+  type MultiTenantResponse,
+  type TokenResponse,
   type TenantChoice,
 } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
@@ -21,7 +23,14 @@ export function SsoCallbackPage() {
   const formId = useId()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { applySession } = useAuth()
+  const { owner, capture, isCurrent, applySession } = useAuth()
+  const [transaction] = useState(() => ({
+    owner,
+    state: sessionStorage.getItem(SSO_STATE_KEY),
+    provider: sessionStorage.getItem(SSO_PROVIDER_KEY),
+    intent: sessionStorage.getItem(SSO_INTENT_KEY),
+  }))
+  const request = useRef<Promise<TokenResponse | MultiTenantResponse | void> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tenants, setTenants] = useState<TenantChoice[] | null>(null)
   const [pendingToken, setPendingToken] = useState<string | null>(null)
@@ -29,8 +38,10 @@ export function SsoCallbackPage() {
   const [selecting, setSelecting] = useState<string | null>(null)
 
   useEffect(() => {
-    const storedState = sessionStorage.getItem(SSO_STATE_KEY)
-    const storedProvider = sessionStorage.getItem(SSO_PROVIDER_KEY)
+    const expectedOwner = transaction.owner
+    if (!isCurrent(expectedOwner)) return
+    const storedState = transaction.state
+    const storedProvider = transaction.provider
     const state = searchParams.get('state')
     const code = searchParams.get('code')
     const queryProvider = searchParams.get('provider')
@@ -46,58 +57,72 @@ export function SsoCallbackPage() {
     }
 
     setProvider(nextProvider)
-    const intent = sessionStorage.getItem(SSO_INTENT_KEY)
-    sessionStorage.removeItem(SSO_STATE_KEY)
-    sessionStorage.removeItem(SSO_PROVIDER_KEY)
-    sessionStorage.removeItem(SSO_INTENT_KEY)
-
-    if (intent === 'bind') {
-      void bindProvider(nextProvider, code)
-        .then(() => {
+    const intent = transaction.intent
+    let cancelled = false
+    const consumeTransaction = (): void => {
+      if (sessionStorage.getItem(SSO_STATE_KEY) !== storedState) return
+      sessionStorage.removeItem(SSO_STATE_KEY)
+      sessionStorage.removeItem(SSO_PROVIDER_KEY)
+      sessionStorage.removeItem(SSO_INTENT_KEY)
+    }
+    request.current ??= intent === 'bind'
+      ? bindProvider(nextProvider, code, expectedOwner).then(() => undefined)
+      : oauthCallback(nextProvider, { code }, expectedOwner)
+    void request.current
+      .then((result) => {
+        if (cancelled || !isCurrent(expectedOwner)) return
+        if (intent === 'bind') {
+          consumeTransaction()
           toast.success('Account linked')
           navigate('/app/account', { replace: true })
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Unable to link this provider.')
-        })
-      return
-    }
-
-    void oauthCallback(nextProvider, { code })
-      .then((result) => {
+          return
+        }
         if (isTokenResponse(result)) {
-          applySession(result)
+          if (!applySession(expectedOwner, result)) return
+          const installedOwner = capture()
+          if (!isCurrent(installedOwner)) return
+          consumeTransaction()
           toast.success('Signed in')
           navigate(result.needs_org_confirm ? '/join' : '/app', { replace: true })
           return
         }
         if (isMultiTenantResponse(result)) {
+          consumeTransaction()
           setTenants(result.tenants)
           setPendingToken(result.pending_token ?? null)
         }
       })
       .catch((err: unknown) => {
+        if (cancelled || !isCurrent(expectedOwner)) return
+        consumeTransaction()
         setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'SSO sign-in failed.')
       })
-  }, [applySession, navigate, searchParams])
+    return () => { cancelled = true }
+  }, [applySession, navigate, searchParams, transaction, capture, isCurrent])
 
   async function chooseTenant(tenant: TenantChoice) {
+    const expectedOwner = transaction.owner
+    if (!isCurrent(expectedOwner)) return
     if (!provider || !pendingToken || !tenant.tenant_id) return
     setSelecting(tenant.tenant_id)
     try {
       const result = await oauthCallback(provider, {
         pending_token: pendingToken,
         tenant_id: tenant.tenant_id,
-      })
+      }, expectedOwner)
+      if (!isCurrent(expectedOwner)) return
       if (isTokenResponse(result)) {
-        applySession(result)
+        if (!applySession(expectedOwner, result)) return
+        const installedOwner = capture()
+        if (!isCurrent(installedOwner)) return
         toast.success(`Signed in to ${tenant.tenant_name}`)
         navigate(result.needs_org_confirm ? '/join' : '/app', { replace: true })
       }
     } catch (err) {
+      if (!isCurrent(expectedOwner)) return
       setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Unable to finish SSO.')
     } finally {
-      setSelecting(null)
+      if (isCurrent(expectedOwner)) setSelecting(null)
     }
   }
 

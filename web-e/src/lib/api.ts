@@ -3,7 +3,10 @@
  * Empty string = same-origin (Vite proxy in dev: /api → engine).
  */
 export function getApiBaseUrl(): string {
-  const raw = import.meta.env.VITE_API_BASE_URL
+  const meta = import.meta
+  const env = 'env' in meta ? meta.env : undefined
+  const raw = env && typeof env === 'object' && 'VITE_API_BASE_URL' in env
+    ? env.VITE_API_BASE_URL : undefined
   if (typeof raw === 'string' && raw.trim()) {
     const base = raw.replace(/\/$/, '')
     try {
