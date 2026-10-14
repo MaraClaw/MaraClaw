@@ -224,13 +224,13 @@ export async function listSessionMessages(agentId: string, sessionId: string): P
 
 export async function uploadChatFile(file: File, agentId: string): Promise<{
   filename: string
-  extracted_text?: string
-  path?: string
+  extracted_text: string
+  workspace_path: string
 }> {
   const form = new FormData()
   form.append('file', file)
   form.append('agent_id', agentId)
-  return apiFormRequest('/api/upload', form)
+  return apiFormRequest('/api/chat/upload', form)
 }
 
 export async function listFiles(agentId: string, path = ''): Promise<FileInfo[]> {
