@@ -754,8 +754,13 @@ async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
     assert "FOR NO KEY UPDATE OF t SKIP LOCKED" in query
     assert "(e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)" in query
     assert query.count("e.source = ANY") == 1
-    assert "OR t.type = 'once'" in query
-    assert "OR (t.max_fires IS NOT NULL AND t.fire_count >= t.max_fires)" in query
+    assert "(t.is_enabled IS TRUE OR t.self_disabled IS TRUE)" in " ".join(query.split())
+    assert "OR t.type = 'once'" not in query
+    assert "t.fire_count >= t.max_fires" not in query
+
+
+@pytest.mark.asyncio
+async def test_recovery_fails_only_externally_disabled_triggers(monkeypatch):
     # Recovery uses a subquery; capture it with the original recording cursor.
     recording_raw = _FakeRawConnection()
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(recording_raw))
@@ -763,8 +768,9 @@ async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
     query, params = recording_raw.executed[0]
     assert "FOR UPDATE OF e SKIP LOCKED" in query
     assert "AND t.is_enabled IS NOT TRUE" in query
-    assert "AND t.type <> 'once'" in query
-    assert "AND (t.max_fires IS NULL OR t.fire_count < t.max_fires)" in query
+    assert "AND t.self_disabled IS NOT TRUE" in query
+    assert "t.type <> 'once'" not in query
+    assert "t.fire_count < t.max_fires" not in query
     assert params["error_text"] == executions.LEASE_EXPIRED_ERROR
 
 

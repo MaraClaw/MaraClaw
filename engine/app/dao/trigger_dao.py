@@ -254,8 +254,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                     WHERE e.status = 'processing'
                       AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
                       AND t.is_enabled IS NOT TRUE
-                      AND t.type <> 'once'
-                      AND (t.max_fires IS NULL OR t.fire_count < t.max_fires)
+                      AND t.self_disabled IS NOT TRUE
                     FOR UPDATE OF e SKIP LOCKED
                 )
                 RETURNING id
@@ -340,11 +339,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                         OR (
                             e.status = 'processing'
                             AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
-                            AND (
-                                t.is_enabled IS TRUE
-                                OR t.type = 'once'
-                                OR (t.max_fires IS NOT NULL AND t.fire_count >= t.max_fires)
-                            )
+                            AND (t.is_enabled IS TRUE OR t.self_disabled IS TRUE)
                         )
                   )
                 ORDER BY e.scheduled_at ASC
