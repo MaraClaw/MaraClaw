@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import uuid
-from collections.abc import AsyncIterator, Coroutine, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import TracebackType
 
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_object_from
@@ -20,7 +20,15 @@ from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
 settings = get_settings()
 LEASE_DURATION = timedelta(minutes=5)
 LEASE_RENEW_INTERVAL = timedelta(seconds=60)
+LEASE_STOP_MARGIN = timedelta(seconds=60)
 LEASE_EXPIRED_ERROR = "Execution lease expired after its trigger was disabled"
+LEASE_LOST_ERROR = "Execution lease lost before the invocation finished"
+
+
+class ExecutionLeaseLostError(Exception):
+    def __init__(self, reason: str) -> None:
+        self.reason: str = reason
+        super().__init__(reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,48 +129,110 @@ async def fail_abandoned_trigger_executions() -> list[uuid.UUID]:
     return failed
 
 
-async def _renew_until_lost(leases: list[ExecutionLease], trace_id: str | None) -> None:
-    if trace_id:
-        set_trace_id(trace_id)
-    held = leases
-    while held:
-        await asyncio.sleep(LEASE_RENEW_INTERVAL.total_seconds())
-        remaining: list[ExecutionLease] = []
-        for lease in held:
+class ExecutionLeaseHold:
+    def __init__(self, leases: Sequence[ExecutionLease]) -> None:
+        self.leases: tuple[ExecutionLease, ...] = tuple(leases)
+        self.loop: asyncio.AbstractEventLoop
+        self.owner_task: asyncio.Task[object]
+        self.cancelling_baseline: int = 0
+        self.lock: asyncio.Lock = asyncio.Lock()
+        self.deadline: float = 0.0
+        self.closed: bool = False
+        self.fired_reason: str | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> ExecutionLeaseHold:
+        if not self.leases:
+            return self
+        self.loop = asyncio.get_running_loop()
+        owner = asyncio.current_task()
+        if owner is None:
+            raise RuntimeError("Execution lease hold requires an asyncio task")
+        self.owner_task = owner
+        self.cancelling_baseline = owner.cancelling()
+        bound = self.loop.time() + (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
+        await self._renew_batch(bound)
+        context = contextvars.Context()
+        trace_id = get_trace_id()
+        if trace_id:
+            context.run(set_trace_id, trace_id)
+        self.heartbeat_task = asyncio.create_task(self._heartbeat(), context=context)
+        return self
+
+    async def _renew_batch(self, bound: float) -> None:
+        try:
+            async with asyncio.timeout_at(bound):
+                async with self.lock:
+                    start = self.loop.time()
+                    deadline = start + (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
+                    lost: list[uuid.UUID] = []
+                    for lease in self.leases:
+                        renewed = await renew_trigger_execution_lease(lease)
+                        lost.extend(execution_id for execution_id in lease.execution_ids if execution_id not in renewed)
+                    if self.loop.time() >= bound:
+                        raise ExecutionLeaseLostError("lease not renewed before it could expire")
+                    if lost:
+                        raise ExecutionLeaseLostError(f"lease lost for {lost}")
+                    self.deadline = deadline
+        except TimeoutError as exc:
+            if self.loop.time() < bound:
+                raise
+            raise ExecutionLeaseLostError("lease not renewed before it could expire") from exc
+
+    def _fire(self, reason: str) -> None:
+        if not self.closed and self.fired_reason is None:
+            self.fired_reason = reason
+            logger.warning(f"Stopping trigger invocation: {reason}")
+            _ = self.owner_task.cancel()
+
+    async def _heartbeat(self) -> None:
+        while not self.closed:
+            delay = min(LEASE_RENEW_INTERVAL.total_seconds(), self.deadline - self.loop.time())
+            await asyncio.sleep(max(0, delay))
+            if self.loop.time() >= self.deadline:
+                self._fire("lease not renewed before it could expire")
+                return
             try:
-                renewed = await renew_trigger_execution_lease(lease)
+                await self._renew_batch(self.deadline)
+            except ExecutionLeaseLostError as exc:
+                self._fire(exc.reason)
+                return
+            except TimeoutError:
+                self._fire("lease not renewed before it could expire")
+                return
             except Exception as exc:
-                logger.warning(f"Execution lease renewal failed for {lease.execution_ids}: {exc}")
-                remaining.append(lease)
-                continue
-            lost = set(lease.execution_ids) - set(renewed)
-            if lost:
-                logger.warning(f"Execution lease lost; stop renewing {list(lost)}")
-            if renewed:
-                remaining.append(ExecutionLease(lease.token, tuple(renewed)))
-        held = remaining
+                logger.warning(f"Execution lease renewal failed: {exc}")
 
+    async def confirm(self) -> None:
+        if self.leases:
+            await self._renew_batch(self.deadline)
 
-@asynccontextmanager
-async def hold_trigger_execution_leases(leases: Sequence[ExecutionLease]) -> AsyncIterator[None]:
-    if not leases:
-        yield
-        return
-    task = asyncio.create_task(_renew_until_lost(list(leases), get_trace_id()), context=contextvars.Context())
-    try:
-        yield
-    finally:
-        task.cancel()
-        joined = asyncio.gather(task, return_exceptions=True)
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        self.closed = True
         interrupted: asyncio.CancelledError | None = None
-        while True:
-            try:
-                _ = await asyncio.shield(joined)
-                break
-            except asyncio.CancelledError as exc:
-                interrupted = exc
+        if self.heartbeat_task is not None:
+            _ = self.heartbeat_task.cancel()
+            joined = asyncio.gather(self.heartbeat_task, return_exceptions=True)
+            while True:
+                try:
+                    _ = await asyncio.shield(joined)
+                    break
+                except asyncio.CancelledError as cancelled:
+                    interrupted = cancelled
+        if self.fired_reason is not None:
+            if self.owner_task.uncancel() > self.cancelling_baseline:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise exc
+                raise interrupted if interrupted is not None else asyncio.CancelledError()
+            raise ExecutionLeaseLostError(self.fired_reason) from exc
         if interrupted is not None:
             raise interrupted
+
+
+def hold_trigger_execution_leases(leases: Sequence[ExecutionLease]) -> ExecutionLeaseHold:
+    return ExecutionLeaseHold(leases)
 
 
 async def claim_pending_trigger_executions(

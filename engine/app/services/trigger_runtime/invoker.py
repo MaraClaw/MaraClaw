@@ -20,6 +20,9 @@ from app.services.llm.base import ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
 from app.services.trigger_runtime import (
+    LEASE_LOST_ERROR,
+    ExecutionLeaseHold,
+    ExecutionLeaseLostError,
     hold_trigger_execution_leases,
     mark_trigger_executions_completed,
     mark_trigger_executions_failed,
@@ -102,15 +105,22 @@ async def resolve_trigger_delivery_target(
 
 async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
     leases = trigger_execution_leases(triggers)
-    async with hold_trigger_execution_leases(leases):
-        error_text = await _run_trigger_invocation(agent_id, triggers)
+    try:
+        async with hold_trigger_execution_leases(leases) as hold:
+            error_text = await _run_trigger_invocation(agent_id, triggers, hold)
+    except ExecutionLeaseLostError as exc:
+        logger.warning(f"Agent {agent_id} stopped after execution lease loss: {exc.reason}")
+        _ = await mark_trigger_executions_failed(leases, LEASE_LOST_ERROR)
+        return
     if error_text is None:
         _ = await mark_trigger_executions_completed(leases)
     else:
         _ = await mark_trigger_executions_failed(leases, error_text)
 
 
-async def _run_trigger_invocation(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> str | None:
+async def _run_trigger_invocation(
+    agent_id: uuid.UUID, triggers: list[AgentTriggerRecord], hold: ExecutionLeaseHold
+) -> str | None:
     from app.services.audit_logger import write_audit_log
     from app.services.llm import call_llm
 
@@ -270,6 +280,7 @@ async def _run_trigger_invocation(agent_id: uuid.UUID, triggers: list[AgentTrigg
             turn=TurnContext(agent=agent, primary_model=model),
         )
 
+        await hold.confirm()
         final_reply = reply or "".join(collected_content)
         is_a2a_internal = all(t.name == "a2a_wake" for t in triggers)
         notify_owner_user_id: str | None = None
@@ -385,6 +396,8 @@ async def _run_trigger_invocation(agent_id: uuid.UUID, triggers: list[AgentTrigg
         )
 
         return None
+    except ExecutionLeaseLostError:
+        raise
     except Exception as e:
         logger.error(f"Failed to invoke agent {agent_id} for triggers: {e}")
         import traceback

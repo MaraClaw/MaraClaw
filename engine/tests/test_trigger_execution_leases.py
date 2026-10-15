@@ -308,37 +308,33 @@ async def test_heartbeat_isolates_parent_and_joins(table, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_retries_and_drops_partial_loss(table, monkeypatch):
-    table.target = 3  # Two row renewals in the first batch, then the surviving row.
-    lease, _ = await claimed_lease(monkeypatch, table)
+async def test_partial_lease_loss_stops_invocation_and_fails_remaining_owned_rows(table, monkeypatch):
+    lease, trigger = await claimed_lease(monkeypatch, table)
     second, _ = queued(table, started=True)
     row = table.rows[second.id]
     row.update(status="processing", lease_owner=lease.token)
-    both = executions.ExecutionLease(lease.token, (*lease.execution_ids, second.id))
-    warnings = Warnings()
-    monkeypatch.setattr(executions, "logger", warnings)
-    real_renew = executions.renew_trigger_execution_lease
-    seen = []
+    second_trigger = replace(trigger, config={**trigger.config, "_execution_id": str(second.id)})
+    cancelled = asyncio.Event()
+    before = None
 
-    async def flaky(held):
-        seen.append(held.execution_ids)
-        if len(seen) == 1:
-            raise RuntimeError("transient")
-        return await real_renew(held)
+    async def llm(**_kwargs):
+        nonlocal before
+        row["lease_owner"] = "takeover"
+        before = dict(row)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
 
-    monkeypatch.setattr(executions, "renew_trigger_execution_lease", flaky)
-    table.rows[lease.execution_ids[0]]["lease_owner"] = "takeover"
-    async with executions.hold_trigger_execution_leases([both]):
-        await asyncio.wait_for(table.renewed.wait(), 1)
-        assert seen[0] == seen[1] == both.execution_ids
-        assert seen[-1] == (second.id,)
-        row["lease_owner"] = "takeover-too"
-        warnings.changed.clear()
-        await asyncio.wait_for(warnings.changed.wait(), 1)
-        await asyncio.sleep(0.025)
-        assert not any(t is not asyncio.current_task() and not t.done() for t in asyncio.all_tasks())
-    assert any("transient" in m for m in warnings.messages)
-    assert any("stop renewing" in m for m in warnings.messages)
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger, second_trigger]), 1)
+    assert cancelled.is_set()
+    assert row == before
+    owned = table.rows[lease.execution_ids[0]]
+    assert owned["status"] == "failed"
+    assert owned["last_error"] == executions.LEASE_LOST_ERROR
+    assert "assistant" not in messages
 
 
 def fake_invoker(monkeypatch, trigger, llm):
@@ -400,7 +396,7 @@ async def test_invoker_renews_without_connection_and_finishes_after_join(table, 
     original_finish = trigger_execution_dao.finish
 
     async def finish(*args, **kwargs):
-        assert not any("_renew_until_lost" in str(t.get_coro()) for t in asyncio.all_tasks())
+        assert not any("_heartbeat" in str(t.get_coro()) for t in asyncio.all_tasks())
         return await original_finish(*args, **kwargs)
 
     monkeypatch.setattr(trigger_execution_dao, "finish", finish)
@@ -424,14 +420,21 @@ async def test_invoker_renews_without_connection_and_finishes_after_join(table, 
 async def test_second_cancellation_waits_for_heartbeat_cleanup(table, monkeypatch):
     _, trigger = await claimed_lease(monkeypatch, table)
     renewing, cleaning, cleanup_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    release_cleanup = asyncio.Event()
+    original_renew = executions.renew_trigger_execution_lease
+    calls = 0
 
     async def renew(_lease):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await original_renew(_lease)
         renewing.set()
         try:
             await asyncio.Event().wait()
         finally:
             cleaning.set()
-            await asyncio.sleep(0.025)
+            await release_cleanup.wait()
             cleanup_done.set()
 
     async def llm(**_kwargs):
@@ -444,10 +447,297 @@ async def test_second_cancellation_waits_for_heartbeat_cleanup(table, monkeypatc
     task.cancel()
     await asyncio.wait_for(cleaning.wait(), 1)
     task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release_cleanup.set()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 1)
     assert cleanup_done.is_set()
     assert all(row["status"] == "processing" for row in table.rows.values())
+
+
+def record_messages(monkeypatch):
+    messages = []
+
+    async def insert(**kwargs):
+        messages.append(kwargs["role"])
+
+    monkeypatch.setattr(invoker.chat_message_dao, "insert_message", insert)
+    return messages
+
+
+def short_lease(monkeypatch):
+    monkeypatch.setattr(executions, "LEASE_DURATION", timedelta(milliseconds=250))
+    monkeypatch.setattr(executions, "LEASE_STOP_MARGIN", timedelta(milliseconds=150), raising=False)
+
+
+@pytest.mark.asyncio
+async def test_entry_confirmation_rejects_lost_lease_before_invocation(table, monkeypatch):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    row = table.rows[lease.execution_ids[0]]
+    row["lease_owner"] = "takeover"
+    before = dict(row)
+    started = asyncio.Event()
+
+    async def llm(**_kwargs):
+        started.set()
+        return "stale reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    baseline = set(asyncio.all_tasks())
+    await invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger])
+    assert not started.is_set()
+    assert not messages
+    assert row == before
+    assert set(asyncio.all_tasks()) == baseline
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_retries_transient_error_before_deadline(table, monkeypatch):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    short_lease(monkeypatch)
+    recovered = asyncio.Event()
+    original = executions.renew_trigger_execution_lease
+    calls = 0
+
+    async def renew(held):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("transient")
+        result = await original(held)
+        if calls == 3:
+            recovered.set()
+        return result
+
+    async def llm(**_kwargs):
+        await recovered.wait()
+        return "reply"
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+    fake_invoker(monkeypatch, trigger, llm)
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger]), 1)
+    assert calls >= 4  # Entry, failed heartbeat, recovered heartbeat, post-LLM confirmation.
+    assert table.rows[lease.execution_ids[0]]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exception", "hung"])
+async def test_unconfirmed_lease_stops_before_expiry(table, monkeypatch, failure):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    short_lease(monkeypatch)
+    original = executions.renew_trigger_execution_lease
+    calls = 0
+    times = []
+
+    async def renew(held):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await original(held)
+        if failure == "exception":
+            raise RuntimeError("partition")
+        await asyncio.Event().wait()
+        return []
+
+    async def llm(**_kwargs):
+        times.append(table.rows[lease.execution_ids[0]]["lease_expires_at"])
+        try:
+            await asyncio.Event().wait()
+        finally:
+            times.append(datetime.now(UTC))
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger]), 1)
+    assert times[1] < times[0]
+    assert "assistant" not in messages
+    assert table.rows[lease.execution_ids[0]]["last_error"] == executions.LEASE_LOST_ERROR
+
+
+@pytest.mark.asyncio
+async def test_lease_deadline_starts_before_renewal_io(table, monkeypatch):
+    lease, _ = await claimed_lease(monkeypatch, table)
+    short_lease(monkeypatch)
+    original = executions.renew_trigger_execution_lease
+    loop = asyncio.get_running_loop()
+    times = []
+
+    async def slow(held):
+        times.append(loop.time())
+        release = asyncio.Event()
+        loop.call_later(0.04, release.set)
+        await release.wait()
+        result = await original(held)
+        times.append(loop.time())
+        return result
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", slow)
+    async with executions.hold_trigger_execution_leases([lease]) as hold:
+        window = (executions.LEASE_DURATION - executions.LEASE_STOP_MARGIN).total_seconds()
+        assert hold.deadline <= times[0] + window
+        assert times[1] + window - hold.deadline >= 0.035
+
+
+@pytest.mark.asyncio
+async def test_post_llm_confirmation_prevents_stale_delivery(table, monkeypatch):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    monkeypatch.setattr(executions, "LEASE_RENEW_INTERVAL", timedelta(seconds=10))
+    row = table.rows[lease.execution_ids[0]]
+    before = None
+
+    async def llm(**_kwargs):
+        nonlocal before
+        row["lease_owner"] = "takeover"
+        before = dict(row)
+        return "stale reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    await invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger])
+    assert "assistant" not in messages
+    assert row == before
+    assert table.renewals == 2
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_wins_over_lease_loss(table, monkeypatch):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    cleaned = asyncio.Event()
+    original = executions.renew_trigger_execution_lease
+    calls = 0
+
+    async def renew(held):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await original(held)
+        try:
+            return []
+        finally:
+            cleaned.set()
+
+    async def llm(**_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            owner = asyncio.current_task()
+            assert owner is not None
+            owner.cancel()  # External cancel ordered after the heartbeat's cancel.
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    task = asyncio.create_task(invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger]))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 1)
+    assert cleaned.is_set()
+    assert task.cancelling() == 1
+    assert table.rows[lease.execution_ids[0]]["status"] == "processing"
+    assert "assistant" not in messages
+    assert not any("_heartbeat" in str(t.get_coro()) for t in asyncio.all_tasks())
+
+
+@pytest.mark.asyncio
+async def test_confirm_waits_for_inflight_heartbeat_batch(table, monkeypatch):
+    lease, _ = await claimed_lease(monkeypatch, table)
+    short_lease(monkeypatch)
+    original = executions.renew_trigger_execution_lease
+    inflight, release, confirming = (asyncio.Event() for _ in range(3))
+    calls = 0
+
+    async def renew(held):
+        nonlocal calls
+        calls += 1
+        result = await original(held)
+        if calls == 2:
+            inflight.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+    async with executions.hold_trigger_execution_leases([lease]) as hold:
+        await asyncio.wait_for(inflight.wait(), 1)
+        previous = hold.deadline
+
+        async def confirm():
+            confirming.set()
+            await hold.confirm()
+
+        task = asyncio.create_task(confirm())
+        try:
+            await confirming.wait()
+            assert not task.done()
+            assert calls == 2
+            assert hold.deadline == previous
+        finally:
+            release.set()
+            await task
+        remaining = (table.rows[lease.execution_ids[0]]["lease_expires_at"] - datetime.now(UTC)).total_seconds()
+        margin = executions.LEASE_STOP_MARGIN.total_seconds()
+        assert hold.deadline - asyncio.get_running_loop().time() <= remaining - margin + 0.002
+
+
+@pytest.mark.asyncio
+async def test_empty_lease_hold_is_a_noop():
+    baseline = set(asyncio.all_tasks())
+    async with executions.hold_trigger_execution_leases([]) as hold:
+        await hold.confirm()
+        assert set(asyncio.all_tasks()) == baseline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("entry unavailable"), TimeoutError("entry unavailable")])
+async def test_entry_renewal_error_propagates_without_terminal_write(table, monkeypatch, error):
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    baseline = set(asyncio.all_tasks())
+
+    async def renew(_held):
+        raise error
+
+    monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+    with pytest.raises(type(error)) as caught:
+        await invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger])
+    assert caught.value is error
+    assert table.rows[lease.execution_ids[0]]["status"] == "processing"
+    assert set(asyncio.all_tasks()) == baseline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_exit", ["error", "return"])
+async def test_internal_loss_wins_over_body_exit(table, monkeypatch, body_exit):
+    lease, _ = await claimed_lease(monkeypatch, table)
+    owner = asyncio.current_task()
+    assert owner is not None
+    baseline = owner.cancelling()
+
+    async def run():
+        async with executions.hold_trigger_execution_leases([lease]) as hold:
+            hold._fire("lease lost")
+            if body_exit == "error":
+                raise RuntimeError("body cleanup failed")
+
+    with pytest.raises(executions.ExecutionLeaseLostError):
+        await run()
+    assert owner.cancelling() == baseline
+
+
+@pytest.mark.asyncio
+async def test_partial_confirmation_does_not_extend_deadline(table, monkeypatch):
+    lease, _ = await claimed_lease(monkeypatch, table)
+    monkeypatch.setattr(executions, "LEASE_RENEW_INTERVAL", timedelta(seconds=10))
+    owner = asyncio.current_task()
+    assert owner is not None
+    baseline = owner.cancelling()
+    async with executions.hold_trigger_execution_leases([lease]) as hold:
+        deadline = hold.deadline
+        table.rows[lease.execution_ids[0]]["lease_owner"] = "takeover"
+        with pytest.raises(executions.ExecutionLeaseLostError):
+            await hold.confirm()
+        assert hold.deadline == deadline
+    assert owner.cancelling() == baseline
 
 
 @pytest.mark.asyncio
