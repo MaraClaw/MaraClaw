@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
 
+from app.api import background_tasks, google_chat as google_chat_api
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
 from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
 from app.services.channels.google_chat import (
@@ -236,7 +242,9 @@ def test_channel_config_out_redacts_secrets():
     assert out.encrypt_key == "***"
     assert out.verification_token == "***"
     assert out.extra_config is not None
-    assert "private_key" not in (out.extra_config.get("service_account_json") or {})
+    service_account = out.extra_config.get("service_account_json")
+    assert isinstance(service_account, dict)
+    assert "private_key" not in service_account
 
 
 @pytest.mark.asyncio
@@ -274,3 +282,73 @@ def test_token_uri_allowlist_constant():
 
 def test_chat_issuer_constant():
     assert CHAT_ISSUER == "chat@system.gserviceaccount.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_webhook_acks_blocked_processing_and_marks_only_success(monkeypatch, fails):
+    # Given
+    agent_id = uuid4()
+    config = SimpleNamespace(is_configured=True, verification_token="token")
+    monkeypatch.setattr(google_chat_api.channel_config, "get_channel_config", AsyncMock(return_value=config))
+    monkeypatch.setattr(google_chat_api.gchat, "audience_for_config", lambda _: "")
+    monkeypatch.setattr(google_chat_api.gchat, "has_service_account", lambda _: True)
+    message_name = "spaces/A/messages/B"
+    payload = json.dumps(
+        {
+            "type": "MESSAGE",
+            "token": "token",
+            "message": {
+                "name": message_name,
+                "text": "hello",
+                "sender": {"name": "users/1", "type": "HUMAN"},
+                "space": {"name": "spaces/A", "type": "DM"},
+            },
+        }
+    ).encode()
+    request = Request(
+        {"type": "http", "headers": []},
+        AsyncMock(
+            return_value={"type": "http.request", "body": payload},
+        ),
+    )
+    marked = AsyncMock()
+    monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
+    monkeypatch.setattr(google_chat_api.channel_dedup, "mark_processed_shared", marked)
+    started, release, observed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    failure = RuntimeError("message processing failed")
+    logger = Mock()
+    logger.opt.return_value.error.side_effect = lambda _: observed.set()
+    monkeypatch.setattr(background_tasks, "logger", logger)
+
+    async def process(**kwargs):
+        started.set()
+        await release.wait()
+        if fails:
+            raise failure
+
+    async def mark_processed(*args):
+        observed.set()
+
+    marked.side_effect = mark_processed
+    monkeypatch.setattr(google_chat_api, "_process_message_event", process)
+    # When
+    try:
+        result = await asyncio.wait_for(google_chat_api.google_chat_event_webhook(agent_id, request), 1)
+        await asyncio.wait_for(started.wait(), 1)
+        # Then
+        assert result == {}
+        marked.assert_not_awaited()
+        assert not observed.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(observed.wait(), 1)
+    if fails:
+        marked.assert_not_awaited()
+        logger.opt.assert_called_once_with(exception=failure)
+        logger.opt.return_value.error.assert_called_once_with(
+            "Background task failed: Google Chat process message event"
+        )
+    else:
+        marked.assert_awaited_once_with("google_chat", message_name)
+        logger.opt.assert_not_called()
