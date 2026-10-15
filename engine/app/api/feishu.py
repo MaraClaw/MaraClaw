@@ -14,6 +14,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
+from app.api.background_tasks import schedule_background_task
 from app.core.json_types import (
     JsonObject,
     JsonValue,
@@ -45,8 +46,6 @@ from app.services.storage import agent_upload_key, get_storage_backend, store_ag
 
 router = APIRouter(tags=["feishu"])
 
-_background_tasks: set[asyncio.Task[None]] = set()
-
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
     return isinstance(value, dict)
@@ -74,15 +73,6 @@ def _avatar_url_from_user(user_info: JsonObject) -> str:
             or json_as_str_or(avatar.get("avatar_origin"), "")
         )
     return json_as_str_or(raw_avatar, "")
-
-
-def _schedule_background(coroutine: Awaitable[object]) -> None:
-    async def run() -> None:
-        await coroutine
-
-    task = asyncio.create_task(run())
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
 
 
 # Number of tool status lines to keep visible in the Feishu card.
@@ -449,9 +439,11 @@ async def configure_channel(
 
         mode = json_as_str_or((config.extra_config or {}).get("connection_mode"), "webhook")
         if mode == "websocket":
-            _schedule_background(feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret))
+            schedule_background_task(
+                feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
+            )
         else:
-            _schedule_background(feishu_ws_manager.stop_client(agent_id))
+            schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
 
         return ChannelConfigOut.model_validate(config)
 
@@ -472,7 +464,9 @@ async def configure_channel(
 
     mode = json_as_str_or((config.extra_config or {}).get("connection_mode"), "webhook")
     if mode == "websocket":
-        _schedule_background(feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret))
+        schedule_background_task(
+            feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
+        )
 
     return ChannelConfigOut.model_validate(config)
 
@@ -648,7 +642,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
             logger.info(f"[Feishu] Normalized post → text='{_extracted_text[:100]}', images={len(_image_markers)}")
 
         if msg_type in ("file", "image"):
-            _schedule_background(
+            schedule_background_task(
                 _handle_feishu_file(
                     agent_id,
                     config,
@@ -657,7 +651,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                     sender_user_id_from_event,
                     chat_type,
                     chat_id,
-                )
+                ),
+                "Feishu handle file",
             )
             return {"code": 0, "msg": "ok"}
 
@@ -1137,7 +1132,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                                 "priority": "medium",
                             }
                         )
-                        _schedule_background(execute_task(task_obj.id, agent_id))
+                        schedule_background_task(execute_task(task_obj.id, agent_id), "Feishu execute_task")
                         reply_text += f"\n\n📋 A task has been created on the task board: 【{task_title}】"
                         logger.info(f"[Feishu] Created task: {task_title}")
                     except Exception as e:
