@@ -9,6 +9,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Self-prefixed (no extra prefix): `triggers.py`, `chat_sessions.py`, `plaza.py`, `webhooks.py`, `websocket.py`, `pages.public_router`, `okr.py`, `linkup_proxy.py` (`/api/linkup`).
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
 - `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. No proactive outbound sender yet. `background_tasks.py` is a helper, not a router.
+- Launch route background work with `schedule_background_task`, not `asyncio.create_task`. It starts the work after the request transaction commits, in a fresh context that carries only the trace id, and drops it on rollback. FastAPI `BackgroundTasks` still run before the request commits.
 - `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/department`).
 
 ## Local departments
