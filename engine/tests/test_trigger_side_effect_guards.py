@@ -83,6 +83,41 @@ async def test_tool_guard_stops_each_side_effect_phase(monkeypatch, stop_at):
 
 
 @pytest.mark.asyncio
+async def test_lease_loss_raised_by_done_callback_is_not_swallowed(monkeypatch):
+    # Given a done callback that finds the lease lost after the caller's check passed.
+    expired = False
+
+    def guard():
+        if expired:
+            lost()
+
+    async def callback(data):
+        nonlocal expired
+        if data["status"] == "done":
+            expired = True
+            lost()
+
+    async def execute(*_args, **_kwargs):
+        return "result"
+
+    monkeypatch.setattr(caller, "execute_tool", execute)
+    # When the callback raises, then the lease loss propagates instead of being logged as a callback failure.
+    with pytest.raises(ExecutionLeaseLostError, match="expired"):
+        await caller._process_tool_call(
+            tc={"id": "call", "function": {"name": "dummy", "arguments": "{}"}},
+            api_messages=[],
+            agent_id=uuid4(),
+            user_id=None,
+            session_id="session",
+            supports_vision=False,
+            on_tool_call=callback,
+            full_reasoning_content="",
+            allowed_tool_names=set(),
+            side_effect_guard=guard,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("existing", [False, True], ids=["create", "promote"])
 @pytest.mark.parametrize("guarded", [False, True], ids=["default", "expired"])
 async def test_primary_session_checks_guard_after_read_before_mutation(monkeypatch, existing, guarded):

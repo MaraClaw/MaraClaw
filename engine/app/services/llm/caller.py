@@ -412,6 +412,9 @@ async def _process_tool_call(
             }
             await on_tool_call(callback_data)
         except Exception as exc:
+            # A callback that tripped the guard must not be swallowed as a callback failure.
+            if side_effect_guard is not None:
+                side_effect_guard()
             logger.debug("[LLM] Tool callback failed: {}", exc)
 
     # Execute tool - pass on_output for execute_code streaming
@@ -459,6 +462,8 @@ async def _process_tool_call(
             }
             await on_tool_call(callback_data)
         except Exception as exc:
+            if side_effect_guard is not None:
+                side_effect_guard()
             logger.debug("[LLM] Tool callback failed: {}", exc)
 
     api_messages.append(
