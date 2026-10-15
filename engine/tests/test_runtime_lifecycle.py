@@ -138,7 +138,7 @@ async def test_invalid_role_has_no_runtime_side_effects(monkeypatch: pytest.Monk
 async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     # Given
     from app.process_roles import parse_process_roles, role_enabled
-    from app.services import audit_logger, trigger_daemon
+    from app.services import audit_logger, scheduler, scheduler_tasks, trigger_daemon
     from app.services.linkup import export
 
     events: list[str] = []
@@ -161,6 +161,15 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     async def loop() -> None:
         await asyncio.Event().wait()
 
+    schedule_started = asyncio.Event()
+
+    async def execution() -> None:
+        schedule_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append("schedule-stopped")
+
     monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
     monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
     monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
@@ -170,6 +179,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     monkeypatch.setattr(audit_logger, "write_audit_log", audit)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
+    monkeypatch.setattr(scheduler, "start_scheduler", loop)
     manager = ChildManager(events)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (manager,))
     monkeypatch.setattr(runtime.proxy, "start", loop)
@@ -178,6 +188,8 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     names = {task.get_name() for task in runtime.tasks.tasks}
     if role_enabled(roles, "connector"):
         await manager.started.wait()
+    scheduler_tasks.schedule_execution(execution)
+    await asyncio.wait_for(schedule_started.wait(), timeout=1)
     await runtime.stop()
     # Then
     expected = ["pool"]
@@ -186,11 +198,15 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     if role_enabled(roles, "api"):
         expected.append("api")
     if role_enabled(roles, "connector"):
-        expected.extend(["wrapper-stopped", "manager-stop", "child-stopped"])
+        expected.append("wrapper-stopped")
+    expected.append("schedule-stopped")
+    if role_enabled(roles, "connector"):
+        expected.extend(["manager-stop", "child-stopped"])
     if role_enabled(roles, "api"):
         expected.append("realtime")
     assert events == [*expected, "database", "redis", "llm", "logging"]
     assert ("trigger_daemon" in names) == role_enabled(roles, "worker")
+    assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
     assert ("ChildManager" in names) == role_enabled(roles, "connector")
 

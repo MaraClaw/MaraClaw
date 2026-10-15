@@ -21,6 +21,7 @@ from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.tasks import OwnedTasks
 from app.services.llm.client_cache import shutdown_llm_clients
 from app.services.realtime import realtime_router
+from app.services.scheduler_tasks import start_schedule_tasks, stop_schedule_tasks
 
 
 class ConnectorManager(Protocol):
@@ -54,6 +55,7 @@ class Runtime:
         self.logging_attempted: bool = False
 
     async def start(self, roles: frozenset[str]) -> None:
+        start_schedule_tasks()
         settings = get_settings()
         self.logging_attempted = True
         _ = configure_logging(
@@ -86,10 +88,12 @@ class Runtime:
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
             from app.services.linkup.export import start_web_search_export_daemon
+            from app.services.scheduler import start_scheduler
             from app.services.trigger_daemon import start_trigger_daemon
 
             self.tasks.start("trigger_daemon", start_trigger_daemon())
             self.tasks.start("web_search_export", start_web_search_export_daemon())
+            self.tasks.start("agent_scheduler", start_scheduler())
         if role_enabled(roles, "connector"):
             self.managers = connector_managers()
             self.tasks.start("ss-local-proxy", self.proxy.start())
@@ -105,6 +109,7 @@ class Runtime:
 
     async def stop(self) -> None:
         await self._cleanup("wrappers", self.tasks.stop)
+        await self._cleanup("schedule executions", stop_schedule_tasks)
         for manager in self.managers:
             await self._cleanup(type(manager).__name__, manager.stop_all)
         await self._cleanup("ss-local", self.proxy.stop)
