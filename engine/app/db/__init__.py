@@ -9,6 +9,7 @@ from app.db.session import (
     get_connection,
     get_db,
     optional_connection_ctx,
+    run_after_commit,
     transaction,
 )
 from app.db.url import normalize_psycopg_conninfo
@@ -29,5 +30,6 @@ __all__ = [
     "normalize_psycopg_conninfo",
     "optional_connection_ctx",
     "ping_pool",
+    "run_after_commit",
     "transaction",
 ]
