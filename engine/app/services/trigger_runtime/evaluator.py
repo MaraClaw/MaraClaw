@@ -118,6 +118,11 @@ async def mark_trigger_fired(trigger_id: uuid.UUID, now: datetime) -> None:
                         WHEN type = 'once' THEN FALSE
                         WHEN max_fires IS NOT NULL AND fire_count + 1 >= max_fires THEN FALSE
                         ELSE is_enabled
+                    END,
+                    self_disabled = CASE
+                        WHEN is_enabled IS TRUE AND (type = 'once' OR
+                            (max_fires IS NOT NULL AND fire_count + 1 >= max_fires))
+                        THEN TRUE ELSE self_disabled
                     END
                 WHERE id = %(id)s
                 """,

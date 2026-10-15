@@ -114,6 +114,25 @@ async def test_disable_triggers_and_schedules_scope_to_tenant(monkeypatch):
     trigger_sql = raw.executed[0][0]
     schedule_sql = raw.executed[1][0]
     assert "FROM agents WHERE tenant_id = %(tenant_id)s" in trigger_sql
-    assert "is_enabled = FALSE" in trigger_sql
+    assert "SET is_enabled = FALSE, self_disabled = FALSE" in trigger_sql
+    assert "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN (" in trigger_sql
     assert "FROM agents WHERE tenant_id = %(tenant_id)s" in schedule_sql
     assert "next_run_at = NULL" in schedule_sql
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_disable_creator_clears_provenance_in_scope(monkeypatch, scoped):
+    # Given a creator and an optional tenant boundary.
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    creator_id, tenant_id = uuid4(), uuid4() if scoped else None
+    # When disabling the creator's triggers.
+    count = await agent_trigger_dao.disable_for_creator(creator_id, tenant_id=tenant_id)
+    # Then enabled and self-disabled rows are cleared within that boundary.
+    query, params = raw.executed[0]
+    assert "SET is_enabled = FALSE, self_disabled = FALSE" in query
+    assert "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN (" in query
+    assert "FROM agents WHERE creator_id = %(creator_id)s" in query
+    assert ("AND tenant_id = %(tenant_id)s" in query) is scoped
+    assert params == ({"creator_id": creator_id, "tenant_id": tenant_id} if scoped else {"creator_id": creator_id})
+    assert count == 1

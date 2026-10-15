@@ -1,9 +1,9 @@
-import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.api.background_tasks import schedule_background_task
 from app.core.logging import logger
 from app.dao.task_dao import task_dao
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
@@ -69,8 +69,7 @@ async def _manage_tasks(
         if task_type == "todo":
             from app.services.task_executor import execute_task
 
-            execution_task = asyncio.create_task(execute_task(task.id, agent_id))
-            del execution_task
+            schedule_background_task(execute_task(task.id, agent_id), f"execute task {task.id}")
             await _sync_tasks_to_file(agent_id, ws)
             return f"✅ Task created: {title} - auto-execution started"
         # Supervision task - reminder engine will pick it up

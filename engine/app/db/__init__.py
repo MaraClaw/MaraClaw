@@ -1,7 +1,7 @@
 """Psycopg3 database access layer."""
 
 from app.db.connection import DbConnection
-from app.db.errors import DbError, UniqueViolationError, map_psycopg_error
+from app.db.errors import DbError, LockNotAvailableError, UniqueViolationError, map_psycopg_error
 from app.db.pool import close_pool, get_pool, init_pool, ping_pool
 from app.db.session import (
     bind_crud_connection,
@@ -9,6 +9,7 @@ from app.db.session import (
     get_connection,
     get_db,
     optional_connection_ctx,
+    run_after_commit,
     transaction,
 )
 from app.db.url import normalize_psycopg_conninfo
@@ -16,6 +17,7 @@ from app.db.url import normalize_psycopg_conninfo
 __all__ = [
     "DbConnection",
     "DbError",
+    "LockNotAvailableError",
     "UniqueViolationError",
     "bind_crud_connection",
     "close_pool",
@@ -28,5 +30,6 @@ __all__ = [
     "normalize_psycopg_conninfo",
     "optional_connection_ctx",
     "ping_pool",
+    "run_after_commit",
     "transaction",
 ]

@@ -11,6 +11,13 @@ class DbError(Exception):
         self.orig: BaseException | None = orig
 
 
+class LockNotAvailableError(DbError):
+    """Raised when a requested row lock cannot be acquired immediately."""
+
+    def __init__(self, message: str = "lock not available", *, orig: BaseException | None = None) -> None:
+        super().__init__(message, orig=orig)
+
+
 class UniqueViolationError(DbError):
     """Raised when a unique constraint is violated."""
 
@@ -68,6 +75,8 @@ def map_psycopg_error(exc: BaseException) -> DbError:
     # Import lazily so modules can load even if binary import is deferred in tests.
     from psycopg import errors as pg_errors
 
+    if isinstance(exc, pg_errors.LockNotAvailable):
+        return LockNotAvailableError(orig=exc)
     if isinstance(exc, pg_errors.UniqueViolation):
         return UniqueViolationError(constraint=_constraint_name(exc), orig=exc)
     if isinstance(exc, pg_errors.ForeignKeyViolation):

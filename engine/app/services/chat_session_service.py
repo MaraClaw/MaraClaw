@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ async def get_primary_platform_session(
 async def ensure_primary_platform_session(
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
+    guard: Callable[[], None] | None = None,
 ) -> ChatSessionRecord:
     """Return a guaranteed primary platform session for a given user+agent pair.
 
@@ -40,9 +42,13 @@ async def ensure_primary_platform_session(
 
     existing = await chat_session_dao.find_best_web_session(agent_id=agent_id, user_id=user_id)
     if existing:
+        if guard is not None:
+            guard()
         return await chat_session_dao.update(db_obj=existing, obj_in={"is_primary": True})
 
     now = datetime.now(UTC)
+    if guard is not None:
+        guard()
     return await chat_session_dao.create(
         obj_in={
             "agent_id": agent_id,

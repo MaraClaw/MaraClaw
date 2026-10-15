@@ -805,6 +805,7 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 	reason TEXT NOT NULL, 
 	focus_ref VARCHAR(200), 
 	is_enabled BOOLEAN NOT NULL DEFAULT true, 
+	self_disabled BOOLEAN NOT NULL DEFAULT false, 
 	last_fired_at TIMESTAMP WITH TIME ZONE, 
 	fire_count INTEGER NOT NULL, 
 	max_fires INTEGER, 

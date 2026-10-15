@@ -29,6 +29,7 @@ class AgentTriggerRecord:
     reason: str = ""
     focus_ref: str | None = None
     is_enabled: bool = True
+    self_disabled: bool = False
     last_fired_at: datetime | None = None
     fire_count: int = 0
     max_fires: int | None = None
@@ -49,6 +50,7 @@ class AgentTriggerRecord:
             reason=str_from_row(row.get("reason")),
             focus_ref=str_from_row(row["focus_ref"]) or None,
             is_enabled=bool(row.get("is_enabled", True)),
+            self_disabled=bool(row.get("self_disabled", False)),
             last_fired_at=datetime_from_row(row.get("last_fired_at")),
             fire_count=int_from_row(row.get("fire_count")),
             max_fires=int_from_row(row["max_fires"]) if row.get("max_fires") is not None else None,

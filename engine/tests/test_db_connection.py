@@ -142,3 +142,23 @@ def test_map_psycopg_unique_violation() -> None:
     assert (
         _constraint_name(SimpleNamespace(diag=SimpleNamespace(constraint_name="users_email_key"))) == "users_email_key"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["execute", "fetchone"])
+async def test_lock_not_available_maps_with_original(method: str) -> None:
+    # Given
+    from psycopg.errors import LockNotAvailable
+
+    from app.db.errors import LockNotAvailableError
+
+    raw = _FakeRawConnection()
+    original = LockNotAvailable("busy")
+    assert original.sqlstate == "55P03"
+    raw.fail_with = original
+    db = _wrap(raw)
+
+    # When / Then
+    with pytest.raises(LockNotAvailableError) as caught:
+        await getattr(db, method)("SELECT 1")
+    assert caught.value.orig is original

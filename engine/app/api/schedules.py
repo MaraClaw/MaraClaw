@@ -157,7 +157,7 @@ async def trigger_schedule(
     from app.api.background_tasks import schedule_background_task
     from app.services.scheduler import _execute_schedule
 
-    _ = schedule_background_task(
+    schedule_background_task(
         _execute_schedule(sched.id, sched.agent_id, sched.instruction),
         "execute schedule",
     )

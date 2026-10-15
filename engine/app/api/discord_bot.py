@@ -373,7 +373,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
 
         from app.api.background_tasks import schedule_background_task
 
-        _ = schedule_background_task(handle_in_background(), "handle Discord interaction")
+        schedule_background_task(handle_in_background(), "handle Discord interaction")
         return {"type": 5}
 
     return {"type": 1}

@@ -6,6 +6,7 @@ and distributed claim/invoke flow.
 """
 
 import asyncio
+import contextvars
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -54,6 +55,13 @@ def _observe_background_task(task: asyncio.Task[None]) -> None:
         task.result()
     except Exception:
         logger.exception("Trigger invocation failed")
+
+
+def _start_invocation(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
+    # Callers may hold a connection_ctx or tool execution context.
+    task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, triggers), context=contextvars.Context())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_observe_background_task)
 
 
 def _cleanup_stale_invoke_cache():
@@ -110,8 +118,6 @@ async def _tick():
     now = datetime.now(UTC)
 
     all_triggers = await agent_trigger_dao.list_enabled()
-    if not all_triggers:
-        return
 
     # Evaluate and enqueue due triggers. Agent invocation happens only after
     # executions are claimed through the distributed execution queue.
@@ -195,9 +201,7 @@ async def _tick():
         except Exception as e:
             logger.warning(f"Failed to pre-update trigger state: {e}")
 
-        task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, agent_triggers))
-        _BACKGROUND_TASKS.add(task)
-        task.add_done_callback(_observe_background_task)
+        _start_invocation(agent_id, agent_triggers)
 
 
 async def wake_agent_with_context(
@@ -282,9 +286,7 @@ async def wake_agent_with_context(
         last_fired_at=now,
         fire_count=0,
     )
-    task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, [dummy_trigger]))
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_observe_background_task)
+    _start_invocation(agent_id, [dummy_trigger])
 
 
 async def start_trigger_daemon():

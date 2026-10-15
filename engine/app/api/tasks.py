@@ -66,12 +66,12 @@ async def create_task(agent_id: uuid.UUID, data: TaskCreate, current_user: UserR
 
     task_out = await _enrich_task_out(task)
 
-    # Fire background execution for todo tasks (row already committed via DAO)
+    # Todo execution starts after the request commits.
     if data.type == "todo":
         from app.api.background_tasks import schedule_background_task
         from app.services.task_executor import execute_task
 
-        _ = schedule_background_task(execute_task(task.id, agent_id), "execute task")
+        schedule_background_task(execute_task(task.id, agent_id), "execute task")
 
     return task_out
 
@@ -128,6 +128,6 @@ async def trigger_task(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: Us
     from app.api.background_tasks import schedule_background_task
     from app.services.task_executor import execute_task
 
-    _ = schedule_background_task(execute_task(task.id, agent_id), "execute task")
+    schedule_background_task(execute_task(task.id, agent_id), "execute task")
 
     return {"status": "triggered", "task_id": str(task_id)}

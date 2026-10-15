@@ -64,7 +64,7 @@ async def configure_atlassian_channel(
         )
         from app.api.background_tasks import schedule_background_task
 
-        _ = schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
+        schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
         return _serialize(config or existing)
 
     config = await channel_config_dao.create(
@@ -79,7 +79,7 @@ async def configure_atlassian_channel(
     )
     from app.api.background_tasks import schedule_background_task
 
-    _ = schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
+    schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, api_key), "sync Atlassian tools")
     return _serialize(config)
 
 
