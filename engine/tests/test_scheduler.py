@@ -110,6 +110,8 @@ async def test_execution_skips_without_counting_when_agent_ineligible(
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None if state == "missing" else agent))
     context = AsyncMock(side_effect=AssertionError("built ineligible context"))
     monkeypatch.setattr("app.services.agent_context.build_agent_context", context)
+    activity = AsyncMock()
+    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
     set_trace_id("request")
     # When execution reloads the agent.
     await scheduler._execute_schedule(row.id, row.agent_id, row.instruction)
@@ -117,14 +119,15 @@ async def test_execution_skips_without_counting_when_agent_ineligible(
     assert pool.rows[row.id] == row
     assert pool.connections == []
     context.assert_not_awaited()
+    activity.assert_not_awaited()
     assert get_trace_id() not in {None, "request"}
 
 
-@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("failure", [None, "provider", "context"])
 async def test_execution_counts_started_attempt_before_detached_llm_and_retains_history(
     pool: _Pool,
     monkeypatch: pytest.MonkeyPatch,
-    fails: bool,
+    failure: str | None,
 ) -> None:
     # Given a running agent, with real atomic bookkeeping and an external LLM seam.
     row = _schedule()
@@ -138,6 +141,8 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
         assert pool.rows[row.id].run_count == row.run_count + 1
         assert pool.connections[0].commits == 1
         traces.append(get_trace_id())
+        if failure == "context":
+            raise RuntimeError("context failure")
         return "static", "dynamic"
 
     async def llm(**kwargs: object) -> str:
@@ -145,7 +150,7 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
         assert kwargs["agent_id"] == row.agent_id
         assert kwargs["session_id"] == str(row.id)
         traces.append(get_trace_id())
-        if fails:
+        if failure == "provider":
             raise RuntimeError("provider failure")
         return "R" * 600
 
@@ -154,19 +159,104 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
     activity = AsyncMock()
     monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
     set_trace_id("request")
-    # When the eligible execution succeeds or its provider fails.
+    # When the eligible execution succeeds or context/provider work fails.
     await scheduler._execute_schedule(row.id, row.agent_id, row.instruction)
     # Then either result counts one committed attempt without changing the cron slot.
     assert pool.rows[row.id] == replace(row, run_count=row.run_count + 1, last_run_at=NOW)
     assert traces[0] is not None
     assert traces[0] != "request"
-    assert traces == [traces[0]] * 2
-    if fails:
-        activity.assert_not_awaited()
+    assert traces == [traces[0]] * (1 if failure == "context" else 2)
+    activity.assert_awaited_once()
+    assert activity.await_args_list[0].args[:2] == (row.agent_id, "schedule_run")
+    if failure is not None:
+        assert activity.await_args_list[0].args[2] == f"Scheduled task failed: {row.instruction[:60]}"
+        assert activity.await_args_list[0].kwargs["detail"] == {
+            "schedule_id": str(row.id),
+            "instruction": row.instruction,
+            "status": "failed",
+        }
     else:
-        assert activity.await_args_list[0].args[:2] == (row.agent_id, "schedule_run")
+        assert activity.await_args_list[0].args[2] == f"Scheduled task executed: {row.instruction[:60]}"
         assert activity.await_args_list[0].kwargs["detail"] == {
             "schedule_id": str(row.id),
             "instruction": row.instruction,
             "reply": "R" * 500,
         }
+
+
+async def test_execution_retains_cancelled_history_when_owner_stops(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an owned execution blocked in its provider after the start committed.
+    row = _schedule()
+    pool.rows[row.id] = row
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("static", "dynamic")))
+    started = asyncio.Event()
+
+    async def llm(**_kwargs: object) -> str:
+        assert session.get_connection() is None
+        assert pool.connections[0].commits == 1
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", llm)
+    activity = AsyncMock()
+    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
+    scheduler_tasks.schedule_execution(lambda: scheduler._execute_schedule(row.id, row.agent_id, row.instruction))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    (execution,) = scheduler_tasks._tasks
+    # When shutdown cancels and awaits the owned attempt.
+    await scheduler_tasks.stop_schedule_tasks()
+    # Then cancellation propagates, with one count and one honest history entry.
+    assert execution.cancelled()
+    assert not scheduler_tasks._tasks
+    assert pool.rows[row.id] == replace(row, run_count=row.run_count + 1, last_run_at=NOW)
+    activity.assert_awaited_once_with(
+        row.agent_id,
+        "schedule_run",
+        f"Scheduled task cancelled: {row.instruction[:60]}",
+        detail={"schedule_id": str(row.id), "instruction": row.instruction, "status": "cancelled"},
+    )
+
+
+async def test_tick_launches_once_after_commit_when_competing_ticks_interleave(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given the first real tick paused while holding the due occurrence's lock.
+    row = _schedule()
+    pool.rows[row.id] = row
+    pool.pause_first = True
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
+    completed = asyncio.Event()
+    launches: list[tuple[UUID, UUID, str]] = []
+
+    async def execute(schedule_id: UUID, agent_id: UUID, instruction: str) -> None:
+        assert session.get_connection() is None
+        assert session._completion_ctx.get() is None
+        assert get_trace_id() is None
+        assert [raw.commits for raw in pool.connections] == [1, 1]
+        launches.append((schedule_id, agent_id, instruction))
+        completed.set()
+
+    monkeypatch.setattr(scheduler, "_execute_schedule", execute)
+    async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(scheduler._tick())
+        await asyncio.wait_for(pool.selected.wait(), timeout=1)
+        # When another full tick runs before the lock owner updates or commits.
+        try:
+            await scheduler._tick()
+            assert launches == []
+            assert not scheduler_tasks._tasks
+            assert [raw.commits for raw in pool.connections] == [0, 1]
+        finally:
+            pool.release.set()
+    await asyncio.wait_for(completed.wait(), timeout=1)
+    # Then the committed occurrence produces exactly one detached execution.
+    assert launches == [(row.id, row.agent_id, row.instruction)]
+    assert pool.rows[row.id] == replace(row, next_run_at=NEXT)
