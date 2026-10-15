@@ -5,6 +5,7 @@ import re
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Literal, assert_never
 from uuid import uuid4
 
 import pytest
@@ -194,14 +195,88 @@ async def test_first_starts_count_inside_claim_transaction(table, monkeypatch):
     updates = [(q, p) for q, p in sql if q.lstrip().startswith("UPDATE agent_triggers")]
     assert len(updates) == 1
     assert updates[0][1]["ids"] == [first[0].id]
-    lock_index = next(i for i, (q, _) in enumerate(sql) if "FOR NO KEY UPDATE OF t" in q)
-    assert "ORDER BY t.id" in sql[lock_index][0]
-    assert lock_index < next(i for i, (q, _) in enumerate(sql) if q == updates[0][0])
+    assert not any("FOR NO KEY UPDATE OF t" in q and "SKIP LOCKED" not in q for q, _ in sql)
     assert all(commits == 0 for conn, _q, _p, commits in table.events if conn is raw)
     assert raw.commits == 1
     assert sum(q.lstrip().startswith("UPDATE trigger_executions") for q, _ in sql) == 1
     await executions.claim_pending_trigger_executions()
     assert not any(q.lstrip().startswith("UPDATE agent_triggers") for q, _ in table.connections[1].executed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["renew", "completed", "failed"])
+async def test_lease_writes_commit_each_execution_separately(table, operation: Literal["renew", "completed", "failed"]):
+    # Given two processing rows and an ambient parent transaction.
+    ids = tuple(queued(table, started=True)[0].id for _ in range(2))
+    lease = executions.ExecutionLease("owner", ids)
+    for execution_id in ids:
+        table.rows[execution_id].update(status="processing", lease_owner=lease.token)
+    async with connection_ctx():
+        parent = table.connections[0]
+        # When writing the lease through each public service.
+        match operation:
+            case "renew":
+                changed = await executions.renew_trigger_execution_lease(lease)
+            case "completed":
+                changed = await executions.mark_trigger_executions_completed([lease])
+            case "failed":
+                changed = await executions.mark_trigger_executions_failed([lease], "failed invocation")
+            case unreachable:
+                assert_never(unreachable)
+        # Then each row has its own committed checkout, outside the parent.
+        assert changed == list(ids)
+        assert not parent.executed
+        children = table.connections[1:]
+        assert len(children) == 2
+        for raw, execution_id in zip(children, ids, strict=True):
+            assert raw.commits == 1
+            assert len(raw.executed) == 1
+            query, params = raw.executed[0]
+            assert query.lstrip().startswith("UPDATE trigger_executions")
+            assert "WHERE id = %(id)s" in query
+            assert params["id"] == execution_id
+        assert parent.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_lease_write_cancellation_joins_child_and_preserves_trace(table, monkeypatch):
+    from app.core.logging import get_trace_id, set_trace_id
+
+    entered, cleaning, release, joined = (asyncio.Event() for _ in range(4))
+    lease = executions.ExecutionLease("owner", (uuid4(),))
+    caller = None
+
+    async def renew(*_args, **_kwargs):
+        assert asyncio.current_task() is not caller
+        assert session_module.get_connection() is None
+        assert get_trace_id() == "lease-write-trace"
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            joined.set()
+
+    async def write():
+        set_trace_id("lease-write-trace")
+        async with connection_ctx():
+            await executions.renew_trigger_execution_lease(lease)
+
+    monkeypatch.setattr(trigger_execution_dao, "renew_lease", renew)
+    caller = asyncio.create_task(write())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        caller.cancel()
+        await asyncio.wait_for(cleaning.wait(), 1)
+        assert not caller.done()
+    finally:
+        release.set()
+        if not cleaning.is_set():
+            caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+    assert joined.is_set()
 
 
 class Warnings:
@@ -234,6 +309,7 @@ async def test_heartbeat_isolates_parent_and_joins(table, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_heartbeat_retries_and_drops_partial_loss(table, monkeypatch):
+    table.target = 3  # Two row renewals in the first batch, then the surviving row.
     lease, _ = await claimed_lease(monkeypatch, table)
     second, _ = queued(table, started=True)
     row = table.rows[second.id]
@@ -378,6 +454,8 @@ async def test_second_cancellation_waits_for_heartbeat_cleanup(table, monkeypatc
 async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
     await trigger_execution_dao.claim_pending(sources=["once"], now=datetime.now(UTC), limit=10)
     query = table.connections[0].executed[0][0]
+    assert "FOR UPDATE OF e SKIP LOCKED" in query
+    assert "FOR NO KEY UPDATE OF t SKIP LOCKED" in query
     assert "(e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)" in query
     assert query.count("e.source = ANY") == 1
     assert "OR t.type = 'once'" in query

@@ -58,19 +58,10 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     record_factory = staticmethod(AgentTriggerRecord.from_row)
 
     async def record_first_starts(self, execution_ids: Sequence[UUID], *, now: datetime) -> None:
+        """Record first starts with trigger row locks already held by the caller (claim)."""
         if not execution_ids:
             return
         async with self.session() as db:
-            _ = await db.fetchall(
-                """
-                SELECT t.id FROM agent_triggers AS t
-                WHERE t.id IN (
-                    SELECT e.trigger_id FROM trigger_executions AS e WHERE e.id = ANY(%(ids)s)
-                )
-                ORDER BY t.id FOR NO KEY UPDATE OF t
-                """,
-                {"ids": list(execution_ids)},
-            )
             await db.execute(
                 """
                 UPDATE agent_triggers AS t
@@ -184,36 +175,30 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
     record_factory = staticmethod(TriggerExecutionRecord.from_row)
 
-    async def renew_lease(
-        self, execution_ids: Sequence[UUID], *, lease_token: str, lease_until: datetime
-    ) -> list[UUID]:
-        if not execution_ids:
-            return []
+    async def renew_lease(self, execution_id: UUID, *, lease_token: str, lease_until: datetime) -> bool:
         async with self.session() as db:
             rows = await db.fetchall(
                 """
                 UPDATE trigger_executions
                 SET lease_expires_at = %(lease_until)s
-                WHERE id = ANY(%(ids)s)
+                WHERE id = %(id)s
                   AND status = 'processing'
                   AND lease_owner = %(lease_token)s
                 RETURNING id
                 """,
-                {"ids": list(execution_ids), "lease_token": lease_token, "lease_until": lease_until},
+                {"id": execution_id, "lease_token": lease_token, "lease_until": lease_until},
             )
-            return [uuid_from_row(row["id"]) for row in rows]
+            return bool(rows)
 
     async def finish(
         self,
-        execution_ids: Sequence[UUID],
+        execution_id: UUID,
         *,
         lease_token: str,
         status: str,
         error_text: str | None,
         now: datetime,
-    ) -> list[UUID]:
-        if not execution_ids:
-            return []
+    ) -> bool:
         async with self.session() as db:
             rows = await db.fetchall(
                 """
@@ -223,20 +208,20 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                     lease_owner = NULL,
                     lease_expires_at = NULL,
                     last_error = %(error_text)s
-                WHERE id = ANY(%(ids)s)
+                WHERE id = %(id)s
                   AND status = 'processing'
                   AND lease_owner = %(lease_token)s
                 RETURNING id
                 """,
                 {
-                    "ids": list(execution_ids),
+                    "id": execution_id,
                     "lease_token": lease_token,
                     "status": status,
                     "error_text": error_text,
                     "now": now,
                 },
             )
-            return [uuid_from_row(row["id"]) for row in rows]
+            return bool(rows)
 
     async def fail_expired_for_disabled_triggers(self, *, now: datetime, error_text: str) -> list[UUID]:
         async with self.session() as db:
@@ -306,7 +291,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         now: datetime,
         limit: int,
     ) -> list[tuple[TriggerExecutionRecord, AgentTriggerRecord]]:
-        """Claim pending/expired-lease executions with FOR UPDATE SKIP LOCKED."""
+        """Never wait on row locks; hold claimed trigger rows for the rest of the claim transaction."""
         exec_cols = ", ".join(f"e.{c} AS e_{c}" for c in self.columns)
         trig_cols = ", ".join(f"t.{c} AS t_{c}" for c in agent_trigger_dao.columns)
         async with self.session() as db:
@@ -328,7 +313,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                         )
                   )
                 ORDER BY e.scheduled_at ASC
-                FOR UPDATE OF e SKIP LOCKED
+                FOR UPDATE OF e SKIP LOCKED FOR NO KEY UPDATE OF t SKIP LOCKED
                 LIMIT %(limit)s
                 """,
                 {"sources": sources, "now": now, "limit": limit},

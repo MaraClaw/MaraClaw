@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,11 +44,26 @@ def trigger_execution_leases(triggers: Sequence[AgentTriggerRecord]) -> list[Exe
     return [ExecutionLease(token, tuple(ids)) for token, ids in grouped.items()]
 
 
+async def _await_in_fresh_context[T](coroutine: Coroutine[None, None, T]) -> T:
+    """Keep lease writes outside ambient transactions while preserving the trace id."""
+    context = contextvars.Context()
+    trace_id = get_trace_id()
+    if trace_id:
+        context.run(set_trace_id, trace_id)
+    task = asyncio.create_task(coroutine, context=context)
+    return await task
+
+
 async def renew_trigger_execution_lease(lease: ExecutionLease) -> list[uuid.UUID]:
-    async with connection_ctx():
-        renewed = await trigger_execution_dao.renew_lease(
-            lease.execution_ids, lease_token=lease.token, lease_until=datetime.now(UTC) + LEASE_DURATION
-        )
+    async def renew() -> list[uuid.UUID]:
+        lease_until = datetime.now(UTC) + LEASE_DURATION
+        return [
+            execution_id
+            for execution_id in lease.execution_ids
+            if await trigger_execution_dao.renew_lease(execution_id, lease_token=lease.token, lease_until=lease_until)
+        ]
+
+    renewed = await _await_in_fresh_context(renew())
     lost = set(lease.execution_ids) - set(renewed)
     if lost:
         logger.warning(f"Execution lease lost; renewal skipped for {list(lost)}")
@@ -56,31 +71,45 @@ async def renew_trigger_execution_lease(lease: ExecutionLease) -> list[uuid.UUID
 
 
 async def mark_trigger_executions_completed(leases: Sequence[ExecutionLease]) -> list[uuid.UUID]:
-    now = datetime.now(UTC)
-    completed: list[uuid.UUID] = []
-    for lease in leases:
-        changed = await trigger_execution_dao.finish(
-            lease.execution_ids, lease_token=lease.token, status="completed", error_text=None, now=now
-        )
-        lost = set(lease.execution_ids) - set(changed)
-        if lost:
-            logger.warning(f"Execution lease lost; completion skipped for {list(lost)}")
-        completed.extend(changed)
-    return completed
+    async def complete() -> list[uuid.UUID]:
+        now = datetime.now(UTC)
+        completed: list[uuid.UUID] = []
+        for lease in leases:
+            changed = [
+                execution_id
+                for execution_id in lease.execution_ids
+                if await trigger_execution_dao.finish(
+                    execution_id, lease_token=lease.token, status="completed", error_text=None, now=now
+                )
+            ]
+            lost = set(lease.execution_ids) - set(changed)
+            if lost:
+                logger.warning(f"Execution lease lost; completion skipped for {list(lost)}")
+            completed.extend(changed)
+        return completed
+
+    return await _await_in_fresh_context(complete())
 
 
 async def mark_trigger_executions_failed(leases: Sequence[ExecutionLease], error_text: str) -> list[uuid.UUID]:
-    now = datetime.now(UTC)
-    failed: list[uuid.UUID] = []
-    for lease in leases:
-        changed = await trigger_execution_dao.finish(
-            lease.execution_ids, lease_token=lease.token, status="failed", error_text=error_text, now=now
-        )
-        lost = set(lease.execution_ids) - set(changed)
-        if lost:
-            logger.warning(f"Execution lease lost; failure skipped for {list(lost)}")
-        failed.extend(changed)
-    return failed
+    async def fail() -> list[uuid.UUID]:
+        now = datetime.now(UTC)
+        failed: list[uuid.UUID] = []
+        for lease in leases:
+            changed = [
+                execution_id
+                for execution_id in lease.execution_ids
+                if await trigger_execution_dao.finish(
+                    execution_id, lease_token=lease.token, status="failed", error_text=error_text, now=now
+                )
+            ]
+            lost = set(lease.execution_ids) - set(changed)
+            if lost:
+                logger.warning(f"Execution lease lost; failure skipped for {list(lost)}")
+            failed.extend(changed)
+        return failed
+
+    return await _await_in_fresh_context(fail())
 
 
 async def fail_abandoned_trigger_executions() -> list[uuid.UUID]:
