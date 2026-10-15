@@ -57,6 +57,13 @@ def _observe_background_task(task: asyncio.Task[None]) -> None:
         logger.exception("Trigger invocation failed")
 
 
+def _start_invocation(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
+    # Callers may hold a connection_ctx or tool execution context.
+    task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, triggers), context=contextvars.Context())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_observe_background_task)
+
+
 def _cleanup_stale_invoke_cache():
     now = datetime.now(UTC)
     stale = [k for k, v in _last_invoke.items() if (now - v).total_seconds() > DEDUP_WINDOW * 2]
@@ -194,9 +201,7 @@ async def _tick():
         except Exception as e:
             logger.warning(f"Failed to pre-update trigger state: {e}")
 
-        task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, agent_triggers), context=contextvars.Context())
-        _BACKGROUND_TASKS.add(task)
-        task.add_done_callback(_observe_background_task)
+        _start_invocation(agent_id, agent_triggers)
 
 
 async def wake_agent_with_context(
@@ -281,9 +286,7 @@ async def wake_agent_with_context(
         last_fired_at=now,
         fire_count=0,
     )
-    task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, [dummy_trigger]))
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_observe_background_task)
+    _start_invocation(agent_id, [dummy_trigger])
 
 
 async def start_trigger_daemon():

@@ -813,3 +813,39 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
         await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS)
         await asyncio.sleep(0)
     assert not trigger_daemon._BACKGROUND_TASKS
+
+
+@pytest.mark.asyncio
+async def test_wake_invocation_starts_in_fresh_context(table, monkeypatch, tmp_path):
+    from app.core.logging import get_trace_id, set_trace_id
+    from app.services import trigger_daemon
+    from app.services.agent_tool_exec.registry import (
+        ToolExecutionContext,
+        current_execution_context,
+        use_execution_context,
+    )
+
+    agent_id = uuid4()
+    caller_context = ToolExecutionContext(tenant_id="caller-tenant", workspace_root=tmp_path)
+    seen = []
+
+    async def invoke(_id, _triggers):
+        seen.append((session_module._conn_ctx.get(), current_execution_context(), get_trace_id()))
+
+    monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invoke)
+    monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
+    async with connection_ctx() as caller_connection:
+        with use_execution_context(caller_context):
+            set_trace_id("caller-trace")
+            await trigger_daemon.wake_agent_with_context(agent_id, "msg", skip_dedup=True)
+            await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS)
+            await asyncio.sleep(0)
+            assert session_module._conn_ctx.get() is caller_connection
+            assert current_execution_context() is caller_context
+            assert get_trace_id() == "caller-trace"
+    assert not trigger_daemon._BACKGROUND_TASKS
+    assert len(seen) == 1
+    connection, execution_context, trace_id = seen[0]
+    assert connection is None
+    assert execution_context is None
+    assert trace_id != "caller-trace"
