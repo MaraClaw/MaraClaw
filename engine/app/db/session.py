@@ -55,19 +55,26 @@ async def _commit_and_flush(db: DbConnection) -> None:
     from app.core.access_cache import flush_deferred_acl
     from app.core.redis_cache import flush_deferred_versions
 
-    await db.commit()
     # Detach in place so later registrations stay on the scope's batch.
     batch = _completion_ctx.get()
-    committed = None
+    pending = None
     if batch is not None:
-        committed = _CompletionBatch(batch.callbacks, committed=True)
+        pending = _CompletionBatch(batch.callbacks)
         batch.callbacks = []
+    try:
+        await db.commit()
+    except BaseException:
+        if pending is not None:
+            _dispatch_completion(pending)
+        raise
+    if pending is not None:
+        pending.committed = True
     try:
         await flush_deferred_acl()
         await flush_deferred_versions()
     finally:
-        if committed is not None:
-            _dispatch_completion(committed)
+        if pending is not None:
+            _dispatch_completion(pending)
 
 
 @asynccontextmanager

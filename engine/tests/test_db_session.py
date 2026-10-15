@@ -436,6 +436,28 @@ async def test_after_commit_explicit_flush_starts_new_batch(callback_scope) -> N
 
 
 @pytest.mark.asyncio
+async def test_after_commit_failed_explicit_flush_drops_its_batch(callback_scope, monkeypatch) -> None:
+    # Given a caller that catches a rejected explicit commit and keeps going
+    raw, events = callback_scope
+    commit = raw.commit
+
+    async def reject_once() -> None:
+        monkeypatch.setattr(raw, "commit", commit)
+        events.append("rejected")
+        raise RuntimeError("commit rejected")
+
+    monkeypatch.setattr(raw, "commit", reject_once)
+    # When
+    async with connection_ctx():
+        session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
+        with pytest.raises(RuntimeError, match="commit rejected"):
+            await flush_request_transaction()
+        session_module.run_after_commit(lambda: events.append("later"), lambda: events.append("drop later"))
+    # Then the rolled-back registration is dropped and only later work launches
+    assert events == ["rejected", "dropped", "commit", "acl", "versions", "later"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("rollback", [False, True])
 async def test_after_commit_explicit_transaction_uses_same_lifecycle(callback_scope, rollback) -> None:
     # Given
