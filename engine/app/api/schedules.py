@@ -1,7 +1,8 @@
 """Schedule API - CRUD for agent cron jobs."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
+from functools import partial
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -119,7 +120,10 @@ async def update_schedule(
         cron_expr = (
             sched.cron_expr if "cron_expr" not in updates else json_as_str_or(updates["cron_expr"], sched.cron_expr)
         )
-        updates["next_run_at"] = compute_next_run(cron_expr) if is_enabled else None
+        next_run = compute_next_run(cron_expr) if is_enabled or "cron_expr" in updates else None
+        if (is_enabled or "cron_expr" in updates) and next_run is None:
+            raise HTTPException(status_code=400, detail=f"Invalid cron expression: {cron_expr}")
+        updates["next_run_at"] = next_run if is_enabled else None
 
     updated = await agent_schedule_dao.update(db_obj=sched, obj_in=updates)
     return ScheduleOut.model_validate(updated)
@@ -154,21 +158,13 @@ async def trigger_schedule(
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    from app.api.background_tasks import schedule_background_task
+    if agent.status != "running":
+        raise HTTPException(status_code=409, detail="Agent is not running")
+
     from app.services.scheduler import _execute_schedule
+    from app.services.scheduler_tasks import schedule_execution
 
-    schedule_background_task(
-        _execute_schedule(sched.id, sched.agent_id, sched.instruction),
-        "execute schedule",
-    )
-
-    _ = await agent_schedule_dao.update(
-        db_obj=sched,
-        obj_in={
-            "last_run_at": datetime.now(UTC),
-            "run_count": (sched.run_count or 0) + 1,
-        },
-    )
+    schedule_execution(partial(_execute_schedule, sched.id, sched.agent_id, sched.instruction))
 
     return {"status": "triggered", "schedule_id": str(schedule_id)}
 

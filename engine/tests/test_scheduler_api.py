@@ -1,0 +1,214 @@
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, replace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import httpx
+import pytest
+from fastapi import Depends, FastAPI
+
+from app.api import schedules
+from app.core.security import get_current_user
+from app.dao.agent_dao import agent_dao
+from app.db import session
+from app.db.connection import DbConnection
+from app.records.agent import AgentRecord
+from app.records.schedule import AgentScheduleRecord
+from app.records.user import UserRecord
+from test_schedule_dao import NOW, _Pool, _schedule, pool as pool
+from test_scheduler import clock as clock
+from test_scheduler_tasks import owner as owner
+
+
+@dataclass
+class _HTTP:
+    client: httpx.AsyncClient
+    row: AgentScheduleRecord
+    agent: AgentRecord
+    get_schedule: AsyncMock
+    update: AsyncMock
+    activity: AsyncMock
+
+    @property
+    def url(self) -> str:
+        return f"/agents/{self.row.agent_id}/schedules/{self.row.id}"
+
+
+@pytest.fixture
+async def api(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_HTTP]:
+    row = _schedule()
+    pool.rows[row.id] = row
+    user = UserRecord(id=uuid4())
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=user.id, status="running")
+    app = FastAPI()
+    app.include_router(schedules.router, dependencies=[Depends(session.bind_crud_connection)])
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr(schedules, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    get_schedule = AsyncMock(return_value=row)
+    update = AsyncMock(return_value=row)
+    monkeypatch.setattr(schedules.agent_schedule_dao, "get_for_agent", get_schedule)
+    monkeypatch.setattr(schedules.agent_schedule_dao, "update", update)
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("", "")))
+    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", AsyncMock(return_value="reply"))
+    activity = AsyncMock()
+    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            yield _HTTP(client, row, agent, get_schedule, update, activity)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(("state", "expected"), [("stopped", 409), ("expired", 403), ("missing", 404)])
+async def test_manual_rejects_before_launch_or_count_when_ineligible(
+    api: _HTTP, pool: _Pool, state: str, expected: int
+) -> None:
+    # Given an expired-and-stopped agent, a stopped agent, or a missing schedule.
+    api.agent.status = "stopped"
+    api.agent.is_expired = state == "expired"
+    if state == "missing":
+        api.get_schedule.return_value = None
+    # When manually triggering through HTTP.
+    response = await api.client.post(api.url + "/run")
+    # Then the contract error is returned before bookkeeping or execution.
+    assert response.status_code == expected
+    assert pool.rows[api.row.id] == api.row
+    api.update.assert_not_awaited()
+    api.activity.assert_not_awaited()
+
+
+async def test_manual_accepts_disabled_schedule_after_commit_without_advancing_next(
+    api: _HTTP,
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a disabled schedule with its existing cron slot.
+    row = replace(api.row, is_enabled=False)
+    api.get_schedule.return_value = row
+    pool.rows[row.id] = row
+    completed = asyncio.Event()
+    errors: list[str] = []
+
+    async def llm(**_kwargs: object) -> str:
+        if session.get_connection() is not None:
+            errors.append("inherited request connection")
+        if len(pool.connections) != 2 or any(raw.commits != 1 for raw in pool.connections):
+            errors.append("request or bookkeeping uncommitted")
+        return "reply"
+
+    async def activity(*_args: object, **_kwargs: object) -> None:
+        completed.set()
+
+    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", llm)
+    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
+    # When a manual request commits and its admitted execution finishes.
+    response = await api.client.post(api.url + "/run")
+    await asyncio.wait_for(completed.wait(), timeout=1)
+    # Then a disabled schedule executes once, retaining its slot and enabled state.
+    assert response.status_code == 200
+    assert response.json() == {"status": "triggered", "schedule_id": str(row.id)}
+    assert errors == []
+    assert pool.rows[row.id] == replace(row, run_count=row.run_count + 1, last_run_at=NOW)
+    api.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"cron_expr": "invalid"},
+        {"cron_expr": "invalid", "is_enabled": False},
+        {"is_enabled": True},
+    ],
+)
+async def test_update_rejects_invalid_effective_cron_before_write(api: _HTTP, payload: dict[str, object]) -> None:
+    # Given an invalid supplied cron, or invalid stored cron being enabled.
+    api.get_schedule.return_value = replace(api.row, cron_expr="invalid", is_enabled=False)
+    # When updating through HTTP.
+    response = await api.client.patch(api.url, json=payload)
+    # Then bad cron never reaches a write, including while disabling.
+    assert response.status_code == 400
+    api.update.assert_not_awaited()
+
+
+async def test_update_can_disable_stored_invalid_cron_without_replacing_it(api: _HTTP) -> None:
+    # Given legacy invalid cron that needs disabling.
+    api.get_schedule.return_value = replace(api.row, cron_expr="invalid")
+    # When disabling without supplying cron.
+    response = await api.client.patch(api.url, json={"is_enabled": False})
+    # Then the slot clears without requiring repair of the stored cron.
+    assert response.status_code == 200
+    assert api.update.await_args_list[0].kwargs["obj_in"] == {"is_enabled": False, "next_run_at": None}
+
+
+async def test_history_retains_deleted_schedule_logs_and_filters_other_schedules(
+    api: _HTTP,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given retained history plus another schedule's activity, without a live schedule.
+    api.get_schedule.return_value = None
+    log_id = uuid4()
+    rows = [
+        {"id": uuid4(), "detail_json": {"schedule_id": str(uuid4())}},
+        *[
+            {
+                "id": log_id,
+                "created_at": NOW,
+                "summary": "summary",
+                "detail_json": {"schedule_id": str(api.row.id), "instruction": "Report", "reply": "reply"},
+            }
+            for _ in range(22)
+        ],
+    ]
+    fetch = AsyncMock(return_value=rows)
+    monkeypatch.setattr(DbConnection, "fetchall", fetch)
+    # When reading history through the HTTP surface.
+    response = await api.client.get(api.url + "/history")
+    # Then the retained public payload is filtered and capped at twenty records.
+    assert response.status_code == 200
+    assert (
+        response.json()
+        == [
+            {
+                "id": str(log_id),
+                "created_at": NOW.isoformat(),
+                "summary": "summary",
+                "instruction": "Report",
+                "reply": "reply",
+            }
+        ]
+        * 20
+    )
+    api.get_schedule.assert_not_awaited()
+    query, params = fetch.await_args_list[0].args
+    assert "action_type = 'schedule_run'" in query
+    assert "ORDER BY created_at DESC LIMIT 200" in query
+    assert params == {"agent_id": api.row.agent_id}
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_create_preserves_enabled_and_initial_accounting_contract(
+    api: _HTTP,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    # Given a valid cron and the existing create DAO boundary.
+    create = AsyncMock(return_value=api.row)
+    monkeypatch.setattr(schedules.agent_schedule_dao, "create", create)
+    # When creating an enabled or disabled schedule through HTTP.
+    response = await api.client.post(
+        api.url.rsplit("/", 1)[0] + "/",
+        json={
+            "name": "Daily",
+            "instruction": "Report",
+            "cron_expr": "0 12 * * *",
+            "is_enabled": enabled,
+        },
+    )
+    # Then initial accounting stays zero and only enabled schedules receive a slot.
+    assert response.status_code == 201
+    values = create.await_args_list[0].kwargs["obj_in"]
+    assert values["run_count"] == 0
+    assert values["is_enabled"] is enabled
+    assert (values["next_run_at"] is not None) is enabled
