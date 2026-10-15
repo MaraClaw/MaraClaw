@@ -9,8 +9,10 @@ from uuid import UUID
 
 from app.core.json_types import int_from_row, uuid_from_row
 from app.dao.base import BaseDAO
-from app.db.errors import UniqueViolationError
+from app.db.errors import LockNotAvailableError, UniqueViolationError
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
+
+ENQUEUE_LOCK_ATTEMPTS = 3
 
 _TRIGGER_COLUMNS = (
     "id",
@@ -253,8 +255,9 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     async def try_enqueue(self, *, obj_in: Mapping[str, object]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
 
-        Uses a savepoint so a unique violation does not abort an outer request
-        transaction (mirrors the old IntegrityError + rollback pattern).
+        Precondition: the caller's transaction holds no other row locks.
+        Each attempt uses a savepoint so a lock or unique violation does not
+        abort an outer request transaction.
         """
         from uuid import uuid4 as _uuid4
 
@@ -275,14 +278,34 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         sql = f"INSERT INTO {self.table} ({col_sql}) VALUES ({val_sql}) RETURNING {self._select_list()}"
 
         async with self.session() as db:
-            try:
-                async with db.raw.transaction():
-                    row = await db.fetchone(sql, params)
-                    if row is None:
-                        raise RuntimeError(f"INSERT into {self.table} returned no row")
-                    return TriggerExecutionRecord.from_row(row), True
-            except UniqueViolationError:
-                return None, False
+            for attempt in range(ENQUEUE_LOCK_ATTEMPTS):
+                try:
+                    async with db.raw.transaction():
+                        await db.fetchone(
+                            "SELECT 1 FROM agent_triggers WHERE id = %(trigger_id)s FOR KEY SHARE",
+                            {"trigger_id": params.get("trigger_id")},
+                        )
+                        # Never wait on the agent while holding the trigger lock.
+                        await db.fetchone(
+                            "SELECT 1 FROM agents WHERE id = %(agent_id)s FOR KEY SHARE NOWAIT",
+                            {"agent_id": params.get("agent_id")},
+                        )
+                        row = await db.fetchone(sql, params)
+                        if row is None:
+                            raise RuntimeError(f"INSERT into {self.table} returned no row")
+                        return TriggerExecutionRecord.from_row(row), True
+                except UniqueViolationError:
+                    return None, False
+                except LockNotAvailableError:
+                    if attempt == ENQUEUE_LOCK_ATTEMPTS - 1:
+                        raise
+                    # The failed attempt's rollback released the trigger lock.
+                    async with db.raw.transaction(force_rollback=True):
+                        await db.fetchone(
+                            "SELECT 1 FROM agents WHERE id = %(agent_id)s FOR KEY SHARE",
+                            {"agent_id": params.get("agent_id")},
+                        )
+        raise RuntimeError("Enqueue lock attempts exhausted")
 
     async def claim_pending(
         self,

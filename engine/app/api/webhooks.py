@@ -19,6 +19,7 @@ from app.core.json_types import int_from_row, json_loads_value
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
+from app.db.errors import LockNotAvailableError
 from app.services.audit_logger import write_audit_log
 from app.services.trigger_runtime import enqueue_webhook_execution
 
@@ -135,13 +136,17 @@ async def receive_webhook(token: str, request: Request):
         payload_obj = None
         payload_str = repr(body[:2000])
 
-    _execution, created = await enqueue_webhook_execution(
-        trigger=target,
-        body=body,
-        payload_text=payload_str,
-        payload_obj=payload_obj if isinstance(payload_obj, dict) else None,
-        request_headers={k.lower(): v for k, v in request.headers.items()},
-    )
+    try:
+        _execution, created = await enqueue_webhook_execution(
+            trigger=target,
+            body=body,
+            payload_text=payload_str,
+            payload_obj=payload_obj if isinstance(payload_obj, dict) else None,
+            request_headers={k.lower(): v for k, v in request.headers.items()},
+        )
+    except LockNotAvailableError:
+        logger.warning(f"Webhook enqueue busy for trigger {target_name} (agent {target_agent_id})")
+        return JSONResponse({"ok": False, "error": "busy"}, status_code=503)
     if not created:
         logger.info(f"Webhook duplicate ignored for trigger {target_name}")
         return JSONResponse({"ok": True})
