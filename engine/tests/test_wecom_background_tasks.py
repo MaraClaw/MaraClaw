@@ -1,66 +1,187 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
 
-from app.api import wecom as wecom_api
-
-
-class RecordingLogger:
-    def __init__(self) -> None:
-        self.debug_messages: list[str] = []
-        self.error_messages: list[str] = []
-
-    def debug(self, message: str) -> None:
-        self.debug_messages.append(message)
-
-    def opt(self, **_kwargs: object) -> RecordingLogger:
-        return self
-
-    def error(self, message: str) -> None:
-        self.error_messages.append(message)
+from app.api import background_tasks, wecom
+from app.db import session as session_module
+from app.records.channel_config import ChannelConfigRecord
+from app.services.channels import dedup
+from test_db_session import _FakePool, _FakeRawConnection
 
 
 @pytest.mark.asyncio
-async def test_wecom_background_task_logs_failure_and_releases_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: a scheduled WeCom task that fails
-    logger = RecordingLogger()
-    monkeypatch.setattr(wecom_api, "logger", logger)
+@pytest.mark.parametrize("kind", ["text", "kf"])
+async def test_webhook_acks_and_deduplicates_while_processing_is_blocked(monkeypatch, kind):
+    # Given
+    agent_id = uuid4()
+    key = str(uuid4())
+    config = SimpleNamespace(verification_token="token", encrypt_key="key")
+    request = Request(
+        {"type": "http"},
+        AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": b"<xml><Encrypt>cipher</Encrypt></xml>",
+            }
+        ),
+    )
+    content = (
+        f"<MsgType>text</MsgType><MsgId>{key}</MsgId><Content>hello</Content>"
+        if kind == "text"
+        else f"<MsgType>event</MsgType><Event>kf_msg_or_event</Event><Token>{key}</Token>"
+    )
+    xml = f"<xml><FromUserName>user</FromUserName>{content}</xml>"
+    monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(wecom, "_decrypt_msg", lambda *_: (xml, "corp"))
+    monkeypatch.setattr(wecom, "_verify_signature", lambda *_: "signature")
+    marked: set[str] = set()
+    started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = []
+    scheduled_after_mark = []
 
-    async def fail() -> None:
-        raise RuntimeError("boom")
+    def schedule(coroutine, description):
+        scheduled_after_mark.append(key in marked)
+        background_tasks.schedule_background_task(coroutine, description)
 
-    # When: the task completes with an exception
-    wecom_api._schedule_background(fail())
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    async def already_processed(_namespace, value):
+        return value in marked
 
-    # Then: its failure is observed and logged
-    assert logger.error_messages == ["WeCom background task failed"]
-    assert not wecom_api._background_tasks
+    async def mark_processed(_namespace, value):
+        marked.add(value)
+
+    async def process(*args, **kwargs):
+        calls.append(key in marked)
+        started.set()
+        try:
+            await release.wait()
+        finally:
+            completed.set()
+
+    monkeypatch.setattr(dedup, "already_processed_shared", already_processed)
+    monkeypatch.setattr(dedup, "mark_processed_shared", mark_processed)
+    monkeypatch.setattr(wecom, "schedule_background_task", schedule)
+    monkeypatch.setattr(wecom, "_process_wecom_text" if kind == "text" else "_process_wecom_kf_event", process)
+    # When
+    try:
+        response = await asyncio.wait_for(wecom.wecom_event_webhook(agent_id, request, "signature"), 1)
+        await asyncio.wait_for(started.wait(), 1)
+        duplicate = await asyncio.wait_for(wecom.wecom_event_webhook(agent_id, request, "signature"), 1)
+        # Then
+        assert response.body == duplicate.body == b"success"
+        assert not completed.is_set()
+        assert calls == [True]
+        assert scheduled_after_mark == [True]
+    finally:
+        release.set()
+        await asyncio.wait_for(completed.wait(), 1)
 
 
 @pytest.mark.asyncio
-async def test_wecom_background_task_logs_cancellation_and_releases_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: a scheduled WeCom task blocked until cancellation
-    logger = RecordingLogger()
-    monkeypatch.setattr(wecom_api, "logger", logger)
-    release = asyncio.Event()
+@pytest.mark.parametrize("mode", ["websocket", "webhook"])
+@pytest.mark.parametrize("existing", [True, False])
+async def test_config_connector_runs_after_save_and_commit(monkeypatch, mode, existing):
+    # Given
+    agent_id = uuid4()
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(wecom, "check_agent_access", AsyncMock(return_value=(object(), None)))
+    monkeypatch.setattr(wecom, "is_agent_creator", lambda *_: True)
+    config = ChannelConfigRecord(
+        id=uuid4(),
+        agent_id=agent_id,
+        channel_type="wecom",
+        app_id="corp",
+        app_secret="secret",
+        encrypt_key="key",
+        verification_token="token",
+        is_configured=True,
+        is_connected=False,
+        last_tested_at=None,
+        extra_config={},
+        created_at=None,
+    )
+    monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config if existing else None))
+    saved = asyncio.Event()
 
-    async def wait_for_release() -> None:
-        await release.wait()
+    async def save(**kwargs):
+        saved.set()
+        return config
 
-    wecom_api._schedule_background(wait_for_release())
-    task = next(iter(wecom_api._background_tasks))
-    await asyncio.sleep(0)
+    monkeypatch.setattr(wecom.channel_config_dao, "update", save)
+    monkeypatch.setattr(wecom.channel_config_dao, "create", save)
+    started = asyncio.Event()
+    seen = []
 
-    # When: the task is cancelled
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    async def connect(*args):
+        seen.append((saved.is_set(), raw.commits))
+        started.set()
 
-    # Then: cancellation is observed without being treated as a failure
-    assert logger.debug_messages == ["WeCom background task cancelled"]
-    assert not logger.error_messages
-    assert not wecom_api._background_tasks
+    operation = "start_client" if mode == "websocket" else "stop_client"
+    monkeypatch.setattr(wecom.wecom_stream_manager, operation, connect)
+    data: wecom.WeComChannelPayload = (
+        {"bot_id": "bot", "bot_secret": "secret"}
+        if mode == "websocket"
+        else {
+            "corp_id": "corp",
+            "secret": "secret",
+            "token": "token",
+            "encoding_aes_key": "key",
+        }
+    )
+    token = session_module._conn_ctx.set(None)
+    # When
+    try:
+        async with session_module.connection_ctx():
+            result = await wecom.configure_wecom_channel(agent_id, data, Mock())
+            # An event-loop barrier lets incorrectly eager launchers run before commit.
+            barrier = asyncio.Event()
+            asyncio.get_running_loop().call_soon(barrier.set)
+            await barrier.wait()
+            assert not started.is_set()
+        await asyncio.wait_for(started.wait(), 1)
+    finally:
+        session_module._conn_ctx.reset(token)
+    # Then
+    assert result.agent_id == agent_id
+    assert seen == [(True, 1)]
+
+
+@pytest.mark.asyncio
+async def test_connector_background_failure_is_logged(monkeypatch):
+    # Given
+    agent_id = uuid4()
+    config = ChannelConfigRecord(
+        id=uuid4(),
+        agent_id=agent_id,
+        channel_type="wecom",
+        app_id="",
+        app_secret="",
+        encrypt_key="",
+        verification_token="",
+        is_configured=True,
+        is_connected=False,
+        last_tested_at=None,
+        extra_config={},
+        created_at=None,
+    )
+    monkeypatch.setattr(wecom, "check_agent_access", AsyncMock(return_value=(object(), None)))
+    monkeypatch.setattr(wecom, "is_agent_creator", lambda *_: True)
+    monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=None))
+    monkeypatch.setattr(wecom.channel_config_dao, "create", AsyncMock(return_value=config))
+    failure = RuntimeError("connector failed")
+    monkeypatch.setattr(wecom.wecom_stream_manager, "start_client", AsyncMock(side_effect=failure))
+    observed = asyncio.Event()
+    logger = Mock()
+    logger.opt.return_value.error.side_effect = lambda _: observed.set()
+    monkeypatch.setattr(background_tasks, "logger", logger)
+    # When
+    result = await wecom.configure_wecom_channel(agent_id, {"bot_id": "bot", "bot_secret": "secret"}, Mock())
+    await asyncio.wait_for(observed.wait(), 1)
+    # Then
+    assert result.agent_id == agent_id
+    logger.opt.assert_called_once_with(exception=failure)
+    logger.opt.return_value.error.assert_called_once_with("Background task failed: WeCom start_client")
