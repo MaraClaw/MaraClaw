@@ -195,6 +195,11 @@ async def test_first_starts_count_inside_claim_transaction(table, monkeypatch):
     sql = [(q, p) for q, p in raw.executed]
     updates = [(q, p) for q, p in sql if q.lstrip().startswith("UPDATE agent_triggers")]
     assert len(updates) == 1
+    assert (
+        "self_disabled = CASE WHEN t.is_enabled IS TRUE AND (t.type = 'once' OR "
+        "(t.max_fires IS NOT NULL AND t.fire_count + f.fires >= t.max_fires)) "
+        "THEN TRUE ELSE t.self_disabled END"
+    ) in " ".join(updates[0][0].split())
     assert updates[0][1]["ids"] == [first[0].id]
     assert not any("FOR NO KEY UPDATE OF t" in q and "SKIP LOCKED" not in q for q, _ in sql)
     assert all(commits == 0 for conn, _q, _p, commits in table.events if conn is raw)

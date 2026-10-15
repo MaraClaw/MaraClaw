@@ -323,6 +323,7 @@ def build_execution_runtime_trigger(
         reason=getattr(trigger, "reason", "") or "",
         focus_ref=getattr(trigger, "focus_ref", None),
         is_enabled=bool(getattr(trigger, "is_enabled", True)),
+        self_disabled=bool(getattr(trigger, "self_disabled", False)),
         last_fired_at=getattr(trigger, "last_fired_at", None),
         fire_count=int(getattr(trigger, "fire_count", 0) or 0),
         max_fires=getattr(trigger, "max_fires", None),

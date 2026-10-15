@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import ClassVar, final
+from typing import ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, uuid_from_row
@@ -23,6 +23,7 @@ _TRIGGER_COLUMNS = (
     "reason",
     "focus_ref",
     "is_enabled",
+    "self_disabled",
     "last_fired_at",
     "fire_count",
     "max_fires",
@@ -59,6 +60,12 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     columns: ClassVar[tuple[str, ...]] = _TRIGGER_COLUMNS
     record_factory = staticmethod(AgentTriggerRecord.from_row)
 
+    @override
+    async def update(self, *, db_obj: AgentTriggerRecord, obj_in: Mapping[str, object]) -> AgentTriggerRecord:
+        if "is_enabled" in obj_in and "self_disabled" not in obj_in:
+            return await super().update(db_obj=db_obj, obj_in={**obj_in, "self_disabled": False})
+        return await super().update(db_obj=db_obj, obj_in=obj_in)
+
     async def record_first_starts(self, execution_ids: Sequence[UUID], *, now: datetime) -> None:
         """Record first starts with trigger row locks already held by the caller (claim)."""
         if not execution_ids:
@@ -73,6 +80,11 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                         WHEN t.type = 'once' THEN FALSE
                         WHEN t.max_fires IS NOT NULL AND t.fire_count + f.fires >= t.max_fires THEN FALSE
                         ELSE t.is_enabled
+                    END,
+                    self_disabled = CASE
+                        WHEN t.is_enabled IS TRUE AND (t.type = 'once' OR
+                            (t.max_fires IS NOT NULL AND t.fire_count + f.fires >= t.max_fires))
+                        THEN TRUE ELSE t.self_disabled
                     END
                 FROM (
                     SELECT trigger_id, COUNT(*) AS fires FROM trigger_executions
@@ -144,8 +156,8 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     async def disable_for_tenant(self, tenant_id: UUID) -> int:
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE agent_triggers SET is_enabled = FALSE "
-                + "WHERE is_enabled IS TRUE AND agent_id IN ("
+                "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
+                + "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
                 + "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
                 + ") RETURNING id",
                 {"tenant_id": tenant_id},
@@ -160,8 +172,8 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             params["tenant_id"] = tenant_id
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE agent_triggers SET is_enabled = FALSE "
-                + "WHERE is_enabled IS TRUE AND agent_id IN ("
+                "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
+                + "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
                 + f"SELECT id FROM agents WHERE {agent_filter}"
                 + ") RETURNING id",
                 params,
