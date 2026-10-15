@@ -21,6 +21,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.schemas.schemas import (
     GatewayHistoryItem,
@@ -38,15 +39,9 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 async def _get_agent_by_key(api_key: str) -> AgentRecord:
     """Authenticate an OpenClaw agent by its API key."""
-    from app.services.openclaw_hot_cache import get_cached_agent_by_key, set_cached_agent_by_key
-
-    cached = get_cached_agent_by_key(api_key)
-    if cached is not None:
-        return cached
     agent = await agent_dao.get_openclaw_by_api_key(api_key)
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    set_cached_agent_by_key(api_key, agent)
     return agent
 
 
@@ -64,16 +59,12 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
     from app.services.openclaw_hot_cache import should_touch_last_seen
 
-    if should_touch_last_seen(agent.id):
-        agent = (
-            await agent_dao.update(
-                db_obj=agent,
-                obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
-            )
-            or agent
-        )
-
-    messages = await claim_poll_batch(agent.id)
+    async with connection_ctx():
+        active = await agent_dao.touch_openclaw(agent, touch_last_seen=should_touch_last_seen(agent.id))
+        if active is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        agent = active
+        messages = await claim_poll_batch(agent.id)
     guest_model, guest_slot = poll_model_hint(messages)
 
     out = []
@@ -175,7 +166,12 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
     logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
     agent = await _get_agent_by_key(x_api_key)
 
-    won = await record_report(agent, body.message_id, body.result)
+    async with connection_ctx():
+        active = await agent_dao.lock_openclaw(agent)
+        if active is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        agent = active
+        won = await record_report(agent, body.message_id, body.result)
     if won is None:
         if await gateway_message_dao.get_for_agent(body.message_id, agent.id) is None:
             raise HTTPException(status_code=404, detail="Message not found")
@@ -192,10 +188,8 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
 async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")):
     """Pure heartbeat ping - keeps the OpenClaw agent marked as online."""
     agent = await _get_agent_by_key(x_api_key)
-    _ = await agent_dao.update(
-        db_obj=agent,
-        obj_in={"openclaw_last_seen": datetime.now(UTC), "status": "running"},
-    )
+    if await agent_dao.touch_openclaw(agent) is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     return {"status": "ok", "agent_id": str(agent.id)}
 
 
@@ -213,62 +207,71 @@ async def send_message(
     - Human target: send via available channel (feishu, etc.)
     """
     agent = await _get_agent_by_key(x_api_key)
-    _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
-
     target_name = body.target.strip()
     content = body.content.strip()
     channel_hint = (body.channel or "").strip().lower()
 
-    # 1. Try to find target as another Agent, limited to active relationships.
-    target_agent = None
-    for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
-        candidate = rel.target_agent
-        if not candidate:
-            continue
-        status_info = await evaluate_agent_relationship_status(rel)
-        if status_info["access_status"] != "active":
-            continue
-        if candidate.name.lower() == target_name.lower() or target_name.lower() in candidate.name.lower():
-            target_agent = candidate
-            break
+    async with connection_ctx():
+        active = await agent_dao.lock_openclaw(agent)
+        if active is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        agent = active
+        _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": datetime.now(UTC)})
 
-    logger.info(
-        f"[Gateway] send_message: target='{target_name}', found_agent={target_agent.name if target_agent else None}, agent_type={getattr(target_agent, 'agent_type', None) if target_agent else None}, channel_hint='{channel_hint}'"
-    )
+        # 1. Try to find target as another Agent, limited to active relationships.
+        target_agent = None
+        for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
+            candidate = rel.target_agent
+            if not candidate:
+                continue
+            status_info = await evaluate_agent_relationship_status(rel)
+            if status_info["access_status"] != "active":
+                continue
+            if candidate.name.lower() == target_name.lower() or target_name.lower() in candidate.name.lower():
+                target_agent = candidate
+                break
 
-    if target_agent and (not channel_hint or channel_hint == "agent"):
-        conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
-
-        _ = await enqueue_openclaw_message(
-            agent=target_agent,
-            content=content,
-            sender_agent_id=agent.id,
-            conversation_id=conv_id,
-            await_wake=False,
+        logger.info(
+            f"[Gateway] send_message: target='{target_name}', found_agent={target_agent.name if target_agent else None}, agent_type={getattr(target_agent, 'agent_type', None) if target_agent else None}, channel_hint='{channel_hint}'"
         )
-        return {
-            "status": "accepted",
-            "target": target_agent.name,
-            "type": "openclaw_agent",
-            "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
-        }
 
-    # 2. Try to find target as a human (via relationships)
-    rels = await agent_relationship_dao.list_for_agent_with_members(agent.id)
+        if target_agent and (not channel_hint or channel_hint == "agent"):
+            conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
 
-    target_member = None
-    for r in rels:
-        status_info = await evaluate_human_relationship_status(r, source_agent=agent)
-        if r.member and status_info["access_status"] == "active" and r.member.name == target_name:
-            target_member = r.member
-            break
-    # Fuzzy match if exact match fails
-    if not target_member:
+            _ = await enqueue_openclaw_message(
+                agent=target_agent,
+                content=content,
+                sender_agent_id=agent.id,
+                conversation_id=conv_id,
+                await_wake=False,
+            )
+            return {
+                "status": "accepted",
+                "target": target_agent.name,
+                "type": "openclaw_agent",
+                "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
+            }
+
+        # 2. Try to find target as a human (via relationships)
+        rels = await agent_relationship_dao.list_for_agent_with_members(agent.id)
+
+        target_member = None
         for r in rels:
             status_info = await evaluate_human_relationship_status(r, source_agent=agent)
-            if r.member and status_info["access_status"] == "active" and target_name.lower() in r.member.name.lower():
+            if r.member and status_info["access_status"] == "active" and r.member.name == target_name:
                 target_member = r.member
                 break
+        # Fuzzy match if exact match fails
+        if not target_member:
+            for r in rels:
+                status_info = await evaluate_human_relationship_status(r, source_agent=agent)
+                if (
+                    r.member
+                    and status_info["access_status"] == "active"
+                    and target_name.lower() in r.member.name.lower()
+                ):
+                    target_member = r.member
+                    break
 
     if not target_member:
         raise HTTPException(status_code=404, detail=f"Target '{target_name}' not found. Check your relationships list.")

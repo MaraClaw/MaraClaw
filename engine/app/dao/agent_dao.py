@@ -14,6 +14,12 @@ from app.dao.base import BaseDAO
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
 _AGENT_POLICY_COLUMNS = frozenset({"access_mode", "company_access_level", "creator_id", "tenant_id"})
+_GATEWAY_ACTIVE_SQL = (
+    "status <> 'stopped' AND is_expired IS FALSE "
+    "AND (expires_at IS NULL OR expires_at > clock_timestamp()) "
+    "AND (tenant_id IS NULL OR EXISTS (SELECT 1 FROM tenants "
+    "WHERE tenants.id = agents.tenant_id AND tenants.is_active IS TRUE))"
+)
 
 _AGENT_COLUMNS = (
     "id",
@@ -127,7 +133,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         from app.core.acl_locks import lock_agent, lock_tenants
         from app.db.session import optional_connection_ctx
 
-        if not _AGENT_POLICY_COLUMNS.intersection(obj_in):
+        if not (_AGENT_POLICY_COLUMNS | {"status", "is_expired", "expires_at"}).intersection(obj_in):
             updated = await super().update(db_obj=db_obj, obj_in=obj_in)
             memo_set("agent", updated.id, updated)
             return updated
@@ -269,10 +275,66 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM agents " + "WHERE api_key_hash = %(key)s LIMIT 1",
+                f"SELECT {self._select_list()} FROM agents WHERE api_key_hash = %(key)s AND "
+                + _GATEWAY_ACTIVE_SQL
+                + " LIMIT 1",
                 {"key": key_hash},
             )
             return AgentRecord.from_row(row) if row else None
+
+    async def lock_openclaw(self, agent: AgentRecord) -> AgentRecord | None:
+        from app.core.acl_locks import lock_agent, lock_tenants
+
+        async with self.session() as db:
+            await lock_tenants(db, (agent.tenant_id,))
+            await lock_agent(db, agent.id, agent.tenant_id)
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM agents WHERE id = %(id)s AND " + _GATEWAY_ACTIVE_SQL,
+                {"id": agent.id},
+            )
+            return AgentRecord.from_row(row) if row else None
+
+    async def touch_openclaw(self, agent: AgentRecord, *, touch_last_seen: bool = True) -> AgentRecord | None:
+        from app.core.acl_locks import lock_agent, lock_tenants
+
+        async with self.session() as db:
+            await lock_tenants(db, (agent.tenant_id,))
+            await lock_agent(db, agent.id, agent.tenant_id)
+            row = await db.fetchone(
+                "UPDATE agents SET status = 'running', openclaw_last_seen = "
+                + ("CURRENT_TIMESTAMP" if touch_last_seen else "openclaw_last_seen")
+                + " WHERE id = %(id)s AND "
+                + _GATEWAY_ACTIVE_SQL
+                + f" RETURNING {self._select_list()}",
+                {"id": agent.id},
+            )
+        memo_drop("agent", agent.id)
+        return AgentRecord.from_row(row) if row else None
+
+    async def prepare_container_stops(self, now: datetime) -> Sequence[AgentRecord]:
+        from app.core.acl_locks import lock_tenants
+
+        async with self.session() as db:
+            candidates = await db.fetchall(
+                "SELECT tenant_id FROM agents WHERE is_expired IS TRUE OR expires_at <= %(now)s "
+                "OR (status = 'stopped' AND container_id IS NOT NULL)",
+                {"now": now},
+            )
+            await lock_tenants(
+                db, (uuid_from_row(row["tenant_id"]) for row in candidates if row["tenant_id"] is not None)
+            )
+            expired = await db.fetchall(
+                "UPDATE agents SET is_expired = TRUE, status = 'stopped', heartbeat_enabled = FALSE "
+                "WHERE (is_expired IS TRUE OR expires_at <= %(now)s) "
+                "AND (is_expired IS FALSE OR status <> 'stopped' OR heartbeat_enabled IS TRUE) RETURNING id",
+                {"now": now},
+            )
+            for row in expired:
+                memo_drop("agent", uuid_from_row(row["id"]))
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents WHERE status = 'stopped' AND container_id IS NOT NULL"
+            )
+            return [AgentRecord.from_row(row) for row in rows]
 
     async def list_all_ids(self) -> Sequence[UUID]:
         async with self.session() as db:
@@ -399,6 +461,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "WHERE id = %(id)s "
                 + "AND heartbeat_enabled IS TRUE "
                 + "AND status = ANY(%(statuses)s) "
+                + "AND "
+                + _GATEWAY_ACTIVE_SQL
+                + " "
                 + "AND (last_heartbeat_at IS NULL OR last_heartbeat_at <= %(cutoff)s) "
                 + "RETURNING id",
                 {
@@ -626,7 +691,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND status <> 'stopped' RETURNING id",
+                + "WHERE tenant_id = %(tenant_id)s RETURNING id",
                 {"tenant_id": tenant_id},
             )
         for row in rows:
@@ -635,7 +700,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
 
     async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         """Stop agents created by this user (optionally limited to one tenant)."""
-        clauses = ["creator_id = %(creator_id)s", "status <> 'stopped'"]
+        clauses = ["creator_id = %(creator_id)s"]
         params: dict[str, Any] = {"creator_id": creator_id}
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")

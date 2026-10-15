@@ -61,6 +61,9 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     async def get_agent(_key: str) -> AgentRecord:
         return agent
 
+    async def lock_openclaw(_agent: AgentRecord) -> AgentRecord:
+        return agent
+
     async def complete(_message_id, _agent_id, *, result, now):
         if msg.status == "completed":
             return None
@@ -93,6 +96,8 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
         delivered.append((agent, session, content))
 
     monkeypatch.setattr(gateway, "_get_agent_by_key", get_agent)
+    monkeypatch.setattr(gateway, "connection_ctx", connection_ctx)
+    monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", lock_openclaw)
     monkeypatch.setattr(delivery, "connection_ctx", connection_ctx)
     monkeypatch.setattr(gateway.gateway_message_dao, "complete", complete)
     monkeypatch.setattr(gateway.agent_dao, "update", update)
