@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -849,3 +850,155 @@ async def test_wake_invocation_starts_in_fresh_context(table, monkeypatch, tmp_p
     assert connection is None
     assert execution_context is None
     assert trace_id != "caller-trace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clock", ["monotonic", "wall"])
+async def test_synchronous_guard_rejects_expiry_before_heartbeat(table, monkeypatch, clock):
+    # Given a held lease whose heartbeat has not had a chance to run.
+    lease, _ = await claimed_lease(monkeypatch, table)
+    async with executions.hold_trigger_execution_leases([lease]) as hold:
+        with monkeypatch.context() as patch:
+            if clock == "monotonic":
+                patch.setattr(hold.loop, "time", lambda: hold.deadline + 1)
+            else:
+                patch.setattr(time, "time", lambda: hold.wall_deadline + 1)
+            # When admission is checked synchronously after either deadline.
+            with pytest.raises(executions.ExecutionLeaseLostError, match="lease not renewed"):
+                hold.ensure_held()
+        # Then no cancellation was scheduled by the synchronous check.
+        assert hold.fired_reason is None
+
+
+@pytest.mark.asyncio
+async def test_renewal_rejects_wall_expiry_during_io_without_publishing(table, monkeypatch):
+    # Given a confirmed lease and renewal I/O that crosses the old wall bound.
+    lease, _ = await claimed_lease(monkeypatch, table)
+    async with executions.hold_trigger_execution_leases([lease]) as hold:
+        previous = (hold.deadline, hold.wall_deadline)
+
+        async def renew(held):
+            monkeypatch.setattr(time, "time", lambda: previous[1] + 1)
+            return list(held.execution_ids)
+
+        monkeypatch.setattr(executions, "renew_trigger_execution_lease", renew)
+        # When the renewal finishes after the old wall deadline.
+        with pytest.raises(executions.ExecutionLeaseLostError, match="lease not renewed"):
+            await hold.confirm()
+        # Then neither new deadline is published.
+        assert (hold.deadline, hold.wall_deadline) == previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fire_first", [False, True])
+async def test_sync_loss_and_heartbeat_loss_both_classify_as_lease_loss(table, monkeypatch, fire_first):
+    # Given both a synchronous failure and the heartbeat's cancellation.
+    lease, _ = await claimed_lease(monkeypatch, table)
+    owner = asyncio.current_task()
+    assert owner is not None
+    baseline = owner.cancelling()
+
+    async def run():
+        async with executions.hold_trigger_execution_leases([lease]) as hold:
+            if fire_first:
+                hold._fire("heartbeat lost")
+            else:
+                hold.deadline = hold.loop.time() - 1
+            try:
+                hold.ensure_held()
+            finally:
+                if not fire_first:
+                    hold._fire("heartbeat lost during exit")
+
+    # When the two failure orders unwind the hold.
+    with pytest.raises(executions.ExecutionLeaseLostError):
+        await run()
+    # Then internal cancellation is consumed, not misclassified as external.
+    assert owner.cancelling() == baseline
+
+
+@pytest.mark.asyncio
+async def test_paused_invocation_cannot_start_tool_or_post_llm_effects(table, monkeypatch):
+    from app.api import websocket
+    from app.services import audit_logger
+    from app.services.llm import caller
+
+    # Given an invocation paused without yielding until its lease expires.
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    short_lease(monkeypatch)
+    effects = []
+
+    async def execute(*_args, **_kwargs):
+        effects.append("tool")
+        return "result"
+
+    async def effect(*_args, **_kwargs):
+        effects.append("delivery")
+
+    def pause_past_deadline():
+        time.sleep(0.12)
+
+    async def llm(**kwargs):
+        pause_past_deadline()
+        guard_kwargs = {"side_effect_guard": kwargs["side_effect_guard"]} if "side_effect_guard" in kwargs else {}
+        await caller._process_tool_call(
+            tc={"id": "paused", "function": {"name": "dummy", "arguments": "{}"}},
+            api_messages=[],
+            agent_id=trigger.agent_id,
+            user_id=None,
+            session_id="paused",
+            supports_vision=False,
+            on_tool_call=kwargs["on_tool_call"],
+            full_reasoning_content="",
+            allowed_tool_names=set(),
+            **guard_kwargs,
+        )
+        return "stale reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    monkeypatch.setattr(caller, "execute_tool", execute)
+    monkeypatch.setattr(websocket.manager, "send_to_user", effect)
+    monkeypatch.setattr(audit_logger, "write_audit_log", effect)
+    # When the paused owner resumes before the heartbeat timer.
+    await invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger])
+    # Then admission fails before any tool or reply persistence/delivery.
+    assert effects == []
+    assert messages == ["user"]
+    assert table.rows[lease.execution_ids[0]]["last_error"] == executions.LEASE_LOST_ERROR
+
+
+@pytest.mark.asyncio
+async def test_wall_jump_between_reply_and_delivery_stops_invocation(table, monkeypatch):
+    from app.api import websocket
+    from app.services import audit_logger
+
+    # Given a wall-clock jump during the post-confirmation participant lookup.
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    effects = []
+    reads = 0
+    now = time.time()
+
+    async def participant(*_args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            monkeypatch.setattr(time, "time", lambda: now + 1000)
+
+    async def llm(**_kwargs):
+        return "reply"
+
+    async def effect(*_args, **_kwargs):
+        effects.append("delivery")
+
+    fake_invoker(monkeypatch, trigger, llm)
+    monkeypatch.setattr(invoker.participant_dao, "get_by_type_ref", participant)
+    monkeypatch.setattr(websocket.manager, "send_to_user", effect)
+    monkeypatch.setattr(audit_logger, "write_audit_log", effect)
+    messages = record_messages(monkeypatch)
+    # When persistence resumes after the jump.
+    await invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger])
+    # Then no stale reply or delivery starts and the still-owned row is failed.
+    assert messages == ["user"]
+    assert effects == []
+    assert table.rows[lease.execution_ids[0]]["last_error"] == executions.LEASE_LOST_ERROR

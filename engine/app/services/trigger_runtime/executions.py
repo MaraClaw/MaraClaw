@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import time
 import uuid
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
@@ -137,6 +138,7 @@ class ExecutionLeaseHold:
         self.cancelling_baseline: int = 0
         self.lock: asyncio.Lock = asyncio.Lock()
         self.deadline: float = 0.0
+        self.wall_deadline: float = 0.0
         self.closed: bool = False
         self.fired_reason: str | None = None
         self.heartbeat_task: asyncio.Task[None] | None = None
@@ -150,8 +152,10 @@ class ExecutionLeaseHold:
             raise RuntimeError("Execution lease hold requires an asyncio task")
         self.owner_task = owner
         self.cancelling_baseline = owner.cancelling()
-        bound = self.loop.time() + (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
-        await self._renew_batch(bound)
+        window = (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
+        bound = self.loop.time() + window
+        wall_bound = time.time() + window
+        await self._renew_batch(bound, wall_bound)
         context = contextvars.Context()
         trace_id = get_trace_id()
         if trace_id:
@@ -159,21 +163,35 @@ class ExecutionLeaseHold:
         self.heartbeat_task = asyncio.create_task(self._heartbeat(), context=context)
         return self
 
-    async def _renew_batch(self, bound: float) -> None:
+    def ensure_held(self) -> None:
+        if not self.leases:
+            return
+        if self.fired_reason is not None:
+            raise ExecutionLeaseLostError(self.fired_reason)
+        if self.loop.time() >= self.deadline or time.time() >= self.wall_deadline:
+            raise ExecutionLeaseLostError("lease not renewed before it could expire")
+
+    async def _renew_batch(self, bound: float, wall_bound: float) -> None:
         try:
             async with asyncio.timeout_at(bound):
                 async with self.lock:
                     start = self.loop.time()
-                    deadline = start + (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
+                    start_wall = time.time()
+                    if start >= bound or start_wall >= wall_bound:
+                        raise ExecutionLeaseLostError("lease not renewed before it could expire")
+                    window = (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
+                    deadline = start + window
+                    wall_deadline = start_wall + window
                     lost: list[uuid.UUID] = []
                     for lease in self.leases:
                         renewed = await renew_trigger_execution_lease(lease)
                         lost.extend(execution_id for execution_id in lease.execution_ids if execution_id not in renewed)
-                    if self.loop.time() >= bound:
+                    if self.loop.time() >= bound or time.time() >= wall_bound:
                         raise ExecutionLeaseLostError("lease not renewed before it could expire")
                     if lost:
                         raise ExecutionLeaseLostError(f"lease lost for {lost}")
                     self.deadline = deadline
+                    self.wall_deadline = wall_deadline
         except TimeoutError as exc:
             if self.loop.time() < bound:
                 raise
@@ -189,11 +207,11 @@ class ExecutionLeaseHold:
         while not self.closed:
             delay = min(LEASE_RENEW_INTERVAL.total_seconds(), self.deadline - self.loop.time())
             await asyncio.sleep(max(0, delay))
-            if self.loop.time() >= self.deadline:
+            if self.loop.time() >= self.deadline or time.time() >= self.wall_deadline:
                 self._fire("lease not renewed before it could expire")
                 return
             try:
-                await self._renew_batch(self.deadline)
+                await self._renew_batch(self.deadline, self.wall_deadline)
             except ExecutionLeaseLostError as exc:
                 self._fire(exc.reason)
                 return
@@ -205,7 +223,7 @@ class ExecutionLeaseHold:
 
     async def confirm(self) -> None:
         if self.leases:
-            await self._renew_batch(self.deadline)
+            await self._renew_batch(self.deadline, self.wall_deadline)
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None

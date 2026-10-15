@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TypedDict
 
@@ -38,7 +39,7 @@ class TriggerDeliveryTarget(TypedDict):
 
 
 async def resolve_trigger_delivery_target(
-    agent: AgentRecord, triggers: list[AgentTriggerRecord]
+    agent: AgentRecord, triggers: list[AgentTriggerRecord], guard: Callable[[], None] | None = None
 ) -> TriggerDeliveryTarget | None:
     from app.services.chat_session_service import ensure_primary_platform_session
 
@@ -56,6 +57,8 @@ async def resolve_trigger_delivery_target(
                     "owner_user_id": str(session.user_id),
                     "source_channel": session.source_channel,
                 }
+            except ExecutionLeaseLostError:
+                raise
             except Exception:
                 return None
 
@@ -83,6 +86,8 @@ async def resolve_trigger_delivery_target(
                 "owner_user_id": str(session.user_id),
                 "source_channel": "agent",
             }
+        except ExecutionLeaseLostError:
+            raise
         except Exception:
             return None
 
@@ -90,13 +95,15 @@ async def resolve_trigger_delivery_target(
         if not isinstance(origin_user_id, str):
             return None
         try:
-            primary = await ensure_primary_platform_session(agent.id, uuid.UUID(origin_user_id))
+            primary = await ensure_primary_platform_session(agent.id, uuid.UUID(origin_user_id), guard=guard)
             return {
                 "kind": "primary_user_session",
                 "session_id": str(primary.id),
                 "owner_user_id": str(primary.user_id),
                 "source_channel": primary.source_channel,
             }
+        except ExecutionLeaseLostError:
+            raise
         except Exception:
             return None
 
@@ -197,6 +204,7 @@ async def _run_trigger_invocation(
         agent_participant = await participant_dao.get_by_type_ref("agent", agent_id)
         agent_participant_id = agent_participant.id if agent_participant else None
 
+        hold.ensure_held()
         session = await chat_session_dao.create(
             obj_in={
                 "agent_id": agent_id,
@@ -209,6 +217,7 @@ async def _run_trigger_invocation(
         session_id = session.id
         trigger_message: OpenAIMessage = {"role": "user", "content": trigger_context}
         messages = [trigger_message]
+        hold.ensure_held()
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=agent.creator_id,
@@ -235,6 +244,7 @@ async def _run_trigger_invocation(
                         delivered_platform_message_via_tool = True
 
                 if tool_status == "running":
+                    hold.ensure_held()
                     _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
@@ -247,6 +257,7 @@ async def _run_trigger_invocation(
                     )
                 elif tool_status == "done":
                     result_str = str(data.get("result", ""))[:2000]
+                    hold.ensure_held()
                     _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
@@ -255,6 +266,8 @@ async def _run_trigger_invocation(
                         conversation_id=str(session_id),
                         participant_id=agent_participant_id,
                     )
+            except ExecutionLeaseLostError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to persist tool call for trigger session: {e}")
 
@@ -278,9 +291,11 @@ async def _run_trigger_invocation(
             on_tool_call=on_tool_call,
             current_user_name_override=from_agent_name,
             turn=TurnContext(agent=agent, primary_model=model),
+            side_effect_guard=hold.ensure_held,
         )
 
         await hold.confirm()
+        hold.ensure_held()
         final_reply = reply or "".join(collected_content)
         is_a2a_internal = all(t.name == "a2a_wake" for t in triggers)
         notify_owner_user_id: str | None = None
@@ -289,6 +304,7 @@ async def _run_trigger_invocation(
 
         async with connection_ctx():
             agent_participant = await participant_dao.get_by_type_ref("agent", agent_id)
+            hold.ensure_held()
             _ = await chat_message_dao.insert_message(
                 agent_id=agent_id,
                 user_id=agent.creator_id,
@@ -305,6 +321,7 @@ async def _run_trigger_invocation(
             try:
                 async with connection_ctx():
                     participant = await participant_dao.get_by_type_ref("agent", agent_id)
+                    hold.ensure_held()
                     _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
@@ -315,15 +332,21 @@ async def _run_trigger_invocation(
                     )
                     chat_session = await chat_session_dao.get(uuid.UUID(a2a_sid))
                     if chat_session:
+                        hold.ensure_held()
                         _ = await chat_session_dao.update(
                             db_obj=chat_session,
                             obj_in={"last_message_at": datetime.now(UTC)},
                         )
+            except ExecutionLeaseLostError:
+                raise
             except Exception as e:
                 logger.warning(f"[A2A] Failed to save reply to A2A session {a2a_sid}: {e}")
             break
 
-        delivery_target = None if is_a2a_internal else await resolve_trigger_delivery_target(agent, triggers)
+        hold.ensure_held()
+        delivery_target = (
+            None if is_a2a_internal else await resolve_trigger_delivery_target(agent, triggers, guard=hold.ensure_held)
+        )
 
         if final_reply and delivery_target and not delivered_platform_message_via_tool:
             try:
@@ -345,6 +368,7 @@ async def _run_trigger_invocation(
                 notify_owner_user_id = delivery_target.get("owner_user_id")
 
                 async with connection_ctx():
+                    hold.ensure_held()
                     _ = await chat_message_dao.insert_message(
                         agent_id=agent_id,
                         user_id=agent.creator_id,
@@ -354,6 +378,7 @@ async def _run_trigger_invocation(
                     )
                     session_row = await chat_session_dao.get(uuid.UUID(notify_session_id))
                     if session_row:
+                        hold.ensure_held()
                         _ = await chat_session_dao.update(
                             db_obj=session_row,
                             obj_in={"last_message_at": datetime.now(UTC)},
@@ -361,11 +386,15 @@ async def _run_trigger_invocation(
                     if notify_owner_user_id:
                         from app.api.websocket import maybe_mark_session_read_for_active_viewer
 
+                        hold.ensure_held()
                         _ = await maybe_mark_session_read_for_active_viewer(
                             agent_id=agent_id,
                             session_id=notify_session_id,
                             user_id=uuid.UUID(notify_owner_user_id),
+                            guard=hold.ensure_held,
                         )
+            except ExecutionLeaseLostError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to persist trigger delivery: {e}")
                 notification = None
@@ -376,6 +405,7 @@ async def _run_trigger_invocation(
             try:
                 from app.api.websocket import manager as ws_manager
 
+                hold.ensure_held()
                 await ws_manager.send_to_user(
                     str(agent_id),
                     notify_owner_user_id,
@@ -386,9 +416,12 @@ async def _run_trigger_invocation(
                         "session_id": notify_session_id,
                     },
                 )
+            except ExecutionLeaseLostError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to push trigger result to WebSocket: {e}")
 
+        hold.ensure_held()
         await write_audit_log(
             "trigger_fired",
             {"agent_name": agent.name, "triggers": [{"name": t.name, "type": t.type} for t in triggers]},
