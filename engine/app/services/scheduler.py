@@ -12,6 +12,7 @@ from functools import partial
 
 from croniter import croniter
 
+from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
 from app.services.scheduler_tasks import schedule_execution
@@ -49,33 +50,38 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
             return
 
         from app.dao.schedule_dao import agent_schedule_dao
+        from app.services.activity_logger import log_activity
 
         await agent_schedule_dao.record_started(schedule_id, datetime.now(UTC))
 
-        from app.services.agent_context import build_agent_context
-        from app.services.llm import call_agent_llm_with_tools
+        summary = f"Scheduled task failed: {instruction[:60]}"
+        detail: JsonObject = {"schedule_id": str(schedule_id), "instruction": instruction, "status": "failed"}
+        try:
+            from app.services.agent_context import build_agent_context
+            from app.services.llm import call_agent_llm_with_tools
 
-        static_prompt, dynamic_prompt = await build_agent_context(agent_id, agent.name, agent.role_description or "")
-        system_prompt = f"{static_prompt}\n\n{dynamic_prompt}"
+            static_prompt, dynamic_prompt = await build_agent_context(
+                agent_id, agent.name, agent.role_description or ""
+            )
+            system_prompt = f"{static_prompt}\n\n{dynamic_prompt}"
 
-        user_prompt = f"[Scheduled task] {instruction}"
+            user_prompt = f"[Scheduled task] {instruction}"
 
-        reply = await call_agent_llm_with_tools(
-            agent_id=agent_id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_rounds=50,
-            session_id=str(schedule_id),
-        )
-
-        from app.services.activity_logger import log_activity
-
-        await log_activity(
-            agent_id,
-            "schedule_run",
-            f"Scheduled task executed: {instruction[:60]}",
-            detail={"schedule_id": str(schedule_id), "instruction": instruction, "reply": reply[:500]},
-        )
+            reply = await call_agent_llm_with_tools(
+                agent_id=agent_id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_rounds=50,
+                session_id=str(schedule_id),
+            )
+            summary = f"Scheduled task executed: {instruction[:60]}"
+            detail = {"schedule_id": str(schedule_id), "instruction": instruction, "reply": reply[:500]}
+        except asyncio.CancelledError:
+            summary = f"Scheduled task cancelled: {instruction[:60]}"
+            detail["status"] = "cancelled"
+            raise
+        finally:
+            await log_activity(agent_id, "schedule_run", summary, detail=detail)
 
         logger.info(f"Schedule {schedule_id} executed for agent {agent.name}: {reply[:80]}")
 
