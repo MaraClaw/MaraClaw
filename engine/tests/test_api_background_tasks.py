@@ -1,6 +1,6 @@
 import asyncio
 import inspect
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from pathlib import Path
 from unittest.mock import Mock
@@ -22,12 +22,17 @@ from test_db_session import _FakePool, _FakeRawConnection
 
 
 @pytest.fixture(autouse=True)
-def _clear_conn_ctx() -> Iterator[None]:
+async def _clear_conn_ctx() -> AsyncIterator[None]:
     token = session_module._conn_ctx.set(None)
     trace_token = trace_id_var.set(None)
-    yield
-    session_module._conn_ctx.reset(token)
-    trace_id_var.reset(trace_token)
+    background_tasks.start_background_tasks()
+    try:
+        yield
+    finally:
+        await background_tasks.drain_background_tasks(grace_seconds=0)
+        background_tasks.start_background_tasks()
+        session_module._conn_ctx.reset(token)
+        trace_id_var.reset(trace_token)
 
 
 @pytest.fixture
@@ -174,3 +179,93 @@ async def test_background_task_failure_observer_logs_in_fresh_context(monkeypatc
     logger.opt.assert_called_once_with(exception=failure)
     assert seen == [None, "observer trace"]
     assert not background_tasks._tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_allows_completion_without_touching_unowned_tasks() -> None:
+    # Given
+    started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+        await release.wait()
+        finished.set()
+
+    schedule_background_task(work(), "graceful work")
+    await started.wait()
+    unrelated = asyncio.create_task(release.wait())
+    # When
+    drain = asyncio.create_task(background_tasks.drain_background_tasks())
+    await asyncio.sleep(0)
+    try:
+        assert not drain.done()
+        assert not unrelated.done()
+        release.set()
+        await asyncio.wait_for(drain, timeout=1)
+        await unrelated
+    finally:
+        unrelated.cancel()
+        await asyncio.gather(unrelated, return_exceptions=True)
+    # Then
+    assert finished.is_set()
+    assert not background_tasks._tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_timeout_awaits_cancellation_cleanup() -> None:
+    # Given
+    started, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    finished: list[str] = []
+
+    async def work() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            finished.append("cleaned")
+
+    schedule_background_task(work(), "slow work")
+    await started.wait()
+    # When
+    drain = asyncio.create_task(background_tasks.drain_background_tasks(grace_seconds=0))
+    await asyncio.wait_for(cleaning.wait(), timeout=1)
+    assert not drain.done()
+    release.set()
+    await asyncio.wait_for(drain, timeout=1)
+    # Then
+    assert finished == ["cleaned"]
+    assert not background_tasks._tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deferred", "reopen"), [(False, False), (True, False), (True, True)])
+async def test_shutdown_rejects_and_closes_work(raw, monkeypatch, deferred: bool, reopen: bool) -> None:
+    # Given
+    del raw
+    logger = Mock()
+    monkeypatch.setattr(background_tasks, "logger", logger)
+    started: list[str] = []
+
+    async def work() -> None:
+        started.append("started")
+
+    coroutine = work()
+    # When
+    async with session_module.connection_ctx():
+        if deferred:
+            schedule_background_task(coroutine, "rejected work")
+        await background_tasks.drain_background_tasks()
+        if reopen:
+            background_tasks.start_background_tasks()
+        if not deferred:
+            schedule_background_task(coroutine, "rejected work")
+    # Then
+    assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
+    assert started == []
+    logger.warning.assert_called_once()
+    if reopen:
+        schedule_background_task(work(), "new generation")
+        await background_tasks.drain_background_tasks()
+        assert started == ["started"]

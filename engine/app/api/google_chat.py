@@ -10,6 +10,7 @@ from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.api.background_tasks import schedule_background_task
 from app.core.json_types import json_loads_value, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
@@ -30,8 +31,6 @@ router = APIRouter(tags=["google_chat"])
 
 CHANNEL_TYPE = "google_chat"
 _DEDUP_NS = "google_chat"
-# Keep strong refs so background tasks are not GC'd mid-flight (RUF006).
-_background_tasks: set[asyncio.Task[None]] = set()
 
 
 class GoogleChatChannelPayload(TypedDict, total=False):
@@ -326,15 +325,10 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
     if use_async:
         # Ack immediately so Google does not time out; process in background.
         async def _bg() -> None:
-            try:
-                await _process_message_event(agent_id=agent_id, config=config, event=event)
-                await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
-            except Exception:
-                logger.exception("[GoogleChat] Background processing failed for agent %s", agent_id)
+            await _process_message_event(agent_id=agent_id, config=config, event=event)
+            await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
 
-        task = asyncio.create_task(_bg())
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        schedule_background_task(_bg(), "Google Chat process message event")
         # Empty body is a valid Chat app ack for async handling.
         return {}
 

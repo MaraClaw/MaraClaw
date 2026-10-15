@@ -5,7 +5,6 @@ Provides Config CRUD and webhook-based message handling with AES encryption.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import os
@@ -13,7 +12,6 @@ import re
 import struct
 import time
 import uuid
-from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TypedDict, overload
@@ -24,6 +22,7 @@ from Crypto.Cipher import AES
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from app.api.background_tasks import schedule_background_task
 from app.core.json_types import (
     JsonObject,
     json_as_int,
@@ -52,7 +51,6 @@ from app.services.platform_service import platform_service
 from app.services.wecom_stream import wecom_stream_manager
 
 router = APIRouter(tags=["wecom"])
-_background_tasks: set[asyncio.Task[None]] = set()
 
 
 class WeComChannelPayload(TypedDict, total=False):
@@ -77,24 +75,6 @@ class WeComXmlFields:
 
     def findtext(self, tag: str, default: str | None = None) -> str | None:
         return self.text_by_tag.get(tag) or default
-
-
-def _schedule_background(coro: Awaitable[object]) -> None:
-    async def run() -> None:
-        await coro
-
-    task = asyncio.create_task(run())
-    _background_tasks.add(task)
-
-    def observe_completion(completed_task: asyncio.Task[None]) -> None:
-        _background_tasks.discard(completed_task)
-        if completed_task.cancelled():
-            logger.debug("WeCom background task cancelled")
-            return
-        if error := completed_task.exception():
-            logger.opt(exception=error).error("WeCom background task failed")
-
-    task.add_done_callback(observe_completion)
 
 
 # ─── WeCom AES Crypto ──────────────────────────────────
@@ -308,10 +288,12 @@ async def configure_wecom_channel(
 
     try:
         if has_ws_mode:
-            _schedule_background(wecom_stream_manager.start_client(agent_id, bot_id, bot_secret))
+            schedule_background_task(
+                wecom_stream_manager.start_client(agent_id, bot_id, bot_secret), "WeCom start_client"
+            )
             logger.info(f"[WeCom] WebSocket client start triggered for agent {agent_id}")
         else:
-            _schedule_background(wecom_stream_manager.stop_client(agent_id))
+            schedule_background_task(wecom_stream_manager.stop_client(agent_id), "WeCom stop_client")
             logger.info(f"[WeCom] WebSocket client stop triggered for agent {agent_id}")
     except Exception as e:
         logger.error(f"[WeCom] Failed to update WebSocket client state: {e}")
@@ -451,12 +433,16 @@ async def wecom_event_webhook(
             return Response(content="success", media_type="text/plain")
 
         # Process in background task (manages its own sessions)
-        _schedule_background(_process_wecom_text(agent_id, config, from_user, user_text, chat_id=chat_id))
+        schedule_background_task(
+            _process_wecom_text(agent_id, config, from_user, user_text, chat_id=chat_id), "WeCom process text"
+        )
 
     elif msg_type == "event":
         event = msg_root.findtext("Event", "")
         if event == "kf_msg_or_event":
-            _schedule_background(_process_wecom_kf_event(agent_id, config, token, open_kfid))
+            schedule_background_task(
+                _process_wecom_kf_event(agent_id, config, token, open_kfid), "WeCom process kf event"
+            )
         else:
             logger.info(f"[WeCom] Received event: {event} (not handled)")
 
