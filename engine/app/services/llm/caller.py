@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 
 from app.core.json_types import str_findall
 from app.core.logging import logger
@@ -352,6 +353,7 @@ async def _process_tool_call(
     full_reasoning_content: str,
     allowed_tool_names: set[str],
     on_code_output: ToolOutputCallback | None = None,
+    side_effect_guard: Callable[[], None] | None = None,
 ) -> str:
     """Process a single tool call and return result."""
     fn = tc.get("function") or {}
@@ -398,6 +400,8 @@ async def _process_tool_call(
 
     # Notify client about tool call (in-progress)
     if on_tool_call:
+        if side_effect_guard is not None:
+            side_effect_guard()
         try:
             callback_data = {
                 "name": tool_name,
@@ -414,6 +418,8 @@ async def _process_tool_call(
     _on_output: ToolOutputCallback | None = (
         on_code_output if tool_name in ("execute_code", "execute_code_e2b") else None
     )
+    if side_effect_guard is not None:
+        side_effect_guard()
     result = await execute_tool(
         tool_name,
         args,
@@ -440,6 +446,8 @@ async def _process_tool_call(
 
     # Notify client about tool call result
     if on_tool_call:
+        if side_effect_guard is not None:
+            side_effect_guard()
         try:
             callback_data: ToolCallbackData = {
                 "name": tool_name,
@@ -487,6 +495,7 @@ async def call_llm(
     current_user_name_override: str | None = None,
     system_prompt_suffix: str | None = None,
     turn: TurnContext | None = None,
+    side_effect_guard: Callable[[], None] | None = None,
 ) -> str:
     """Call LLM via unified client with function-calling tool loop."""
     # Get agent config for tool rounds
@@ -575,6 +584,8 @@ async def call_llm(
 
     # Tool-calling loop
     for round_i in range(_max_tool_rounds):
+        if side_effect_guard is not None:
+            side_effect_guard()
         # Dynamic tool-call limit warning
         _warn_threshold_80 = int(_max_tool_rounds * 0.8)
         _warn_threshold_96 = _max_tool_rounds - 2
@@ -607,6 +618,8 @@ async def call_llm(
                 await client.close()
                 return _token_limit_msg
 
+        if side_effect_guard is not None:
+            side_effect_guard()
         try:
             # Use streaming API for real-time responses
             async def _buffer_chunk(_text: str) -> None:
@@ -710,6 +723,7 @@ async def call_llm(
                 on_code_output=on_code_output,
                 full_reasoning_content=full_reasoning_content,
                 allowed_tool_names=allowed_tool_names,
+                side_effect_guard=side_effect_guard,
             )
             if tool_error:
                 api_messages.append(

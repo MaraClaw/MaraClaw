@@ -1,6 +1,7 @@
 """WebSocket chat endpoint for real-time agent conversations."""
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -165,6 +166,7 @@ async def maybe_mark_session_read_for_active_viewer(
     agent_id: uuid.UUID,
     session_id: str,
     user_id: uuid.UUID,
+    guard: Callable[[], None] | None = None,
 ) -> bool:
     """Advance last_read_at_by_user if the owner is actively viewing this exact session."""
     if not await manager.is_user_viewing_session(str(agent_id), session_id, str(user_id)):
@@ -178,6 +180,8 @@ async def maybe_mark_session_read_for_active_viewer(
     if not session:
         return False
 
+    if guard is not None:
+        guard()
     _ = await chat_session_dao.update(db_obj=session, obj_in={"last_read_at_by_user": datetime.now(UTC)})
     return True
 
