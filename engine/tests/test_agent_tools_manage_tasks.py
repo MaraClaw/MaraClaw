@@ -161,15 +161,14 @@ async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monke
     execute_task = AsyncMock()
     scheduled = []
 
-    def schedule(coroutine):
-        scheduled.append(coroutine)
+    def schedule(coroutine, description):
+        scheduled.append((coroutine, description))
         coroutine.close()
-        return object()
 
     monkeypatch.setattr(tasks_tool.task_dao, "create", create)
     monkeypatch.setattr(tasks_tool, "_sync_tasks_to_file", sync_tasks_to_file)
     monkeypatch.setattr("app.services.task_executor.execute_task", execute_task)
-    monkeypatch.setattr("asyncio.create_task", schedule)
+    monkeypatch.setattr(tasks_tool, "schedule_background_task", schedule)
 
     # When
     result = await tasks_tool._manage_tasks(agent_id, user_id, tmp_path, {"action": "create", "title": "Ship"})
@@ -177,6 +176,7 @@ async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monke
     # Then
     assert result == "✅ Task created: Ship - auto-execution started"
     create.assert_awaited_once()
+    assert create.await_args is not None
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in == {
         "agent_id": agent_id,
@@ -192,6 +192,7 @@ async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monke
     }
     execute_task.assert_called_once_with(task_id, agent_id)
     assert len(scheduled) == 1
+    assert scheduled[0][1] == f"execute task {task_id}"
     sync_tasks_to_file.assert_awaited_once_with(agent_id, tmp_path)
 
 
@@ -221,6 +222,7 @@ async def test_manage_tasks_creates_supervision_with_defaults_without_scheduling
 
     # Then
     assert result == "✅ Supervision task created: 'Check in' - will remind someone on schedule (not set)"
+    assert create.await_args is not None
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in["supervision_channel"] == "feishu"
     assert obj_in["type"] == "supervision"
@@ -251,6 +253,7 @@ async def test_manage_tasks_marks_done_with_utc_completion_and_syncs(monkeypatch
     assert result == "✅ Updated 'Ship' from pending to done"
     find.assert_awaited_once_with(agent_id, "hip")
     update.assert_awaited_once()
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"]["status"] == "done"
     assert update.await_args.kwargs["obj_in"]["completed_at"].tzinfo is UTC
     sync_tasks_to_file.assert_awaited_once_with(agent_id, tmp_path)
@@ -275,6 +278,7 @@ async def test_manage_tasks_updates_non_done_without_changing_completion(monkeyp
 
     # Then
     assert result == "✅ Updated 'Ship' from pending to doing"
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"] == {"status": "doing"}
 
 

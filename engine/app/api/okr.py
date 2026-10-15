@@ -1371,7 +1371,7 @@ Contact the {len(members_to_contact)} member(s) below who have NOT set their OKR
     from app.api.background_tasks import schedule_background_task
     from app.services.heartbeat import run_agent_oneshot
 
-    _ = schedule_background_task(
+    schedule_background_task(
         run_agent_oneshot(
             agent_id=okr_agent.id,
             prompt=task_prompt,

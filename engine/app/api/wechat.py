@@ -135,7 +135,7 @@ async def get_wechat_qrcode_status(
         if _role_enabled("connector"):
             from app.api.background_tasks import schedule_background_task
 
-            _ = schedule_background_task(wechat_poll_manager.start_client(agent_id), "start WeChat polling client")
+            schedule_background_task(wechat_poll_manager.start_client(agent_id), "start WeChat polling client")
 
     return payload
 

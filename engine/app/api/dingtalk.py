@@ -79,12 +79,12 @@ async def configure_dingtalk_channel(
         from app.services.dingtalk_stream import dingtalk_stream_manager
 
         if conn_mode == "websocket":
-            _ = schedule_background_task(
+            schedule_background_task(
                 dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
                 "start DingTalk stream client",
             )
         else:
-            _ = schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+            schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
         return ChannelConfigOut.model_validate(config)
 
@@ -103,7 +103,7 @@ async def configure_dingtalk_channel(
         from app.api.background_tasks import schedule_background_task
         from app.services.dingtalk_stream import dingtalk_stream_manager
 
-        _ = schedule_background_task(
+        schedule_background_task(
             dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
             "start DingTalk stream client",
         )
@@ -133,7 +133,7 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
     from app.api.background_tasks import schedule_background_task
     from app.services.dingtalk_stream import dingtalk_stream_manager
 
-    _ = schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+    schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
 
 # ─── Message Processing (called by Stream callback) ────

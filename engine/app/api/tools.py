@@ -834,7 +834,7 @@ async def update_category_config(
         from app.api.atlassian import _sync_atlassian_tools_for_agent
         from app.api.background_tasks import schedule_background_task
 
-        _ = schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, app_secret), "sync Atlassian tools")
+        schedule_background_task(_sync_atlassian_tools_for_agent(agent_id, app_secret), "sync Atlassian tools")
 
     return {"ok": True}
 
