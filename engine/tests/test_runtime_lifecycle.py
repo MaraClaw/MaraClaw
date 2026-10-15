@@ -1,11 +1,22 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
 from fastapi import FastAPI
 
+from app.api import background_tasks
 from app.runtime import lifecycle
 from app.runtime.tasks import OwnedTasks
+
+
+@pytest.fixture(autouse=True)
+async def _background_admission() -> AsyncIterator[None]:
+    background_tasks.start_background_tasks()
+    try:
+        yield
+    finally:
+        await background_tasks.drain_background_tasks(grace_seconds=0)
+        background_tasks.start_background_tasks()
 
 
 class ChildManager:
@@ -183,8 +194,16 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     manager = ChildManager(events)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (manager,))
     monkeypatch.setattr(runtime.proxy, "start", loop)
+    await background_tasks.drain_background_tasks()
     # When
     await runtime.start(roles)
+    route_started = asyncio.Event()
+
+    async def route_work() -> None:
+        route_started.set()
+
+    background_tasks.schedule_background_task(route_work(), "runtime admission")
+    await asyncio.wait_for(route_started.wait(), timeout=1)
     names = {task.get_name() for task in runtime.tasks.tasks}
     if role_enabled(roles, "connector"):
         await manager.started.wait()
@@ -243,6 +262,45 @@ async def test_cancellation_of_active_lifespan_drains_children(monkeypatch: pyte
         "manager-stop",
         "child-stopped",
         "realtime",
+        "database",
+        "redis",
+        "llm",
+        "logging",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drain_failure", [False, True])
+async def test_route_drain_precedes_manager_and_resource_cleanup(monkeypatch, drain_failure: bool) -> None:
+    # Given
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = runtime.logging_attempted = True
+    manager = ChildManager(events)
+    runtime.managers = (manager,)
+
+    async def configure_client() -> None:
+        await manager.start_all()
+
+    background_tasks.schedule_background_task(configure_client(), "configure connector")
+    await manager.started.wait()
+
+    async def drain() -> None:
+        await background_tasks.drain_background_tasks(grace_seconds=0)
+        events.append("route-drained")
+        if drain_failure:
+            raise RuntimeError("drain failed")
+
+    monkeypatch.setattr(lifecycle, "drain_background_tasks", drain)
+    # When
+    await runtime.stop()
+    # Then
+    assert events == [
+        "wrapper-stopped",
+        "route-drained",
+        "manager-stop",
+        "child-stopped",
         "database",
         "redis",
         "llm",

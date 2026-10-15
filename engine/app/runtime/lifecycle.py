@@ -10,6 +10,7 @@ from typing import Protocol
 import anyio
 from fastapi import FastAPI
 
+from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
 from app.core.events import close_redis
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
@@ -55,6 +56,7 @@ class Runtime:
         self.logging_attempted: bool = False
 
     async def start(self, roles: frozenset[str]) -> None:
+        start_background_tasks()
         start_schedule_tasks()
         settings = get_settings()
         self.logging_attempted = True
@@ -108,6 +110,7 @@ class Runtime:
             logger.warning("[shutdown] Cleanup {} failed: {}", name, exc)
 
     async def stop(self) -> None:
+        await self._cleanup("route background tasks", drain_background_tasks)
         await self._cleanup("wrappers", self.tasks.stop)
         await self._cleanup("schedule executions", stop_schedule_tasks)
         for manager in self.managers:
