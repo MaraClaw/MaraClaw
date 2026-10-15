@@ -51,6 +51,7 @@ async def test_set_tenant_active_disables_members_agents_and_services(monkeypatc
     reactivate = AsyncMock(return_value=4)
     monkeypatch.setattr(lifecycle.user_dao, "deactivate_for_tenant", deactivate)
     monkeypatch.setattr(lifecycle.agent_dao, "disable_for_tenant", disable_agents)
+    monkeypatch.setattr(lifecycle.agent_dao, "list_for_tenant", AsyncMock(return_value=[]))
     monkeypatch.setattr(lifecycle.agent_trigger_dao, "disable_for_tenant", disable_triggers)
     monkeypatch.setattr(lifecycle.agent_schedule_dao, "disable_for_tenant", disable_schedules)
     monkeypatch.setattr(lifecycle.user_dao, "reactivate_for_tenant", reactivate)

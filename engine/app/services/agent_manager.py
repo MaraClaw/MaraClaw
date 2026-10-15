@@ -1,5 +1,6 @@
 """Agent lifecycle manager - Docker container management for OpenClaw Gateway instances."""
 
+import asyncio
 import hashlib
 import json
 import secrets
@@ -821,7 +822,7 @@ class AgentManager:
             return True
 
         try:
-            self.docker_client.container.stop(agent.container_id, time=10)
+            await asyncio.to_thread(self.docker_client.container.stop, agent.container_id, time=10)
             agent.status = "stopped"
             logger.info(f"Stopped container {agent.container_id[:12]} for agent {agent.name}")
             return True

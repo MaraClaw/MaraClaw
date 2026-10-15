@@ -1,6 +1,9 @@
 import asyncio
+import threading
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -12,8 +15,19 @@ from app.api import background_tasks, gateway
 from app.dao.agent_dao import agent_dao
 from app.db import session
 from app.records.agent import AgentRecord
+from app.records.tenant import TenantRecord
+from app.records.user import UserRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
-from app.services import openclaw_hot_cache, openclaw_routing
+from app.services import (
+    admin_provisioning,
+    agent_stops,
+    heartbeat,
+    openclaw_hot_cache,
+    openclaw_routing,
+    quota_guard,
+    tenant_lifecycle,
+)
+from app.services.agent_manager import agent_manager
 
 
 def _agent():
@@ -56,6 +70,99 @@ async def test_gateway_key_sql_rejects_all_persisted_stop_reasons(monkeypatch):
     assert params["key"] != "secret"
 
 
+@pytest.mark.parametrize("rollback", [False, True])
+@pytest.mark.parametrize("scope", ["user", "tenant"])
+async def test_disable_stops_only_after_owning_crud_commit(monkeypatch, rollback, scope):
+    # Given: the real request transaction owner, with only DB writes and Docker faked.
+    agent = _agent()
+    raw = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+
+    @asynccontextmanager
+    async def connection():
+        yield raw
+
+    monkeypatch.setattr(session, "get_pool", lambda: SimpleNamespace(connection=connection))
+    monkeypatch.setattr(admin_provisioning, "write_admin_audit", AsyncMock())
+    for dao, method, result in (
+        (admin_provisioning.user_dao, "update", SimpleNamespace(is_active=False)),
+        (agent_dao, "disable_for_creator", [agent]),
+        (agent_dao, "disable_for_tenant", 1),
+        (agent_dao, "list_for_tenant", [replace(agent, status="stopped")]),
+        (tenant_lifecycle.tenant_dao, "update", None),
+        (admin_provisioning.user_dao, "deactivate_for_tenant", 1),
+    ):
+        monkeypatch.setattr(dao, method, AsyncMock(return_value=result))
+    for dao in (admin_provisioning.agent_trigger_dao, admin_provisioning.agent_schedule_dao):
+        monkeypatch.setattr(dao, "disable_for_creator", AsyncMock())
+        monkeypatch.setattr(dao, "disable_for_tenant", AsyncMock())
+    observed = []
+
+    async def stop(record):
+        observed.append((record.container_id, raw.commit.await_count, session.get_connection()))
+        return True
+
+    monkeypatch.setattr(agent_manager, "stop_container", stop)
+    owner = session.bind_crud_connection()
+    assert isinstance(owner, AsyncGenerator)
+    await anext(owner)
+    try:
+        # When: disable joins that still-open request transaction.
+        if scope == "user":
+            actor = UserRecord(id=uuid4(), role="platform_admin")
+            target = UserRecord(id=agent.creator_id, tenant_id=agent.tenant_id, role="member", is_active=True)
+            await admin_provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+        else:
+            tenant = TenantRecord(id=uuid4(), name="Company", slug="company", created_at=datetime.now(UTC))
+            await tenant_lifecycle.set_tenant_active(tenant, is_active=False)
+        assert observed == []
+    finally:
+        if rollback:
+            with pytest.raises(RuntimeError, match="rollback"):
+                await owner.athrow(RuntimeError("rollback"))
+        else:
+            with pytest.raises(StopAsyncIteration):
+                await anext(owner)
+        if background_tasks._tasks:
+            await asyncio.gather(*tuple(background_tasks._tasks))
+    # Then: only a committed disable stops, in a clean context (including already-stopped rows).
+    assert observed == ([] if rollback else [("fake", 1, None)])
+
+
+async def test_heartbeat_reconciles_before_listing_heartbeat_candidates(monkeypatch):
+    # Given: no heartbeat-enabled agents, but a reconciler with pending expiry work.
+    calls = []
+
+    async def reconcile(now):
+        calls.append("reconcile")
+
+    async def candidates():
+        calls.append("candidates")
+        return []
+
+    monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", reconcile)
+    monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", candidates)
+    # When: the worker ticks without any guest traffic.
+    await heartbeat._heartbeat_tick()
+    # Then: reconciliation is independent of heartbeat eligibility.
+    assert calls == ["reconcile", "candidates"]
+
+
+async def test_actual_docker_stop_runs_off_event_loop(monkeypatch):
+    # Given: a harmless synchronous Docker fake that records the executing thread.
+    threads = []
+    loop_thread = threading.get_ident()
+    monkeypatch.setattr(
+        agent_manager,
+        "docker_client",
+        SimpleNamespace(container=SimpleNamespace(stop=lambda *args, **kwargs: threads.append(threading.get_ident()))),
+    )
+    # When: using the public async stop API.
+    assert await agent_manager.stop_container(_agent()) is True
+    # Then: blocking Docker work did not execute on the event-loop thread.
+    assert len(threads) == 1
+    assert threads[0] != loop_thread
+
+
 @pytest.mark.parametrize("status", ["idle", "creating", "error"])
 async def test_poll_promotes_even_when_last_seen_is_throttled(monkeypatch, status):
     # Given: an externally hosted guest in a promotable state and a warm last-seen throttle.
@@ -78,6 +185,48 @@ async def test_poll_promotes_even_when_last_seen_is_throttled(monkeypatch, statu
     promote.assert_awaited_once()
     assert promote.await_args is not None
     assert promote.await_args.kwargs["touch_last_seen"] is False
+
+
+async def test_expired_heartbeat_disabled_container_retries_false_stop_after_commit(monkeypatch):
+    # Given: persisted expiry with heartbeat disabled; Docker fails its first attempt.
+    agent = replace(_agent(), heartbeat_enabled=False, expires_at=datetime(2020, 1, 1, tzinfo=UTC))
+    events = []
+    queries = []
+
+    async def fetchall(sql, params=None):
+        queries.append(sql)
+        if sql.startswith("SELECT tenant_id"):
+            return [{"tenant_id": agent.tenant_id}]
+        if sql.startswith("UPDATE agents"):
+            agent.status, agent.is_expired = "stopped", True
+            return [{"id": agent.id}]
+        return [asdict(agent)]
+
+    @asynccontextmanager
+    async def context():
+        events.append("transaction")
+        yield SimpleNamespace(fetchall=fetchall, fetchone=AsyncMock(return_value={"id": agent.tenant_id}))
+        events.append("commit")
+
+    results = iter([False, True])
+
+    async def stop(record):
+        assert events[-1] == "commit"
+        assert record.is_expired
+        assert record.status == "stopped"
+        assert not record.heartbeat_enabled
+        events.append("stop")
+        return next(results)
+
+    monkeypatch.setattr(agent_dao, "session", context)
+    monkeypatch.setattr(agent_manager, "stop_container", stop)
+    # When: two worker reconciliation passes run without any guest traffic.
+    await agent_stops.reconcile_stopped_containers(datetime.now(UTC))
+    await agent_stops.reconcile_stopped_containers(datetime.now(UTC))
+    # Then: the failed stop remains discoverable, and each attempt follows its commit.
+    assert events == ["transaction", "commit", "stop"] * 2
+    assert agent.container_id == "fake"
+    assert "heartbeat_enabled" not in queries[0]
 
 
 async def test_promotion_lock_wait_rereads_stop_before_claim(monkeypatch):
@@ -128,6 +277,20 @@ async def test_promotion_lock_wait_rereads_stop_before_claim(monkeypatch):
     claim.assert_not_awaited()
     assert "FROM tenants" in queries[0]
     assert "FROM agents" in queries[1]
+
+
+async def test_repeated_quota_expiry_never_calls_docker(monkeypatch):
+    # Given: an agent already marked expired by a previous check.
+    agent = replace(_agent(), is_expired=True)
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
+    stop = AsyncMock()
+    monkeypatch.setattr(agent_manager, "stop_container", stop)
+    # When: successive WebSocket messages check the same expiry.
+    for _ in range(2):
+        with pytest.raises(quota_guard.AgentExpired):
+            await quota_guard.check_agent_expired(agent.id)
+    # Then: every message is denied without Docker work in the message path.
+    stop.assert_not_awaited()
 
 
 @pytest.mark.parametrize("operation", ["send", "report"])

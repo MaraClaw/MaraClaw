@@ -502,6 +502,7 @@ async def _heartbeat_tick():
     """One heartbeat tick: find agents due for heartbeat."""
     from app.dao.agent_dao import agent_dao
     from app.dao.tenant_dao import tenant_dao
+    from app.services.agent_stops import reconcile_stopped_containers
     from app.services.audit_logger import write_audit_log
     from app.services.timezone_utils import get_agent_timezone_sync
 
@@ -509,6 +510,7 @@ async def _heartbeat_tick():
     now = datetime.now(UTC)
 
     try:
+        await reconcile_stopped_containers(now)
         agents = list(await agent_dao.list_heartbeat_candidates())
 
         # Pre-load tenants for timezone resolution
