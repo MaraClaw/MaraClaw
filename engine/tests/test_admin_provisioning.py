@@ -460,6 +460,12 @@ async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
         ctx.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()):
             updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    from app.api.background_tasks import _tasks
+
+    if _tasks:
+        import asyncio
+
+        await asyncio.gather(*tuple(_tasks))
     assert updated.is_active is False
     disable_agents.assert_awaited_once_with(target.id, tenant_id=tenant_id)
     disable_triggers.assert_awaited_once_with(target.id, tenant_id=tenant_id)

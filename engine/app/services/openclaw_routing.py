@@ -14,6 +14,7 @@ from uuid import UUID
 
 from app.core.logging import logger
 from app.dao.gateway_message_dao import gateway_message_dao
+from app.db.session import get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
@@ -210,6 +211,14 @@ _wake_again: dict[UUID, tuple[str, UUID | None]] = {}
 
 def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
     """Start inbox wake without blocking the chat socket."""
+    if get_connection() is not None:
+        from app.api.background_tasks import schedule_background_task
+
+        async def after_commit() -> None:
+            _schedule_inbox_wake(agent, content, message_id)
+
+        schedule_background_task(after_commit(), description="wake committed OpenClaw inbox")
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
 
+from app.core.logging import logger
 from app.dao.base import BaseDAO
 from app.records.schedule import AgentScheduleRecord
 
@@ -56,6 +57,44 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
                 {"now": now},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
+
+    async def claim_due(
+        self, now: datetime, compute_next_run: Callable[[str, datetime], datetime | None]
+    ) -> Sequence[AgentScheduleRecord]:
+        """Claim each missed schedule once, advancing its slot before releasing row locks."""
+        claimed: list[AgentScheduleRecord] = []
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agent_schedules "
+                + "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s FOR UPDATE SKIP LOCKED",
+                {"now": now},
+            )
+            for row in rows:
+                schedule = AgentScheduleRecord.from_row(row)
+                next_run = compute_next_run(schedule.cron_expr, now)
+                if next_run is None:
+                    await db.execute(
+                        "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL WHERE id = %(id)s",
+                        {"id": schedule.id},
+                    )
+                    logger.bind(schedule_id=str(schedule.id)).warning("Disabled schedule with invalid cron expression")
+                    continue
+                await db.execute(
+                    "UPDATE agent_schedules SET next_run_at = %(next_run_at)s WHERE id = %(id)s",
+                    {"id": schedule.id, "next_run_at": next_run},
+                )
+                schedule.next_run_at = next_run
+                claimed.append(schedule)
+        return claimed
+
+    async def record_started(self, schedule_id: UUID, now: datetime) -> None:
+        """Count a run only after execution passes its eligibility checks."""
+        async with self.session() as db:
+            await db.execute(
+                "UPDATE agent_schedules SET run_count = COALESCE(run_count, 0) + 1, last_run_at = %(now)s "
+                + "WHERE id = %(id)s",
+                {"id": schedule_id, "now": now},
+            )
 
     async def list_all(self) -> Sequence[AgentScheduleRecord]:
         async with self.session() as db:

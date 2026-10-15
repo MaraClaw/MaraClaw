@@ -8,22 +8,13 @@ and executes them by calling the LLM with the schedule's instruction.
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from functools import partial
 
 from croniter import croniter
 
-from app.core.logging import logger
-
-_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
-
-
-def _observe_background_task(task: asyncio.Task[None]) -> None:
-    _BACKGROUND_TASKS.discard(task)
-    if task.cancelled():
-        return
-    try:
-        task.result()
-    except Exception:
-        logger.exception("Scheduled task failed")
+from app.core.logging import logger, new_trace_id
+from app.db.session import connection_ctx
+from app.services.scheduler_tasks import schedule_execution
 
 
 def compute_next_run(cron_expr: str, after: datetime | None = None) -> datetime | None:
@@ -37,8 +28,9 @@ def compute_next_run(cron_expr: str, after: datetime | None = None) -> datetime 
         return None
 
 
-async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruction: str):
+async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruction: str) -> None:
     """Execute a single schedule by calling the LLM with the instruction."""
+    new_trace_id()
     try:
         from app.core.permissions import is_agent_expired
         from app.dao.agent_dao import agent_dao
@@ -55,6 +47,10 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
         if is_agent_expired(agent):
             logger.info(f"Schedule {schedule_id}: agent {agent.name} has expired, skipping")
             return
+
+        from app.dao.schedule_dao import agent_schedule_dao
+
+        await agent_schedule_dao.record_started(schedule_id, datetime.now(UTC))
 
         from app.services.agent_context import build_agent_context
         from app.services.llm import call_agent_llm_with_tools
@@ -87,53 +83,46 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
         logger.exception(f"Schedule {schedule_id} execution error: {e}")
 
 
-async def _tick():
+async def _tick() -> None:
     """One scheduler tick: find and execute due schedules."""
+    new_trace_id()
     from app.dao.schedule_dao import agent_schedule_dao
     from app.services.audit_logger import write_audit_log
 
     now = datetime.now(UTC)
 
     try:
-        due_schedules = await agent_schedule_dao.list_due(now)
+        async with connection_ctx():
+            due_schedules = await agent_schedule_dao.claim_due(now, compute_next_run)
+            for sched in due_schedules:
+                schedule_execution(partial(_execute_schedule, sched.id, sched.agent_id, sched.instruction))
 
+        # Audit writes swallow errors, so they must not share the claim transaction.
         if due_schedules:
             await write_audit_log("schedule_tick", {"due_count": len(due_schedules)})
 
         for sched in due_schedules:
-            next_run = compute_next_run(sched.cron_expr, now)
-            _ = await agent_schedule_dao.update(
-                db_obj=sched,
-                obj_in={
-                    "last_run_at": now,
-                    "next_run_at": next_run,
-                    "run_count": (sched.run_count or 0) + 1,
-                },
-            )
-
             await write_audit_log(
                 "schedule_fire",
                 {
                     "schedule_id": str(sched.id),
                     "name": sched.name,
                     "instruction": sched.instruction[:100],
-                    "next_run": str(next_run),
+                    "next_run": str(sched.next_run_at),
                 },
                 agent_id=sched.agent_id,
             )
 
-            task = asyncio.create_task(_execute_schedule(sched.id, sched.agent_id, sched.instruction))
-            _BACKGROUND_TASKS.add(task)
-            task.add_done_callback(_observe_background_task)
-            logger.info(f"Triggered schedule '{sched.name}' (next: {next_run})")
+            logger.info(f"Triggered schedule '{sched.name}' (next: {sched.next_run_at})")
 
     except Exception as e:
         logger.exception(f"Scheduler tick error: {e}")
         await write_audit_log("schedule_error", {"error": str(e)[:300]})
 
 
-async def start_scheduler():
+async def start_scheduler() -> None:
     """Start the background scheduler loop. Call from FastAPI startup."""
+    new_trace_id()
     logger.info("🕐 Agent scheduler started (30s interval)")
     while True:
         await _tick()

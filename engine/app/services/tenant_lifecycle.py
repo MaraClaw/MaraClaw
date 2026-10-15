@@ -9,6 +9,7 @@ from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.tenant import TenantRecord
+from app.services.agent_stops import schedule_container_stops
 from app.services.org_membership import assert_may_deactivate_tenant
 
 
@@ -30,6 +31,7 @@ async def set_tenant_active(tenant: TenantRecord, *, is_active: bool) -> TenantR
             _ = await agent_dao.disable_for_tenant(tenant_id)
             _ = await agent_trigger_dao.disable_for_tenant(tenant_id)
             _ = await agent_schedule_dao.disable_for_tenant(tenant_id)
+            schedule_container_stops(await agent_dao.list_for_tenant(tenant_id))
         else:
             _ = await user_dao.reactivate_for_tenant(tenant_id)
         return updated or tenant

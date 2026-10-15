@@ -254,6 +254,15 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     async def touch_last_seen(*, db_obj, obj_in):
         return db_obj
 
+    @asynccontextmanager
+    async def send_context():
+        yield None
+
+    async def admit(record):
+        return record
+
+    monkeypatch.setattr(gateway, "connection_ctx", send_context)
+    monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", admit)
     monkeypatch.setattr(gateway, "_get_agent_by_key", get_source_agent)
     monkeypatch.setattr(gateway, "evaluate_human_relationship_status", active_human_relationship)
     monkeypatch.setattr(gateway.agent_agent_relationship_dao, "list_for_agent_with_targets", no_agent_rels)
@@ -358,6 +367,20 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
 
     async def authenticate(_key):
         return agent
+
+    async def promote(record, *, touch_last_seen=True):
+        return replace(record, status="running")
+
+    async def admit(record):
+        return record
+
+    @asynccontextmanager
+    async def poll_context():
+        yield None
+
+    monkeypatch.setattr(gateway.agent_dao, "touch_openclaw", promote)
+    monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", admit)
+    monkeypatch.setattr(gateway, "connection_ctx", poll_context)
 
     async def insert(**kwargs):
         assert delivery_store.events[-1] == "enter"

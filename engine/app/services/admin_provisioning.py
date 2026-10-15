@@ -401,7 +401,6 @@ async def set_end_user_active(
     if target.is_active == is_active:
         return target
 
-    to_stop = []
     async with connection_ctx():
         updated = await user_dao.update(db_obj=target, obj_in={"is_active": is_active}) or target
         if not is_active:
@@ -409,12 +408,9 @@ async def set_end_user_active(
             to_stop = list(await agent_dao.disable_for_creator(target.id, tenant_id=tenant_id))
             _ = await agent_trigger_dao.disable_for_creator(target.id, tenant_id=tenant_id)
             _ = await agent_schedule_dao.disable_for_creator(target.id, tenant_id=tenant_id)
+            from app.services.agent_stops import schedule_container_stops
 
-    if to_stop:
-        from app.services.agent_manager import agent_manager
-
-        for agent in to_stop:
-            _ = await agent_manager.stop_container(agent)
+            schedule_container_stops(to_stop)
 
     await write_admin_audit(
         actor=actor,
