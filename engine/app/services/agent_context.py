@@ -107,7 +107,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
                         skills.append((entry.name, "", f"{entry.name}/SKILL.md"))
 
             # Case 2: Flat file - skills/<name>.md
-            elif Path(entry.name).suffix == ".md" and not entry.is_dir:
+            elif Path(entry.name).suffix == ".md":
                 try:
                     content = (await storage.read_text(entry_key, encoding="utf-8", errors="replace")).strip()
                     name, desc = _parse_skill_frontmatter(content, Path(entry.name).stem)
@@ -157,7 +157,7 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
     from app.dao.agent_relationship_dao import agent_relationship_dao
 
     def _display_provider_name(pn: str | None, pt: str | None) -> str | None:
-        if not pn and not pt:
+        if pn in (None, "") and pt in (None, ""):
             return None
         if (pt or "").lower() in ("web", "platform") or (pn or "").lower() == "web":
             return "Platform"
@@ -189,7 +189,7 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
             m = r.member
             if not m:
                 continue
-            source = f" (synced through {provider_name})" if provider_name else ""
+            source = f" (synced through {provider_name})" if provider_name not in (None, "") else ""
             lines.append(f"### {m.name} - {m.title or 'Position not set'}{source}")
             if r.description:
                 lines.append(f"- {r.description}")
@@ -432,7 +432,7 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
                         "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                         {"tenant_id": _agent_tenant_id, "key": "company_intro"},
                     )
-                if row and row.get("value"):
+                if row is not None and row.get("value"):
                     value: Any = row["value"]
                     content: Any = value.get("content") if isinstance(value, dict) else None
                     if isinstance(content, str) and content:
@@ -443,14 +443,14 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
         if not company_intro and _agent_tenant_id:
             setting = await system_setting_dao.get_by_key(f"company_intro_{_agent_tenant_id}")
             if setting and setting.value:
-                content = setting.value.get("content") if isinstance(setting.value, dict) else None
+                content = setting.value.get("content")
                 if isinstance(content, str) and content:
                     company_intro = content.strip()
 
         if not company_intro:
             setting = await system_setting_dao.get_by_key("company_intro")
             if setting and setting.value:
-                content = setting.value.get("content") if isinstance(setting.value, dict) else None
+                content = setting.value.get("content")
                 if isinstance(content, str) and content:
                     company_intro = content.strip()
 
@@ -642,7 +642,7 @@ If no search or webpage-reading tool is available, say that web lookup is not en
             for t in triggers:
                 config_str = str(t.config)[:80]
                 reason_str = (t.reason or "")[:500]
-                ref_str = f" (focus: {t.focus_ref})" if t.focus_ref else ""
+                ref_str = f" (focus: {t.focus_ref})" if t.focus_ref not in (None, "") else ""
                 lines.append(f"\n- **{t.name}** [{t.type}]{ref_str}\n  Config: `{config_str}`\n  Reason: {reason_str}")
             dynamic_parts.append("\n## Active Triggers\n" + "\n".join(lines))
     except Exception as exc:
@@ -658,7 +658,7 @@ If no search or webpage-reading tool is available, say that web lookup is not en
     # Append dynamic parts (Time, Focus, Triggers) at the very end to maximize cache hits
 
     # Inject current user identity
-    if current_user_name:
+    if current_user_name not in (None, ""):
         dynamic_parts.append(
             f"\n## Current Conversation\nYou are currently chatting with **{current_user_name}**. Address them by name when appropriate."
         )

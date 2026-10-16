@@ -278,7 +278,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
             if unread:
                 notif_lines = ["\\n\\n---\\n## Inbox (new messages for you - please review and respond if appropriate)"]
                 for n in unread:
-                    sender = f"from {n.sender_name}" if n.sender_name else ""
+                    sender = f"from {n.sender_name}" if n.sender_name not in (None, "") else ""
                     notif_lines.append(f"- [{n.type}] {n.title} {sender}: {(n.body or '')[:150]}")
                 await notification_dao.mark_read([n.id for n in unread])
         except Exception as e:
@@ -335,7 +335,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                 from app.services.llm.caller import _get_agent_config
 
                 _, _token_limit_msg = await _get_agent_config(agent_id)
-                if _token_limit_msg:
+                if _token_limit_msg not in (None, ""):
                     logger.warning(f"[Heartbeat] Token limit exceeded mid-loop: {_token_limit_msg}")
                     await client.close()
                     reply = _token_limit_msg
@@ -715,7 +715,7 @@ async def run_agent_oneshot(
                 from app.services.llm.caller import _get_agent_config
 
                 _, _token_limit_msg = await _get_agent_config(agent_id)
-                if _token_limit_msg:
+                if _token_limit_msg not in (None, ""):
                     logger.warning(f"[Oneshot] Token limit exceeded mid-loop: {_token_limit_msg}")
                     await client.close()
                     reply = _token_limit_msg

@@ -49,9 +49,11 @@ async def persist_chat_message(
                 updates: dict[str, Any] = {}
                 if not skip_insert:
                     updates["last_message_at"] = datetime.now(UTC)
-                if session_updates:
+                if session_updates is not None and session_updates:
                     updates.update(session_updates)
-                if title_if_default and str(getattr(session, "title", "") or "").startswith("Session "):
+                if title_if_default not in (None, "") and str(getattr(session, "title", "") or "").startswith(
+                    "Session "
+                ):
                     updates["title"] = title_if_default
                 if updates:
                     _ = await chat_session_dao.update(db_obj=session, obj_in=updates)

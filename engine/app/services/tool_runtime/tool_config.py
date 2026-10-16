@@ -72,15 +72,15 @@ def decrypt_sensitive_fields(
     settings = get_settings()
     result = dict(config)
     sensitive_keys = set(SENSITIVE_FIELD_KEYS if sensitive_field_keys is None else sensitive_field_keys)
-    if config_schema and "fields" in config_schema:
+    if config_schema is not None and config_schema and "fields" in config_schema:
         for field in config_schema["fields"]:
             if field.get("type") == "password":
                 key = field.get("key")
-                if key:
+                if key is not None and key:
                     sensitive_keys.add(key)
 
     for key in sensitive_keys:
-        if result.get(key):
+        if (value := result.get(key)) is not None and value:
             value = result[key]
             if isinstance(value, str) and value:
                 result[key] = decrypt_data(value, settings.SECRET_KEY)
@@ -157,9 +157,7 @@ async def get_tool_config(
             schema = _as_tool_config_schema(config_schema)
             if tool_source == "builtin":
                 tenant_config = await get_tenant_tool_config(agent_tenant_id, db_tool_name, schema)
-            if not isinstance(global_config, dict):
-                global_config = dict[str, Any](global_config)
-            merged: dict[str, Any] = {
+            merged: JsonObject = {
                 **dependencies.decrypt_sensitive_fields(global_config, schema),
                 **tenant_config,
                 **dependencies.decrypt_sensitive_fields(agent_config, schema),

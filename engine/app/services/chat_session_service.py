@@ -6,7 +6,7 @@ import json
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger
@@ -80,7 +80,7 @@ async def save_tool_call_log(
         "name": tool_name,
         "args": arguments or {},
         "status": status,
-        "result": str(result) if result is not None else "",
+        "result": str(result) if cast(object, result) is not None else "",
         "tool_call_id": tool_call_id,
         "reasoning_content": reasoning_content,
     }

@@ -105,7 +105,7 @@ async def write_identity_audit_log(
         "provider_user_id": provider_user_id,
         "success": success,
     }
-    if error_message:
+    if error_message not in (None, ""):
         details["error"] = error_message
 
     await _write_log(

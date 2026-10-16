@@ -14,7 +14,7 @@ class ResolvedWorkspacePath:
 
 
 def enterprise_info_root(workspace_root: Path, tenant_id: str | None = None) -> Path:
-    suffix = f"enterprise_info_{tenant_id}" if tenant_id else "enterprise_info"
+    suffix = f"enterprise_info_{tenant_id}" if tenant_id not in (None, "") else "enterprise_info"
     return (workspace_root / suffix).resolve()
 
 
