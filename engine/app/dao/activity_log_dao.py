@@ -38,10 +38,10 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
     ) -> Sequence[AgentActivityLogRecord]:
         params: dict[str, Any] = {"agent_id": agent_id, "limit": limit}
         clauses = ["agent_id = %(agent_id)s"]
-        if action_type:
+        if action_type not in (None, ""):
             clauses.append("action_type = %(action_type)s")
             params["action_type"] = action_type
-        if action_types:
+        if action_types is not None and action_types:
             clauses.append("action_type = ANY(%(action_types)s)")
             params["action_types"] = list(action_types)
         where = " AND ".join(clauses)

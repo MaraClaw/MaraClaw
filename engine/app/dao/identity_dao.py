@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
@@ -35,6 +35,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     columns: ClassVar[tuple[str, ...]] = _IDENTITY_COLUMNS
     record_factory = staticmethod(IdentityRecord.from_row)
 
+    @override
     async def update(self, *, db_obj: IdentityRecord, obj_in: Mapping[str, Any]) -> IdentityRecord:
         updated = await super().update(db_obj=db_obj, obj_in=obj_in)
         await bump_identity_session(updated.id)
@@ -53,7 +54,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 + "LIMIT 1",
                 {"identifier": value},
             )
-            return IdentityRecord.from_row(row) if row else None
+            return IdentityRecord.from_row(row) if row is not None else None
 
     async def get_by_email(self, email: str) -> IdentityRecord | None:
         async with self.session() as db:
@@ -61,7 +62,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 f"SELECT {self._select_list()} FROM identities WHERE email = %(email)s LIMIT 1",
                 {"email": email},
             )
-            return IdentityRecord.from_row(row) if row else None
+            return IdentityRecord.from_row(row) if row is not None else None
 
     async def get_by_username(self, username: str) -> IdentityRecord | None:
         async with self.session() as db:
@@ -69,7 +70,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 f"SELECT {self._select_list()} FROM identities WHERE username = %(username)s LIMIT 1",
                 {"username": username},
             )
-            return IdentityRecord.from_row(row) if row else None
+            return IdentityRecord.from_row(row) if row is not None else None
 
     async def get_by_phone(self, phone: str) -> IdentityRecord | None:
         normalized = re.sub(r"[\s\-\+]", "", phone)
@@ -78,7 +79,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 f"SELECT {self._select_list()} FROM identities WHERE phone = %(phone)s LIMIT 1",
                 {"phone": normalized},
             )
-            return IdentityRecord.from_row(row) if row else None
+            return IdentityRecord.from_row(row) if row is not None else None
 
     async def tombstone_orphans(self, identity_ids: Sequence[UUID]) -> int:
         """Clear unique login fields on identities that no longer have a membership.
@@ -123,7 +124,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         must_change_password: bool = False,
     ) -> IdentityRecord:
         """Create and return a new Identity row."""
-        normalized_phone = re.sub(r"[\s\-\+]", "", phone) if phone else None
+        normalized_phone = re.sub(r"[\s\-\+]", "", phone) if phone not in (None, "") else None
         return await self.create(
             obj_in={
                 "email": email,

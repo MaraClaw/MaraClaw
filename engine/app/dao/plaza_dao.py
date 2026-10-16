@@ -159,7 +159,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id},
             )
-            return PlazaPostRecord.from_row(row) if row else None
+            return PlazaPostRecord.from_row(row) if row is not None else None
 
     async def adjust_likes_count(self, post_id: UUID, delta: int) -> PlazaPostRecord | None:
         async with self.session() as db:
@@ -168,7 +168,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id, "delta": delta},
             )
-            return PlazaPostRecord.from_row(row) if row else None
+            return PlazaPostRecord.from_row(row) if row is not None else None
 
 
 @final
@@ -227,7 +227,7 @@ class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
                 + "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
                 {"post_id": post_id, "author_id": author_id},
             )
-            return PlazaLikeRecord.from_row(row) if row else None
+            return PlazaLikeRecord.from_row(row) if row is not None else None
 
     async def delete_by_post_and_author(self, post_id: UUID, author_id: UUID) -> bool:
         async with self.session() as db:

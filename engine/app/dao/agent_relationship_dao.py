@@ -59,7 +59,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "WHERE agent_id = %(agent_id)s AND member_id = %(member_id)s LIMIT 1",
                 {"agent_id": agent_id, "member_id": member_id},
             )
-            return AgentRelationshipRecord.from_row(row) if row else None
+            return AgentRelationshipRecord.from_row(row) if row is not None else None
 
     async def get_for_agent_and_user(self, agent_id: UUID, user_id: UUID) -> AgentRelationshipRecord | None:
         async with self.session() as db:
@@ -70,7 +70,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "AND m.status = 'active' LIMIT 1",
                 {"agent_id": agent_id, "user_id": user_id},
             )
-            return AgentRelationshipRecord.from_row(row) if row else None
+            return AgentRelationshipRecord.from_row(row) if row is not None else None
 
     async def list_member_ids_for_agent(self, agent_id: UUID) -> set[UUID]:
         async with self.session() as db:
@@ -109,7 +109,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "LIMIT 1",
                 {"agent_id": agent_id, "feishu_id": feishu_id},
             )
-            if not row:
+            if row is None:
                 return None
             return _relationship_with_member(row)
 
@@ -182,7 +182,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"rel_id": rel_id, "agent_id": agent_id},
             )
-            return AgentRelationshipRecord.from_row(row) if row else None
+            return AgentRelationshipRecord.from_row(row) if row is not None else None
 
 
 def _relationship_with_member(row: Mapping[str, object], *, include_provider: bool = False) -> AgentRelationshipRecord:

@@ -33,7 +33,7 @@ class EnterpriseInfoDAO(BaseDAO[EnterpriseInfoRecord]):
                 f"SELECT {self._select_list()} FROM enterprise_info WHERE info_type = %(info_type)s",
                 {"info_type": info_type},
             )
-            return EnterpriseInfoRecord.from_row(row) if row else None
+            return EnterpriseInfoRecord.from_row(row) if row is not None else None
 
     async def list_all(self) -> Sequence[EnterpriseInfoRecord]:
         async with self.session() as db:

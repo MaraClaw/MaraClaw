@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -34,11 +34,12 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(AgentFocusItemRecord.from_row)
 
+    @override
     def _select_list(self, alias: str | None = None) -> str:
         # Map SQL column "metadata" into a consistent select list.
         cols = []
         for col in self.columns:
-            expr = f"{alias}.{col}" if alias else col
+            expr = f"{alias}.{col}" if alias not in (None, "") else col
             cols.append(expr)
         return ", ".join(cols)
 
@@ -68,7 +69,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 f"SELECT {self._select_list()} FROM agent_focus_items WHERE agent_id = %(agent_id)s AND key = %(key)s",
                 {"agent_id": agent_id, "key": key},
             )
-            return AgentFocusItemRecord.from_row(row) if row else None
+            return AgentFocusItemRecord.from_row(row) if row is not None else None
 
     async def max_sort_order(self, agent_id: UUID) -> int:
         async with self.session() as db:
@@ -107,16 +108,18 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                     + "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
                     params,
                 )
-                if result:
+                if result is not None:
                     inserted += 1
         return inserted
 
+    @override
     async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")
         return await super().update(db_obj=db_obj, obj_in=data)
 
+    @override
     async def create(self, *, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:

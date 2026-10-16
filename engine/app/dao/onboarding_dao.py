@@ -35,7 +35,7 @@ class UserTenantOnboardingDAO(BaseDAO[UserTenantOnboardingRecord]):
                 + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s LIMIT 1",
                 {"user_id": user_id, "tenant_id": tenant_id},
             )
-            return UserTenantOnboardingRecord.from_row(row) if row else None
+            return UserTenantOnboardingRecord.from_row(row) if row is not None else None
 
     async def insert_ignore(
         self,

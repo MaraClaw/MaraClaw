@@ -69,7 +69,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         ]
         if exclude_system:
             clauses.append("a.is_system IS FALSE")
-        if exclude_statuses:
+        if exclude_statuses is not None and exclude_statuses:
             clauses.append("NOT (a.status = ANY(%(exclude_statuses)s))")
             params["exclude_statuses"] = list(exclude_statuses)
         async with self.session() as db:
@@ -119,7 +119,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
                 + "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"rel_id": rel_id, "agent_id": agent_id},
             )
-            return AgentAgentRelationshipRecord.from_row(row) if row else None
+            return AgentAgentRelationshipRecord.from_row(row) if row is not None else None
 
 
 def _relationship_with_target(row: dict[str, Any], agent_columns: Sequence[str]) -> AgentAgentRelationshipRecord:

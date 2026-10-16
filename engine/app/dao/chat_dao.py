@@ -63,7 +63,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "WHERE id = %(session_id)s AND agent_id = %(agent_id)s",
                 {"session_id": session_id, "agent_id": agent_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def get_for_agent_or_peer(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
         async with self.session() as db:
@@ -72,7 +72,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "WHERE id = %(session_id)s AND (agent_id = %(agent_id)s OR peer_agent_id = %(agent_id)s)",
                 {"session_id": session_id, "agent_id": agent_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def get_by_external_conv(
         self,
@@ -86,7 +86,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "WHERE agent_id = %(agent_id)s AND external_conv_id = %(external_conv_id)s",
                 {"agent_id": agent_id, "external_conv_id": external_conv_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def find_user_id_by_external_patterns(self, *, agent_id: UUID, patterns: Sequence[str]) -> UUID | None:
         if not patterns:
@@ -115,7 +115,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "AND source_channel = 'agent' LIMIT 1",
                 {"agent_id": session_agent_id, "peer_agent_id": peer_agent_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def get_primary_platform(
         self,
@@ -131,7 +131,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 + "LIMIT 1",
                 {"agent_id": agent_id, "user_id": user_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def find_best_web_session(
         self,
@@ -170,7 +170,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 """,
                 {"agent_id": agent_id, "user_id": user_id},
             )
-            return ChatSessionRecord.from_row(row) if row else None
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def list_for_user(
         self,
@@ -233,7 +233,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
     ) -> Sequence[ChatSessionRecord]:
         """Agent↔agent sessions involving any of the given agent ids."""
         if not agent_ids:
-            return []
+            return list[ChatSessionRecord]()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM chat_sessions "
@@ -428,7 +428,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 FROM last_week_active lw
                 """
             )
-            if not row:
+            if row is None:
                 return 0, 0
             return int_from_row(row.get("last_week_total")), int_from_row(row.get("retained"))
 
@@ -662,12 +662,13 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         ascending: bool = False,
     ) -> dict[str, str]:
         """Latest (or earliest) content for many conversations or users."""
+        params: dict[str, object]
         if conversation_ids is not None:
             if not conversation_ids:
                 return {}
             partition = "conversation_id"
             extra = " AND conversation_id = ANY(%(ids)s)"
-            params: dict[str, Any] = {"agent_id": agent_id, "ids": list(conversation_ids)}
+            params = {"agent_id": agent_id, "ids": list(conversation_ids)}
         elif user_ids is not None:
             if not user_ids:
                 return {}
@@ -755,7 +756,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                 + "FROM chat_messages WHERE conversation_id = %(conversation_id)s",
                 {"conversation_id": conversation_id},
             )
-            if not row:
+            if row is None:
                 return 0, None
             return int_from_row(row.get("cnt")), row.get("last_at")
 

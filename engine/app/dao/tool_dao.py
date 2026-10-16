@@ -58,11 +58,11 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 f"SELECT {self._select_list()} FROM tools WHERE name = %(name)s",
                 {"name": name},
             )
-            return ToolRecord.from_row(row) if row else None
+            return ToolRecord.from_row(row) if row is not None else None
 
     async def list_by_names(self, names: Sequence[str]) -> Sequence[ToolRecord]:
         if not names:
-            return []
+            return list[ToolRecord]()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools WHERE name = ANY(%(names)s)",
@@ -72,7 +72,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
 
     async def list_ids_by_names(self, names: Sequence[str]) -> Sequence[UUID]:
         if not names:
-            return []
+            return list[UUID]()
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id FROM tools WHERE name = ANY(%(names)s)",
@@ -95,7 +95,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 f"SELECT {self._select_list()} FROM tools WHERE name = %(name)s AND enabled IS TRUE LIMIT 1",
                 {"name": name},
             )
-            return ToolRecord.from_row(row) if row else None
+            return ToolRecord.from_row(row) if row is not None else None
 
     async def get_mcp_by_mcp_tool_name(self, mcp_tool_name: str) -> ToolRecord | None:
         async with self.session() as db:
@@ -104,7 +104,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 + "WHERE type = 'mcp' AND mcp_tool_name = %(mcp_tool_name)s LIMIT 1",
                 {"mcp_tool_name": mcp_tool_name},
             )
-            return ToolRecord.from_row(row) if row else None
+            return ToolRecord.from_row(row) if row is not None else None
 
     async def list_mcp_by_server_url(self, mcp_server_url: str) -> Sequence[ToolRecord]:
         async with self.session() as db:
@@ -169,7 +169,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
                     + "  DELETE FROM tools WHERE type = 'mcp' AND tenant_id IS NULL RETURNING 1"
                     + ") SELECT COUNT(*) AS cnt FROM deleted"
                 )
-            return int_from_row(result["cnt"] if result else 0)
+            return int_from_row(result["cnt"] if result is not None else 0)
 
     async def list_platform_for_tenant(self, tenant_id: UUID | None) -> Sequence[ToolRecord]:
         params: dict[str, Any] = {}
@@ -193,11 +193,11 @@ class ToolDAO(BaseDAO[ToolRecord]):
                 + "WHERE name = %(name)s AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 1",
                 {"name": name, "tenant_id": tenant_id},
             )
-            return ToolRecord.from_row(row) if row else None
+            return ToolRecord.from_row(row) if row is not None else None
 
     async def list_by_ids(self, tool_ids: Sequence[UUID]) -> Sequence[ToolRecord]:
         if not tool_ids:
-            return []
+            return list[ToolRecord]()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools WHERE id = ANY(%(ids)s)",
@@ -256,7 +256,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
             assigned_tool_ids=assigned_tool_ids,
         )
         filtered = [t for t in tools if t.category == category]
-        if primary_tool_name:
+        if primary_tool_name not in (None, ""):
             filtered.sort(key=lambda t: (t.name != primary_tool_name, t.name))
         else:
             filtered.sort(key=lambda t: t.name)
@@ -291,7 +291,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
 
     async def list_mcp_by_name_prefixes(self, prefixes: Sequence[str]) -> Sequence[ToolRecord]:
         if not prefixes:
-            return []
+            return list[ToolRecord]()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools WHERE type = 'mcp' AND name LIKE ANY(%(patterns)s)",
@@ -332,7 +332,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
                 + "WHERE agent_id = %(agent_id)s AND tool_id = %(tool_id)s",
                 {"agent_id": agent_id, "tool_id": tool_id},
             )
-            return AgentToolRecord.from_row(row) if row else None
+            return AgentToolRecord.from_row(row) if row is not None else None
 
     async def get_assignment_with_tool_by_name(
         self, agent_id: UUID, tool_name: str
@@ -349,7 +349,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
                 + "LIMIT 1",
                 {"agent_id": agent_id, "tool_name": tool_name},
             )
-            if not row:
+            if row is None:
                 return None
             assignment = AgentToolRecord.from_row({col: row[col] for col in self.columns if col in row})
             tool_fields: dict[str, Any] = {
@@ -383,7 +383,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
 
     async def list_agent_ids_with_enabled_tools(self, tool_ids: Sequence[UUID]) -> Sequence[UUID]:
         if not tool_ids:
-            return []
+            return list[UUID]()
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DISTINCT agent_id FROM agent_tools WHERE tool_id = ANY(%(tool_ids)s) AND enabled IS TRUE",

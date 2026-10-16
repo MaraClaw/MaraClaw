@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import float_from_row, int_from_row, str_from_row, uuid_from_row_opt
@@ -181,7 +181,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             )
             return int_from_row(value)
 
-    async def export_status(self) -> dict[str, Any]:
+    async def export_status(self) -> dict[str, object]:
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT "
@@ -208,7 +208,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             "last_exported_at": row.get("last_exported_at"),
         }
 
-    async def summary(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> dict[str, Any]:
+    async def summary(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> dict[str, object]:
         params = {"start": start, "end": end, "tenant_id": tenant_id}
         async with self.session() as db:
             totals = await db.fetchone(
@@ -243,7 +243,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             ],
         }
 
-    async def timeseries(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> list[dict[str, Any]]:
+    async def timeseries(self, *, start: datetime, end: datetime, tenant_id: UUID | None) -> list[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT (occurred_at AT TIME ZONE 'UTC')::date AS bucket_date, "
@@ -254,7 +254,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
                 "GROUP BY 1 ORDER BY 1",
                 {"start": start, "end": end, "tenant_id": tenant_id},
             )
-        series: list[dict[str, Any]] = []
+        series: list[dict[str, object]] = []
         for row in rows:
             bucket = row.get("bucket_date")
             date_value = str(bucket)
@@ -268,7 +268,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             )
         return series
 
-    async def top_orgs(self, *, start: datetime, end: datetime, limit: int) -> list[dict[str, Any]]:
+    async def top_orgs(self, *, start: datetime, end: datetime, limit: int) -> list[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT e.tenant_id, t.name AS tenant_name, count(*) AS event_count, "
@@ -300,7 +300,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
         tenant_id: UUID | None,
         limit: int,
         system_wide: bool = False,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         order = "distinct_orgs DESC, hits DESC" if system_wide else "hits DESC"
         async with self.session() as db:
             rows = await db.fetchall(

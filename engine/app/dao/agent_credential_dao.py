@@ -57,7 +57,7 @@ class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
                 f"SELECT {self._select_list()} FROM agent_credentials WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": credential_id, "agent_id": agent_id},
             )
-            return AgentCredentialRecord.from_row(row) if row else None
+            return AgentCredentialRecord.from_row(row) if row is not None else None
 
 
 agent_credential_dao = AgentCredentialDAO()

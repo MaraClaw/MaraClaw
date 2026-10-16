@@ -34,7 +34,7 @@ class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
                 f"SELECT {self._select_list()} FROM published_pages WHERE short_id = %(short_id)s",
                 {"short_id": short_id},
             )
-            return PublishedPageRecord.from_row(row) if row else None
+            return PublishedPageRecord.from_row(row) if row is not None else None
 
     async def list_for_agent(self, agent_id: UUID) -> Sequence[PublishedPageRecord]:
         async with self.session() as db:

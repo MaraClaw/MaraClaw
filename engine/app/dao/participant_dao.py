@@ -40,7 +40,7 @@ class ParticipantDAO(BaseDAO[ParticipantRecord]):
                 f"SELECT {self._select_list()} FROM participants WHERE type = %(type)s AND ref_id = %(ref_id)s LIMIT 1",
                 {"type": type, "ref_id": ref_id},
             )
-            return ParticipantRecord.from_row(row) if row else None
+            return ParticipantRecord.from_row(row) if row is not None else None
 
 
 participant_dao = ParticipantDAO()

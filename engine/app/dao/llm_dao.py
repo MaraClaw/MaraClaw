@@ -93,7 +93,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
                 + "ORDER BY updated_at DESC NULLS LAST LIMIT 1",
                 {"tenant_id": tenant_id, "auth_kind": auth_kind},
             )
-            return LLMModelRecord.from_row(row) if row else None
+            return LLMModelRecord.from_row(row) if row is not None else None
 
 
 llm_model_dao = LLMModelDAO()

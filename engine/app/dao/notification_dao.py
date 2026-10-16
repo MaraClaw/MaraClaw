@@ -56,7 +56,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         clauses = ["user_id = %(user_id)s"]
         if unread_only:
             clauses.append("is_read IS FALSE")
-        if types:
+        if types is not None and types:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
         where = " AND ".join(clauses)
@@ -77,7 +77,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
     ) -> int:
         params: dict[str, object] = {"user_id": user_id}
         clauses = ["user_id = %(user_id)s", "is_read IS FALSE"]
-        if types:
+        if types is not None and types:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
         where = " AND ".join(clauses)
@@ -135,7 +135,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 + "ORDER BY created_at DESC LIMIT 1",
                 {"user_id": user_id, "ref_id": ref_id, "title_pat": "%task failed%"},
             )
-            return NotificationRecord.from_row(row) if row else None
+            return NotificationRecord.from_row(row) if row is not None else None
 
 
 notification_dao = NotificationDAO()

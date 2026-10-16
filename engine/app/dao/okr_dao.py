@@ -125,7 +125,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
         ]
         if exclude_archived:
             clauses.append("status <> 'archived'")
-        if owner_types:
+        if owner_types is not None and owner_types:
             clauses.append("owner_type = ANY(%(owner_types)s)")
             params["owner_types"] = list(owner_types)
         where = " AND ".join(clauses)
@@ -142,7 +142,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
                 f"SELECT {self._select_list()} FROM okr_objectives WHERE id = %(id)s AND tenant_id = %(tenant_id)s",
                 {"id": objective_id, "tenant_id": tenant_id},
             )
-            return OKRObjectiveRecord.from_row(row) if row else None
+            return OKRObjectiveRecord.from_row(row) if row is not None else None
 
     async def earliest_period_start(self, tenant_id: UUID) -> date | None:
         async with self.session() as db:
@@ -209,7 +209,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
 
     async def list_for_objectives(self, objective_ids: Sequence[UUID]) -> Sequence[OKRKeyResultRecord]:
         if not objective_ids:
-            return []
+            return list[OKRKeyResultRecord]()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM okr_key_results "
@@ -230,7 +230,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
                 + "WHERE k.id = %(kr_id)s AND o.tenant_id = %(tenant_id)s",
                 {"kr_id": kr_id, "tenant_id": tenant_id},
             )
-            if not row:
+            if row is None:
                 return None
             kr = OKRKeyResultRecord.from_row({c: row[c] for c in self.columns})
             obj = OKRObjectiveRecord.from_row({c: row[f"o_{c}"] for c in _OBJECTIVE_COLUMNS})
@@ -271,7 +271,7 @@ class WorkReportDAO(BaseDAO[WorkReportRecord]):
     ) -> Sequence[WorkReportRecord]:
         params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
         type_sql = ""
-        if report_type:
+        if report_type not in (None, ""):
             type_sql = " AND report_type = %(report_type)s"
             params["report_type"] = report_type
         async with self.session() as db:
@@ -312,7 +312,7 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
                     "report_date": report_date,
                 },
             )
-            return MemberDailyReportRecord.from_row(row) if row else None
+            return MemberDailyReportRecord.from_row(row) if row is not None else None
 
     async def list_for_date(self, tenant_id: UUID, report_date: date) -> Sequence[MemberDailyReportRecord]:
         async with self.session() as db:
@@ -352,7 +352,7 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
                     "period_end": period_end,
                 },
             )
-            return CompanyReportRecord.from_row(row) if row else None
+            return CompanyReportRecord.from_row(row) if row is not None else None
 
     async def list_for_tenant(
         self,
@@ -363,7 +363,7 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
     ) -> Sequence[CompanyReportRecord]:
         params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
         type_sql = ""
-        if report_type:
+        if report_type not in (None, ""):
             type_sql = " AND report_type = %(report_type)s"
             params["report_type"] = report_type
         async with self.session() as db:

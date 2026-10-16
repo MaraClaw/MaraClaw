@@ -47,7 +47,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         if actor_id is not None:
             clauses.append("actor_id = %(actor_id)s")
             params["actor_id"] = actor_id
-        if action:
+        if action not in (None, ""):
             clauses.append("action = %(action)s")
             params["action"] = action
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""

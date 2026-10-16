@@ -32,7 +32,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
                 f"SELECT {self._select_list()} FROM tenant_email_domains WHERE domain = %(domain)s LIMIT 1",
                 {"domain": domain},
             )
-            return TenantEmailDomainRecord.from_row(row) if row else None
+            return TenantEmailDomainRecord.from_row(row) if row is not None else None
 
     async def list_for_tenant(self, tenant_id: UUID) -> Sequence[TenantEmailDomainRecord]:
         async with self.session() as db:
@@ -50,7 +50,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
                 + "WHERE tenant_id = %(tenant_id)s AND is_default IS TRUE LIMIT 1",
                 {"tenant_id": tenant_id},
             )
-            return TenantEmailDomainRecord.from_row(row) if row else None
+            return TenantEmailDomainRecord.from_row(row) if row is not None else None
 
     async def clear_default_for_tenant(self, tenant_id: UUID) -> None:
         async with self.session() as db:

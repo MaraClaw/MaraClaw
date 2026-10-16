@@ -37,7 +37,7 @@ class BaseDAO[RecordT]:
             yield db
 
     def _select_list(self, alias: str | None = None) -> str:
-        if alias:
+        if alias not in (None, ""):
             return ", ".join(f"{alias}.{col}" for col in self.columns)
         return ", ".join(self.columns)
 
@@ -48,7 +48,7 @@ class BaseDAO[RecordT]:
                 f"SELECT {self._select_list()} FROM {self.table} WHERE {self.pk} = %(id)s",
                 {"id": id},
             )
-            return self.record_factory(row) if row else None
+            return self.record_factory(row) if row is not None else None
 
     async def get_many(self, ids: Sequence[UUID]) -> list[RecordT]:
         """Fetch rows whose primary keys are in ``ids`` (order not preserved)."""
@@ -154,7 +154,7 @@ class BaseDAO[RecordT]:
                 f"DELETE FROM {self.table} WHERE {self.pk} = %(id)s RETURNING {self._select_list()}",
                 {"id": id},
             )
-            return self.record_factory(row) if row else None
+            return self.record_factory(row) if row is not None else None
 
 
 def as_uuid(value: object) -> UUID | None:

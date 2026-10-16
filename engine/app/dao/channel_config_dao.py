@@ -48,7 +48,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 + "LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type},
             )
-            return ChannelConfigRecord.from_row(row) if row else None
+            return ChannelConfigRecord.from_row(row) if row is not None else None
 
     async def get_first_for_agent(self, agent_id: UUID) -> ChannelConfigRecord | None:
         """Return any channel config row for the agent (first match)."""
@@ -57,7 +57,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 f"SELECT {self._select_list()} FROM channel_configs WHERE agent_id = %(agent_id)s LIMIT 1",
                 {"agent_id": agent_id},
             )
-            return ChannelConfigRecord.from_row(row) if row else None
+            return ChannelConfigRecord.from_row(row) if row is not None else None
 
     async def list_configured(self, channel_type: str) -> Sequence[ChannelConfigRecord]:
         async with self.session() as db:
@@ -83,7 +83,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 + "LIMIT 1",
                 {"channel_type": channel_type, "tenant_id": tenant_id},
             )
-            return ChannelConfigRecord.from_row(row) if row else None
+            return ChannelConfigRecord.from_row(row) if row is not None else None
 
     async def get_configured_for_agent(self, agent_id: UUID, *, channel_type: str) -> ChannelConfigRecord | None:
         async with self.session() as db:
@@ -93,7 +93,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 + "AND is_configured IS TRUE LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type},
             )
-            return ChannelConfigRecord.from_row(row) if row else None
+            return ChannelConfigRecord.from_row(row) if row is not None else None
 
     async def list_configured_types_for_agent(self, agent_id: UUID, *, channel_types: Sequence[str]) -> set[str]:
         if not channel_types:

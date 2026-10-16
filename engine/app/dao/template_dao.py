@@ -51,7 +51,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
                 + "WHERE name = %(name)s AND is_builtin IS TRUE LIMIT 1",
                 {"name": name},
             )
-            return AgentTemplateRecord.from_row(row) if row else None
+            return AgentTemplateRecord.from_row(row) if row is not None else None
 
     async def count_agents_using(self, template_id: UUID) -> int:
         async with self.session() as db:
@@ -83,7 +83,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
     async def list_ordered_by_name(self, *, category: str | None = None) -> Sequence[AgentTemplateRecord]:
         params: dict[str, Any] = {}
         category_sql = ""
-        if category:
+        if category not in (None, ""):
             category_sql = " WHERE category = %(category)s"
             params["category"] = category
         async with self.session() as db:
@@ -99,7 +99,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
                 f"SELECT {self._select_list()} FROM agent_templates WHERE name = %(name)s LIMIT 1",
                 {"name": name},
             )
-            return AgentTemplateRecord.from_row(row) if row else None
+            return AgentTemplateRecord.from_row(row) if row is not None else None
 
 
 agent_template_dao = AgentTemplateDAO()

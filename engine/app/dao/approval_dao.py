@@ -101,7 +101,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
     ) -> Sequence[ApprovalRequestRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
         status_sql = ""
-        if status:
+        if status not in (None, ""):
             status_sql = " AND status = %(status)s"
             params["status"] = status
         async with self.session() as db:
@@ -129,7 +129,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         if creator_id is not None:
             clauses.append("agent_id IN (SELECT id FROM agents WHERE creator_id = %(creator_id)s)")
             params["creator_id"] = creator_id
-        if status:
+        if status not in (None, ""):
             clauses.append("status = %(status)s")
             params["status"] = status
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
