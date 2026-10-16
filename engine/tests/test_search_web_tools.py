@@ -41,6 +41,7 @@ class _HttpResponse:
         self._chunks = [text.encode(encoding)]
         self.closed = False
         self.body_read = False
+        self.chunks_read = 0
 
     async def __aenter__(self) -> _HttpResponse:
         return self
@@ -52,6 +53,7 @@ class _HttpResponse:
     async def aiter_bytes(self):
         self.body_read = True
         for chunk in self._chunks:
+            self.chunks_read += 1
             yield chunk
 
 
@@ -92,7 +94,7 @@ class _FakeHttpxModule:
         return _QueuedAsyncClient(self.responses, self.calls, kwargs)
 
 
-async def test_validate_public_http_url_preserves_ssrf_guard_and_proxy_test_exemption(monkeypatch) -> None:
+async def test_validate_public_http_url_rejects_private_and_benchmark_destinations(monkeypatch) -> None:
     target = _web_read_module()
     dns_calls: list[tuple[str, int]] = []
 
@@ -105,7 +107,7 @@ async def test_validate_public_http_url_preserves_ssrf_guard_and_proxy_test_exem
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.18.0.1", port))]
         if host == "private.example":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
-        raise OSError("dns unavailable")
+        raise socket.gaierror(socket.EAI_NONAME, "dns unavailable")
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
@@ -120,8 +122,8 @@ async def test_validate_public_http_url_preserves_ssrf_guard_and_proxy_test_exem
 
     assert public_url == "https://public.example/path"
     assert public_error is None
-    assert proxy_url == "https://proxy-range.example/read"
-    assert proxy_error is None
+    assert proxy_url is None
+    assert proxy_error == "❌ Private, local, reserved, or internal network URLs are blocked (198.18.0.1)"
     assert direct_proxy_ip_url is None
     assert direct_proxy_ip_error == "❌ Private, local, reserved, or internal network URLs are blocked (198.18.0.1)"
     assert localhost_url is None
@@ -185,7 +187,7 @@ async def test_read_webpage_extracts_metadata_text_and_links_without_network(mon
     async def validate_url(_url: str) -> tuple[str, None]:
         return "https://example.test/page", None
 
-    monkeypatch.setitem(sys.modules, "httpx", httpx)
+    monkeypatch.setattr(target, "public_http_client", httpx.AsyncClient)
     monkeypatch.setitem(
         sys.modules, "trafilatura", SimpleNamespace(extract=lambda *_args, **_kwargs: "# Heading\n\nReadable body")
     )
@@ -227,7 +229,7 @@ def redirect_dns(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         assert type == socket.SOCK_STREAM
         calls.append(host)
         if host == "missing.example":
-            raise OSError("dns unavailable")
+            raise socket.gaierror(socket.EAI_NONAME, "dns unavailable")
         addresses = {
             "private.example": "10.0.0.5",
             "proxy-range.example": "198.18.0.1",
@@ -245,7 +247,6 @@ def redirect_dns(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         ("https://other.example/final", "https://other.example/final"),
         ("../final", "https://public.example/final"),
         ("//other.example/final", "https://other.example/final"),
-        ("https://proxy-range.example/final", "https://proxy-range.example/final"),
     ],
 )
 async def test_read_webpage_follows_validated_redirects(monkeypatch, redirect_dns, status, location, expected) -> None:
@@ -256,7 +257,7 @@ async def test_read_webpage_follows_validated_redirects(monkeypatch, redirect_dn
         text="Readable body", url="http://127.0.0.1/unvalidated", headers={"content-type": "text/plain"}
     )
     httpx = _FakeHttpxModule(first, second, final)
-    monkeypatch.setitem(sys.modules, "httpx", httpx)
+    monkeypatch.setattr(_web_read_module(), "public_http_client", httpx.AsyncClient)
 
     # When reading with the real URL validator and deterministic DNS.
     result = await _web_read_module()._read_webpage({"url": "https://public.example/start"})
@@ -288,6 +289,7 @@ async def test_read_webpage_follows_validated_redirects(monkeypatch, redirect_dn
         ("http://10.0.0.5/", "blocked (10.0.0.5)"),
         ("http://localhost/", "Localhost URLs are blocked"),
         ("https://198.18.0.1/", "blocked (198.18.0.1)"),
+        ("https://proxy-range.example/final", "blocked (198.18.0.1)"),
         ("ftp://public.example/file", "Only HTTP and HTTPS"),
         ("data:text/plain,secret", "Only HTTP and HTTPS"),
         ("mailto:ops@public.example", "Only HTTP and HTTPS"),
@@ -300,7 +302,7 @@ async def test_read_webpage_never_sends_forbidden_redirect(monkeypatch, redirect
     first = _HttpResponse(status_code=302, headers={"location": "/step"})
     second = _HttpResponse(status_code=307, headers={"location": location})
     httpx = _FakeHttpxModule(first, second)
-    monkeypatch.setitem(sys.modules, "httpx", httpx)
+    monkeypatch.setattr(_web_read_module(), "public_http_client", httpx.AsyncClient)
 
     # When the later Location is resolved and validated.
     result = await _web_read_module()._read_webpage({"url": "https://public.example/start"})
@@ -318,6 +320,8 @@ async def test_read_webpage_never_sends_forbidden_redirect(monkeypatch, redirect
         if "private.example" in location
         else ["missing.example"]
         if "missing.example" in location
+        else ["proxy-range.example"]
+        if "proxy-range.example" in location
         else []
     )
 
@@ -330,7 +334,7 @@ async def test_read_webpage_bounds_redirect_chains(monkeypatch, redirect_dns, cy
         for index in range(12)
     ]
     httpx = _FakeHttpxModule(*responses)
-    monkeypatch.setitem(sys.modules, "httpx", httpx)
+    monkeypatch.setattr(_web_read_module(), "public_http_client", httpx.AsyncClient)
 
     # When the last permitted request also redirects.
     result = await _web_read_module()._read_webpage({"url": "https://public.example/start"})
@@ -347,3 +351,55 @@ async def test_read_tools_empty_argument_messages() -> None:
 
     assert await target._validate_public_http_url("") == (None, "❌ Please provide a URL")
     assert await target._read_webpage({}) == "❌ Please provide a URL"
+
+
+async def test_read_webpage_rejects_declared_oversize_before_reading(monkeypatch, redirect_dns) -> None:
+    response = _HttpResponse(text="unread", headers={"content-length": "2000001"})
+    client = _FakeHttpxModule(response)
+    monkeypatch.setattr(_web_read_module(), "public_http_client", client.AsyncClient)
+
+    result = await _web_read_module()._read_webpage({"url": "https://public.example/page"})
+
+    assert "Page is too large" in result
+    assert response.closed
+    assert not response.body_read
+
+
+@pytest.mark.parametrize("extra_bytes", [0, 1])
+async def test_read_webpage_caps_stream_before_extraction(monkeypatch, redirect_dns, extra_bytes) -> None:
+    response = _HttpResponse(headers={"content-type": "text/html"})
+    response._chunks = (
+        [b"a" * 1_999_999, b"b" * (1 + extra_bytes), b"must not be consumed"]
+        if extra_bytes
+        else [b"a" * 1_999_999, b"b"]
+    )
+    client = _FakeHttpxModule(response)
+    extracted_inputs: list[str] = []
+
+    def extract(text: str, **_kwargs) -> str:
+        extracted_inputs.append(text)
+        return "Readable body"
+
+    monkeypatch.setattr(_web_read_module(), "public_http_client", client.AsyncClient)
+    monkeypatch.setitem(sys.modules, "trafilatura", SimpleNamespace(extract=extract))
+
+    result = await _web_read_module()._read_webpage({"url": "https://public.example/page"})
+
+    assert extracted_inputs == ["a" * 1_999_999 + "b"]
+    assert ("response body truncated at 2000000 bytes" in result) == bool(extra_bytes)
+    assert result.endswith("Readable body")
+    assert response.closed
+    assert response.chunks_read == 2
+
+
+async def test_read_webpage_reports_connection_policy_errors(monkeypatch, redirect_dns) -> None:
+    from app.core.outbound_policy import OutboundPolicyError
+
+    def blocked_client(**_kwargs):
+        raise OutboundPolicyError("Private, local, reserved, or internal network URLs are blocked (127.0.0.1)")
+
+    monkeypatch.setattr(_web_read_module(), "public_http_client", blocked_client)
+
+    result = await _web_read_module()._read_webpage({"url": "https://public.example/page"})
+
+    assert result == "❌ Private, local, reserved, or internal network URLs are blocked (127.0.0.1)"

@@ -15,10 +15,12 @@ from app.core.json_types import JsonObject, is_str_dict, json_as_str_or, mapping
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.approval_dao import approval_request_dao
+from app.dao.audit_log_dao import audit_log_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.audit import ApprovalRequestRecord
 from app.records.user import UserRecord
@@ -105,30 +107,33 @@ class AutonomyService:
         if approval_id is None or user is None:
             raise ValueError("Approval not found")
 
-        approval = await approval_request_dao.get(approval_id)
-        if not approval:
-            raise ValueError("Approval not found")
+        async with optional_connection_ctx():
+            approval = await approval_request_dao.get(approval_id)
+            if not approval:
+                raise ValueError("Approval not found")
 
-        if approval.status != "pending":
-            raise ValueError("Approval already resolved")
+            if approval.status != "pending":
+                raise ValueError("Approval already resolved")
 
-        agent = await agent_dao.get(approval.agent_id)
-        if agent and agent.creator_id != user.id and user.role != "platform_admin":
-            raise ValueError("Only the agent creator or platform admin can resolve approvals")
+            agent = await agent_dao.get(approval.agent_id)
+            if agent and agent.creator_id != user.id and user.role != "platform_admin":
+                raise ValueError("Only the agent creator or platform admin can resolve approvals")
 
-        status = "approved" if action == "approve" else "rejected"
-        approval = await approval_request_dao.resolve(
-            approval,
-            status=status,
-            resolved_by=user.id,
-        )
+            status = "approved" if action == "approve" else "rejected"
+            approval = await approval_request_dao.resolve(
+                approval,
+                status=status,
+                resolved_by=user.id,
+            )
 
-        await write_audit_log(
-            action=f"approval_{approval.status}",
-            details={"approval_id": str(approval.id), "action_type": approval.action_type},
-            agent_id=approval.agent_id,
-            user_id=user.id,
-        )
+            _ = await audit_log_dao.create(
+                obj_in={
+                    "action": f"approval_{approval.status}",
+                    "details": {"approval_id": str(approval.id), "action_type": approval.action_type},
+                    "agent_id": approval.agent_id,
+                    "user_id": user.id,
+                }
+            )
 
         execution_result = None
         if approval.status == "approved" and approval.details:

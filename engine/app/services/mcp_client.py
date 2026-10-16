@@ -11,7 +11,7 @@ Reference: https://modelcontextprotocol.io/docs
 import json
 from collections.abc import Mapping
 from contextlib import suppress
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -24,6 +24,8 @@ from app.core.json_types import (
     json_value_from_response,
 )
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError, ensure_same_origin
+from app.core.outbound_transport import public_http_client
 
 
 def _require_json_object(value: object) -> JsonObject:
@@ -122,12 +124,14 @@ class MCPClient:
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=self._headers(),
             )
+        except OutboundPolicyError:
+            raise
         except Exception as exc:
             logger.debug("MCP streamable initialization failed; continuing without a session: {}", exc)
 
     async def _streamable_request(self, method: str, params: Mapping[str, JsonValue] | None = None) -> JsonObject:
         """Send a JSON-RPC request via Streamable HTTP transport."""
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with public_http_client(timeout=30, follow_redirects=True, origin=self.server_url) as client:
             if self._session_id in (None, ""):
                 await self._streamable_initialize(client)
 
@@ -148,8 +152,6 @@ class MCPClient:
         # Determine SSE URL: if server_url ends with /sse use it directly,
         # otherwise append /sse
         sse_url = self.server_url if self.server_url.endswith("/sse") else f"{self.server_url}/sse"
-        parsed = urlparse(sse_url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         headers = {"Accept": "text/event-stream"}
         if self.api_key not in (None, ""):
@@ -159,7 +161,7 @@ class MCPClient:
         event_type = ""
 
         async with (
-            httpx.AsyncClient(timeout=15, follow_redirects=True) as client,
+            public_http_client(timeout=15, follow_redirects=True, origin=self.server_url) as client,
             client.stream("GET", sse_url, headers=headers) as resp,
         ):
             if resp.status_code != 200:
@@ -174,7 +176,8 @@ class MCPClient:
                     data = line[5:].strip()
                     if event_type == "endpoint" and data:
                         # data is typically a relative URL like /messages?sessionId=xxx
-                        messages_url = data if data.startswith("http") else base_url + data
+                        messages_url = urljoin(sse_url, data)
+                        ensure_same_origin(self.server_url, messages_url)
                         break
 
         if messages_url in (None, ""):
@@ -190,8 +193,6 @@ class MCPClient:
         """
         # Connect to SSE to get the messages endpoint
         sse_url = self.server_url if self.server_url.endswith("/sse") else f"{self.server_url}/sse"
-        parsed = urlparse(sse_url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         headers_sse: dict[str, str] = {"Accept": "text/event-stream"}
         headers_post: dict[str, str] = {
@@ -207,7 +208,7 @@ class MCPClient:
         timeout = 60 if method == "tools/call" else 30
 
         async with (
-            httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client,
+            public_http_client(timeout=timeout, follow_redirects=True, origin=self.server_url) as client,
             client.stream("GET", sse_url, headers=headers_sse) as sse_resp,
         ):
             if sse_resp.status_code != 200:
@@ -225,7 +226,8 @@ class MCPClient:
                 elif line.startswith("data:"):
                     data = line[5:].strip()
                     if event_type == "endpoint" and data:
-                        messages_url = data if data.startswith("http") else base_url + data
+                        messages_url = urljoin(sse_url, data)
+                        ensure_same_origin(self.server_url, messages_url)
                         break
 
             if messages_url in (None, ""):
@@ -301,6 +303,8 @@ class MCPClient:
             result = await self._streamable_request(method, params)
             self._transport = "streamable"
             return result
+        except OutboundPolicyError:
+            raise
         except Exception as streamable_err:
             streamable_error_message = str(streamable_err)
             logger.info(f"[MCPClient] Streamable HTTP failed ({streamable_err}), trying SSE transport...")
@@ -310,6 +314,8 @@ class MCPClient:
             result = await self._sse_request(method, params)
             self._transport = "sse"
             return result
+        except OutboundPolicyError:
+            raise
         except Exception as sse_err:
             raise Exception(
                 f"Both transports failed. Streamable HTTP: {streamable_error_message}; SSE: {sse_err}"

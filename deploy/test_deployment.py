@@ -94,6 +94,28 @@ class ComposeContracts(unittest.TestCase):
         self.assertEqual(bootstrap["PYTHONPATH"], "/app")
         self.assertEqual(bootstrap["PLATFORM_ADMIN_PASSWORD"], self.values["PLATFORM_ADMIN_PASSWORD"])
 
+    def test_inherited_identity_and_genesis_inputs_cannot_reach_serving_processes(self) -> None:
+        result = render(self.values | {"INSTANCE_ID": "shared-identity-that-must-not-survive"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        services = json.loads(result.stdout)["services"]
+        for name in ("engine", "background"):
+            for key in ("INSTANCE_ID", "PLATFORM_ADMIN_EMAIL", "PLATFORM_ADMIN_PASSWORD"):
+                self.assertEqual(services[name]["environment"][key], "")
+        self.assertEqual(services["bootstrap"]["environment"]["PLATFORM_ADMIN_EMAIL"],
+                         self.values["PLATFORM_ADMIN_EMAIL"])
+
+    def test_engine_and_ingress_route_only_readiness_eligible_backends(self) -> None:
+        for name in ("engine", "background"):
+            self.assertEqual(self.services[name]["healthcheck"]["test"],
+                             ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/ready"])
+        self.assertTrue(self.services["bootstrap"]["healthcheck"]["disable"])
+        config = (ROOT / "deploy" / "haproxy.cfg").read_text()
+        backend = config.split("\nbackend engine_pool\n", 1)[1].split("\nbackend ", 1)[0]
+        self.assertIn("option httpchk GET /api/ready", backend)
+        self.assertIn("http-check expect status 200", backend)
+        self.assertIn("server-template engine", backend)
+        self.assertNotIn("/api/health", backend)
+
     def test_runtime_password_urls_preserve_special_characters(self) -> None:
         environment = self.services["engine"]["environment"]
         self.assertEqual(environment["DATABASE_URL"],

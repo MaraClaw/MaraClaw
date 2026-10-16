@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
-import ipaddress
 import re
-import socket
 from collections.abc import Callable
 from typing import Protocol, TypeIs, cast
 from urllib.parse import urljoin, urlparse
@@ -12,6 +9,8 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from httpx import AsyncClient, Response, TimeoutException
 
+from app.core.outbound_policy import OutboundPolicyError, validate_public_url
+from app.core.outbound_transport import public_http_client
 from app.services.agent_tool_exec.registry import ToolArguments
 
 type TrafilaturaExtract = Callable[..., object]
@@ -25,14 +24,8 @@ def _is_trafilatura_module(value: object) -> TypeIs[_TrafilaturaModule]:
     return callable(getattr(value, "extract", None))
 
 
-def _httpx_module():
-    import httpx
-
-    return httpx
-
-
 def _httpx_client(*, follow_redirects: bool, timeout: float) -> AsyncClient:
-    return cast(AsyncClient, _httpx_module().AsyncClient(follow_redirects=follow_redirects, timeout=timeout))
+    return public_http_client(follow_redirects=follow_redirects, timeout=timeout)
 
 
 def _beautiful_soup() -> type[BeautifulSoup]:
@@ -53,54 +46,23 @@ async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
     if "://" not in url:
         url = "https://" + url
 
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError:
+        return None, "❌ Invalid outbound URL"
     if parsed.scheme not in {"http", "https"}:
         return None, "❌ Only HTTP and HTTPS URLs are supported"
-    if parsed.hostname in (None, ""):
+    if hostname in (None, ""):
         return None, "❌ URL must include a hostname"
-
-    hostname = parsed.hostname
-    try:
-        _ = ipaddress.ip_address(hostname)
-        host_is_ip = True
-    except ValueError:
-        host_is_ip = False
 
     if hostname.lower() in {"localhost", "localhost.localdomain"}:
         return None, "❌ Localhost URLs are blocked for safety"
 
     try:
-        if host_is_ip:
-            addresses = [hostname]
-        else:
-            loop = asyncio.get_running_loop()
-            infos = await loop.run_in_executor(
-                None,
-                lambda: socket.getaddrinfo(
-                    hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM
-                ),
-            )
-            addresses = [info[4][0] for info in infos]
-    except Exception as exc:
-        return None, f"❌ Could not resolve hostname {hostname}: {str(exc)[:160]}"
-
-    for address in set(addresses):
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            return None, f"❌ Could not validate resolved address: {address}"
-        is_proxy_test_range = (not host_is_ip) and ip in ipaddress.ip_network("198.18.0.0/15")
-        if (
-            ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_unspecified
-            or ip.is_reserved
-            or (ip.is_private and not is_proxy_test_range)
-        ):
-            return None, f"❌ Private, local, reserved, or internal network URLs are blocked ({address})"
-
-    return url, None
+        return await validate_public_url(url), None
+    except OutboundPolicyError as exc:
+        return None, f"❌ {exc}"
 
 
 def _fallback_extract_visible_text(html: str) -> str:
@@ -272,6 +234,8 @@ async def _read_webpage(arguments: ToolArguments) -> str:
             result += "\n\n---\n\nLinks:\n" + "\n".join(links)
         return result
 
+    except OutboundPolicyError as exc:
+        return f"❌ {exc}"
     except TimeoutException:
         return f"❌ Webpage fetch timed out: {url}"
     except Exception as e:

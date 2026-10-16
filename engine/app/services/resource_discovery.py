@@ -718,7 +718,13 @@ async def import_mcp_direct(
     This bypasses Smithery entirely - useful for self-hosted or third-party
     MCP servers that provide their own public endpoint.
     """
+    from app.core.outbound_policy import OutboundPolicyError, validate_public_url
     from app.services.mcp_client import MCPClient
+
+    try:
+        _ = await validate_public_url(mcp_url)
+    except OutboundPolicyError:
+        return "MCP import blocked: server destination is not allowed."
 
     # Build URL with apiKey if provided
     full_url = mcp_url
@@ -735,9 +741,11 @@ async def import_mcp_direct(
     try:
         client = MCPClient(full_url)
         tools_discovered = await client.list_tools()
-        logger.info(f"[DirectImport] Got {len(tools_discovered)} tools from {mcp_url}")
-    except Exception as e:
-        logger.error(f"[DirectImport] Could not list tools from {mcp_url}: {e}")
+        logger.info("[DirectImport] Got {} tools", len(tools_discovered))
+    except OutboundPolicyError:
+        return "MCP import blocked: server destination is not allowed."
+    except Exception:
+        logger.error("[DirectImport] Could not list tools")
 
     # Config to store in AgentTool
     agent_tool_config: JsonObject = {}

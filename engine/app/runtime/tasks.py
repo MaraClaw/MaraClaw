@@ -3,7 +3,7 @@
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
-from typing import TypeIs
+from typing import Literal, TypeIs
 
 from app.core.logging import logger
 
@@ -22,12 +22,30 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task[object]]) -> None:
 class OwnedTasks:
     def __init__(self) -> None:
         self.tasks: set[asyncio.Task[object]] = set()
+        self.required: dict[str, tuple[asyncio.Task[object], bool]] = {}
 
-    def start(self, name: str, coroutine: Coroutine[object, object, object]) -> None:
+    def start(
+        self,
+        name: str,
+        coroutine: Coroutine[object, object, object],
+        *,
+        requirement: Literal["optional", "setup", "loop"] = "optional",
+    ) -> None:
         task = asyncio.create_task(coroutine, name=name)
         self.tasks.add(task)
+        if requirement != "optional":
+            self.required[name] = (task, requirement == "setup")
         task.add_done_callback(self.tasks.discard)
         task.add_done_callback(self._report)
+
+    def ready(self) -> bool:
+        for task, finite in self.required.values():
+            if finite:
+                if not task.done() or task.cancelled() or task.exception() is not None:
+                    return False
+            elif task.done():
+                return False
+        return True
 
     @staticmethod
     def _report(task: asyncio.Task[object]) -> None:

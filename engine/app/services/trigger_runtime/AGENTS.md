@@ -34,7 +34,7 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 - `agent_triggers.self_disabled` records that a trigger turned itself off through `once` or `max_fires`. Only the fire-accounting updates (`record_first_starts`, `evaluator.mark_trigger_fired`) set it, on the enabled-to-disabled transition. `AgentTriggerDAO.update` clears it whenever `is_enabled` is written, and the tenant/creator bulk disables clear it. Do not expose it in API responses or trigger config.
 - Reclaim expired work when its trigger is enabled or `self_disabled`; fail expired work for every other disabled trigger. Claims run every tick.
 - Reload trigger/agent rows via DAOs after a long LLM call; do not hold a stale `connection_ctx` across the invoke.
-- Poll triggers must preserve the private/internal URL block; it is an SSRF boundary.
+- Poll triggers use the shared core public-destination policy and pinned HTTP client; preserve this SSRF boundary and the existing no-redirect behavior.
 - `on_message` matching must continue excluding internal trigger reflection sessions to avoid loops.
 - A2A wake depth, TTL, and dedup guards live in `trigger_daemon.py`, not this package.
 - Webhook dedup depends on unique `(trigger_id, idempotency_key)` semantics.

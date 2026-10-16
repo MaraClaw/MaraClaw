@@ -11,13 +11,13 @@ Provider-specific organization-structure sync adapters live here. This package i
 | Department reconciliation | `departments.py`, `paths.py` | Provider-scoped department upserts, virtual root `external_id == "0"`, path rebuilds, recursive member counts |
 | Member reconciliation | `members.py` | Upserts org members, links existing platform users by email/phone, and syncs contact fields |
 | Provider adapters | `feishu.py`, `dingtalk.py`, `wecom.py`, `google_workspace.py` | API token fetching and provider payload mapping |
-| Public service entry | `app/services/org_sync_service.py` | Loads `IdentityProviderRecord`, requires tenant binding. No outer commit wrapper - each mixin `connection_ctx` commits unless the caller already opened one. |
+| Public service entry | `app/services/org_sync_service.py` | Loads a provider snapshot, requires tenant binding, and rechecks actor/provider authority inside the final persistence scope. |
 
 ## Conventions
 
 - New providers must subclass `BaseOrgSyncAdapter`, implement `api_base_url`, `get_access_token()`, `fetch_departments()`, and `fetch_users()`, then register in `factory.py`.
 - Provider config comes from `IdentityProvider.config`; tenant scoping comes from the provider row or explicit factory argument.
-- `sync_org_structure()` fetches provider HTTP **outside** a DB transaction, then upserts departments/members on a shared `connection_ctx` per batch. Nested `connection_ctx()` **joins** (no savepoints). Preserve partial-failure collection and skip stale-record reconciliation after any partial failure.
+- `sync_org_structure()` collects all provider HTTP results **outside** a DB transaction, then persists departments, members, paths, provider config, and reconciliation in one owned scope. Nested `connection_ctx()` **joins** (no savepoints). Preserve partial-fetch failure collection and skip stale-record reconciliation after any partial failure; database write failures roll back the whole persistence scope.
 - Feishu and DingTalk users require `unionid`; `unionid` must not equal `external_id`.
 - Existing member lookup prefers provider-safe stable identifiers; be careful changing fallback order between `unionid`, `external_id`, and open-id fields.
 - Department paths are derived from the internal parent tree; virtual provider root `external_id` `"0"` maps to an empty path.

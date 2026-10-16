@@ -458,16 +458,16 @@ async def check_mcp_connection(
     - URL-embedded key (e.g. ?tavilyApiKey=xxx) - include in server_url.
     - Bearer token - pass via api_key field; sent as Authorization header.
     """
+    from app.core.outbound_policy import OutboundPolicyError, validate_public_url
     from app.services.mcp_client import MCPClient
-    from app.services.trigger_runtime.evaluator import is_private_url
-
-    if is_private_url(data.server_url):
-        raise HTTPException(status_code=400, detail="MCP server URL is not allowed")
 
     try:
-        client = MCPClient(data.server_url, api_key=data.api_key or None)
+        server_url = await validate_public_url(data.server_url)
+        client = MCPClient(server_url, api_key=data.api_key or None)
         tools = await client.list_tools()
         return {"ok": True, "tools": tools}
+    except OutboundPolicyError as exc:
+        raise HTTPException(status_code=400, detail="MCP server URL is not allowed") from exc
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 

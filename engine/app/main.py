@@ -12,6 +12,7 @@ from app.core.middleware import TraceIdMiddleware
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
+from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
 
 settings = get_settings()
@@ -27,6 +28,7 @@ def _role_enabled(*required: str) -> bool:
 
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+app.include_router(readiness_router)
 app.add_middleware(TraceIdMiddleware)
 _cors_origins = settings.CORS_ORIGINS
 _allow_creds = "*" not in _cors_origins
@@ -88,15 +90,15 @@ from app.api.whatsapp import router as whatsapp_router
 
 # Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound.
 _CRUD_DB = [Depends(bind_crud_connection)]
-app.include_router(auth_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(files_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(files_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(enterprise_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(enterprise_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(relationships_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
@@ -107,12 +109,12 @@ app.include_router(schedules_router, prefix=settings.API_PREFIX, dependencies=_C
 app.include_router(tools_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(enterprise_kb_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(skills_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(skills_router, prefix=settings.API_PREFIX)
 app.include_router(users_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(slack_router, prefix=settings.API_PREFIX)
 app.include_router(discord_router, prefix=settings.API_PREFIX)
 app.include_router(dingtalk_router, prefix=settings.API_PREFIX)
-app.include_router(google_workspace_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(google_workspace_router, prefix=settings.API_PREFIX)
 app.include_router(google_chat_router, prefix=settings.API_PREFIX)
 app.include_router(wecom_router, prefix=settings.API_PREFIX)
 app.include_router(wechat_router, prefix=settings.API_PREFIX)

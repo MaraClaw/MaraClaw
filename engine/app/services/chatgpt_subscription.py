@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar, Final, Literal, cast
 
@@ -17,11 +17,13 @@ from pydantic import BaseModel, ConfigDict
 from app.config import get_settings
 from app.core.security import decrypt_data, encrypt_data
 from app.dao.llm_dao import llm_model_dao
+from app.db.session import optional_connection_ctx, run_after_commit
 from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
 from app.services.chatgpt_oauth import (
     ChatGPTOAuthTokens,
     DeviceCodeChallenge,
+    TokenPoll,
     poll_device_authorization,
     refresh_access_token,
     request_device_code,
@@ -32,6 +34,11 @@ from app.services.enterprise_llm import (
     require_llm_pool_tenant_id,
 )
 from app.services.llm import get_model_api_key
+from app.services.subscription_boundaries import (
+    active_subscription_tenant,
+    fresh_subscription_actor,
+    unchanged_subscription_model,
+)
 
 AUTH_KIND_API_KEY: Final = "api_key"
 AUTH_KIND_CHATGPT_SUBSCRIPTION: Final = "chatgpt_subscription"
@@ -167,7 +174,7 @@ def _store_session(challenge: DeviceCodeChallenge, tenant_id: uuid.UUID) -> Chat
         interval=challenge.interval,
         expires_at=datetime.now(UTC) + timedelta(seconds=challenge.expires_in),
     )
-    _SESSIONS[session.session_id] = session
+    run_after_commit(lambda: _SESSIONS.__setitem__(session.session_id, session))
     return session
 
 
@@ -200,6 +207,13 @@ async def persist_subscription_tokens(
     tokens: ChatGPTOAuthTokens,
     *,
     existing: LLMModelRecord | None = None,
+) -> LLMModelRecord:
+    async with optional_connection_ctx():
+        return await _persist_subscription_tokens(tenant_id, tokens, existing=existing)
+
+
+async def _persist_subscription_tokens(
+    tenant_id: uuid.UUID, tokens: ChatGPTOAuthTokens, *, existing: LLMModelRecord | None = None
 ) -> LLMModelRecord:
     """Upsert the company ChatGPT subscription pool row. Access + refresh stay encrypted."""
     expires_at = datetime.now(UTC) + timedelta(seconds=tokens.expires_in)
@@ -238,7 +252,11 @@ async def start_chatgpt_subscription_handoff(user: UserRecord, tenant_id: str | 
     """Admin-only device-code start. Invokes the shipped Codex start path."""
     tid = require_llm_pool_tenant_id(user, tenant_id)
     challenge = await request_device_code()
-    session = _store_session(challenge, tid)
+    async with optional_connection_ctx():
+        fresh = await fresh_subscription_actor(user)
+        require_llm_pool_tenant_id(fresh, str(tid))
+        await active_subscription_tenant(tid)
+        session = _store_session(challenge, tid)
     return public_start_payload(session)
 
 
@@ -254,7 +272,34 @@ async def chatgpt_subscription_status(user: UserRecord, session_id: str) -> Chat
         session.device_auth_id = ""
         return public_status_payload(session)
 
+    async with optional_connection_ctx() as db:
+        snapshot = (
+            await llm_model_dao.get_subscription_for_tenant(session.tenant_id, auth_kind=AUTH_KIND_CHATGPT_SUBSCRIPTION)
+            if db is not None
+            else None
+        )
     poll = await poll_device_authorization(session.device_auth_id, session.user_code, interval=session.interval)
+    async with optional_connection_ctx() as db:
+        fresh = await fresh_subscription_actor(user)
+        _require_session_tenant(fresh, session)
+        await active_subscription_tenant(session.tenant_id)
+        if db is not None:
+            if snapshot is not None:
+                await unchanged_subscription_model(snapshot)
+            current = await llm_model_dao.get_subscription_for_tenant(
+                session.tenant_id, auth_kind=AUTH_KIND_CHATGPT_SUBSCRIPTION
+            )
+            if current != snapshot:
+                raise HTTPException(status_code=409, detail="Subscription changed during sign-in; retry")
+        candidate = replace(session)
+        result = await _finish_chatgpt_subscription_status(candidate, poll)
+        run_after_commit(lambda: _SESSIONS.__setitem__(session_id, candidate))
+        return result
+
+
+async def _finish_chatgpt_subscription_status(
+    session: ChatGPTOAuthSession, poll: TokenPoll
+) -> ChatGPTSubscriptionStatusOut:
     if poll.interval not in (None, 0):
         session.interval = poll.interval
     if poll.status == "pending":
@@ -275,7 +320,7 @@ async def chatgpt_subscription_status(user: UserRecord, session_id: str) -> Chat
     return public_status_payload(session)
 
 
-async def refresh_subscription_model(model: LLMModelRecord) -> LLMModelRecord:
+async def refresh_subscription_model(model: LLMModelRecord, *, actor: UserRecord | None = None) -> LLMModelRecord:
     """Refresh a stored subscription without a new browser login. Shipped refresh path."""
     kind = getattr(model, "auth_kind", AUTH_KIND_API_KEY) or AUTH_KIND_API_KEY
     if kind != AUTH_KIND_CHATGPT_SUBSCRIPTION:
@@ -305,7 +350,9 @@ async def refresh_subscription_model(model: LLMModelRecord) -> LLMModelRecord:
         )
     if model.tenant_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model is not tenant-scoped")
-    return await persist_subscription_tokens(model.tenant_id, tokens, existing=model)
+    async with optional_connection_ctx():
+        current = await unchanged_subscription_model(model, actor)
+        return await persist_subscription_tokens(model.tenant_id, tokens, existing=current)
 
 
 def _is_fresh(model: LLMModelRecord) -> bool:
@@ -317,7 +364,7 @@ def _is_fresh(model: LLMModelRecord) -> bool:
     return expires > datetime.now(UTC) + REFRESH_SKEW
 
 
-async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
+async def ensure_fresh_access_token(model: LLMModelRecord, *, actor: UserRecord | None = None) -> LLMModelRecord:
     """Refresh an expired (or soon-expiring) subscription; otherwise return as-is."""
     kind = getattr(model, "auth_kind", AUTH_KIND_API_KEY) or AUTH_KIND_API_KEY
     if kind != AUTH_KIND_CHATGPT_SUBSCRIPTION:
@@ -325,8 +372,10 @@ async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
     if _is_fresh(model) and get_model_api_key(model):
         return model
     try:
-        return await refresh_subscription_model(model)
+        return await refresh_subscription_model(model, actor=actor)
     except HTTPException:
+        if actor is not None:
+            raise
         return model
 
 
@@ -334,11 +383,12 @@ async def refresh_chatgpt_subscription_for_admin(
     user: UserRecord, model_id: uuid.UUID
 ) -> ChatGPTSubscriptionRefreshOut:
     """Admin refresh of one company ChatGPT subscription row."""
-    model = await llm_model_dao.get(model_id)
-    if model is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
-    assert_can_manage_model(user, model)
-    updated = await refresh_subscription_model(model)
+    async with optional_connection_ctx():
+        model = await llm_model_dao.get(model_id)
+        if model is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        assert_can_manage_model(user, model)
+    updated = await refresh_subscription_model(model, actor=user)
     out = ChatGPTSubscriptionRefreshOut(ok=True, model_id=updated.id, expires_at=updated.token_expires_at)
     _assert_public(out)
     return out

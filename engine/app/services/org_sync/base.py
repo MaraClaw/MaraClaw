@@ -2,9 +2,11 @@
 
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
 import httpx
+from fastapi import HTTPException
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger
@@ -77,7 +79,7 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
             List of ExternalUser
         """
 
-    async def sync_org_structure(self) -> dict[str, Any]:
+    async def sync_org_structure(self, before_write: Callable[[], Awaitable[None]] | None = None) -> dict[str, Any]:
         """Main sync function - syncs departments and members.
 
         Returns:
@@ -91,25 +93,9 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
         sync_start = _utcnow()
         partial_failure = False
 
-        # Ensure provider exists
-        provider = await self._ensure_provider()
-
         try:
-            # Fetch departments over HTTP first, then persist on one connection.
             departments = await self.fetch_departments()
-            async with optional_connection_ctx():
-                for dept in departments:
-                    try:
-                        await self._upsert_department(provider, dept)
-                        dept_count += 1
-                    except Exception as e:
-                        partial_failure = True
-                        errors.append(f"Department {dept.external_id}: {e!s}")
-                        logger.error(f"[OrgSync] Failed to sync department {dept.external_id}: {e}")
-
-                _ = await self._rebuild_department_paths(provider.id)
-
-            # Fetch users over HTTP; persist each department's members together.
+            collected_users: list[tuple[ExternalDepartment, list[ExternalUser]]] = []
             for dept in departments:
                 try:
                     users = await self.fetch_users(dept.external_id)
@@ -118,22 +104,41 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                     logger.error(f"[OrgSync] Failed to fetch users in department {dept.external_id}: {e}")
                     errors.append(f"Fetch users in dept {dept.external_id}: {e!s}")
                     continue
+                collected_users.append((dept, users))
 
-                async with optional_connection_ctx():
+            async with optional_connection_ctx():
+                if before_write is not None:
+                    await before_write()
+                provider = await self._ensure_provider()
+                for dept in departments:
+                    try:
+                        await self._upsert_department(provider, dept)
+                    except Exception as e:
+                        errors.append(f"Department {dept.external_id}: {e!s}")
+                        raise
+                    dept_count += 1
+                _ = await self._rebuild_department_paths(provider.id)
+
+                for dept, users in collected_users:
                     for user in users:
                         try:
-                            stats = await self._upsert_member(provider, user, dept.external_id)
-                            if stats.get("user_created") is True:
-                                user_count += 1
-                            if stats.get("profile_synced") is True:
-                                profile_count += 1
-                            member_count += 1
-                        except Exception as e:
+                            self._validate_member_identifiers(provider, user)
+                        except ValueError as e:
                             partial_failure = True
                             logger.error(f"[OrgSync] Failed to sync member {user.external_id} ({user.name}): {e}")
                             errors.append(f"Member {user.external_id}: {e!s}")
+                            continue
+                        try:
+                            stats = await self._upsert_member(provider, user, dept.external_id)
+                        except Exception as e:
+                            errors.append(f"Member {user.external_id}: {e!s}")
+                            raise
+                        if stats.get("user_created") is True:
+                            user_count += 1
+                        if stats.get("profile_synced") is True:
+                            profile_count += 1
+                        member_count += 1
 
-            async with optional_connection_ctx():
                 await self._refresh_member_department_paths(provider.id)
 
                 if self.provider:
@@ -157,11 +162,14 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
 
                     await self._update_member_counts(provider.id)
 
+        except HTTPException:
+            raise
         except Exception as e:
             import traceback
 
             logger.error(f"[OrgSync] Critical error during sync: {e}\n{traceback.format_exc()}")
             errors.append(f"Critical: {e!s}")
+            dept_count = member_count = user_count = profile_count = 0
 
         return {
             "departments": dept_count,

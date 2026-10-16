@@ -185,6 +185,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
     monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
     monkeypatch.setattr(lifecycle, "init_pool", record_pool)
+    monkeypatch.setattr(lifecycle, "get_redis", audit)
     monkeypatch.setattr(lifecycle, "bootstrap", record_bootstrap)
     monkeypatch.setattr(lifecycle.realtime_router, "start", realtime)
     monkeypatch.setattr(audit_logger, "write_audit_log", audit)
