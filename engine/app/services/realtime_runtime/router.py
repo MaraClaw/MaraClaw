@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
+from app.services.realtime_runtime.subscription import AcknowledgedPubSub
 
 settings = get_settings()
 
@@ -30,6 +31,19 @@ class RealtimeRouter:
         self.instance_id: str = settings.INSTANCE_ID
         self._subscriber_task: asyncio.Task[None] | None = None
         self._started: bool = False
+        self._subscription: AcknowledgedPubSub | None = None
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self._started
+            and self._subscriber_task is not None
+            and not self._subscriber_task.done()
+            and self._subscription is not None
+            and self._subscription.acknowledged
+            and self._subscription.connection is not None
+            and bool(self._subscription.connection.is_connected)
+        )
 
     def _connection_key(self, connection_id: str) -> str:
         return f"{PUBSUB_PREFIX}:conn:{connection_id}"
@@ -153,6 +167,9 @@ class RealtimeRouter:
         self._subscriber_task = asyncio.create_task(self._subscriber_loop(deliver_local), name="realtime-subscriber")
 
     async def stop(self) -> None:
+        self._started = False
+        if self._subscription is not None:
+            self._subscription.acknowledged = False
         if self._subscriber_task:
             task = self._subscriber_task
             if task.done() and not task.cancelled():
@@ -164,43 +181,52 @@ class RealtimeRouter:
                 with suppress(asyncio.CancelledError):
                     await task
             self._subscriber_task = None
+        self._subscription = None
         self._started = False
 
     async def _subscriber_loop(self, deliver_local: LocalDeliverer) -> None:
         redis = await get_redis()
-        pubsub = redis.pubsub()
-        subscribed = False
-        try:
-            await pubsub.subscribe(self._instance_channel())
-            subscribed = True
-            while True:
-                message_raw = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if not message_raw:
-                    await asyncio.sleep(0.05)
-                    continue
-                try:
+        while True:
+            pubsub = AcknowledgedPubSub(redis.connection_pool)
+            self._subscription = pubsub
+            try:
+                await pubsub.subscribe(self._instance_channel())
+                while True:
+                    message_raw = await pubsub.get_message(ignore_subscribe_messages=False, timeout=1.0)
+                    if not message_raw:
+                        continue
                     message = dict[str, object](message_raw)
-                    payload_raw = message.get("data")
-                    if isinstance(payload_raw, (bytes, bytearray)):
-                        data = json_loads_object(bytes(payload_raw))
-                    elif isinstance(payload_raw, str):
-                        data = json_loads_object(payload_raw)
-                    else:
-                        data = json_object_from(payload_raw)
-                    await deliver_local(
-                        agent_id=data["agent_id"],
-                        payload=data["message"],
-                        session_id=data.get("session_id"),
-                        user_id=data.get("user_id"),
-                    )
-                except Exception as exc:
-                    logger.warning(f"[Realtime] Failed to deliver pubsub message: {exc}")
-        except asyncio.CancelledError:
-            raise
-        finally:
-            if subscribed:
-                await pubsub.unsubscribe(self._instance_channel())
-            await pubsub.aclose()
+                    channel = message.get("channel")
+                    if message.get("type") == "subscribe":
+                        pubsub.acknowledged = channel in (self._instance_channel(), self._instance_channel().encode())
+                    elif message.get("type") == "unsubscribe":
+                        pubsub.acknowledged = False
+                    elif message.get("type") == "message":
+                        await self._deliver_message(message.get("data"), deliver_local)
+            except Exception as exc:
+                logger.warning("[Realtime] Subscription lost: {}", type(exc).__name__)
+            finally:
+                pubsub.acknowledged = False
+                await pubsub.aclose()
+            await asyncio.sleep(1.0)
+
+    @staticmethod
+    async def _deliver_message(payload_raw: object, deliver_local: LocalDeliverer) -> None:
+        try:
+            if isinstance(payload_raw, (bytes, bytearray)):
+                data = json_loads_object(bytes(payload_raw))
+            elif isinstance(payload_raw, str):
+                data = json_loads_object(payload_raw)
+            else:
+                data = json_object_from(payload_raw)
+            await deliver_local(
+                agent_id=data["agent_id"],
+                payload=data["message"],
+                session_id=data.get("session_id"),
+                user_id=data.get("user_id"),
+            )
+        except Exception as exc:
+            logger.warning("[Realtime] Failed to deliver pubsub message: {}", exc)
 
     async def _list_presence(self, agent_id: str) -> list[dict[str, str]]:
         redis_client: Redis = await get_redis()

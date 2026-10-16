@@ -12,6 +12,7 @@ from app.core.middleware import TraceIdMiddleware
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
+from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
 
 settings = get_settings()
@@ -27,6 +28,7 @@ def _role_enabled(*required: str) -> bool:
 
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+app.include_router(readiness_router)
 app.add_middleware(TraceIdMiddleware)
 _cors_origins = settings.CORS_ORIGINS
 _allow_creds = "*" not in _cors_origins

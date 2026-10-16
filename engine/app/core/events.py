@@ -47,6 +47,12 @@ def _current_redis() -> redis.Redis | None:
     return _redis_client
 
 
+async def ping_redis() -> bool:
+    """Probe only the lifecycle-created durable client; never initialize from HTTP."""
+    client = _current_redis()
+    return client is not None and bool(await client.ping())
+
+
 def _current_cache_redis() -> redis.Redis | None:
     return _cache_redis_client
 

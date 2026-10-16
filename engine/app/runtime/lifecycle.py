@@ -12,13 +12,14 @@ from fastapi import FastAPI
 
 from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
-from app.core.events import close_redis
+from app.core.events import close_redis, get_redis
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
 from app.db.pool import close_pool, init_pool
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.bootstrap import bootstrap
 from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.proxy import ShadowsocksProxy
+from app.runtime.readiness import Readiness
 from app.runtime.tasks import OwnedTasks
 from app.services.llm.client_cache import shutdown_llm_clients
 from app.services.realtime import realtime_router
@@ -49,6 +50,7 @@ def connector_managers() -> tuple[ConnectorManager, ...]:
 class Runtime:
     def __init__(self) -> None:
         self.tasks: OwnedTasks = OwnedTasks()
+        self.readiness: Readiness = Readiness(self.tasks)
         self.managers: tuple[ConnectorManager, ...] = ()
         self.proxy: ShadowsocksProxy = ShadowsocksProxy()
         self.pool_attempted: bool = False
@@ -56,6 +58,7 @@ class Runtime:
         self.logging_attempted: bool = False
 
     async def start(self, roles: frozenset[str]) -> None:
+        self.readiness.roles = roles
         start_background_tasks()
         start_schedule_tasks()
         settings = get_settings()
@@ -74,6 +77,8 @@ class Runtime:
         _ = await init_pool()
         if role_enabled(roles, "bootstrap"):
             await bootstrap()
+        if any(role_enabled(roles, role) for role in ("api", "worker", "connector")):
+            _ = await get_redis()
         if role_enabled(roles, "api"):
             from app.api.websocket import manager as ws_manager
 
@@ -94,15 +99,20 @@ class Runtime:
             from app.services.scheduler import start_scheduler
             from app.services.trigger_daemon import start_trigger_daemon
 
-            self.tasks.start("trigger_daemon", start_trigger_daemon())
-            self.tasks.start("web_search_export", start_web_search_export_daemon())
-            self.tasks.start("agent_scheduler", start_scheduler())
-            self.tasks.start("gateway_report_relay", start_gateway_report_relay())
+            self.tasks.start("trigger_daemon", start_trigger_daemon(), requirement="loop")
+            self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
+            self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
+            self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
         if role_enabled(roles, "connector"):
+            from app.runtime.connectors import WeChatRuntime
+            from app.services.wechat_channel import WeChatPollManager
+
             self.managers = connector_managers()
-            self.tasks.start("ss-local-proxy", self.proxy.start())
+            self.tasks.start("ss-local-proxy", self.proxy.start(), requirement="setup")
             for manager in self.managers:
-                self.tasks.start(type(manager).__name__, manager.start_all())
+                initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
+                self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")
+        self.readiness.initialized = True
 
     @staticmethod
     async def _cleanup(name: str, close: Callable[[], Awaitable[None]]) -> None:
@@ -112,6 +122,7 @@ class Runtime:
             logger.warning("[shutdown] Cleanup {} failed: {}", name, exc)
 
     async def stop(self) -> None:
+        self.readiness.draining = True
         await self._cleanup("route background tasks", drain_background_tasks)
         await self._cleanup("wrappers", self.tasks.stop)
         await self._cleanup("schedule executions", stop_schedule_tasks)
@@ -135,10 +146,12 @@ class Runtime:
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     roles = parse_process_roles(get_settings().PROCESS_ROLE)
     runtime = Runtime()
+    _app.state.readiness = runtime.readiness
     try:
         await runtime.start(roles)
         yield
     finally:
+        runtime.readiness.draining = True
         original_error = sys.exc_info()[1]
         # AnyIO shields ASGI cancel scopes; asyncio.shield also handles direct Task.cancel().
         with anyio.CancelScope(shield=True):
