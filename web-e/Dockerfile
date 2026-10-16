@@ -13,7 +13,7 @@
 ARG NODE_VERSION=26.11.1
 
 # ─── Dependencies ───────────────────────────────────────────────────────────
-FROM node:${NODE_VERSION}-alpine AS deps
+FROM node:trixie-slim AS deps
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN npm ci --no-audit --no-fund \
   && npm cache clean --force
 
 # ─── Build ──────────────────────────────────────────────────────────────────
-FROM node:${NODE_VERSION}-alpine AS build
+FROM node:trixie-slim AS build
 
 WORKDIR /app
 
@@ -49,7 +49,7 @@ RUN npm run build \
 
 # ─── Runtime ────────────────────────────────────────────────────────────────
 # nginx-unprivileged: non-root by default, listens on 8080.
-FROM nginxinc/nginx-unprivileged:1.30.4-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine AS runtime
 
 LABEL org.opencontainers.image.title="MaraClaw web-e" \
       org.opencontainers.image.description="MaraClaw end-user UI: landing and member workspace" \
