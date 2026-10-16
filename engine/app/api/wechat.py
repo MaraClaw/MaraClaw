@@ -40,7 +40,7 @@ def _route_tag(data: WeChatQRCodePayload | None = None) -> str | None:
 
 def _build_qrcode_headers(route_tag: str | None = None) -> dict[str, str]:
     headers: dict[str, str] = {}
-    if route_tag:
+    if route_tag not in (None, ""):
         headers["SKRouteTag"] = route_tag
     return headers
 
@@ -105,7 +105,7 @@ async def get_wechat_qrcode_status(
             "session_expired": False,
             "saved_at": datetime.now(UTC).isoformat(),
         }
-        if route_tag:
+        if route_tag not in (None, ""):
             extra["route_tag"] = route_tag
 
         if existing:

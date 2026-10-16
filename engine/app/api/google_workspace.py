@@ -82,7 +82,7 @@ async def _handle_google_sso_callback(
             "google_workspace",
             str(tenant_id) if tenant_id else None,
         )
-    if provider:
+    if provider is not None and provider:
         redirect_uri = await get_google_redirect_uri(provider, request)
         auth_provider.config["redirect_uri"] = redirect_uri
 
@@ -194,7 +194,7 @@ async def _handle_google_admin_sync_callback(
 @router.get(GOOGLE_CALLBACK_PATH)
 async def google_workspace_callback(code: str, request: Request, state: str | None = None):
     """Unified callback for Google Workspace SSO login and admin authorization."""
-    parsed_state = parse_google_oauth_state(state) if state else None
+    parsed_state = parse_google_oauth_state(state) if state not in (None, "") else None
     if parsed_state:
         state_kind, state_value = parsed_state
         if state_kind == GOOGLE_SYNC_STATE_KIND:
@@ -205,7 +205,7 @@ async def google_workspace_callback(code: str, request: Request, state: str | No
             return await _handle_google_sso_callback(code, sid, provider_id, request)
 
     sid: uuid.UUID | None = None
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
         except ValueError, AttributeError:

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/linkup", tags=["linkup"])
 
 
 def _bearer_token(authorization: str | None) -> str:
-    if not authorization:
+    if authorization in (None, ""):
         return ""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer":

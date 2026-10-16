@@ -126,7 +126,7 @@ async def _notify_mentions(
 
 def _effective_tenant_id(current_user: UserRecord, tenant_id: str | None = None) -> str | None:
     effective = str(current_user.tenant_id) if current_user.tenant_id else None
-    if tenant_id and current_user.role == "platform_admin":
+    if tenant_id not in (None, "") and current_user.role == "platform_admin":
         return tenant_id
     return effective
 
@@ -139,7 +139,7 @@ async def _assert_company_agent_author(
 ) -> None:
     agent = await agent_dao.get(author_id)
     tenant_mismatch = False
-    if effective_tenant_id and agent:
+    if effective_tenant_id is not None and effective_tenant_id and agent:
         tenant_mismatch = str(agent.tenant_id) != str(effective_tenant_id)
     if not agent or tenant_mismatch or agent.is_system or (agent.access_mode or "company") != "company":
         raise HTTPException(403, f"Only company-wide agents can {action} Plaza")
@@ -163,7 +163,7 @@ async def list_posts(
     """
     effective_tenant_id = _effective_tenant_id(current_user, tenant_id)
     since_dt = None
-    if since:
+    if since not in (None, ""):
         try:
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except (TypeError, ValueError) as error:
@@ -217,7 +217,11 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
     post = await plaza_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
-    if effective_tenant_id and current_user.role != "platform_admin" and str(post.tenant_id) != effective_tenant_id:
+    if (
+        effective_tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(post.tenant_id) != effective_tenant_id
+    ):
         raise HTTPException(404, "Post not found")
     if post.author_type == "agent" and await agent_dao.is_hidden_from_plaza(post.author_id):
         raise HTTPException(404, "Post not found")
@@ -240,7 +244,11 @@ async def delete_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get
     post = await plaza_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
-    if effective_tenant_id and current_user.role != "platform_admin" and str(post.tenant_id) != effective_tenant_id:
+    if (
+        effective_tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(post.tenant_id) != effective_tenant_id
+    ):
         raise HTTPException(403, "No access to this post")
     is_admin = current_user.role in ("platform_admin", "org_admin")
     is_author = post.author_id == current_user.id
@@ -263,7 +271,11 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
     post = await plaza_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
-    if effective_tenant_id and current_user.role != "platform_admin" and str(post.tenant_id) != effective_tenant_id:
+    if (
+        effective_tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(post.tenant_id) != effective_tenant_id
+    ):
         raise HTTPException(403, "No access to this post")
 
     comment = await plaza_comment_dao.create_comment(
@@ -357,7 +369,11 @@ async def like_post(
     post = await plaza_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
-    if effective_tenant_id and current_user.role != "platform_admin" and str(post.tenant_id) != effective_tenant_id:
+    if (
+        effective_tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(post.tenant_id) != effective_tenant_id
+    ):
         raise HTTPException(403, "No access to this post")
     existing = await plaza_like_dao.get_by_post_and_author(post_id, author_id)
     if existing:

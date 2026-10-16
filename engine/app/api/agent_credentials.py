@@ -96,7 +96,7 @@ async def create_credential(
     settings = get_settings()
 
     # Validate cookies_json format if provided
-    if data.cookies_json:
+    if data.cookies_json not in (None, ""):
         try:
             parsed = json_loads_value(data.cookies_json)
             if not isinstance(parsed, list):
@@ -116,7 +116,7 @@ async def create_credential(
     }
 
     # Encrypt sensitive fields
-    if data.cookies_json:
+    if data.cookies_json not in (None, ""):
         obj_in["cookies_json"] = encrypt_data(data.cookies_json, settings.SECRET_KEY)
         obj_in["cookies_updated_at"] = datetime.now(UTC)
 

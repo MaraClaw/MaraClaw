@@ -106,7 +106,7 @@ async def list_users(
             raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
         tid = str(current_user.tenant_id)
     else:
-        if not tenant_id:
+        if tenant_id in (None, ""):
             raise HTTPException(status_code=400, detail="tenant_id is required")
         tid = tenant_id
     try:

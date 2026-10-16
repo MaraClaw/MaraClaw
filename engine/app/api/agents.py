@@ -461,7 +461,11 @@ async def create_agent(
                 "heartbeat_interval_minutes": default_heartbeat_interval,
                 "access_mode": access_mode,
                 "company_access_level": access_level,
-                **({"autonomy_policy": data.autonomy_policy} if data.autonomy_policy else {}),
+                **(
+                    {"autonomy_policy": data.autonomy_policy}
+                    if data.autonomy_policy is not None and data.autonomy_policy
+                    else {}
+                ),
             }
         )
 
@@ -561,7 +565,7 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
         out["creator_username"] = creator.username if creator else None
 
     effective_tz = agent.timezone
-    if not effective_tz and agent.tenant_id:
+    if effective_tz in (None, "") and agent.tenant_id:
         tenant = await tenant_dao.get(agent.tenant_id)
         if tenant:
             effective_tz = tenant.timezone or "UTC"
@@ -711,7 +715,7 @@ async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermi
         scope_type = "private"
 
     supplied_departments = data.department_ids
-    if scope_type != "custom" and supplied_departments:
+    if scope_type != "custom" and supplied_departments is not None and supplied_departments:
         raise HTTPException(422, "Department grants require custom sharing")
     department_ids: set[uuid.UUID] = set()
     if scope_type == "custom":
@@ -754,7 +758,7 @@ async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermi
                 "access_level": "manage",
             }
         )
-    elif scope_type == "custom":
+    else:
         agent = await agent_dao.update(
             db_obj=agent,
             obj_in={"access_mode": "custom", "company_access_level": access_level},
@@ -840,9 +844,13 @@ async def get_agent_permission_candidates(
 
     linked_user_ids = [m.user_id for m in members if m.user_id]
     users_by_id = await user_dao.get_many_with_identity(linked_user_ids)
+
     # Restrict to same tenant
+    def current_agent_tenant_id() -> uuid.UUID | None:
+        return agent.tenant_id
+
     users_by_id = {
-        uid: u for uid, u in users_by_id.items() if agent.tenant_id is None or u.tenant_id == agent.tenant_id
+        uid: u for uid, u in users_by_id.items() if current_agent_tenant_id() is None or u.tenant_id == agent.tenant_id
     }
 
     candidates: list[dict[str, object]] = []

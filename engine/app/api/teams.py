@@ -139,7 +139,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
 
     app_id = config.app_id
     app_secret = config.app_secret
-    if not app_id or not app_secret:
+    if app_id in (None, "") or app_secret in (None, ""):
         logger.error(f"Teams: Missing app_id or app_secret for agent {agent_id}")
         return None
 
@@ -205,7 +205,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
 async def _send_teams_message(config: ChannelConfigRecord, conversation_id: str, activity: JsonObject) -> None:
     """Send an activity (message) to Microsoft Teams."""
     access_token = await _get_teams_access_token(config)
-    if not access_token:
+    if access_token in (None, ""):
         logger.error(f"Teams: No access token for agent {config.agent_id}, cannot send message")
         raise ValueError("No access token available")
 
@@ -219,7 +219,7 @@ async def _send_teams_message(config: ChannelConfigRecord, conversation_id: str,
     if "timestamp" not in activity:
         activity["timestamp"] = datetime.now(UTC).isoformat() + "Z"
 
-    if activity.get("replyToId") and "id" not in activity:
+    if (reply_to_id := activity.get("replyToId")) is not None and reply_to_id and "id" not in activity:
         activity["id"] = str(uuid.uuid4())
 
     text_value = activity.get("text", "")
@@ -404,7 +404,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         from_id = json_as_str_or(from_account.get("id"), "unknown")
         text_preview = json_as_str(activity.get("text"))
         logger.info(
-            f"Teams: Webhook received for agent {agent_id}, activity type={activity.get('type')}, from={from_id}, text={text_preview[:50] if text_preview else 'no text'}"
+            f"Teams: Webhook received for agent {agent_id}, activity type={activity.get('type')}, from={from_id}, text={text_preview[:50] if text_preview not in (None, '') else 'no text'}"
         )
 
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
@@ -414,7 +414,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
 
         extra = _extra_config(config)
         service_url = json_as_str(activity.get("serviceUrl"))
-        if service_url and extra.get("service_url") != service_url:
+        if service_url not in (None, "") and extra.get("service_url") != service_url:
             extra["service_url"] = service_url
             config = (
                 await channel_config_dao.update(
@@ -426,7 +426,11 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.info(f"Teams: Updated service_url for agent {agent_id} to {service_url}")
 
         activity_id = activity.get("id")
-        if activity_id and await channel_dedup.already_processed_shared("teams", str(activity_id), cap=2000):
+        if (
+            activity_id is not None
+            and activity_id
+            and await channel_dedup.already_processed_shared("teams", str(activity_id), cap=2000)
+        ):
             return {"ok": True}
 
         if activity.get("type") != "message":
@@ -434,7 +438,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
 
         recipient = _json_mapping(activity.get("recipient"))
         bot_id = config.app_id or json_as_str(recipient.get("id"))
-        if bot_id and from_account.get("id") == bot_id:
+        if bot_id not in (None, "") and from_account.get("id") == bot_id:
             return {"ok": True}
 
         user_text = str(activity.get("text", "") or "").strip()
@@ -445,11 +449,11 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         conversation_id = json_as_str(conversation.get("id"))
         sender_id = json_as_str(from_account.get("id"))
         sender_name = json_as_str(from_account.get("name")) or (
-            f"Teams User {sender_id[:8]}" if sender_id else "Teams User"
+            f"Teams User {sender_id[:8]}" if sender_id not in (None, "") else "Teams User"
         )
         reply_to_id = activity.get("id")
 
-        if not conversation_id or not sender_id:
+        if conversation_id in (None, "") or sender_id in (None, ""):
             logger.warning(f"[Teams] Missing conversation_id or sender_id in activity for agent {agent_id}")
             return {"ok": True}
 
@@ -544,8 +548,8 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         if has_credentials and conversation_id:
             try:
                 bot_channel_account = _json_mapping(activity.get("recipient"))
-                if not bot_channel_account.get("id"):
-                    if config.app_id:
+                if (bot_account_id := bot_channel_account.get("id")) is None or not bot_account_id:
+                    if config.app_id not in (None, ""):
                         bot_channel_account = _json_mapping({"id": config.app_id})
                     else:
                         logger.error(
@@ -554,7 +558,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                         raise ValueError("Cannot determine bot channel account ID")
 
                 user_account = _json_mapping(activity.get("from"))
-                if not user_account.get("id"):
+                if (user_account_id := user_account.get("id")) is None or not user_account_id:
                     user_account = _json_mapping({"id": sender_id, "name": sender_name})
 
                 reply_activity: JsonObject = {
@@ -581,7 +585,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                 + f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
             )
 
-        if activity_id:
+        if activity_id is not None and activity_id:
             await channel_dedup.mark_processed_shared("teams", str(activity_id), cap=2000)
 
         return {"ok": True}

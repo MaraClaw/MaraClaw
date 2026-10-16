@@ -202,7 +202,7 @@ async def process_dingtalk_message(
         "",
         user_text,
     ).strip()
-    if saved_file_paths:
+    if saved_file_paths is not None and saved_file_paths:
         _file_prefixes = "\n".join(f"[file:{Path(p).name}]" for p in saved_file_paths)
         saved_content = f"{_file_prefixes}\n{_clean_text}".strip() if _clean_text else _file_prefixes
     else:
@@ -225,7 +225,7 @@ async def process_dingtalk_message(
     _agent_name = agent_obj.name
 
     llm_user_text = user_text
-    if image_base64_list:
+    if image_base64_list is not None and image_base64_list:
         image_markers = "\n".join(f"[image_data:{uri}]" for uri in image_base64_list)
         llm_user_text = f"{user_text}\n{image_markers}" if user_text else image_markers
 
@@ -236,7 +236,7 @@ async def process_dingtalk_message(
     )
 
     _cfs_token = None
-    if _dt_app_key and _dt_app_secret:
+    if _dt_app_key not in (None, "") and _dt_app_secret not in (None, ""):
         _dt_target_id = conversation_id if conversation_type == "2" else sender_staff_id
         _dt_conv_type = conversation_type
 
@@ -256,7 +256,7 @@ async def process_dingtalk_message(
 
             _mid = await _upload_dingtalk_media(_dt_app_key, _dt_app_secret, str(file_path), _media_type)
 
-            if _mid:
+            if _mid not in (None, ""):
                 _ok = await _send_dingtalk_media_message(
                     _dt_app_key,
                     _dt_app_secret,
@@ -315,7 +315,7 @@ async def process_dingtalk_message(
     finally:
         if _cfs_token is not None:
             _cfs.reset(_cfs_token)
-        if message_id and _dt_app_key and _dt_app_secret:
+        if message_id and _dt_app_key not in (None, "") and _dt_app_secret not in (None, ""):
             try:
                 from app.services.dingtalk_reaction import recall_thinking_reaction
 
@@ -395,7 +395,7 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
     from app.services.auth_registry import auth_provider_registry
 
     tenant_id = None
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
@@ -416,7 +416,7 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
             return HTMLResponse("Auth failed: Token exchange error")
 
         user_info = await auth_provider.get_user_info(access_token)
-        if not user_info.provider_union_id:
+        if user_info.provider_union_id in (None, ""):
             logger.error(f"DingTalk user info missing unionId: {user_info.raw_data}")
             return HTMLResponse("Auth failed: No unionid returned")
 
@@ -430,7 +430,7 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
 
     token = create_access_token(str(user.id), user.role)
 
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)

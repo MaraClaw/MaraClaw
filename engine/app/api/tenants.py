@@ -432,13 +432,13 @@ async def transfer_organization(
 
     identity_id = current_user.identity_id or getattr(getattr(current_user, "identity", None), "id", None)
     identity = await load_identity_for_password(identity_id)
-    if identity is None or not identity.password_hash:
+    if identity is None or identity.password_hash in (None, ""):
         raise HTTPException(status_code=400, detail="This account cannot confirm a password")
     if not await verify_password_async(data.password, identity.password_hash):
         raise HTTPException(status_code=401, detail="Password is incorrect")
 
     target = None
-    if data.invitation_code:
+    if data.invitation_code not in (None, ""):
         try:
             code_obj = await require_active_invitation(data.invitation_code)
         except InvitationError as exc:
@@ -480,7 +480,7 @@ async def transfer_organization(
     except DefaultOrgUnavailableError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if data.invitation_code:
+    if data.invitation_code not in (None, ""):
         await consume_invitation_code(data.invitation_code)
 
     return JoinOrgResponse(

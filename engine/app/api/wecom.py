@@ -473,7 +473,7 @@ async def _process_wecom_kf_event(
             )
             token_data = json_object_from_response(tok_resp)
             access_token = json_as_str(token_data.get("access_token"))
-            if not access_token:
+            if access_token in (None, ""):
                 return
 
             current_cursor = token
@@ -482,7 +482,7 @@ async def _process_wecom_kf_event(
 
             while has_more:
                 payload: dict[str, int | str] = {"limit": 20}
-                if open_kfid:
+                if open_kfid not in (None, ""):
                     payload["open_kfid"] = open_kfid
 
                 if current_cursor.startswith("ENC"):
@@ -509,12 +509,16 @@ async def _process_wecom_kf_event(
                         mid = msg.get("msgid")
                         from app.services.channels import dedup as channel_dedup
 
-                        if mid and await channel_dedup.already_processed_shared("wecom_kf", str(mid)):
+                        if (
+                            mid is not None
+                            and mid
+                            and await channel_dedup.already_processed_shared("wecom_kf", str(mid))
+                        ):
                             continue
                         send_time = json_as_int(msg.get("send_time"))
                         if send_time > 0 and (current_ts - send_time > 86400):
                             continue
-                        if mid:
+                        if mid is not None and mid:
                             await channel_dedup.mark_processed_shared("wecom_kf", str(mid))
                         text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
                         if text:
@@ -637,7 +641,7 @@ async def _process_wecom_text(
             )
             access_token = json_as_str_or(json_object_from_response(tok_resp).get("access_token"))
             if access_token:
-                if is_kf and open_kfid:
+                if is_kf and open_kfid not in (None, ""):
                     # For KF messages, need to bridge/trans state first then send via kf/send_msg
                     res_state = await client.post(
                         f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={access_token}",
@@ -697,7 +701,7 @@ async def _process_wecom_text(
 async def wecom_callback(code: str, state: str | None = None):
     # 1. Resolve session to get tenant context
     tenant_id = None
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
@@ -724,7 +728,7 @@ async def wecom_callback(code: str, state: str | None = None):
             return HTMLResponse("Auth failed: Token error")
 
         user_info = await auth_provider.get_user_info(access_token_str)
-        if not user_info.provider_user_id:
+        if user_info.provider_user_id in (None, ""):
             return HTMLResponse("Auth failed: No UserId returned")
 
         # Find or Create User (handles Identity and OrgMember linking)
@@ -736,7 +740,7 @@ async def wecom_callback(code: str, state: str | None = None):
     # Standard login
     token = create_access_token(str(user.id), user.role)
 
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)

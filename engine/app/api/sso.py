@@ -44,7 +44,7 @@ async def get_sso_session_status(sid: uuid.UUID) -> dict[str, Any]:
         "error_msg": session.error_msg,
     }
 
-    if session.status == "authorized" and session.access_token:
+    if session.status == "authorized" and session.access_token not in (None, ""):
         user = await user_dao.get_with_identity(session.user_id) if session.user_id else None
 
         response["access_token"] = session.access_token

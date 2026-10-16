@@ -78,7 +78,7 @@ def _tool_record_visible_to_agent(
 
 
 def _resolve_target_tenant_id(current_user: UserRecord, tenant_id: str | None = None) -> uuid.UUID | None:
-    if tenant_id:
+    if tenant_id not in (None, ""):
         try:
             resolved = uuid.UUID(tenant_id)
         except ValueError as exc:
@@ -382,7 +382,11 @@ async def get_agent_tools(
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
-        if json_object_from(t.config).get("okr_agent_only") and not is_system_agent:
+        if (
+            (okr_agent_only := json_object_from(t.config).get("okr_agent_only")) is not None
+            and okr_agent_only
+            and not is_system_agent
+        ):
             continue
         tid = str(t.id)
         at = assignments.get(tid)
@@ -639,7 +643,11 @@ async def get_agent_tools_with_config(
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
-        if json_object_from(t.config).get("okr_agent_only") and not is_system_agent2:
+        if (
+            (okr_agent_only := json_object_from(t.config).get("okr_agent_only")) is not None
+            and okr_agent_only
+            and not is_system_agent2
+        ):
             continue
         tid = str(t.id)
         at = assignments.get(tid)
@@ -649,7 +657,7 @@ async def get_agent_tools_with_config(
 
         raw_global = await get_tool_company_config(t, agent_obj2.tenant_id)
 
-        if t.name in system_settings_tool_map and not raw_global.get("api_key"):
+        if t.name in system_settings_tool_map and ((api_key := raw_global.get("api_key")) is None or not api_key):
             ss_key, ss_field = system_settings_tool_map[t.name]
             if ss_key not in system_keys_cache:
                 try:
@@ -815,7 +823,7 @@ async def update_category_config(
             "extra_config": {**json_object_from(existing.extra_config), **extra},
             "is_configured": True,
         }
-        if app_secret:
+        if app_secret not in (None, ""):
             updates["app_secret"] = app_secret
         _ = await channel_config_dao.update(db_obj=existing, obj_in=updates)
     else:
@@ -830,7 +838,7 @@ async def update_category_config(
             }
         )
 
-    if category == "atlassian" and app_secret:
+    if category == "atlassian" and app_secret not in (None, ""):
         from app.api.atlassian import _sync_atlassian_tools_for_agent
         from app.api.background_tasks import schedule_background_task
 

@@ -55,7 +55,7 @@ def _split_text(text: str, limit: int = WHATSAPP_TEXT_LIMIT) -> list[str]:
 
 
 def _verify_signature(app_secret: str, body: bytes, signature: str | None) -> bool:
-    if not app_secret or not signature or not signature.startswith("sha256="):
+    if not app_secret or signature in (None, "") or not signature.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)

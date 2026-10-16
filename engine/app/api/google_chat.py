@@ -277,7 +277,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         except ValueError as exc:
             logger.warning("[GoogleChat] Auth failed for agent %s: %s", agent_id, exc)
             return Response(status_code=401)
-    elif config.verification_token:
+    elif config.verification_token not in (None, ""):
         token = str(body.get("token") or "").strip()
         expected = config.verification_token
         if not hmac.compare_digest(token, expected):
@@ -310,7 +310,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
     elif event.event_type != "MESSAGE":
         return {}
 
-    if event.message_name:
+    if event.message_name not in (None, ""):
         dedupe_key = event.message_name
     else:
         import hashlib

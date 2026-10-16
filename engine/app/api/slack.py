@@ -171,7 +171,9 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     if event_id and await channel_dedup.already_processed_shared("slack", event_id, cap=2000):
         return {"ok": True}
 
-    if event.get("bot_id") or event.get("subtype"):
+    if ((bot_id := event.get("bot_id")) is not None and bot_id) or (
+        (subtype := event.get("subtype")) is not None and subtype
+    ):
         return {"ok": True}
 
     event_type = event.get("type", "")
@@ -221,7 +223,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                     params={"user": sender_id},
                 )
                 _info_data = json_object_from_response(_info_resp)
-                if _info_data.get("ok"):
+                if (info_ok := _info_data.get("ok")) is not None and info_ok:
                     _user = json_object_from(_info_data.get("user"))
                     _profile = json_object_from(_user.get("profile"))
                     _slack_real_name = (
@@ -388,7 +390,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                 data={"filename": _fp.name, "length": str(_file_stat.st_size)},
             )
             _ud = json_object_from_response(_upload_url_resp)
-            if not _ud.get("ok"):
+            if (upload_ok := _ud.get("ok")) is None or not upload_ok:
                 raise RuntimeError(f"Slack upload URL error: {_ud}")
             _upload_url = _ud["upload_url"]
             _file_id = _ud["file_id"]
@@ -401,7 +403,7 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
                 json={"files": [{"id": _file_id}], "channel_id": channel_id, "initial_comment": msg or ""},
             )
             _complete_data = json_object_from_response(_complete)
-            if not _complete_data.get("ok"):
+            if (complete_ok := _complete_data.get("ok")) is None or not complete_ok:
                 raise RuntimeError(f"Slack upload complete error: {_complete_data}")
 
     _cfs_s_token = _cfs_s.set(_slack_file_sender)

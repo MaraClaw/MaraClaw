@@ -329,7 +329,7 @@ async def update_okr_settings(body: OKRSettingsUpdate, user: UserRecord = Depend
 
     okr_agent_id_str: str | None = str(settings.okr_agent_id) if settings.okr_agent_id else None
 
-    if body.enabled and not settings.okr_agent_id:
+    if body.enabled is True and not settings.okr_agent_id:
         from app.services.agent_seeder import seed_okr_agent_for_tenant
 
         logger.info(f"[OKR] OKR enabled for tenant {_require_tenant_id(user)} - auto-seeding OKR Agent")
@@ -490,7 +490,7 @@ async def list_objectives(
     OKR period computed from the tenant's OKR settings.
     Includes owner_name resolved from User.display_name or Agent.name.
     """
-    if not period_start or not period_end:
+    if period_start in (None, "") or period_end in (None, ""):
         settings = await _get_or_create_settings(_require_tenant_id(user))
         ps, pe = _compute_current_period(settings.period_frequency, settings.period_length_days)
     else:
@@ -534,7 +534,7 @@ async def create_objective(body: ObjectiveCreate, user: UserRecord = Depends(get
 
     resolved_owner_id: uuid.UUID | None = None
 
-    if body.owner_id:
+    if body.owner_id not in (None, ""):
         candidate = uuid.UUID(body.owner_id)
 
         if body.owner_type == "user":
@@ -721,7 +721,7 @@ async def update_kr_progress_endpoint(
     kr, _ = row
     prev_value = kr.current_value
     status = kr.status
-    if body.status and body.status in ("on_track", "at_risk", "behind", "completed"):
+    if body.status not in (None, "") and body.status in ("on_track", "at_risk", "behind", "completed"):
         status = body.status
     elif kr.target_value:
         ratio = body.value / kr.target_value
@@ -798,7 +798,7 @@ async def list_member_daily_reports(
     """List all member daily reports for a specific date plus missing members."""
     from app.services.okr_reporting import list_member_daily_reports_for_date
 
-    target_day = date.fromisoformat(report_date) if report_date else datetime.now(UTC).date()
+    target_day = date.fromisoformat(report_date) if report_date not in (None, "") else datetime.now(UTC).date()
     items = await list_member_daily_reports_for_date(_require_tenant_id(user), target_day)
     return [
         MemberDailyReportOut(
@@ -834,7 +834,7 @@ async def upsert_member_daily_report(
     )
 
     target_member_type = body.member_type or "user"
-    target_member_id = uuid.UUID(body.member_id) if body.member_id else user.id
+    target_member_id = uuid.UUID(body.member_id) if body.member_id not in (None, "") else user.id
 
     if getattr(user, "role", None) not in ("org_admin", "platform_admin") and (
         target_member_type != "user" or target_member_id != user.id
@@ -978,7 +978,7 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> d
         unkeyed: list[TrackedMember] = []
         for member in all_member_rows:
             member_id, member_name, member_user_id, external_id, avatar_url, provider_name = member
-            if not external_id:
+            if external_id in (None, ""):
                 unkeyed.append(member)
                 continue
             existing = best_by_ext.get(external_id)
@@ -1092,7 +1092,7 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> d
         member_channels: dict[str, list[str]] = {}
         for m in members_without_okr:
             ch = m.get("channel") or m.get("source_label")
-            if ch and ch not in ("Platform User", "Web"):
+            if ch not in (None, "") and ch not in ("Platform User", "Web"):
                 member_channels.setdefault(ch, []).append(m.get("display_name", "?"))
 
         if member_channels:
@@ -1113,7 +1113,7 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> d
             needed_types: set[str] = set()
             for ch_name in member_channels:
                 ct = _channel_name_to_type.get(ch_name)
-                if ct:
+                if ct not in (None, ""):
                     needed_types.add(ct)
 
             if needed_types:
@@ -1208,9 +1208,9 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
         member_user_ids[org_member.id] = org_member.user_id
         if not org_member.user_id:
             patterns = []
-            if org_member.open_id:
+            if org_member.open_id not in (None, ""):
                 patterns.append(f"feishu_p2p_{org_member.open_id}")
-            if org_member.external_id:
+            if org_member.external_id not in (None, ""):
                 patterns.append(f"feishu_p2p_{org_member.external_id}")
                 patterns.append(f"dingtalk_p2p_{org_member.external_id}")
             if patterns:
@@ -1264,7 +1264,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
         username_hint = ""
         if platform_uid:
             display = await user_dao.display_name_for_id(platform_uid)
-            if display:
+            if display not in (None, ""):
                 username_hint = (
                     f'\n  Platform account: "{display}"'
                     + "  (use this as the recipient identifier in send_platform_message)"
@@ -1316,7 +1316,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
         company_okr_lines = []
         for i, co in enumerate(company_okrs, 1):
             company_okr_lines.append(f"  {i}. **{co.title}**")
-            if co.description:
+            if co.description not in (None, ""):
                 company_okr_lines.append(f"     Description: {co.description[:120]}")
             krs = company_okr_krs.get(co.id, [])
             for j, kr in enumerate(krs, 1):

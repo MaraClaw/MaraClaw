@@ -22,7 +22,6 @@ from app.core.json_types import (
     json_as_str_or,
     json_loads_object,
     json_object_from_response,
-    mapping_from_row,
     object_list_from_row,
 )
 from app.core.logging import logger
@@ -52,7 +51,7 @@ def _is_json_object(value: object) -> TypeIs[JsonObject]:
 
 
 def _json_object(value: object) -> JsonObject:
-    return value if _is_json_object(value) else mapping_from_row(value)
+    return value if _is_json_object(value) else {}
 
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
@@ -119,7 +118,7 @@ def _build_card(
     """Build a Feishu interactive card for streaming replies."""
     elements: list[JsonValue] = []
 
-    if tool_status_lines:
+    if tool_status_lines is not None and tool_status_lines:
         elements.append(
             {
                 "tag": "markdown",
@@ -210,7 +209,7 @@ def _append_error_details(reply_text: str, tool_errors: list[str]) -> str:
 
 def _normalize_history_messages(history: list[OpenAIMessage] | None) -> list[OpenAIMessage]:
     """Drop UI-only message roles before replaying history into the LLM."""
-    if not history:
+    if history is None or not history:
         return []
     allowed_roles = {"system", "assistant", "user", "tool", "function"}
     normalized: list[OpenAIMessage] = []
@@ -341,7 +340,7 @@ async def feishu_oauth_callback(code: str, state: str | None = None):
     from app.services.auth_provider import FeishuAuthProvider
 
     tenant_id = None
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
@@ -379,7 +378,7 @@ async def feishu_oauth_callback(code: str, state: str | None = None):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Feishu auth failed: {e}") from e
 
-    if state:
+    if state not in (None, ""):
         try:
             sid = uuid.UUID(state)
             session = await sso_scan_session_dao.get(sid)
@@ -548,7 +547,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
         return {"code": 1, "msg": "Channel not found"}
     app_id = config.app_id
     app_secret = config.app_secret
-    if not app_id or not app_secret:
+    if app_id in (None, "") or app_secret in (None, ""):
         logger.error(f"[Feishu] Channel credentials missing for agent {agent_id}")
         return {"code": 1, "msg": "Channel credentials not configured"}
 
@@ -578,7 +577,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
             # Feishu post content: {"title": "...", "content": [[{"tag":"text","text":"..."},...],...]}
             # The content may be nested under a locale key like "zh_cn"
             _paragraphs_raw: object = _post_body.get("content", [])
-            if not _paragraphs_raw:
+            if _paragraphs_raw is None or not _paragraphs_raw:
                 # Try locale keys (zh_cn, en_us, etc.)
                 for _locale_val in _post_body.values():
                     if isinstance(_locale_val, dict) and "content" in _locale_val:
@@ -602,7 +601,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                         _line_parts.append(f"{_link_text} ({_href})" if _href else _link_text)
                     elif _tag == "img":
                         _ik = json_as_str(_elem.get("image_key"))
-                        if _ik:
+                        if _ik not in (None, ""):
                             _post_image_keys.append(_ik)
                 if _line_parts:
                     _text_parts.append("".join(_line_parts))
@@ -861,7 +860,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                             if _mtime and (_now - _mtime) < 1800:
                                 _recent_file_path = f"uploads/{_entry.name}"
                                 break
-                if _recent_file_path:
+                if _recent_file_path not in (None, ""):
                     # _recent_file_path is relative to uploads dir; agent workspace root is
                     # AGENT_DATA_DIR/{agent_id}/, so the correct relative path is workspace/uploads/
                     _ws_rel_path = f"workspace/{_recent_file_path}"
@@ -1002,7 +1001,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
 
             async def _flush_stream(reason: str, force: bool = False) -> None:
                 nonlocal _last_flushed_hash, _last_flush_time
-                if not _patch_msg_id:
+                if _patch_msg_id in (None, ""):
                     return
                 async with _flush_lock:
                     now = time.time()
@@ -1027,12 +1026,12 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
 
             async def _ws_on_chunk(text: str) -> None:
                 _stream_buffer.append(text)
-                if _patch_msg_id:
+                if _patch_msg_id not in (None, ""):
                     await _flush_stream("chunk")
 
             async def _ws_on_thinking(text: str) -> None:
                 _thinking_buffer.append(text)
-                if _patch_msg_id:
+                if _patch_msg_id not in (None, ""):
                     await _flush_stream("thinking")
 
             async def _ws_on_tool_call(evt: ToolCallbackData) -> None:
@@ -1045,12 +1044,12 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                 elif status == "done":
                     _ = _tool_status_running.pop(call_id, None)
                     normalized_error = _normalize_tool_error(tool_name, result)
-                    if normalized_error:
+                    if normalized_error not in (None, ""):
                         _tool_errors.append(normalized_error)
                         _tool_status_done.append(f"❌ Tool failed: `{tool_name}`")
                     else:
                         _tool_status_done.append(f"✅ Tool done: `{tool_name}`")
-                elif status and status not in {"running", "done"}:
+                elif status:
                     _ = _tool_status_running.pop(call_id, None)
                     _tool_errors.append(f"`{tool_name}`: tool status `{status}`")
                     _tool_status_done.append(f"Info: Tool update: `{tool_name}` ({status})")
@@ -1069,16 +1068,16 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                         tool_call_id=evt.get("call_id"),
                         reasoning_content=evt.get("reasoning_content"),
                     )
-                if _patch_msg_id:
+                if _patch_msg_id not in (None, ""):
                     await _flush_stream("tool", force=True)
 
             async def _heartbeat() -> None:
                 while not _llm_done:
                     await asyncio.sleep(_flush_interval)
-                    if _patch_msg_id:
+                    if _patch_msg_id not in (None, ""):
                         await _flush_stream("heartbeat")
 
-            if _patch_msg_id:
+            if _patch_msg_id not in (None, ""):
                 _heartbeat_task = asyncio.create_task(_heartbeat())
 
             # Call LLM via shared channel inbound helper (streaming callbacks preserved)
@@ -1150,7 +1149,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                 agent_name=_agent_name,
             )
 
-            if _patch_msg_id:
+            if _patch_msg_id not in (None, ""):
                 try:
                     await _patch_queue.drain()
                 except Exception as e:
@@ -1512,16 +1511,16 @@ async def _handle_feishu_file(
 
         async def _img_on_chunk(text: str) -> None:
             _img_stream_buf.append(text)
-            if _patch_msg_id:
+            if _patch_msg_id not in (None, ""):
                 await _flush_image_stream("chunk")
 
         async def _img_heartbeat() -> None:
             while not _img_llm_done:
                 await asyncio.sleep(_img_flush_interval)
-                if _patch_msg_id:
+                if _patch_msg_id not in (None, ""):
                     await _flush_image_stream("heartbeat")
 
-        if _patch_msg_id:
+        if _patch_msg_id not in (None, ""):
             _img_heartbeat_task = asyncio.create_task(_img_heartbeat())
 
         # Call LLM with image marker - vision models will parse it
@@ -1553,7 +1552,7 @@ async def _handle_feishu_file(
             return
 
         # Send final card or fallback text
-        if _patch_msg_id:
+        if _patch_msg_id not in (None, ""):
             try:
                 await _img_patch_queue.drain()
             except Exception as _e_drain:
