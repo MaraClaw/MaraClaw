@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from app.core.logging import logger
@@ -13,6 +13,7 @@ from app.dao.org_member_dao import org_member_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 from app.dao.user_dao import user_dao
+from app.db.connection import DbConnection
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.invitation import InvitationCodeRecord
@@ -73,7 +74,7 @@ def normalize_email_domain(raw: str) -> str:
 
 
 def email_domain(email: str | None) -> str | None:
-    if not email or "@" not in email:
+    if email in (None, "") or "@" not in email:
         return None
     try:
         return normalize_email_domain(email.rsplit("@", 1)[1])
@@ -119,7 +120,7 @@ async def require_active_invitation(code: str) -> InvitationCodeRecord:
 
 async def consume_invitation_code(code: str | None) -> None:
     """Increment used_count after a successful attach. Missing codes are a no-op."""
-    if not code:
+    if code in (None, ""):
         return
     inv = await invitation_code_dao.get_active_by_code(code)
     if inv is None:
@@ -135,7 +136,7 @@ async def resolve_registration_org(
     """Invite wins, then claimed domain, else the default end-user org."""
     fallback = await get_fallback_org()
 
-    if invitation_code:
+    if invitation_code not in (None, ""):
         inv = await require_active_invitation(invitation_code)
         if inv.tenant_id is None:
             raise InvitationError("Invitation code tenant is inactive")
@@ -206,7 +207,8 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: str) ->
         raise DefaultOrgUnavailableError("Organization is disabled")
     previous_tenant_id = user.tenant_id
     try:
-        async with connection_ctx() as db:
+        async with connection_ctx() as connection:
+            db = cast(DbConnection | None, connection)
             if db is not None:
                 from app.core.acl_locks import lock_tenants, lock_user
 

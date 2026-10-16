@@ -84,7 +84,7 @@ class RegistrationService:
         """
         conflicts = []
 
-        if email and await identity_dao.get_by_email(email):
+        if email not in (None, "") and await identity_dao.get_by_email(email):
             conflicts.append(
                 {
                     "type": "email",
@@ -93,7 +93,7 @@ class RegistrationService:
                 }
             )
 
-        if mobile:
+        if mobile not in (None, ""):
             normalized = re.sub(r"[\s\-\+]", "", mobile)
             if await identity_dao.get_by_phone(normalized):
                 conflicts.append(
@@ -125,11 +125,11 @@ class RegistrationService:
         identity: IdentityRecord | None = None
 
         # Match by email (primary ownership claim)
-        if email:
+        if email not in (None, ""):
             identity = await identity_dao.get_by_email(email)
 
         # Match by phone (secondary ownership claim)
-        if not identity and phone:
+        if not identity and phone not in (None, ""):
             identity = await identity_dao.get_by_phone(phone)
 
         if identity:
@@ -147,7 +147,7 @@ class RegistrationService:
 
         # Resolve a safe, unique username
         final_username = username
-        if username and await identity_dao.is_username_taken(username):
+        if username not in (None, "") and await identity_dao.is_username_taken(username):
             final_username = f"{username}_{uuid.uuid4().hex[:6]}"
             logger.info(
                 "Username '%s' already taken; assigned '%s' to new identity",
@@ -156,7 +156,7 @@ class RegistrationService:
             )
 
         # Hash password if not pre-hashed
-        if not password_hash and password:
+        if password_hash in (None, "") and password not in (None, ""):
             password_hash = await hash_password_async(password)
 
         return await identity_dao.create_identity(
@@ -239,7 +239,7 @@ class RegistrationService:
         email = user_info.get("email", "")
         tenant_id = None
         sso_tenant_id: str | None = None
-        if email:
+        if email not in (None, ""):
             from app.services.org_membership import place_new_registration
 
             placement = await place_new_registration(email=email)
@@ -271,7 +271,7 @@ class RegistrationService:
 
         # Create new IdentityRecord + UserRecord
         effective_id = provider_user_id or user_info.get("open_id") or user_info.get("union_id") or uuid.uuid4().hex[:8]
-        username = email.split("@")[0] if email else f"{provider_type}_{effective_id[:8]}"
+        username = email.split("@")[0] if email not in (None, "") else f"{provider_type}_{effective_id[:8]}"
 
         identity = await self.find_or_create_identity(
             email=email,
@@ -328,18 +328,18 @@ class RegistrationService:
         member = await self._find_unbound_org_member_by_contact(user)
         if member:
             fields: dict[str, Any] = {"user_id": user.id}
-            if user.email and member.email != user.email:
+            if user.email not in (None, "") and member.email != user.email:
                 fields["email"] = user.email
-            if user.primary_mobile and member.phone != user.primary_mobile:
+            if user.primary_mobile not in (None, "") and member.phone != user.primary_mobile:
                 fields["phone"] = user.primary_mobile
             member = await org_member_dao.update_fields(member.id, fields) or member
 
             # Keep identity contact in sync when org directory is authoritative.
             identity_updates: dict[str, Any] = {}
-            if not user.email and member.email:
+            if user.email in (None, "") and member.email not in (None, ""):
                 identity_updates["email"] = member.email
                 user.email = member.email
-            if not user.primary_mobile and member.phone:
+            if user.primary_mobile in (None, "") and member.phone not in (None, ""):
                 identity_updates["phone"] = member.phone
                 user.primary_mobile = member.phone
             if identity_updates and user.identity is not None:
@@ -352,11 +352,11 @@ class RegistrationService:
     async def _find_unbound_org_member_by_contact(self, user: UserRecord) -> OrgMemberRecord | None:
         if user.tenant_id is None:
             return None
-        if user.email:
+        if user.email not in (None, ""):
             member = await org_member_dao.find_unbound_by_email(user.email, user.tenant_id)
             if member:
                 return member
-        if user.primary_mobile:
+        if user.primary_mobile not in (None, ""):
             return await org_member_dao.find_unbound_by_phone(user.primary_mobile, user.tenant_id)
         return None
 
@@ -378,11 +378,11 @@ class RegistrationService:
             web_provider = await identity_provider_dao.update(db_obj=web_provider, obj_in={"name": "Platform"})
 
         member = await org_member_dao.get_by_user_and_provider(user.id, user.tenant_id, web_provider.id)
-        if not member and user.email:
+        if not member and user.email not in (None, ""):
             member = await org_member_dao.find_unbound_by_email_and_provider(
                 user.email, user.tenant_id, web_provider.id
             )
-        if not member and user.primary_mobile:
+        if not member and user.primary_mobile not in (None, ""):
             member = await org_member_dao.find_unbound_by_phone_and_provider(
                 user.primary_mobile, user.tenant_id, web_provider.id
             )

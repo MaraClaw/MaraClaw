@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -18,7 +18,7 @@ def field_change(before: object, after: object) -> dict[str, object]:
 
 
 @asynccontextmanager
-async def _audit_savepoint() -> AsyncIterator[None]:
+async def _audit_savepoint() -> AsyncGenerator[None]:
     """Recover SQL failures before the best-effort writer swallows them."""
     async with optional_connection_ctx() as db:
         if db is None:

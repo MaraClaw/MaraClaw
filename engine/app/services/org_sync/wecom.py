@@ -76,7 +76,11 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
         It cannot call user/list or user/get (those raise errcode 48009).
         Full user profiles are obtained passively via SSO login instead.
         """
-        if self._access_token and self._token_expires_at and datetime.now(UTC) < self._token_expires_at:
+        if (
+            self._access_token not in (None, "")
+            and self._token_expires_at
+            and datetime.now(UTC) < self._token_expires_at
+        ):
             return self._access_token
 
         if not self.corp_id or not self.secret:
@@ -118,7 +122,7 @@ class WeComOrgSyncAdapter(BaseOrgSyncAdapter):
                     continue
                 dept_id = str(raw_id)
                 parentid = item.get("parentid", 0)
-                parent_id = str(parentid) if parentid and parentid != 0 else None
+                parent_id = str(parentid) if parentid is not None and parentid and parentid != 0 else None
 
                 all_depts.append(
                     ExternalDepartment(

@@ -56,12 +56,12 @@ class OrgSyncMemberMixin:
         email = _normalize_contact(user.email)
         mobile = _normalize_contact(user.mobile)
 
-        if email:
+        if email not in (None, ""):
             platform_user = await user_dao.get_by_email_and_tenant(email, self.tenant_id)
             if platform_user:
                 user_id = platform_user.id
 
-        if not user_id and mobile:
+        if not user_id and mobile not in (None, ""):
             platform_user = await user_dao.get_by_phone_and_tenant(mobile, self.tenant_id)
             if platform_user:
                 user_id = platform_user.id
@@ -130,9 +130,9 @@ class OrgSyncMemberMixin:
             identity = await identity_dao.get(target_user.identity_id)
             if identity:
                 id_updates: dict[str, object] = {}
-                if email and identity.email != email:
+                if email not in (None, "") and identity.email != email:
                     id_updates["email"] = email
-                if mobile and identity.phone != mobile:
+                if mobile not in (None, "") and identity.phone != mobile:
                     id_updates["phone"] = mobile
                 if id_updates:
                     _ = await identity_dao.update(db_obj=identity, obj_in=mapping_from_row(id_updates))
@@ -179,7 +179,7 @@ class OrgSyncMemberMixin:
     async def _resolve_platform_user(self, user: ExternalUser) -> UserRecord | None:
         """Resolve platform user from external user info."""
         email = _normalize_contact(user.email)
-        if email:
+        if email not in (None, ""):
             # Prefer tenant-scoped lookup when available
             found = await user_dao.get_by_email_and_tenant(email, self.tenant_id)
             if found:
@@ -192,7 +192,7 @@ class OrgSyncMemberMixin:
                     return users[0]
 
         mobile = _normalize_contact(user.mobile)
-        if mobile:
+        if mobile not in (None, ""):
             found = await user_dao.get_by_phone_and_tenant(mobile, self.tenant_id)
             if found:
                 return found

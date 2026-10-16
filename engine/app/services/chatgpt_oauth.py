@@ -164,7 +164,7 @@ def _as_int(value: object, default: int) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     text = json_as_str(value)
-    if not text:
+    if text in (None, ""):
         return default
     try:
         return int(text.strip())
@@ -185,12 +185,12 @@ def account_id_from_jwt(token: str) -> str:
     except ValueError, UnicodeDecodeError:
         return ""
     direct = json_as_str(claims.get("chatgpt_account_id"))
-    if direct:
+    if direct not in (None, ""):
         return direct
     auth = claims.get("https://api.openai.com/auth")
     if isinstance(auth, dict):
         nested = json_as_str(auth.get("chatgpt_account_id"))
-        if nested:
+        if nested not in (None, ""):
             return nested
     return ""
 

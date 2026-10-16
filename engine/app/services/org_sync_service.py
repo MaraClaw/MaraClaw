@@ -1,5 +1,8 @@
 """Organization structure sync service (provider-based only)."""
 
+from typing import cast
+from uuid import UUID
+
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.identity_provider_dao import identity_provider_dao
@@ -8,7 +11,7 @@ from app.dao.identity_provider_dao import identity_provider_dao
 class OrgSyncService:
     """Sync org structure from a specific identity provider."""
 
-    async def sync_provider(self, provider_id: str) -> JsonObject:
+    async def sync_provider(self, provider_id: UUID | str) -> JsonObject:
         import uuid as _uuid
 
         pid = _uuid.UUID(provider_id) if isinstance(provider_id, str) else provider_id
@@ -33,7 +36,7 @@ class OrgSyncService:
         adapter.tenant_id = provider.tenant_id
 
         try:
-            return await adapter.sync_org_structure()
+            return cast(JsonObject, await adapter.sync_org_structure())
         except Exception as e:
             logger.error(f"[OrgSync] Provider sync failed: {e}")
             return {"error": str(e)}

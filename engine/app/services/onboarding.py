@@ -185,7 +185,7 @@ def _render_template_greeting(
     user_name: str,
 ) -> str:
     role_line = f", your {agent.role_description}" if agent.role_description else ""
-    if capability_bullets:
+    if capability_bullets is not None and capability_bullets:
         bullets = "; ".join(b.strip() for b in capability_bullets if b and b.strip())
         bullets_line = f" - ideas to lean on: {bullets}" if bullets else ""
     else:
@@ -239,7 +239,7 @@ async def resolve_onboarding_prompt(
             "SELECT phase FROM agent_user_onboardings WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s LIMIT 1",
             {"agent_id": agent.id, "user_id": user_id},
         )
-        existing_phase = existing["phase"] if existing else None
+        existing_phase = existing["phase"] if existing is not None else None
         if existing_phase == PHASE_COMPLETED:
             return None
 
@@ -271,7 +271,7 @@ async def resolve_onboarding_prompt(
                 "SELECT capability_bullets, bootstrap_content FROM agent_templates WHERE id = %(template_id)s",
                 {"template_id": agent.template_id},
             )
-            if tpl:
+            if tpl is not None:
                 bullets = str_list_from_row(tpl.get("capability_bullets"))
                 capability_bullets = bullets or None
                 template_prompt = str_from_row_opt(tpl.get("bootstrap_content"))
@@ -303,7 +303,7 @@ async def resolve_onboarding_prompt(
         # Custom agents get the OpenClaw-inspired "define who I am" ritual.
         if is_template_agent:
             prompt = _render_template_greeting(agent, capability_bullets, user_name)
-        elif is_founder and template_prompt:
+        elif is_founder and template_prompt not in (None, ""):
             # Defensive fallback for legacy data that has bootstrap text but no
             # usable template_id. Keep the old authored bootstrap behavior.
             prompt = (

@@ -105,7 +105,7 @@ class FeishuOrgSyncAdapter(BaseOrgSyncAdapter):
                     for item_raw in object_list_from_row(res_data.get("items")):
                         item = json_object_from(item_raw)
                         dept_id = json_as_str(item.get("open_department_id"))
-                        if not dept_id:
+                        if dept_id in (None, ""):
                             continue
 
                         # Since we fetched using parent_id, we intrinsically know the parent!

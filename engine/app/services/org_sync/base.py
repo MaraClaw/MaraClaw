@@ -123,9 +123,9 @@ class BaseOrgSyncAdapter(OrgSyncDepartmentMixin, OrgSyncMemberMixin, ABC):
                     for user in users:
                         try:
                             stats = await self._upsert_member(provider, user, dept.external_id)
-                            if stats.get("user_created"):
+                            if stats.get("user_created") is True:
                                 user_count += 1
-                            if stats.get("profile_synced"):
+                            if stats.get("profile_synced") is True:
                                 profile_count += 1
                             member_count += 1
                         except Exception as e:

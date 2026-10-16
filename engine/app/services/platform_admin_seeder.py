@@ -125,7 +125,7 @@ async def _rehydrate_identity_hash(user: UserRecord) -> UserRecord:
     """Reload password_hash from SQL when a session snapshot stripped it."""
     identity = user.identity
     identity_id = user.identity_id or (identity.id if identity is not None else None)
-    if identity is not None and identity.password_hash:
+    if identity is not None and identity.password_hash not in (None, ""):
         return user
     if identity_id is None:
         return user
@@ -195,7 +195,7 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
         "email_verified": True,
         "must_change_password": True,
     }
-    if not identity.password_hash:
+    if identity.password_hash in (None, ""):
         updates["password_hash"] = password_hash
     if not (identity.email or "").strip():
         taken = await identity_dao.get_by_email(email)
@@ -270,7 +270,9 @@ async def ensure_platform_admin() -> UserRecord:
                     f"Identity {email} exists but is disabled; refusing to auto-elevate. "
                     + "Re-enable the account manually or use a different PLATFORM_ADMIN_EMAIL."
                 )
-            if not identity.password_hash or not await verify_password_async(password, identity.password_hash):
+            if identity.password_hash in (None, "") or not await verify_password_async(
+                password, identity.password_hash
+            ):
                 raise PlatformAdminSeedError(
                     f"Identity {email} already exists but PLATFORM_ADMIN_PASSWORD does not match. "
                     + "Refusing to elevate without proving the bootstrap secret."
