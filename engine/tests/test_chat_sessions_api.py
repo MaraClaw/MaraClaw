@@ -4,8 +4,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from app.api import chat_sessions as chat_sessions_api
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
 
 
 @pytest.mark.asyncio
@@ -165,6 +168,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         is_group=False,
     )
     message = SimpleNamespace(
+        id=uuid.uuid4(),
         role="user",
         content="hello",
         created_at=now,
@@ -195,6 +199,8 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
 
     assert messages == [
         {
+            "message_id": str(message.id),
+            "entry_id": str(message.id),
             "role": "user",
             "content": "hello",
             "created_at": now.isoformat(),
@@ -221,6 +227,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         is_group=False,
     )
     message = SimpleNamespace(
+        id=uuid.uuid4(),
         role="user",
         content="hello",
         created_at=now,
@@ -251,6 +258,8 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
 
     assert messages == [
         {
+            "message_id": str(message.id),
+            "entry_id": str(message.id),
             "role": "user",
             "content": "hello",
             "created_at": now.isoformat(),
@@ -293,3 +302,76 @@ async def test_create_session_returns_web_session_shape(monkeypatch):
     assert result.source_channel == "web"
     assert result.is_primary is False
     assert result.message_count == 0
+
+
+@pytest.mark.parametrize("source_channel", ["web", "agent"])
+async def test_history_http_preserves_content_and_deterministic_persisted_identities(monkeypatch, source_channel):
+    agent_id, owner_id = uuid.uuid4(), uuid.uuid4()
+    viewer = SimpleNamespace(id=uuid.uuid4(), role="org_admin")
+    session = ChatSessionRecord(id=uuid.uuid4(), agent_id=agent_id, user_id=owner_id, source_channel=source_channel)
+    now = datetime(2026, 10, 16, tzinfo=UTC)
+    inline = 'before\n```tool_code\nsearch\n```\n```json\n{"q":"hello"}\n```\nafter'
+    messages = [
+        ChatMessageRecord(
+            id=uuid.uuid4(), agent_id=agent_id, user_id=owner_id, role=role, content=content, created_at=now
+        )
+        for role, content in [
+            ("user", "same"),
+            ("assistant", "same"),
+            ("tool_call", '{"name":"search","args":{"q":"hello"},"result":"found"}'),
+            ("tool_call", "invalid JSON"),
+            ("assistant", inline),
+            ("assistant", "```tool_code malformed"),
+        ]
+    ]
+    messages[1].thinking = "reasoning"
+
+    async def access(_user, _agent_id):
+        return SimpleNamespace(id=agent_id, creator_id=uuid.uuid4()), "use"
+
+    async def get_session(_sid, _aid):
+        return session
+
+    async def list_messages(**kwargs):
+        assert kwargs == {"conversation_id": str(session.id), "limit": 20, "before": None}
+        return messages
+
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", access)
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", get_session)
+    monkeypatch.setattr(chat_sessions_api.chat_message_dao, "list_for_session", list_messages)
+    app = FastAPI()
+    app.include_router(chat_sessions_api.router)
+    app.dependency_overrides[chat_sessions_api.get_current_user] = lambda: viewer
+    url = f"/api/agents/{agent_id}/sessions/{session.id}/messages"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.get(url)
+        second = await client.get(url)
+        viewer.role = "member"
+        forbidden = await client.get(url)
+
+    assert first.status_code == second.status_code == 200
+    entries = first.json()
+    assert second.json() == entries
+    assert forbidden.status_code == 403
+    assert [entry["message_id"] for entry in entries[:4]] == [str(message.id) for message in messages[:4]]
+    assert [entry["entry_id"] for entry in entries[:4]] == [str(message.id) for message in messages[:4]]
+    assert entries[0]["content"] == entries[1]["content"] == "same"
+    assert entries[1]["thinking"] == "reasoning"
+    assert entries[2]["toolName"] == "search"
+    assert entries[2]["toolArgs"] == {"q": "hello"}
+    assert entries[2]["toolResult"] == "found"
+    assert entries[3]["content"] == "invalid JSON"
+    if source_channel == "agent":
+        assert [entry["message_id"] for entry in entries[4:7]] == [str(messages[4].id)] * 3
+        assert [entry["entry_id"] for entry in entries[4:7]] == [f"{messages[4].id}:{index}" for index in range(3)]
+        assert [entry["content"] for entry in entries[4:7]] == ["before", "", "after"]
+        assert entries[5]["toolName"] == "search"
+        assert entries[5]["toolArgs"] == {"q": "hello"}
+        assert entries[7]["entry_id"] == f"{messages[5].id}:0"
+    else:
+        assert entries[4]["content"] == inline
+        assert entries[4]["entry_id"] == str(messages[4].id)
+        assert entries[5]["entry_id"] == str(messages[5].id)
+    assert entries[-1]["content"] == "```tool_code malformed"
+    assert len({entry["entry_id"] for entry in entries}) == len(entries)
