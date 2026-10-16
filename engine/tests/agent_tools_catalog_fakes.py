@@ -2,12 +2,14 @@ import copy
 import uuid
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from typing import Any
 
 from app.services import agent_tools as agent_tools_service
 from app.services.agent_tools_definitions import AGENT_TOOLS
 from app.services.tool_runtime import catalog as catalog_module
 
-AGENT_TOOLS_BY_NAME = {tool["function"]["name"]: tool for tool in AGENT_TOOLS}
+_agent_tools: list[Any] = AGENT_TOOLS
+AGENT_TOOLS_BY_NAME = {tool["function"]["name"]: tool for tool in _agent_tools}
 
 
 @dataclass(frozen=True, slots=True)

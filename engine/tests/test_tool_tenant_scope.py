@@ -1,5 +1,6 @@
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 from app.api.tools import _tool_record_visible_to_agent
 
@@ -37,7 +38,7 @@ def test_agent_installed_tools_require_explicit_assignment():
     tenant_id = uuid.uuid4()
     tool_id = uuid.uuid4()
     installed_tool = make_tool(source="agent", id=tool_id, tenant_id=uuid.uuid4())
-    assignment = SimpleNamespace(agent_id=uuid.uuid4(), tool_id=tool_id)
+    assignment: Any = SimpleNamespace(agent_id=uuid.uuid4(), tool_id=tool_id)
 
     assert _tool_record_visible_to_agent(installed_tool, tenant_id, {}) is False
     assert _tool_record_visible_to_agent(installed_tool, tenant_id, {str(tool_id): assignment}) is True

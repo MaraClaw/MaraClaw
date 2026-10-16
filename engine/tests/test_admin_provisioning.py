@@ -200,6 +200,8 @@ async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
         )
 
     assert result.admin_email == "pa@example.com"
+    assert create_identity.await_args is not None
+    assert create_user.await_args is not None
     assert create_identity.await_args.kwargs["is_platform_admin"] is True
     assert create_identity.await_args.kwargs["must_change_password"] is True
     assert create_user.await_args.kwargs["obj_in"]["role"] == "platform_admin"
@@ -252,16 +254,18 @@ async def test_set_peer_admin_active_deactivates_other_platform_admin(monkeypatc
         "deactivate_unless_last_active",
         AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": False})),
     )
-    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+    write_admin_audit = AsyncMock()
+    monkeypatch.setattr(provisioning, "write_admin_audit", write_admin_audit)
 
     with patch.object(provisioning, "connection_ctx") as ctx:
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
     assert updated.is_active is False
-    provisioning.write_admin_audit.assert_awaited_once()
-    assert provisioning.write_admin_audit.await_args.kwargs["action"] == "user_deactivate"
-    assert "is_active" in provisioning.write_admin_audit.await_args.kwargs["changes"]
+    write_admin_audit.assert_awaited_once()
+    assert write_admin_audit.await_args is not None
+    assert write_admin_audit.await_args.kwargs["action"] == "user_deactivate"
+    assert "is_active" in write_admin_audit.await_args.kwargs["changes"]
 
 
 @pytest.mark.asyncio
@@ -295,6 +299,7 @@ async def test_write_admin_audit_persists_actor_and_changes(monkeypatch):
         changes={"is_active": admin_audit.field_change(True, False)},
         ip_address="127.0.0.1",
     )
+    assert create.await_args is not None
     payload = create.await_args.kwargs["obj_in"]
     assert payload["actor_id"] == actor.id
     assert payload["actor_role"] == "platform_admin"
@@ -345,7 +350,8 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
     identity = SimpleNamespace(id=uuid.uuid4(), is_platform_admin=True)
     peer = _user(role="platform_admin", identity=identity, is_active=True)
     monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
-    monkeypatch.setattr(provisioning.identity_dao, "update", AsyncMock())
+    update_identity = AsyncMock()
+    monkeypatch.setattr(provisioning.identity_dao, "update", update_identity)
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
@@ -362,8 +368,9 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
             role="member",
         )
     assert updated.role == "member"
-    provisioning.identity_dao.update.assert_awaited_once()
-    assert provisioning.identity_dao.update.await_args.kwargs["obj_in"]["is_platform_admin"] is False
+    update_identity.assert_awaited_once()
+    assert update_identity.await_args is not None
+    assert update_identity.await_args.kwargs["obj_in"]["is_platform_admin"] is False
 
 
 def test_join_refuses_genesis_and_platform_admin_rewrite():
@@ -552,10 +559,12 @@ async def test_set_peer_admin_active_activates_inactive_platform_admin(monkeypat
         "update",
         AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": True})),
     )
-    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+    write_admin_audit = AsyncMock()
+    monkeypatch.setattr(provisioning, "write_admin_audit", write_admin_audit)
     with patch.object(provisioning, "connection_ctx") as ctx:
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=True)
     assert updated.is_active is True
-    assert provisioning.write_admin_audit.await_args.kwargs["action"] == "user_activate"
+    assert write_admin_audit.await_args is not None
+    assert write_admin_audit.await_args.kwargs["action"] == "user_activate"

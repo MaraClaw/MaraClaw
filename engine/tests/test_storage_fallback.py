@@ -1,5 +1,7 @@
 from typing import override
 
+import pytest
+
 from app.services.storage_runtime.base import StorageBackend, StorageEntry
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.s3 import S3StorageBackend
@@ -7,7 +9,7 @@ from app.services.storage_runtime.s3 import S3StorageBackend
 
 class MemoryStorageBackend(StorageBackend):
     def __init__(self, files: dict[str, bytes] | None = None):
-        self.files = dict(files or {})
+        self.files: dict[str, bytes] = dict(files or {})
 
     @override
     async def exists(self, key: str) -> bool:
@@ -82,13 +84,13 @@ async def test_fallback_storage_writes_only_to_primary():
     assert "agent-id/focus.md" not in fallback.files
 
 
-async def test_s3_local_path_for_preserves_suffix_and_materialized_content():
+async def test_s3_local_path_for_preserves_suffix_and_materialized_content(monkeypatch: pytest.MonkeyPatch):
     backend = object.__new__(S3StorageBackend)
 
     async def write_local_copy(key: str, path) -> None:
         path.write_bytes(key.encode())
 
-    backend.write_local_copy = write_local_copy
+    monkeypatch.setattr(backend, "write_local_copy", write_local_copy)
 
     path = await backend.local_path_for("agent-id/report.txt")
     assert path is not None

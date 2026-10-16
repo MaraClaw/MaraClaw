@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -17,7 +18,7 @@ from app.api.admin_search_analytics import (
 )
 
 
-def _pa() -> SimpleNamespace:
+def _pa() -> Any:
     return SimpleNamespace(id=uuid4(), role="platform_admin", email="pa@example.test")
 
 
@@ -25,7 +26,7 @@ def _pa() -> SimpleNamespace:
 async def test_summary_and_trending_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.api import admin_search_analytics as api
 
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     class FakeDao:
         async def summary(self, **kwargs):
@@ -107,8 +108,8 @@ async def test_export_path_and_raw_flag(monkeypatch: pytest.MonkeyPatch) -> None
 
     class FakeDao:
         def __init__(self) -> None:
-            self.exported: list = []
-            self.released: list = []
+            self.exported: list[Any] = []
+            self.released: list[Any] = []
 
         async def claim_pending_export(self, **_kwargs):
             return [event]

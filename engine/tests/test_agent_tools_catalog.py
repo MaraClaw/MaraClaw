@@ -2,6 +2,7 @@ import sys
 import uuid
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from typing import Any
 
 from app.services.agent_tools_definitions import (
     _ALWAYS_INCLUDE_CORE,
@@ -13,6 +14,11 @@ from app.services.agent_tools_definitions import (
     _feishu_tools,
 )
 from app.services.llm.finish import FINISH_TOOL_DEFINITION, FINISH_TOOL_DEFINITION as CANONICAL_FINISH_TOOL_DEFINITION
+
+_catalog_tools: list[Any] = AGENT_TOOLS
+_core_tools: list[Any] = _always_core_tools
+_feishu_catalog_tools: list[Any] = _feishu_tools
+_channel_catalog_tools: list[Any] = _channel_tools
 
 _catalog_fakes_spec = spec_from_file_location(
     "agent_tools_catalog_fakes",
@@ -38,30 +44,32 @@ def test_catalog_shape_when_imported_from_public_module():
     expected_tool_count = 73
 
     # When: callers inspect the static OpenAI function-calling catalog.
-    tool_names = [tool["function"]["name"] for tool in AGENT_TOOLS]
+    tool_names = [tool["function"]["name"] for tool in _catalog_tools]
 
     # Then: the catalog shape and core entries match the current public contract.
     assert len(AGENT_TOOLS) == expected_tool_count
     assert FINISH_TOOL_DEFINITION is CANONICAL_FINISH_TOOL_DEFINITION
     assert AGENT_TOOLS[0] is FINISH_TOOL_DEFINITION
-    assert all(tool["type"] == "function" for tool in AGENT_TOOLS)
-    assert all(tool["function"]["name"] for tool in AGENT_TOOLS)
+    assert all(tool["type"] == "function" for tool in _catalog_tools)
+    assert all(tool["function"]["name"] for tool in _catalog_tools)
     assert len(tool_names) == len(set(tool_names))
     assert {"finish", "list_files", "read_file", "write_file", "edit_file"} <= set(tool_names)
 
 
 def test_core_subsets_cohere_with_catalog():
     # Given: public static subsets used by get_agent_tools_for_llm.
-    catalog_names = {tool["function"]["name"] for tool in AGENT_TOOLS}
+    catalog_names = {tool["function"]["name"] for tool in _catalog_tools}
     configured_only_feishu_tool_names = {"bitable_create_app"}
 
     # When: each subset is recomputed from the public catalog.
-    expected_core_tools = [tool for tool in AGENT_TOOLS if tool["function"]["name"] in _ALWAYS_INCLUDE_CORE]
-    expected_feishu_tools = [tool for tool in AGENT_TOOLS if tool["function"]["name"] in _FEISHU_TOOL_NAMES]
-    expected_channel_tools = [tool for tool in AGENT_TOOLS if tool["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES]
-    core_names = {tool["function"]["name"] for tool in _always_core_tools}
-    feishu_names = {tool["function"]["name"] for tool in _feishu_tools}
-    channel_names = {tool["function"]["name"] for tool in _channel_tools}
+    expected_core_tools = [tool for tool in _catalog_tools if tool["function"]["name"] in _ALWAYS_INCLUDE_CORE]
+    expected_feishu_tools = [tool for tool in _catalog_tools if tool["function"]["name"] in _FEISHU_TOOL_NAMES]
+    expected_channel_tools = [
+        tool for tool in _catalog_tools if tool["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES
+    ]
+    core_names = {tool["function"]["name"] for tool in _core_tools}
+    feishu_names = {tool["function"]["name"] for tool in _feishu_catalog_tools}
+    channel_names = {tool["function"]["name"] for tool in _channel_catalog_tools}
 
     # Then: the exported subsets are order-preserving views of the same catalog.
     assert "finish" in _ALWAYS_INCLUDE_CORE
@@ -139,7 +147,7 @@ async def test_db_failure_or_empty_result_returns_minimal_fallback_catalog(monke
         names = set(tool_names(tools))
 
         # Then: only the minimal always-core fallback is exposed, not the full static catalog.
-        assert names == {tool["function"]["name"] for tool in _always_core_tools}
+        assert names == {tool["function"]["name"] for tool in _core_tools}
         assert len(tools) < len(AGENT_TOOLS)
         assert "agentbay_file_transfer" not in names
         assert "duckduckgo_search" not in names

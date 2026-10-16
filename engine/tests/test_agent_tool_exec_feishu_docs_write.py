@@ -82,7 +82,7 @@ class _FakeHttpxModule:
 
 class _FakeFeishuService:
     def __init__(self, *, create_responses: list[JsonObject] | None = None) -> None:
-        self.create_responses = deque(create_responses or [])
+        self.create_responses: deque[JsonObject] = deque(create_responses or [])
         self.create_calls: list[tuple[str, str, str, str]] = []
         self.token_calls: list[tuple[str, str]] = []
 

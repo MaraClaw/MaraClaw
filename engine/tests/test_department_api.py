@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -20,7 +20,7 @@ from app.services import local_departments
 
 
 @asynccontextmanager
-async def transaction() -> AsyncIterator[None]:
+async def transaction() -> AsyncGenerator[None]:
     yield None
 
 
@@ -131,8 +131,10 @@ def test_assignment_invalidates_old_and_new_department_grants(directory, selecti
     )
     assert response.status_code == 200
     assert response.json() == {"user_id": str(subject.id), "tenant_id": str(actor.tenant_id), "department_id": selected}
-    assert assignments.get(subject.id) == (second.id if selected else None)
-    assert {call.args[0] for call in bumped.await_args_list} == ({old_agent, new_agent} if selected else {old_agent})
+    assert assignments.get(subject.id) == (second.id if selected not in (None, "") else None)
+    assert {call.args[0] for call in bumped.await_args_list} == (
+        {old_agent, new_agent} if selected not in (None, "") else {old_agent}
+    )
 
 
 @pytest.mark.parametrize(

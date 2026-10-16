@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 from app.records.agent import AgentRecord
@@ -12,7 +13,8 @@ def setup_function() -> None:
 
 def test_model_bundle_round_trip() -> None:
     agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="N", primary_model_id=uuid4())
-    bundle = ModelBundle(primary=SimpleNamespace(id=agent.primary_model_id))
+    primary: Any = SimpleNamespace(id=agent.primary_model_id)
+    bundle = ModelBundle(primary=primary)
     assert openclaw_hot_cache.get_cached_bundle(agent) is None
     openclaw_hot_cache.set_cached_bundle(agent, bundle)
     assert openclaw_hot_cache.get_cached_bundle(agent) is bundle
@@ -43,7 +45,8 @@ def test_api_key_lookup_does_not_store_plaintext() -> None:
 def test_drop_model_caches_and_agent_key() -> None:
     agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="N", primary_model_id=uuid4())
     openclaw_hot_cache.mark_ensured(agent)
-    openclaw_hot_cache.set_cached_bundle(agent, ModelBundle(primary=SimpleNamespace(id=agent.primary_model_id)))
+    primary: Any = SimpleNamespace(id=agent.primary_model_id)
+    openclaw_hot_cache.set_cached_bundle(agent, ModelBundle(primary=primary))
     openclaw_hot_cache.set_cached_agent_by_key("oc-secret", agent)
     openclaw_hot_cache.drop_model_caches()
     assert openclaw_hot_cache.recently_ensured(agent) is False

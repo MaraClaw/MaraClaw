@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from importlib import import_module
 from types import SimpleNamespace
-from typing import override
+from typing import Any, override
 
 import pytest
 
@@ -53,7 +53,7 @@ class _DummyAdapter(BaseOrgSyncAdapter):
 
 class _SyncAdapterWithFailure(_DummyAdapter):
     def __init__(self):
-        provider = SimpleNamespace(
+        provider: Any = SimpleNamespace(
             id=uuid.uuid4(),
             provider_type=AuthProviderType.FEISHU,
             name="Feishu",
@@ -65,17 +65,15 @@ class _SyncAdapterWithFailure(_DummyAdapter):
         self.failure_provider = provider
 
     @override
-    async def _ensure_provider(self) -> SimpleNamespace:
+    async def _ensure_provider(self) -> Any:
         return self.failure_provider
 
     @override
-    async def _upsert_department(self, provider: SimpleNamespace, dept: ExternalDepartment) -> None:
+    async def _upsert_department(self, provider: Any, dept: ExternalDepartment) -> None:
         return None
 
     @override
-    async def _upsert_member(
-        self, provider: SimpleNamespace, user: ExternalUser, department_external_id: str
-    ) -> dict[str, bool]:
+    async def _upsert_member(self, provider: Any, user: ExternalUser, department_external_id: str) -> dict[str, bool]:
         raise ValueError("unionid is required")
 
     @override
@@ -105,7 +103,7 @@ class _SyncAdapterWithFailure(_DummyAdapter):
 
 def test_validate_member_identifiers_requires_unionid_for_feishu():
     adapter = _DummyAdapter()
-    provider = SimpleNamespace(provider_type=AuthProviderType.FEISHU, name="Feishu", config={})
+    provider: Any = SimpleNamespace(provider_type=AuthProviderType.FEISHU, name="Feishu", config={})
     user = ExternalUser(external_id="ou_123", name="Alice", unionid="")
 
     with pytest.raises(ValueError, match="unionid is required"):
@@ -114,7 +112,7 @@ def test_validate_member_identifiers_requires_unionid_for_feishu():
 
 def test_validate_member_identifiers_rejects_unionid_equal_to_external_id():
     adapter = _DummyAdapter()
-    provider = SimpleNamespace(provider_type=AuthProviderType.DINGTALK, name="DingTalk", config={})
+    provider: Any = SimpleNamespace(provider_type=AuthProviderType.DINGTALK, name="DingTalk", config={})
     user = ExternalUser(external_id="same-id", name="Bob", unionid="same-id")
 
     with pytest.raises(ValueError, match="must not equal external_id"):
@@ -123,7 +121,7 @@ def test_validate_member_identifiers_rejects_unionid_equal_to_external_id():
 
 def test_validate_member_identifiers_allows_wecom_without_unionid():
     adapter = _DummyAdapter()
-    provider = SimpleNamespace(provider_type=AuthProviderType.WECOM, name="WeCom", config={})
+    provider: Any = SimpleNamespace(provider_type=AuthProviderType.WECOM, name="WeCom", config={})
     user = ExternalUser(external_id="zhangsan", name="Zhang San", unionid="")
 
     adapter._validate_member_identifiers(provider, user)
@@ -213,7 +211,7 @@ def test_build_department_path_map_reconstructs_name_chain_from_internal_tree():
     child_id = uuid.uuid4()
     leaf_id = uuid.uuid4()
 
-    departments = [
+    departments: list[Any] = [
         SimpleNamespace(id=leaf_id, external_id="leaf", name="平台组", parent_id=child_id),
         SimpleNamespace(id=child_id, external_id="child", name="研发部", parent_id=root_id),
         SimpleNamespace(id=root_id, external_id="root", name="总部", parent_id=None),
@@ -230,7 +228,7 @@ def test_build_department_path_map_treats_external_zero_root_as_empty_path():
     root_id = uuid.uuid4()
     child_id = uuid.uuid4()
 
-    departments = [
+    departments: list[Any] = [
         SimpleNamespace(id=child_id, external_id="200", name="研发部", parent_id=root_id),
         SimpleNamespace(id=root_id, external_id="0", name="Root", parent_id=None),
     ]

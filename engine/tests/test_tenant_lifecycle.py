@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -21,7 +22,7 @@ _NOW = datetime.now(UTC)
 
 
 def _tenant(**kwargs) -> TenantRecord:
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": uuid4(),
         "name": "Acme",
         "slug": "acme",
@@ -89,9 +90,10 @@ async def test_update_tenant_is_active_uses_cascade(monkeypatch):
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenants_api, "set_tenant_active", set_active)
     monkeypatch.setattr(tenants_api, "write_admin_audit", AsyncMock())
-    actor = SimpleNamespace(role="platform_admin", tenant_id=None, email="pa@x.com")
+    actor: Any = SimpleNamespace(role="platform_admin", tenant_id=None, email="pa@x.com")
     await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(is_active=False), actor)
     set_active.assert_awaited_once()
+    assert set_active.await_args is not None
     assert set_active.await_args.kwargs["is_active"] is False
 
 
@@ -101,7 +103,7 @@ async def test_update_tenant_org_admin_cannot_set_is_active(monkeypatch):
     set_active = AsyncMock(return_value=tenant)
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenants_api, "set_tenant_active", set_active)
-    actor = SimpleNamespace(
+    actor: Any = SimpleNamespace(
         role="org_admin",
         tenant_id=tenant.id,
         email="oa@x.com",
@@ -123,7 +125,7 @@ async def test_update_tenant_refuses_system_org(monkeypatch):
         "set_tenant_active",
         AsyncMock(side_effect=DefaultOrgUnavailableError("Cannot disable a system organization")),
     )
-    actor = SimpleNamespace(role="platform_admin", tenant_id=None, email="pa@x.com")
+    actor: Any = SimpleNamespace(role="platform_admin", tenant_id=None, email="pa@x.com")
     with pytest.raises(HTTPException) as exc:
         await tenants_api.update_tenant(tenant.id, tenants_api.TenantUpdate(is_active=False), actor)
     assert exc.value.status_code == 400

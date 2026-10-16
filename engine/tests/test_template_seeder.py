@@ -44,7 +44,7 @@ async def test_seeder_unlinks_then_deletes_retired_builtins(monkeypatch) -> None
     existing_retired = SimpleNamespace(id=retired_id, name="Project Manager")
     cleared: list[uuid.UUID] = []
     deleted: list[uuid.UUID] = []
-    updated: list[object] = []
+    updated: list[tuple[SimpleNamespace, dict[str, object]]] = []
 
     class FakeDao:
         async def list_builtins(self):

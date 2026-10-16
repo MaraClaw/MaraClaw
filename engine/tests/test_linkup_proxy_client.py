@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -46,7 +47,7 @@ class MemoryKeyDao:
             key=lambda row: row.position,
         )
 
-    async def create(self, *, obj_in: dict) -> LinkupApiKeyRecord:
+    async def create(self, *, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
         record = LinkupApiKeyRecord(
             id=uuid4(),
             label=str(obj_in["label"]),
@@ -58,7 +59,7 @@ class MemoryKeyDao:
         self.rows[record.id] = record
         return record
 
-    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict) -> LinkupApiKeyRecord:
+    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
         for key, value in obj_in.items():
             setattr(db_obj, key, value)
         return db_obj
@@ -80,7 +81,7 @@ class MemoryJobDao:
     async def get_by_job_id(self, upstream_job_id: str):
         return self.rows.get(upstream_job_id)
 
-    async def create(self, *, obj_in: dict):
+    async def create(self, *, obj_in: dict[str, Any]):
         from app.records.linkup_api_key import LinkupAsyncJobRecord
 
         record = LinkupAsyncJobRecord(

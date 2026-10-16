@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -50,7 +51,8 @@ def test_removed_search_tools_are_absent_from_shipped_catalog_and_registry() -> 
     # Given: the shipped builtin catalog, LLM catalog, registry, and seeder lists.
     importlib_agent_tools()
     builtin_names = {tool["name"] for tool in BUILTIN_TOOLS}
-    catalog_names = {tool["function"]["name"] for tool in AGENT_TOOLS}
+    tools: list[Any] = AGENT_TOOLS
+    catalog_names = {tool["function"]["name"] for tool in tools}
 
     # When / Then: the old search-engine family is gone from every shipped surface.
     assert set(REMOVED_SEARCH_TOOL_NAMES).isdisjoint(builtin_names)
@@ -74,7 +76,7 @@ def importlib_agent_tools() -> None:
 
 def test_official_linkup_search_skill_payload_teaches_rest_search() -> None:
     # Given: the vendored official Linkup skill package used by the seeder.
-    manifest = load_linkup_manifest()
+    manifest: dict[str, Any] = load_linkup_manifest()
     skill_md = linkup_skill_root() / LINKUP_SEARCH_SKILL_FOLDER / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
@@ -96,7 +98,7 @@ def test_official_linkup_search_skill_payload_teaches_rest_search() -> None:
 
 
 def test_official_linkup_fetch_skill_payload_teaches_rest_fetch() -> None:
-    manifest = load_linkup_manifest()
+    manifest: dict[str, Any] = load_linkup_manifest()
     skill_md = linkup_skill_root() / LINKUP_FETCH_SKILL_FOLDER / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
@@ -113,7 +115,7 @@ def test_official_linkup_fetch_skill_payload_teaches_rest_fetch() -> None:
 
 
 def test_official_linkup_research_skill_payload_teaches_rest_research() -> None:
-    manifest = load_linkup_manifest()
+    manifest: dict[str, Any] = load_linkup_manifest()
     skill_md = linkup_skill_root() / LINKUP_RESEARCH_SKILL_FOLDER / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
@@ -130,7 +132,7 @@ def test_official_linkup_research_skill_payload_teaches_rest_research() -> None:
 
 
 def test_official_linkup_extract_skill_payload_teaches_rest_extract() -> None:
-    manifest = load_linkup_manifest()
+    manifest: dict[str, Any] = load_linkup_manifest()
     skill_md = linkup_skill_root() / LINKUP_EXTRACT_SKILL_FOLDER / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
@@ -151,7 +153,7 @@ async def test_seed_linkup_skills_upserts_official_default_package(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: the real seeder path with a captured skill_dao.
-    upserts: list[dict] = []
+    upserts: list[dict[str, Any]] = []
 
     async def fake_get_by_folder_name(_folder_name: str):
         return None
@@ -198,10 +200,10 @@ def test_generate_openclaw_config_enables_linkup_skill_and_denies_native_web_sea
         raising=False,
     )
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
 
     # When: proxy off keeps today's single-key inject
-    config = manager._generate_openclaw_config(agent, model=None, linkup_proxy=False)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None, linkup_proxy=False)
 
     # Then
     skills = config["skills"]["entries"]
@@ -226,9 +228,9 @@ def test_generate_openclaw_config_proxy_sets_base_and_hides_raw_key(
     )
     monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "cfg-secret", raising=False)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
 
-    config = manager._generate_openclaw_config(agent, model=None, linkup_proxy=True)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None, linkup_proxy=True)
     skills = config["skills"]["entries"]
     for folder_name in DEFAULT_LINKUP_SKILLS:
         env = skills[folder_name]["env"]
@@ -240,9 +242,9 @@ def test_generate_openclaw_config_proxy_sets_base_and_hides_raw_key(
 def test_generate_openclaw_config_omits_empty_linkup_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "", raising=False)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
 
-    config = manager._generate_openclaw_config(agent, model=None)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     assert set(config["skills"]["entries"]) == set(DEFAULT_LINKUP_SKILLS)
     for folder_name in DEFAULT_LINKUP_SKILLS:

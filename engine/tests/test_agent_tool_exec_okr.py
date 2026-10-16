@@ -4,7 +4,7 @@ import importlib
 import uuid
 from datetime import date
 from types import SimpleNamespace
-from typing import override
+from typing import Any, Self, override
 
 from app.core.json_types import JsonObject
 from app.services import activity_logger, agent_tools
@@ -29,7 +29,7 @@ def test_compute_okr_period_bounds_uses_module_local_today(monkeypatch) -> None:
     class LocalDate(date):
         @override
         @classmethod
-        def today(cls) -> date:
+        def today(cls) -> Self:
             return cls(2026, 4, 1)
 
     monkeypatch.setattr(okr_access, "date", LocalDate)
@@ -152,7 +152,7 @@ async def test_update_kr_progress_preserves_success_and_user_id_permission_flow(
     agent_dao = importlib.import_module("app.dao.agent_dao")
     user_dao_mod = importlib.import_module("app.dao.user_dao")
     okr_dao = importlib.import_module("app.dao.okr_dao")
-    creates: list[dict] = []
+    creates: list[dict[str, Any]] = []
 
     async def update_kr(*, db_obj, obj_in):
         for key, value in obj_in.items():

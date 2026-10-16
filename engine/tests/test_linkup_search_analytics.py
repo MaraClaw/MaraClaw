@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,7 +26,7 @@ class MemoryEventDao:
         self.rows: list[WebSearchEventRecord] = []
         self.payloads: dict[UUID, str] = {}
 
-    async def create(self, *, obj_in: dict) -> WebSearchEventRecord:
+    async def create(self, *, obj_in: dict[str, Any]) -> WebSearchEventRecord:
         record = WebSearchEventRecord.from_row(
             {
                 "id": obj_in.get("id") or uuid4(),
@@ -206,7 +207,7 @@ async def test_record_insert_failure_is_swallowed(monkeypatch: pytest.MonkeyPatc
     from app.services.linkup import analytics as analytics_mod
 
     class BoomDao:
-        async def create(self, *, obj_in: dict) -> None:
+        async def create(self, *, obj_in: dict[str, Any]) -> None:
             del obj_in
             raise RuntimeError("db down")
 

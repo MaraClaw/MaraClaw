@@ -2,6 +2,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,7 +28,7 @@ async def test_check_new_agent_messages_matches_user_role():
     source_agent_id = uuid.uuid4()
     participant_id = uuid.uuid4()
 
-    trigger = SimpleNamespace(
+    trigger: Any = SimpleNamespace(
         id=uuid.uuid4(),
         agent_id=agent_id,
         name="test_trigger",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -29,7 +30,7 @@ def configure_clawsec(monkeypatch: pytest.MonkeyPatch, *, enabled: bool = True) 
 
 def test_manifest_lists_openclaw_protection_packages() -> None:
     # Given / When
-    manifest = load_clawsec_manifest()
+    manifest: dict[str, Any] = load_clawsec_manifest()
     skills = set(manifest.get("skills") or [])
     defaults = set(manifest.get("default_skills") or [])
     catalog_only = set(manifest.get("catalog_only_skills") or [])
@@ -102,7 +103,7 @@ async def test_seed_clawsec_skills_creates_default_and_catalog_packages(
 ) -> None:
     # Given
     configure_clawsec(monkeypatch, enabled=True)
-    upserts: list[dict] = []
+    upserts: list[dict[str, Any]] = []
 
     async def fake_get_by_folder_name(_folder_name: str):
         return None

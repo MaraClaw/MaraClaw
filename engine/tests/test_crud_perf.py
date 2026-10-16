@@ -103,7 +103,7 @@ async def test_list_latest_for_conversations_uses_window(raw: _FakeRawConnection
 
 @pytest.mark.asyncio
 async def test_get_tenant_tool_configs_one_round_trip(raw: _FakeRawConnection) -> None:
-    tools = [
+    tools: list[Any] = [
         type("T", (), {"name": "search_web", "source": "builtin", "config_schema": None})(),
         type("T", (), {"name": "read_file", "source": "builtin", "config_schema": None})(),
     ]

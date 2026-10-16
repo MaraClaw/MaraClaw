@@ -176,7 +176,9 @@ def _assert_locked_dependencies(source: str) -> None:
         )
         observed = [line.split("\t") for line in result.stdout.splitlines()]
         assert len(observed) == 4
-        expected = (["--index-url", index] if index else []) + (["--trusted-host", host] if host else [])
+        expected = (["--index-url", index] if index not in (None, "") else []) + (
+            ["--trusted-host", host] if host not in (None, "") else []
+        )
         assert observed[0] == ["pip", "install", "--no-cache-dir", *expected, "uv==0.12.23"]
         assert observed[1] == export
         assert observed[2] == [

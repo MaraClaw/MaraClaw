@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import Any, override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -80,7 +81,7 @@ def _reset_memo_and_ttl(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _user(**overrides):
-    values = {
+    values: dict[str, Any] = {
         "id": uuid.uuid4(),
         "role": "member",
         "tenant_id": uuid.uuid4(),
@@ -92,7 +93,7 @@ def _user(**overrides):
 
 def _agent(**overrides):
     tenant = overrides.pop("tenant_id", uuid.uuid4())
-    values = {
+    values: dict[str, Any] = {
         "id": uuid.uuid4(),
         "name": "Test agent",
         "creator_id": uuid.uuid4(),
@@ -430,6 +431,7 @@ async def test_version_change_between_validation_and_write_rejects_stale_fill(mo
     agent_id = uuid.uuid4()
 
     class ConcurrentRedis(FakeRedis):
+        @override
         async def eval(self, script, key_count, version_key, decision_key, expected, payload, ttl):
             self.store[version_key] = "1"
             return await super().eval(script, key_count, version_key, decision_key, expected, payload, ttl)

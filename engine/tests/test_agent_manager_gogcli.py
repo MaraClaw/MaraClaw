@@ -1,6 +1,6 @@
 import uuid
 from types import SimpleNamespace
-from typing import override
+from typing import Any, override
 
 from python_on_whales.exceptions import DockerException
 
@@ -98,7 +98,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
         )
 
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
-    agent = SimpleNamespace(id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.gogcli_enabled = True
 
     # When
@@ -140,7 +140,7 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
-    agent = SimpleNamespace(id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.gogcli_enabled = True
 
     # When
@@ -177,7 +177,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
         raise AssertionError(msg)
 
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
-    agent = SimpleNamespace(id=agent_id, name="Plain Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Plain Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.gogcli_enabled = False
 
     # When
@@ -199,7 +199,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
 async def test_start_gogcli_auth_executes_gogcli_with_argv_sequence() -> None:
     # Given
     docker_client = RecordingDockerClient()
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "container-oauth"
 
     # When
@@ -229,7 +229,7 @@ async def test_start_gogcli_auth_executes_gogcli_with_argv_sequence() -> None:
 
 async def test_start_gogcli_auth_fails_safely_without_docker_client() -> None:
     # Given
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "container-oauth"
 
     # When
@@ -244,7 +244,7 @@ async def test_start_gogcli_auth_fails_safely_without_docker_client() -> None:
 async def test_start_gogcli_auth_fails_safely_without_container_id() -> None:
     # Given
     docker_client = RecordingDockerClient()
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = None
 
     # When
@@ -261,7 +261,7 @@ async def test_gogcli_auth_status_executes_status_with_argv_sequence() -> None:
     # Given
     docker_client = RecordingDockerClient()
     docker_client.execute_output = "Logged in as maraclaw@example.com"
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "container-oauth"
 
     # When
@@ -281,7 +281,7 @@ async def test_gogcli_auth_status_executes_status_with_argv_sequence() -> None:
 async def test_gogcli_auth_status_parses_nonzero_exec_output_safely() -> None:
     # Given
     docker_client = NonZeroDockerClient()
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "container-oauth"
 
     # When

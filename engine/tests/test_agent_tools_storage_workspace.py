@@ -45,7 +45,7 @@ def _disable_redis_workspace_locks(monkeypatch):
 
 class MemoryStorageBackend(StorageBackend):
     def __init__(self, files: dict[str, bytes] | None = None):
-        self.files = dict(files or {})
+        self.files: dict[str, bytes] = dict(files or {})
         self.versions = dict.fromkeys(self.files, 1)
 
     @override

@@ -2,7 +2,7 @@
 
 import importlib
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import asdict
@@ -68,7 +68,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> SeedStore:
     state = SeedStore()
 
     @asynccontextmanager
-    async def connection() -> AsyncIterator[None]:
+    async def connection() -> AsyncGenerator[None]:
         yield
 
     monkeypatch.setattr(tool_seeder, "connection_ctx", connection)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
@@ -45,7 +47,7 @@ class MemoryUpload:
         return chunk
 
 
-def make_user(**overrides: object) -> SimpleNamespace:
+def make_user(**overrides: object) -> Any:
     values: dict[str, object] = {
         "id": uuid.uuid4(),
         "display_name": "Ada",
@@ -72,8 +74,9 @@ def make_agent(creator_id: uuid.UUID, **overrides: object) -> SimpleNamespace:
 
 async def test_chat_upload_when_docx_then_keeps_response_fields_and_extracts(monkeypatch: pytest.MonkeyPatch) -> None:
     data = _fixture("supported.docx")
+    upload: Any = MemoryUpload("report.docx", data)
     result = await upload_api.upload_file(
-        file=MemoryUpload("report.docx", data),
+        file=upload,
         agent_id="",
         current_user=make_user(),
     )
@@ -95,8 +98,9 @@ async def test_chat_upload_when_docx_then_keeps_response_fields_and_extracts(mon
 
 
 async def test_chat_upload_when_plain_text_then_decodes_locally() -> None:
+    upload: Any = MemoryUpload("notes.txt", b"hello csv-looking,1,2")
     result = await upload_api.upload_file(
-        file=MemoryUpload("notes.txt", b"hello csv-looking,1,2"),
+        file=upload,
         agent_id="",
         current_user=make_user(),
     )
@@ -104,8 +108,9 @@ async def test_chat_upload_when_plain_text_then_decodes_locally() -> None:
 
 
 async def test_chat_upload_when_scanned_pdf_then_preserves_failure_prefix() -> None:
+    upload: Any = MemoryUpload("scan.pdf", _fixture("scanned.pdf"))
     result = await upload_api.upload_file(
-        file=MemoryUpload("scan.pdf", _fixture("scanned.pdf")),
+        file=upload,
         agent_id="",
         current_user=make_user(),
     )
@@ -124,8 +129,9 @@ async def test_chat_upload_when_storage_backed_then_retains_original(
 
     monkeypatch.setattr(upload_api, "check_agent_access", fake_check_agent_access)
 
+    upload: Any = MemoryUpload("report.docx", _fixture("supported.docx"))
     result = await upload_api.upload_file(
-        file=MemoryUpload("report.docx", _fixture("supported.docx")),
+        file=upload,
         agent_id=agent_id,
         current_user=make_user(),
     )
@@ -150,9 +156,10 @@ async def test_agent_upload_when_office_file_then_writes_same_stem_sidecar(
     _bind_storage(monkeypatch, storage, tmp_path)
     monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
 
+    upload: Any = MemoryUpload("brief.docx", _fixture("supported.docx"))
     result = await files_api.upload_file_to_workspace(
         agent_id=agent.id,
-        file=MemoryUpload("brief.docx", _fixture("supported.docx")),
+        file=upload,
         path="workspace/knowledge_base",
         current_user=user,
     )
@@ -173,8 +180,9 @@ async def test_enterprise_upload_when_encrypted_then_keeps_original_without_side
     storage = LocalStorageBackend(str(tmp_path))
     _bind_storage(monkeypatch, storage, tmp_path)
 
+    upload: Any = MemoryUpload("secret.odt", _fixture("encrypted.odt"))
     result = await files_api.upload_enterprise_kb_file(
-        file=MemoryUpload("secret.odt", _fixture("encrypted.odt")),
+        file=upload,
         sub_path="",
         current_user=user,
     )
@@ -340,12 +348,15 @@ async def test_read_document_handler_when_storage_backed_then_uses_bridge(
         fake_from_storage,
     )
 
-    result = await read_document(
-        arguments={"path": "workspace/report.pdf", "max_chars": 90000},
-        agent_id=agent_id,
-        user_id=uuid.uuid4(),
-        session_id="s",
-        on_output=None,
+    result = await cast(
+        Awaitable[str],
+        read_document(
+            arguments={"path": "workspace/report.pdf", "max_chars": 90000},
+            agent_id=agent_id,
+            user_id=uuid.uuid4(),
+            session_id="s",
+            on_output=None,
+        ),
     )
     assert result == "storage markdown"
     assert calls == [(agent_id, "workspace/report.pdf", 20000, "tenant-a")]
@@ -357,9 +368,10 @@ async def _async_value(value: str) -> str:
 
 async def test_enterprise_upload_when_member_then_forbidden() -> None:
     user = make_user(role="member")
+    upload: Any = MemoryUpload("report.docx", _fixture("supported.docx"))
     with pytest.raises(HTTPException) as exc:
         await files_api.upload_enterprise_kb_file(
-            file=MemoryUpload("report.docx", _fixture("supported.docx")),
+            file=upload,
             sub_path="",
             current_user=user,
         )
@@ -373,8 +385,9 @@ async def test_enterprise_upload_when_supported_office_then_writes_sidecar(
     storage = LocalStorageBackend(str(tmp_path))
     _bind_storage(monkeypatch, storage, tmp_path)
 
+    upload: Any = MemoryUpload("policy.docx", _fixture("supported.docx"))
     result = await files_api.upload_enterprise_kb_file(
-        file=MemoryUpload("policy.docx", _fixture("supported.docx")),
+        file=upload,
         sub_path="knowledge_base",
         current_user=user,
     )
@@ -493,9 +506,10 @@ async def test_agent_upload_when_markdown_exists_then_does_not_clobber(
     _bind_storage(monkeypatch, storage, tmp_path)
     monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
 
+    upload: Any = MemoryUpload("brief.docx", _fixture("supported.docx"))
     result = await files_api.upload_file_to_workspace(
         agent_id=agent.id,
-        file=MemoryUpload("brief.docx", _fixture("supported.docx")),
+        file=upload,
         path="workspace/knowledge_base",
         current_user=user,
     )
@@ -542,10 +556,11 @@ async def test_agent_upload_when_path_collapses_out_of_workspace_then_rejected(
     _bind_storage(monkeypatch, LocalStorageBackend(str(tmp_path)), tmp_path)
     monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
 
+    upload: Any = MemoryUpload("soul.docx", _fixture("supported.docx"))
     with pytest.raises(HTTPException) as exc:
         await files_api.upload_file_to_workspace(
             agent_id=agent.id,
-            file=MemoryUpload("soul.docx", _fixture("supported.docx")),
+            file=upload,
             path="workspace/..",
             current_user=user,
         )
@@ -553,9 +568,10 @@ async def test_agent_upload_when_path_collapses_out_of_workspace_then_rejected(
 
 
 async def test_chat_upload_when_too_large_then_rejects_before_store() -> None:
+    upload: Any = MemoryUpload("huge.docx", b"x" * (MAX_INPUT_BYTES + 1))
     with pytest.raises(HTTPException) as exc:
         await upload_api.upload_file(
-            file=MemoryUpload("huge.docx", b"x" * (MAX_INPUT_BYTES + 1)),
+            file=upload,
             agent_id="",
             current_user=make_user(),
         )
@@ -564,8 +580,9 @@ async def test_chat_upload_when_too_large_then_rejects_before_store() -> None:
 
 
 async def test_chat_upload_when_encrypted_office_then_keeps_typed_reason() -> None:
+    upload: Any = MemoryUpload("secret.odt", _fixture("encrypted.odt"))
     result = await upload_api.upload_file(
-        file=MemoryUpload("secret.odt", _fixture("encrypted.odt")),
+        file=upload,
         agent_id="",
         current_user=make_user(),
     )

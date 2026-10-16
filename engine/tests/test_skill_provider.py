@@ -1,5 +1,6 @@
 import base64
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -58,9 +59,10 @@ async def test_install_from_clawhub_defaults_null_moderation_to_empty(monkeypatc
     monkeypatch.setattr(skills, "_fetch_clawhub_skill_archive", fetch_archive)
     monkeypatch.setattr(skills, "_save_skill_to_db", save_skill)
 
+    user: Any = SimpleNamespace(display_name="Test User", tenant_id=None, id=None, role="member")
     result = await skills.install_from_clawhub(
         skills.ClawhubInstallIn(slug="research"),
-        SimpleNamespace(display_name="Test User", tenant_id=None, id=None, role="member"),
+        user,
     )
 
     assert result["is_suspicious"] is False

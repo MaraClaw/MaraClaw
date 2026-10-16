@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -106,7 +107,7 @@ async def test_exhausted_invite_is_invitation_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_user_to_org_refuses_second_membership():
-    user = SimpleNamespace(tenant_id=uuid.uuid4())
+    user: Any = SimpleNamespace(tenant_id=uuid.uuid4())
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.attach_user_to_org(user, _tenant())
 
@@ -115,7 +116,7 @@ async def test_attach_user_to_org_refuses_second_membership():
 async def test_transfer_user_to_org_moves_member(monkeypatch):
     source = uuid.uuid4()
     dest = _tenant()
-    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=source, role="member", is_genesis=False)
+    user: Any = SimpleNamespace(id=uuid.uuid4(), tenant_id=source, role="member", is_genesis=False)
     updated = SimpleNamespace(id=user.id, tenant_id=dest.id, role="member")
     unbind = AsyncMock()
 
@@ -135,7 +136,7 @@ async def test_transfer_user_to_org_moves_member(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_user_to_org_blocks_platform_admin():
-    user = SimpleNamespace(tenant_id=None, role="platform_admin", is_genesis=False)
+    user: Any = SimpleNamespace(tenant_id=None, role="platform_admin", is_genesis=False)
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.attach_user_to_org(user, _tenant())
 
@@ -144,7 +145,7 @@ async def test_attach_user_to_org_blocks_platform_admin():
 async def test_lookup_tenant_for_verified_email_ignores_unverified(monkeypatch):
     lookup = AsyncMock()
     monkeypatch.setattr(membership, "lookup_tenant_by_email_domain", lookup)
-    user = SimpleNamespace(email="ada@acme.com", email_verified=False)
+    user: Any = SimpleNamespace(email="ada@acme.com", email_verified=False)
     assert await membership.lookup_tenant_for_verified_email(user) is None
     lookup.assert_not_called()
 
@@ -153,7 +154,7 @@ async def test_lookup_tenant_for_verified_email_ignores_unverified(monkeypatch):
 async def test_lookup_tenant_for_verified_email_uses_verified(monkeypatch):
     acme = _tenant()
     monkeypatch.setattr(membership, "lookup_tenant_by_email_domain", AsyncMock(return_value=acme))
-    user = SimpleNamespace(email="ada@acme.com", email_verified=True)
+    user: Any = SimpleNamespace(email="ada@acme.com", email_verified=True)
     assert await membership.lookup_tenant_for_verified_email(user) is acme
 
 
@@ -167,7 +168,7 @@ def test_cannot_delete_system_or_default_org():
 
 @pytest.mark.asyncio
 async def test_transfer_user_to_org_blocks_org_admin():
-    user = SimpleNamespace(tenant_id=uuid.uuid4(), role="org_admin", is_genesis=False)
+    user: Any = SimpleNamespace(tenant_id=uuid.uuid4(), role="org_admin", is_genesis=False)
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.transfer_user_to_org(user, _tenant())
 
@@ -192,6 +193,7 @@ async def test_consume_invitation_code_increments(monkeypatch):
     monkeypatch.setattr(membership.invitation_code_dao, "update", update)
     await membership.consume_invitation_code("ABCD")
     update.assert_awaited_once()
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"]["used_count"] == 2
 
 
@@ -217,7 +219,7 @@ async def test_create_user_with_identity_copies_tenant_quotas(monkeypatch):
     from app.services.registration_service import RegistrationService
 
     tenant = _tenant(default_message_limit=80, default_max_agents=4)
-    identity = SimpleNamespace(id=uuid.uuid4(), username="ada", email_verified=True, is_platform_admin=False)
+    identity: Any = SimpleNamespace(id=uuid.uuid4(), username="ada", email_verified=True, is_platform_admin=False)
     created = {}
 
     async def _create(*, obj_in):

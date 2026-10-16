@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -56,9 +57,10 @@ async def test_create_tenant_rejects_non_platform_admin():
 @pytest.mark.asyncio
 async def test_create_tenant_provisions_org_admin(monkeypatch):
     tenant = _tenant_record()
+    org_admin: Any = SimpleNamespace(id=uuid.uuid4(), role="org_admin")
     provisioned = ProvisionedTenant(
         tenant=tenant,
-        org_admin=SimpleNamespace(id=uuid.uuid4(), role="org_admin"),
+        org_admin=org_admin,
         admin_email="orgadmin@acme.com",
     )
     create = AsyncMock(return_value=provisioned)
@@ -79,6 +81,7 @@ async def test_create_tenant_provisions_org_admin(monkeypatch):
     assert result.tenant.id == tenant.id
     assert result.tenant.name == "Acme"
     create.assert_awaited_once()
+    assert create.await_args is not None
     kwargs = create.await_args.kwargs
     assert kwargs["name"] == "Acme"
     assert kwargs["admin_email"] == "orgadmin@acme.com"
@@ -290,6 +293,7 @@ async def test_attach_genesis_org_admin_creates_when_missing(monkeypatch):
             admin_password="temp-password",
         )
     assert result.admin_email == "oa@acme.com"
+    assert create_user.await_args is not None
     assert create_user.await_args.kwargs["obj_in"]["is_genesis"] is True
 
 

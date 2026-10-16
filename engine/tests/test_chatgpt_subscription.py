@@ -48,7 +48,7 @@ def _user(*, role="org_admin", tenant_id: uuid.UUID | None = _TENANT):
 
 
 def _model(**kwargs) -> LLMModelRecord:
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
         "provider": "openai",
         "model": "gpt-5.4",
@@ -216,6 +216,7 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     assert poll_calls, "status must poll the shipped Codex deviceauth endpoint"
     assert exchange_calls, "status must exchange the authorization code"
     create.assert_awaited_once()
+    assert create.await_args is not None
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == f"enc:{_ACCESS}"
     assert obj_in["refresh_token_encrypted"] == "enc:oa-refresh-LIVE"
@@ -297,6 +298,7 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     assert out.model_id == updated.id
     _assert_no_secrets(out.model_dump())
     persist.assert_awaited_once()
+    assert persist.await_args is not None
     obj_in = persist.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == f"enc:{_REFRESHED}"
     assert "model" not in obj_in
@@ -390,6 +392,8 @@ async def test_activate_subscription_replaces_openai_api_key_default(monkeypatch
     monkeypatch.setattr(pool.agent_dao, "migrate_primary_model", migrate)
     monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", assign)
     await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args is not None
+    assert migrate.await_args is not None
     assert tenant_update.await_args.kwargs["obj_in"]["default_model_id"] == created.id
     assert migrate.await_args.kwargs["old_model_id"] == dummy_id
     assert migrate.await_args.kwargs["new_model_id"] == created.id
@@ -398,7 +402,7 @@ async def test_activate_subscription_replaces_openai_api_key_default(monkeypatch
 @pytest.mark.asyncio
 async def test_ensure_agent_inherits_chatgpt_subscription_when_primary_missing(monkeypatch):
     chatgpt = _model()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=None,
@@ -438,7 +442,7 @@ async def test_ensure_agent_prefers_subscription_over_openai_api_key(monkeypatch
         refresh_token_encrypted=None,
         base_url="https://api.openai.com/v1",
     )
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=dummy.id,
@@ -465,6 +469,7 @@ async def test_ensure_agent_prefers_subscription_over_openai_api_key(monkeypatch
     monkeypatch.setattr(pool.agent_dao, "update", update)
     out = await pool.ensure_agent_company_models(agent)
     assert out.primary_model_id == chatgpt.id
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"]["primary_model_id"] == chatgpt.id
 
 
@@ -493,6 +498,7 @@ async def test_activate_chatgpt_leaves_grok_primary(monkeypatch):
     monkeypatch.setattr(pool.tenant_dao, "update", tenant_update)
     monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", AsyncMock(return_value=0))
     await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args is not None
     assert tenant_update.await_args.kwargs["obj_in"]["default_fallback_model_id"] == created.id
     assert tenant.default_model_id == grok_id
 

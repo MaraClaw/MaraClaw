@@ -3,6 +3,7 @@ import sys
 import uuid
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from typing import Any
 
 from app.services import agent_tools
 from app.services.agent_tools_definitions import AGENT_TOOLS
@@ -25,7 +26,8 @@ run_catalog = _catalog_fakes.run_catalog
 tool_named = _catalog_fakes.tool_named
 tool_names = _catalog_fakes.tool_names
 
-AGENT_TOOLS_BY_NAME = {tool["function"]["name"]: tool for tool in AGENT_TOOLS}
+_agent_tools: list[Any] = AGENT_TOOLS
+AGENT_TOOLS_BY_NAME = {tool["function"]["name"]: tool for tool in _agent_tools}
 
 
 async def test_catalog_preserves_db_order_visibility_shape_and_disabled_core(monkeypatch):
@@ -59,7 +61,8 @@ async def test_catalog_uses_minimal_fallback_when_no_database_tools_exist(monkey
     # Then: only the always-core tools are exposed.
     from app.services.agent_tools_definitions import _always_core_tools
 
-    assert tool_names(tools) == [tool["function"]["name"] for tool in _always_core_tools]
+    core_tools: list[Any] = _always_core_tools
+    assert tool_names(tools) == [tool["function"]["name"] for tool in core_tools]
 
 
 async def test_catalog_applies_channel_gates_and_a2a_schema_stripping(monkeypatch):
@@ -146,7 +149,7 @@ def test_tool_runtime_never_imports_facade_registry_or_dispatcher():
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported_modules.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
+            elif isinstance(node, ast.ImportFrom) and node.module not in (None, ""):
                 imported_modules.append(node.module)
             elif (
                 isinstance(node, ast.Call)
