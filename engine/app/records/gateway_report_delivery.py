@@ -16,7 +16,16 @@ from app.core.json_types import (
 )
 
 type DestinationKind = Literal["im", "agent"]
+type TerminalReason = Literal[
+    "source_agent_unavailable",
+    "source_tenant_changed",
+    "destination_agent_unavailable",
+    "destination_tenant_changed",
+    "destination_relationship_changed",
+    "destination_session_unavailable",
+]
 _destination_kind = TypeAdapter(DestinationKind)
+_terminal_reason = TypeAdapter(TerminalReason)
 
 
 @dataclass(slots=True)
@@ -31,9 +40,12 @@ class GatewayReportDeliveryRecord:
     claim_token: UUID | None = None
     lease_expires_at: datetime | None = None
     delivered_at: datetime | None = None
+    terminal_reason: TerminalReason | None = None
+    terminal_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> GatewayReportDeliveryRecord:
+        terminal_reason = row.get("terminal_reason")
         return cls(
             id=uuid_from_row(row["id"]),
             message_id=uuid_from_row(row["message_id"]),
@@ -45,4 +57,6 @@ class GatewayReportDeliveryRecord:
             claim_token=uuid_from_row_opt(row.get("claim_token")),
             lease_expires_at=datetime_from_row(row.get("lease_expires_at")),
             delivered_at=datetime_from_row(row.get("delivered_at")),
+            terminal_reason=_terminal_reason.validate_python(terminal_reason) if terminal_reason is not None else None,
+            terminal_at=datetime_from_row(row.get("terminal_at")),
         )

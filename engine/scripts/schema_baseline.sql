@@ -1020,10 +1020,18 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     claim_token UUID,
     lease_expires_at TIMESTAMP WITH TIME ZONE,
     delivered_at TIMESTAMP WITH TIME ZONE,
+    terminal_reason TEXT CHECK (terminal_reason IN (
+        'source_agent_unavailable', 'source_tenant_changed',
+        'destination_agent_unavailable', 'destination_tenant_changed',
+        'destination_relationship_changed', 'destination_session_unavailable'
+    )),
+    terminal_at TIMESTAMP WITH TIME ZONE,
+    CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL)),
+    CHECK (terminal_at IS NULL OR delivered_at IS NULL),
     UNIQUE (message_id, destination_kind, destination_id)
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
-    ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL;
+    ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
     ON gateway_report_deliveries (tenant_id);
 
