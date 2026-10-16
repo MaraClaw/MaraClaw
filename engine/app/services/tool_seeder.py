@@ -157,10 +157,7 @@ def _global_builtin_config(tool_data: BuiltinToolDefinition) -> JsonObject:
     """Return config safe to store on the global builtin Tool row."""
     # Builtin tools specify defaults (like 'allow_network': True) in their 'config' dict.
     # The actual sensitive data defaults are empty strings ("") so this is safe to store globally.
-    config = tool_data.get("config")
-    if isinstance(config, dict):
-        return config
-    return {}
+    return tool_data["config"]
 
 
 async def seed_builtin_tools():

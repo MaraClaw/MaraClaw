@@ -82,7 +82,11 @@ def clawhub_headers_for_base(api_key: str, base_url: str) -> dict[str, str]:
 
 def candidate_clawhub_bases(preferred: str | None = None) -> list[str]:
     return list(
-        dict.fromkeys(base_url.rstrip("/") for base_url in (preferred, CLAWHUB_BASE, CLAWHUB_MIRROR_BASE) if base_url)
+        dict.fromkeys(
+            base_url.rstrip("/")
+            for base_url in (preferred, CLAWHUB_BASE, CLAWHUB_MIRROR_BASE)
+            if base_url not in (None, "")
+        )
     )
 
 

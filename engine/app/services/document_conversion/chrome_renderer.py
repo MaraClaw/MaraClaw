@@ -30,7 +30,7 @@ def chrome_executable() -> str | None:
         shutil.which("chromium"),
         shutil.which("chromium-browser"),
     ]
-    executable = next((trusted_executable(path) for path in candidates if path), None)
+    executable = next((trusted_executable(path) for path in candidates if path not in (None, "")), None)
     return str(executable) if executable else None
 
 
@@ -95,7 +95,7 @@ async def collect_browser_layout(
     import websockets
 
     chrome = chrome_executable()
-    if not chrome:
+    if chrome in (None, ""):
         return None
 
     port = local_ephemeral_port()
@@ -113,8 +113,8 @@ async def collect_browser_layout(
 
         file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
         ws_url = await create_cdp_target(port, file_url)
-        ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url else None
-        if not ws_url:
+        ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
+        if ws_url in (None, ""):
             return None
 
         expression = r"""
@@ -364,7 +364,7 @@ roots = [body];
                         },
                     )
                     data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
-                    if not data:
+                    if data in (None, ""):
                         screenshots.append(None)
                         continue
                     image_file = await write_temporary_bytes(base64.b64decode(data), f"-slide-{idx + 1}.png")
@@ -422,7 +422,7 @@ roots = [body];
                     finally:
                         _ = await send("Runtime.evaluate", {"expression": restore_expr})
                     data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
-                    if not data:
+                    if data in (None, ""):
                         background_screenshots.append(None)
                         continue
                     image_file = await write_temporary_bytes(base64.b64decode(data), f"-slide-bg-{idx + 1}.png")
@@ -443,7 +443,7 @@ roots = [body];
                             or str(style.get("filter") or "none") != "none"
                             or str(style.get("backdropFilter") or "none") != "none"
                         )
-                        if not has_complex_paint or not item.get("itemId"):
+                        if not has_complex_paint or (item_id_value := item.get("itemId")) is None or not item_id_value:
                             continue
                         item_id = str(item["itemId"])
                         clip_w = max(1.0, _json_float(item.get("w"), 1.0))
@@ -490,7 +490,7 @@ roots = [body];
                         finally:
                             _ = await send("Runtime.evaluate", {"expression": restore_expr})
                         data = json_as_str(_cdp_nested(screenshot_result, "result", "data"))
-                        if not data:
+                        if data in (None, ""):
                             continue
                         image_file = await write_temporary_bytes(base64.b64decode(data), f"-item-bg-{item_id}.png")
                         shape_screenshots[item_id] = str(image_file)

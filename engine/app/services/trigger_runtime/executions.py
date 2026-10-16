@@ -48,7 +48,7 @@ def trigger_execution_leases(triggers: Sequence[AgentTriggerRecord]) -> list[Exe
         cfg = json_object_from(trigger.config)
         execution_id = json_as_str(cfg.get("_execution_id"))
         token = json_as_str(cfg.get("_lease_token"))
-        if execution_id and token:
+        if execution_id not in (None, "") and token not in (None, ""):
             grouped.setdefault(token, []).append(uuid.UUID(execution_id))
     return [ExecutionLease(token, tuple(ids)) for token, ids in grouped.items()]
 
@@ -57,7 +57,7 @@ async def _await_in_fresh_context[T](coroutine: Coroutine[None, None, T]) -> T:
     """Keep lease writes outside ambient transactions while preserving the trace id."""
     context = contextvars.Context()
     trace_id = get_trace_id()
-    if trace_id:
+    if trace_id not in (None, ""):
         context.run(set_trace_id, trace_id)
     task = asyncio.create_task(coroutine, context=context)
     return await task
@@ -158,7 +158,7 @@ class ExecutionLeaseHold:
         await self._renew_batch(bound, wall_bound)
         context = contextvars.Context()
         trace_id = get_trace_id()
-        if trace_id:
+        if trace_id not in (None, ""):
             context.run(set_trace_id, trace_id)
         self.heartbeat_task = asyncio.create_task(self._heartbeat(), context=context)
         return self
@@ -312,7 +312,7 @@ def build_execution_runtime_trigger(
     if payload_text:
         runtime_cfg["_webhook_payload"] = payload_text
     runtime_cfg["_execution_id"] = str(execution.id)
-    if execution.lease_owner:
+    if execution.lease_owner not in (None, ""):
         runtime_cfg["_lease_token"] = execution.lease_owner
     return AgentTriggerRecord(
         id=trigger.id,

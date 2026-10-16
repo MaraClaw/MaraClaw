@@ -88,9 +88,9 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
 
         if not org_member.user_id:
             patterns: list[str] = []
-            if org_member.open_id:
+            if org_member.open_id not in (None, ""):
                 patterns.append(f"feishu_p2p_{org_member.open_id}")
-            if org_member.external_id:
+            if org_member.external_id not in (None, ""):
                 patterns.append(f"feishu_p2p_{org_member.external_id}")
                 patterns.append(f"dingtalk_p2p_{org_member.external_id}")
             found: uuid.UUID | None = None
@@ -126,7 +126,7 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
                 okr_agent.id,
                 {"member_name": org_member.name, "message": message_text},
             )
-        elif platform_name:
+        elif platform_name not in (None, ""):
             send_result = await _send_platform_message(
                 okr_agent.id,
                 {"username": platform_name, "message": message_text},

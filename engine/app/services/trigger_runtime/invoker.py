@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import TypedDict
 
@@ -46,7 +46,7 @@ async def resolve_trigger_delivery_target(
     for trigger in triggers:
         cfg = mapping_from_row(trigger.config)
         a2a_sid = json_as_str(cfg.get("_a2a_session_id"))
-        if a2a_sid:
+        if a2a_sid not in (None, ""):
             try:
                 session = await chat_session_dao.get(uuid.UUID(a2a_sid))
                 if not session:
@@ -62,20 +62,20 @@ async def resolve_trigger_delivery_target(
             except Exception:
                 return None
 
-    origin_cfg: dict[str, object] | None = None
+    origin_cfg: Mapping[str, object] | None = None
     for trigger in triggers:
         cfg = mapping_from_row(trigger.config)
         if cfg.get("_origin_session_id") or cfg.get("_origin_user_id"):
             origin_cfg = cfg
             break
-    if not origin_cfg:
+    if origin_cfg is None or not origin_cfg:
         return None
 
     origin_source_channel = json_as_str(origin_cfg.get("_origin_source_channel"))
     origin_session_id = json_as_str(origin_cfg.get("_origin_session_id"))
     origin_user_id = json_as_str(origin_cfg.get("_origin_user_id"))
 
-    if origin_source_channel == "agent" and origin_session_id:
+    if origin_source_channel == "agent" and origin_session_id not in (None, ""):
         try:
             session = await chat_session_dao.get(uuid.UUID(origin_session_id))
             if not session:
@@ -91,9 +91,7 @@ async def resolve_trigger_delivery_target(
         except Exception:
             return None
 
-    if origin_source_channel != "trigger" and origin_user_id:
-        if not isinstance(origin_user_id, str):
-            return None
+    if origin_source_channel != "trigger" and origin_user_id not in (None, ""):
         try:
             primary = await ensure_primary_platform_session(agent.id, uuid.UUID(origin_user_id), guard=guard)
             return {
@@ -168,11 +166,11 @@ async def _run_trigger_invocation(
                     + "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
                     + "If they are disabled, state that no action is needed and stop."
                 )
-            if t.focus_ref:
+            if t.focus_ref not in (None, ""):
                 part += f"\nRelated Focus: {t.focus_ref}"
             cfg = mapping_from_row(t.config)
             matched_message = json_as_str(cfg.get("_matched_message"))
-            if t.type == "on_message" and matched_message:
+            if t.type == "on_message" and matched_message not in (None, ""):
                 part += f'\nMessage received from {cfg.get("_matched_from", "?")}:\n"{matched_message[:500]}"'
             if t.type == "on_message" and cfg.get("okr_member_id") and cfg.get("okr_report_date"):
                 part += (
@@ -185,7 +183,7 @@ async def _run_trigger_invocation(
                     + "\n4. Do not only acknowledge receipt without calling the tool, and do not store the raw long conversation unchanged as the daily report."
                 )
             webhook_payload = json_as_str(cfg.get("_webhook_payload"))
-            if t.type == "webhook" and webhook_payload:
+            if t.type == "webhook" and webhook_payload not in (None, ""):
                 payload_str = webhook_payload
                 if len(payload_str) > 2000:
                     payload_str = payload_str[:2000] + "... (truncated)"
@@ -316,7 +314,7 @@ async def _run_trigger_invocation(
 
         for t in triggers:
             a2a_sid = json_as_str((t.config or {}).get("_a2a_session_id"))
-            if not (a2a_sid and final_reply):
+            if not (a2a_sid not in (None, "") and final_reply):
                 continue
             try:
                 async with connection_ctx():
@@ -401,7 +399,11 @@ async def _run_trigger_invocation(
                 notify_session_id = None
                 notify_owner_user_id = None
 
-        if notification and notify_session_id and notify_owner_user_id:
+        if (
+            notification not in (None, "")
+            and notify_session_id not in (None, "")
+            and notify_owner_user_id not in (None, "")
+        ):
             try:
                 from app.api.websocket import manager as ws_manager
 

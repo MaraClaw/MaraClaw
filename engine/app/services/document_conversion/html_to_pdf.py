@@ -57,7 +57,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
             import websockets
 
             chrome = chrome_executable()
-            if not chrome:
+            if chrome in (None, ""):
                 return False
 
             port = local_ephemeral_port()
@@ -74,8 +74,8 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
                 file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
                 ws_url = await create_cdp_target(port, file_url)
-                ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url else None
-                if not ws_url:
+                ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
+                if ws_url in (None, ""):
                     return False
 
                 msg_id = 0
@@ -153,7 +153,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
                     pdf_result = await send("Page.printToPDF", pdf_params)
                     data = json_as_str(_cdp_nested(pdf_result, "result", "data"))
-                    if not data:
+                    if data in (None, ""):
                         return False
                     _ = await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
                     return True

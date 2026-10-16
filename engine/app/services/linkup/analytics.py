@@ -61,7 +61,7 @@ def status_class_for(status_code: int, body: str) -> str:
 
 
 def _parse_body(content: bytes | None) -> dict[str, object]:
-    if not content:
+    if content in (None, b""):
         return {}
     return dict(json_loads_object(content))
 
@@ -98,7 +98,7 @@ def _raw_and_normalized(kind: str, payload: dict[str, object]) -> tuple[str, str
 
 
 def _clip(value: str | None, limit: int) -> str | None:
-    if not value:
+    if value in (None, ""):
         return None
     return value[:limit]
 
@@ -212,7 +212,7 @@ async def _record_linkup_call(
                 "result_count": cheap_result_count(body),
                 "error_class": error_class,
                 "upstream_job_id": job_id,
-                "request_bytes": len(content) if content else 0,
+                "request_bytes": len(content) if content not in (None, b"") else 0,
                 "response_bytes": len(body.encode("utf-8")),
                 "export_state": export_state,
                 "schema_version": SCHEMA_VERSION,

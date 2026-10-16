@@ -46,7 +46,7 @@ async def get_agent_timezone(agent_id: uuid.UUID) -> str:
         return "UTC"
 
     # Agent-level override
-    if agent.timezone:
+    if agent.timezone not in (None, ""):
         return agent.timezone
 
     # Tenant-level default
@@ -63,7 +63,7 @@ def get_agent_timezone_sync(agent: _HasTimezone, tenant: object | None = None) -
 
     Priority: agent.timezone → tenant.timezone → 'UTC'
     """
-    if agent.timezone:
+    if agent.timezone not in (None, ""):
         return agent.timezone
     from app.core.json_types import object_attr
 

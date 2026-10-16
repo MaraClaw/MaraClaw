@@ -2,7 +2,7 @@
 
 from typing import NotRequired, TypedDict
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, object_attr
 from app.core.logging import logger
 from app.dao import agent_dao, skill_dao, system_setting_dao
 from app.db.session import connection_ctx
@@ -1034,7 +1034,7 @@ async def push_default_skills_to_existing_agents():
         current_hash = hasher.hexdigest()
 
         setting = await system_setting_dao.get_by_key("default_skills_sync_hash")
-        if setting and isinstance(setting.value, dict) and setting.value.get("hash") == current_hash:
+        if setting and isinstance(object_attr(setting, "value"), dict) and setting.value.get("hash") == current_hash:
             logger.info(
                 f"[SkillSeeder] Default skills sync hash '{current_hash}' matches, skipping sync for existing agents"
             )

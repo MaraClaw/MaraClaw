@@ -9,6 +9,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 from functools import partial
+from typing import cast
 
 from croniter import croniter
 
@@ -23,7 +24,7 @@ def compute_next_run(cron_expr: str, after: datetime | None = None) -> datetime 
     try:
         base = after or datetime.now(UTC)
         cron = croniter(cron_expr, base)
-        return cron.get_next(datetime).replace(tzinfo=UTC)
+        return cast(datetime, cron.get_next(datetime)).replace(tzinfo=UTC)
     except Exception as e:
         logger.error(f"Invalid cron expression '{cron_expr}': {e}")
         return None

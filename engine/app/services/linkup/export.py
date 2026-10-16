@@ -7,7 +7,7 @@ import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -132,8 +132,8 @@ async def drain_pending_exports(*, sink: AnalyticsObjectSink | None = None) -> i
     include_raw = settings.WEB_SEARCH_ANALYTICS_INCLUDE_RAW
     raw_map = await web_search_event_dao.payloads_for([row.id for row in claimed]) if include_raw else {}
     rows: list[dict[str, object]] = []
-    ids: list = []
-    leftover: list = []
+    ids: list[UUID] = []
+    leftover: list[UUID] = []
     for index, record in enumerate(claimed):
         raw = raw_map.get(record.id) if include_raw else None
         candidate = event_to_export_row(record, raw_query=raw)

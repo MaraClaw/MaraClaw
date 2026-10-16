@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import time
 from json import JSONDecodeError
-from typing import final
+from typing import TYPE_CHECKING, final
 from uuid import UUID
+
+if TYPE_CHECKING:
+    import httpx
 
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_loads_value, json_object_from
@@ -43,10 +46,10 @@ def allowed_upstream_path(path: str) -> bool:
     return head in ALLOWED_PREFIXES
 
 
-def _httpx_client(*args: object, **kwargs: object):
+def _httpx_client(*, follow_redirects: bool, timeout: float) -> httpx.AsyncClient:
     import httpx
 
-    return httpx.AsyncClient(*args, **kwargs)
+    return httpx.AsyncClient(follow_redirects=follow_redirects, timeout=timeout)
 
 
 async def _send(
@@ -247,7 +250,7 @@ async def proxy_linkup(
 
         if status < 400 and kind in {"research", "extract"} and method.upper() == "POST":
             job_id = _extract_job_id(body)
-            if job_id:
+            if job_id not in (None, ""):
                 try:
                     await bind_job(upstream_job_id=job_id, key_id=record.id, kind=kind)
                 except Exception:

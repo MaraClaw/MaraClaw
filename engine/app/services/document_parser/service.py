@@ -243,10 +243,10 @@ def format_parse_failure(exc: BaseException) -> str:
     if isinstance(exc, EncryptedDocumentError):
         return "Document is encrypted or password-protected."
     if isinstance(exc, ResourceLimitedDocumentError):
-        limit = f" ({exc.limit})" if exc.limit else ""
+        limit = f" ({exc.limit})" if exc.limit not in (None, "") else ""
         return f"Document exceeded a parser safety limit{limit}."
     if isinstance(exc, MissingDocumentPartError):
-        part = f" ({exc.part})" if exc.part else ""
+        part = f" ({exc.part})" if exc.part not in (None, "") else ""
         return f"Document is missing a required part{part}."
     if isinstance(exc, MalformedDocumentError):
         return "Document is malformed and could not be converted."
@@ -310,7 +310,7 @@ def extract_document_text(data: bytes, filename: str) -> str | None:
 def save_extracted_markdown(save_path: Path, data: bytes, filename: str) -> Path | None:
     """Write a same-stem UTF-8 Markdown sidecar next to the original file."""
     text = extract_document_text(data, filename)
-    if not text:
+    if text in (None, ""):
         return None
     md_path = save_path.parent / f"{save_path.stem}.md"
     _ = md_path.write_text(text, encoding="utf-8")

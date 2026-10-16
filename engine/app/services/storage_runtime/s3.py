@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -133,7 +133,7 @@ class S3StorageBackend(StorageBackend):
 
     def _is_gcs(self) -> bool:
         """Return True if the endpoint targets Google Cloud Storage."""
-        if not self.endpoint_url:
+        if self.endpoint_url in (None, ""):
             return False
         return "storage.googleapis.com" in self.endpoint_url
 
@@ -179,7 +179,7 @@ class S3StorageBackend(StorageBackend):
         return self._client
 
     @asynccontextmanager
-    async def _async_client(self) -> AsyncIterator[_AsyncS3Client]:
+    async def _async_client(self) -> AsyncGenerator[_AsyncS3Client]:
         """Shared aioboto3 session with aiohttp connection pool - reuses connections but detects stale ones correctly."""
         try:
             import aioboto3
@@ -412,7 +412,7 @@ class S3StorageBackend(StorageBackend):
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
         client = self._client_or_raise()
         params: dict[str, str] = {"Bucket": self.bucket, "Key": self._object_key(key)}
-        if filename:
+        if filename not in (None, ""):
             disposition = "inline" if inline else "attachment"
             params["ResponseContentDisposition"] = f'{disposition}; filename="{filename}"'
         url = await asyncio.to_thread(
@@ -421,7 +421,7 @@ class S3StorageBackend(StorageBackend):
             Params=params,
             ExpiresIn=self.presign_ttl_seconds,
         )
-        if url and self.endpoint_url:
+        if url and self.endpoint_url not in (None, ""):
             from urllib.parse import urlparse, urlunparse
 
             parsed_url = urlparse(url)
