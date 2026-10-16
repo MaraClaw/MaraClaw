@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from contextvars import Context
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -21,6 +22,7 @@ from app.db.session import (
     get_connection,
     transaction,
 )
+from transaction_pool_fakes import CountingPool
 
 
 class _FakeCursor:
@@ -478,3 +480,112 @@ async def test_after_commit_explicit_transaction_uses_same_lifecycle(callback_sc
         await scope()
     # Then
     assert events == (["dropped"] if rollback else ["commit", "acl", "versions", "launched"])
+
+
+@pytest.mark.asyncio
+async def test_flush_retains_slot_until_connection_owner_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given
+    pool = CountingPool()
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    effects: list[tuple[int, int]] = []
+
+    async def borrow() -> None:
+        async with connection_ctx():
+            effects.append((pool.raw.commits, pool.active))
+
+    async with asyncio.TaskGroup() as tasks:
+        async with connection_ctx() as owner:
+            session_module.run_after_commit(lambda: effects.append((pool.raw.commits, pool.active)))
+            contender = tasks.create_task(borrow(), context=Context())
+            async with asyncio.timeout(5):
+                await pool.waiting.wait()
+
+            # When
+            await flush_request_transaction()
+
+            # Then
+            assert effects == [(1, 1)]
+            assert (pool.active, pool.checkouts, pool.releases) == (1, 1, 0)
+            assert not contender.done()
+            assert get_connection() is owner
+            async with connection_ctx() as joined, transaction() as nested:
+                assert joined is nested is owner
+            assert (pool.raw.commits, pool.checkouts, pool.releases) == (1, 1, 0)
+
+        async with asyncio.timeout(5):
+            await contender
+
+    assert effects == [(1, 1), (2, 1)]
+    assert (pool.active, pool.checkouts, pool.releases) == (0, 2, 2)
+    assert (pool.raw.commits, pool.raw.rollbacks) == (3, 0)
+    assert get_connection() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("body failed"), asyncio.CancelledError("cancelled")])
+async def test_failed_owner_returns_slot_and_discards_commit_effects(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    # Given
+    pool = CountingPool()
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    effects: list[str] = []
+
+    async def fail_scope() -> None:
+        async with connection_ctx():
+            session_module.run_after_commit(lambda: effects.append("committed"), lambda: effects.append("dropped"))
+            raise failure
+
+    # When
+    with pytest.raises(type(failure)):
+        await fail_scope()
+
+    # Then
+    assert (pool.active, pool.checkouts, pool.releases) == (0, 1, 1)
+    assert (pool.raw.commits, pool.raw.rollbacks) == (0, 1)
+    assert get_connection() is None
+    assert effects == ["dropped"]
+    session_module.run_after_commit(lambda: effects.append("outside"))
+    async with asyncio.timeout(5), connection_ctx():
+        session_module.run_after_commit(lambda: effects.append("next"))
+    assert effects == ["dropped", "outside", "next"]
+    assert (pool.active, pool.checkouts, pool.releases) == (0, 2, 2)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_task_cleans_owner_context_and_returns_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given
+    pool = CountingPool()
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    entered = asyncio.Event()
+    hold = asyncio.Event()
+    effects: list[str] = []
+    restored: list[DbConnection | None] = []
+
+    async def own_connection() -> None:
+        try:
+            async with connection_ctx():
+                session_module.run_after_commit(lambda: effects.append("committed"), lambda: effects.append("dropped"))
+                entered.set()
+                await hold.wait()
+        finally:
+            restored.append(get_connection())
+            session_module.run_after_commit(lambda: effects.append("outside"))
+
+    async with asyncio.TaskGroup() as tasks:
+        owner = tasks.create_task(own_connection())
+        async with asyncio.timeout(5):
+            await entered.wait()
+        # When
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+
+    # Then
+    assert restored == [None]
+    assert effects == ["dropped", "outside"]
+    assert (pool.active, pool.checkouts, pool.releases) == (0, 1, 1)
+    assert (pool.raw.commits, pool.raw.rollbacks) == (0, 1)
+    async with asyncio.timeout(5), connection_ctx():
+        pass
+    assert (pool.active, pool.checkouts, pool.releases) == (0, 2, 2)
