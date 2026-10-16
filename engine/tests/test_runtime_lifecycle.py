@@ -149,7 +149,7 @@ async def test_invalid_role_has_no_runtime_side_effects(monkeypatch: pytest.Monk
 async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     # Given
     from app.process_roles import parse_process_roles, role_enabled
-    from app.services import audit_logger, scheduler, scheduler_tasks, trigger_daemon
+    from app.services import audit_logger, gateway_report_relay, scheduler, scheduler_tasks, trigger_daemon
     from app.services.linkup import export
 
     events: list[str] = []
@@ -191,6 +191,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
+    monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     manager = ChildManager(events)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (manager,))
     monkeypatch.setattr(runtime.proxy, "start", loop)
@@ -226,6 +227,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     assert events == [*expected, "database", "redis", "llm", "logging"]
     assert ("trigger_daemon" in names) == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
+    assert ("gateway_report_relay" in names) == role_enabled(roles, "worker")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
     assert ("ChildManager" in names) == role_enabled(roles, "connector")
 
