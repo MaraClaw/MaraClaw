@@ -81,6 +81,7 @@ async def send_wechat_text_message(
     context_token: str,
     text: str,
     route_tag: str | None = None,
+    strict: bool = False,
 ) -> None:
     """Send one or more WeChat iLink text messages."""
     async with httpx.AsyncClient(timeout=20) as client:
@@ -110,7 +111,14 @@ async def send_wechat_text_message(
                     },
                 },
             )
+            if strict:
+                _ = resp.raise_for_status()
             data = json_object_from_response(resp)
+            if strict and (
+                not any(key in data for key in ("ret", "errcode"))
+                or any(data[key] != 0 for key in ("ret", "errcode") if key in data)
+            ):
+                raise RuntimeError("WeChat did not acknowledge the message")
             if resp.status_code >= 400:
                 raise RuntimeError(f"WeChat sendmessage failed: {resp.text[:300]}")
             ret = data.get("ret", 0)

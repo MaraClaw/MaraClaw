@@ -6,7 +6,7 @@ from app.core.json_types import JsonObject, json_as_int, json_object_from_respon
 from app.core.logging import logger
 
 
-async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
+async def get_wecom_access_token(corp_id: str, secret: str, *, strict: bool = False) -> JsonObject:
     """Get WeCom access_token using corp_id and secret.
 
     API: https://developer.work.weixin.qq.com/document/14403
@@ -26,6 +26,8 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params=params)
+        if strict:
+            _ = resp.raise_for_status()
         data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
@@ -52,6 +54,8 @@ async def send_wecom_message(
     user_id: str,
     message: str,
     agent_id: str | None = None,
+    *,
+    strict: bool = False,
 ) -> JsonObject:
     """Send a text message to a WeCom user.
 
@@ -68,7 +72,7 @@ async def send_wecom_message(
         Dict with errcode on success
     """
     # 1. Get access token
-    token_result = await get_wecom_access_token(corp_id, secret)
+    token_result = await get_wecom_access_token(corp_id, secret, strict=strict)
     access_token = token_result.get("access_token")
 
     if not isinstance(access_token, str) or not access_token:
@@ -94,6 +98,8 @@ async def send_wecom_message(
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, params=params, json=payload)
+        if strict:
+            _ = resp.raise_for_status()
         data = json_object_from_response(resp)
 
         if data.get("errcode") == 0:
