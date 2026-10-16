@@ -11,7 +11,14 @@ from typing import TypedDict
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from
+from app.core.json_types import (
+    JsonObject,
+    json_as_str,
+    json_as_str_or,
+    json_loads_object,
+    json_object_from,
+    json_object_from_response,
+)
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -77,7 +84,9 @@ def _extract_message_text(message: JsonObject) -> str:
     return ""
 
 
-async def _send_whatsapp_messages(config: ChannelConfigRecord, to_phone: str, text: str) -> None:
+async def _send_whatsapp_messages(
+    config: ChannelConfigRecord, to_phone: str, text: str, *, strict: bool = False
+) -> None:
     token = (config.app_secret or "").strip()
     phone_number_id = (config.app_id or "").strip()
     if not token or not phone_number_id:
@@ -102,6 +111,14 @@ async def _send_whatsapp_messages(config: ChannelConfigRecord, to_phone: str, te
                     "text": {"preview_url": False, "body": chunk},
                 },
             )
+            if strict:
+                _ = resp.raise_for_status()
+                data = json_object_from_response(resp)
+                messages = data.get("messages")
+                if bool(data.get("error")) or not isinstance(messages, list) or not messages:
+                    raise RuntimeError("WhatsApp did not acknowledge the message")
+                if any(not bool(json_as_str(json_object_from(message).get("id"))) for message in messages):
+                    raise RuntimeError("WhatsApp returned no message id")
             if resp.status_code >= 400:
                 raise RuntimeError(f"WhatsApp send failed: {resp.text[:300]}")
 
