@@ -368,6 +368,7 @@ async def send_google_chat_message(
     space_name: str,
     text: str,
     thread_name: str | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Proactively post a message into a Google Chat space via Chat API."""
     sa_info = _service_account_info(config)
@@ -396,7 +397,11 @@ async def send_google_chat_message(
                 params=params,
                 json=body,
             )
+            if strict:
+                _ = resp.raise_for_status()
             if resp.status_code >= 400:
                 raise ValueError(f"Chat API send failed: {resp.status_code} {resp.text[:300]}")
             last = mapping_from_row(json_object_from_response(resp))
+            if strict and not bool(json_as_str(last.get("name"))):
+                raise RuntimeError("Google Chat did not acknowledge the message")
     return last
