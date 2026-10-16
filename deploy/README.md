@@ -21,6 +21,21 @@ sets `PGDATA=/var/lib/postgresql/18/docker` and declares `/var/lib/postgresql` a
 its volume. Compose therefore mounts `postgres_data` at **`/var/lib/postgresql`**,
 not `/var/lib/postgresql/data`, so the actual database directory is persisted.
 
+## Readiness and routing
+
+Engine and HAProxy checks use `/api/ready` (200 or 503). `/api/health` remains
+the database-only diagnostic. Readiness requires completed startup, existing
+database/Redis connectivity, and every enabled serving role's evidence: API
+subscription acknowledgement, live required worker loops, and completed connector
+runtime setup. Connector readiness does not promise provider authentication.
+Subscription loss removes API eligibility until a new ACK is consumed; draining
+clears eligibility before resource cleanup. Bootstrap-only processes never serve
+ready. Responses contain only a status, not dependency errors or credentials.
+
+Serving services explicitly override `INSTANCE_ID` and genesis credentials with
+empty values, including values inherited through `env_file`. The entrypoint
+generates each process's identity; only bootstrap receives genesis credentials.
+
 ## Prepare the host
 
 1. Copy `deploy/.env.example` to `deploy/.env` and restrict it to the operator
