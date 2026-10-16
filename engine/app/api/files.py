@@ -5,6 +5,7 @@ import base64
 import csv
 import io
 import mimetypes
+import shutil
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -22,7 +23,11 @@ from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.skill_dao import skill_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
+from app.db.session import connection_ctx, optional_connection_ctx
+from app.records.agent import AgentRecord
 from app.records.user import UserRecord
+from app.records.workspace import WorkspaceFileRevisionRecord
+from app.services import workspace_collaboration as workspace
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
     PREVIEW_MAX_CHARS,
@@ -43,19 +48,190 @@ from app.services.storage import (
     guess_content_type,
     normalize_storage_key,
 )
-from app.services.storage_runtime.base import StorageBackend, StorageEntry
+from app.services.storage_runtime.base import StorageBackend, StorageEntry, WriteCondition
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
-    delete_workspace_file,
     list_revisions,
     release_edit_lock,
-    write_workspace_file,
 )
 from app.services.workspace_paths import WorkspacePathError, resolve_agent_visible_path
 
 settings = get_settings()
 router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
+
+
+async def _fresh_agent_authority(current_user: UserRecord, agent: AgentRecord) -> tuple[UserRecord, AgentRecord, str]:
+    from app.api.skills import _fresh_import_actor
+
+    actor = await _fresh_import_actor(current_user)
+    fresh_agent, level = await check_agent_access(actor, agent.id, fresh=True)
+    if fresh_agent.tenant_id != agent.tenant_id:
+        raise HTTPException(403, "Agent membership changed during operation")
+    return actor, fresh_agent, level
+
+
+async def _persist_workspace_revision(
+    current_user: UserRecord,
+    agent: AgentRecord,
+    *,
+    path: str,
+    operation: str,
+    before_content: str | None,
+    after_content: str | None,
+    session_id: str | None = None,
+    merge_user_autosave: bool = False,
+    source_revision: WorkspaceFileRevisionRecord | None = None,
+) -> WorkspaceFileRevisionRecord | None:
+    from app.api.background_tasks import schedule_background_task
+    from app.services.agent_context_cache import invalidate_for_workspace_paths
+
+    async with optional_connection_ctx() as conn:
+        actor = current_user
+        if conn is not None:
+            actor, _, level = await _fresh_agent_authority(current_user, agent)
+            if (
+                operation == "delete"
+                and level != "manage"
+                and actor.role not in ("platform_admin", "org_admin", "super_admin")
+            ):
+                raise HTTPException(403, "Only agent managers or admins can delete files")
+        if source_revision is not None:
+            fresh_revision = await workspace_file_revision_dao.get_for_agent(source_revision.id, agent.id)
+            if (
+                fresh_revision is None
+                or fresh_revision.path != source_revision.path
+                or fresh_revision.after_content != source_revision.after_content
+            ):
+                raise HTTPException(409, "Revision changed during restore")
+        saved = await workspace.record_revision(
+            agent_id=agent.id,
+            actor_type="user",
+            actor_id=actor.id,
+            path=path,
+            operation=operation,
+            before_content=before_content,
+            after_content=after_content,
+            session_id=session_id,
+            merge_user_autosave=merge_user_autosave,
+        )
+        schedule_background_task(invalidate_for_workspace_paths(agent.id, path), "invalidate workspace context")
+    return saved
+
+
+async def _write_workspace_file(
+    current_user: UserRecord,
+    agent: AgentRecord,
+    path: str,
+    data: FileWrite,
+    *,
+    operation: str = "write",
+    source_revision: WorkspaceFileRevisionRecord | None = None,
+) -> workspace.WorkspaceWriteResult:
+    normalized = workspace.normalize_workspace_path(path)
+    if not normalized:
+        return workspace.WorkspaceWriteResult(False, normalized, "Missing file path")
+    storage = workspace.get_storage_backend()
+    storage_key = normalize_storage_key(f"{agent.id}/{normalized}")
+    local_base_available = workspace._should_mirror_to_local_filesystem(storage)
+    try:
+        target = workspace.safe_agent_path(_agent_base_dir(agent.id), normalized)
+    except Exception:
+        target = None
+        local_base_available = False
+    before = (
+        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        if await storage.exists(storage_key)
+        else None
+    )
+    token = data.expected_version_token
+    write_result = await storage.write_bytes_if_match(
+        storage_key,
+        data.content.encode("utf-8"),
+        condition=WriteCondition(version_token=token) if token is not None else None,
+        content_type="text/plain; charset=utf-8",
+    )
+    if not write_result.ok:
+        return workspace.WorkspaceWriteResult(False, normalized, f"Conflict detected while writing {normalized}")
+    if local_base_available and target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(target, "w", encoding="utf-8") as output:
+            _ = await output.write(data.content)
+    revision = await _persist_workspace_revision(
+        current_user,
+        agent,
+        path=normalized,
+        operation=operation,
+        before_content=before,
+        after_content=data.content,
+        session_id=data.session_id,
+        merge_user_autosave=data.autosave,
+        source_revision=source_revision,
+    )
+    return workspace.WorkspaceWriteResult(
+        True,
+        normalized,
+        f"Written to {normalized} ({len(data.content)} chars)",
+        revision_id=str(revision.id) if revision else None,
+    )
+
+
+async def _delete_workspace_file(
+    current_user: UserRecord, agent: AgentRecord, path: str, token: str | None
+) -> workspace.WorkspaceWriteResult:
+    normalized = workspace.normalize_workspace_path(path)
+    storage = workspace.get_storage_backend()
+    storage_key = normalize_storage_key(f"{agent.id}/{normalized}")
+    target = None
+    if workspace._should_mirror_to_local_filesystem(storage):
+        try:
+            target = workspace.safe_agent_path(_agent_base_dir(agent.id), normalized)
+        except Exception:
+            target = None
+    storage_exists = await storage.exists(storage_key)
+    storage_is_dir = await storage.is_dir(storage_key)
+    if not storage_exists and not storage_is_dir:
+        return workspace.WorkspaceWriteResult(False, normalized, f"File not found: {normalized}")
+    before = (
+        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        if storage_exists and await storage.is_file(storage_key)
+        else None
+    )
+    async with workspace.workspace_locks(agent.id, [normalized]):
+        if storage_is_dir:
+            entries = await workspace._collect_storage_tree_versions(storage, storage_key)
+            for entry_key, version_token in reversed(entries):
+                deleted = await storage.delete_if_match(
+                    entry_key, condition=WriteCondition(version_token=version_token)
+                )
+                if not deleted.ok:
+                    return workspace.WorkspaceWriteResult(
+                        False, normalized, f"Conflict detected while deleting {normalized}"
+                    )
+        else:
+            deleted = await storage.delete_if_match(
+                storage_key, condition=WriteCondition(version_token=token) if token is not None else None
+            )
+            if not deleted.ok:
+                return workspace.WorkspaceWriteResult(
+                    False, normalized, f"Conflict detected while deleting {normalized}"
+                )
+    if target is not None and target.exists():
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    revision = await _persist_workspace_revision(
+        current_user,
+        agent,
+        path=normalized,
+        operation="delete",
+        before_content=before,
+        after_content=None,
+    )
+    return workspace.WorkspaceWriteResult(
+        True, normalized, f"Deleted {normalized}", revision_id=str(revision.id) if revision else None
+    )
 
 
 class FileInfo(BaseModel):
@@ -203,11 +379,11 @@ def _visible_storage_key(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUI
 async def _require_agent_file_delete_access(
     current_user: UserRecord,
     agent_id: uuid.UUID,
-) -> None:
+) -> AgentRecord:
     """Allow destructive workspace file operations only for managers/admins."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level == "manage" or current_user.role in ("platform_admin", "org_admin", "super_admin"):
-        return
+        return _agent
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Only agent managers or admins can delete files",
@@ -690,7 +866,7 @@ async def write_file(
     current_user: UserRecord = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Write content to a file (create or overwrite)."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -707,18 +883,12 @@ async def write_file(
             _ = await f.write(data.content)
         return {"status": "ok", "path": path, "revision_id": None}
 
-    result = await write_workspace_file(
-        agent_id=agent_id,
-        base_dir=_agent_base_dir(agent_id),
-        path=path,
-        content=data.content,
-        actor_type="user",
-        actor_id=current_user.id,
+    result = await _write_workspace_file(
+        current_user,
+        agent,
+        path,
+        data,
         operation="autosave" if data.autosave else "write",
-        session_id=data.session_id,
-        enforce_human_lock=False,
-        merge_user_autosave=data.autosave,
-        expected_version_token=data.expected_version_token,
     )
     if not result.ok:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.message)
@@ -735,12 +905,13 @@ async def lock_file(
     _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(data.path):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Focus is stored in the system database.")
-    lock = await acquire_edit_lock(
-        agent_id=agent_id,
-        path=data.path,
-        user_id=current_user.id,
-        session_id=data.session_id,
-    )
+    async with optional_connection_ctx():
+        lock = await acquire_edit_lock(
+            agent_id=agent_id,
+            path=data.path,
+            user_id=current_user.id,
+            session_id=data.session_id,
+        )
     return {"status": "ok", "path": lock.path, "expires_at": lock.expires_at.isoformat()}
 
 
@@ -787,23 +958,20 @@ async def restore_file_revision(
     current_user: UserRecord = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Restore a file to a previous revision's after-content."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
     revision = await workspace_file_revision_dao.get_for_agent(data.revision_id, agent_id)
     if not revision:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found")
     if revision.after_content is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore an empty/deleted revision")
 
-    restored = await write_workspace_file(
-        agent_id=agent_id,
-        base_dir=_agent_base_dir(agent_id),
-        path=revision.path,
-        content=revision.after_content,
-        actor_type="user",
-        actor_id=current_user.id,
+    restored = await _write_workspace_file(
+        current_user,
+        agent,
+        revision.path,
+        FileWrite(content=revision.after_content, expected_version_token=data.expected_version_token),
         operation="restore",
-        enforce_human_lock=False,
-        expected_version_token=data.expected_version_token,
+        source_revision=revision,
     )
     if not restored.ok:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=restored.message)
@@ -818,7 +986,7 @@ async def delete_file(
     current_user: UserRecord = Depends(get_current_user),
 ):
     """Delete a file."""
-    await _require_agent_file_delete_access(current_user, agent_id)
+    agent = await _require_agent_file_delete_access(current_user, agent_id)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -828,14 +996,11 @@ async def delete_file(
         raise HTTPException(status_code=403, detail="Only admins can delete enterprise knowledge base files")
     if path.strip("/") == "enterprise_info":
         raise HTTPException(status_code=400, detail="Cannot delete enterprise_info root")
-    result = await delete_workspace_file(
-        agent_id=agent_id,
-        base_dir=_agent_base_dir(agent_id),
-        path=path,
-        actor_type="user",
-        actor_id=current_user.id,
-        enforce_human_lock=False,
-        expected_version_token=expected_version_token,
+    result = await _delete_workspace_file(
+        current_user,
+        agent,
+        path,
+        expected_version_token,
     )
     if not result.ok:
         if "not found" in result.message.lower():
@@ -857,7 +1022,7 @@ async def import_skill_to_agent(
     Copies all files from the global skill registry into
     <agent_workspace>/skills/<folder_name>/.
     """
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
 
     try:
         skill_id = uuid.UUID(body.skill_id)
@@ -870,6 +1035,14 @@ async def import_skill_to_agent(
     skill_files = await skill_dao.list_files(skill.id)
     if not skill_files:
         raise HTTPException(status_code=400, detail="Skill has no files")
+
+    async with optional_connection_ctx() as conn:
+        if conn is not None:
+            _ = await _fresh_agent_authority(current_user, agent)
+        fresh_skill = await skill_dao.get(skill_id)
+        if not fresh_skill or fresh_skill.tenant_id != skill.tenant_id or fresh_skill.folder_name != skill.folder_name:
+            raise HTTPException(403, "Skill changed during import")
+        skill_files = await skill_dao.list_files(skill_id)
 
     storage = get_storage_backend()
     written = []
@@ -900,7 +1073,7 @@ async def upload_file_to_workspace(
     current_user: UserRecord = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Upload a binary file to agent workspace."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
 
     normalized_path = (path or "").strip().strip("/")
     if not normalized_path or normalized_path == ".":
@@ -929,6 +1102,9 @@ async def upload_file_to_workspace(
         content = await read_bytes_limited(file.read, MAX_INPUT_BYTES)
     except DocumentTooLargeError as exc:
         raise HTTPException(status_code=400, detail=format_parse_failure(exc)) from exc
+    async with optional_connection_ctx() as conn:
+        if conn is not None:
+            _ = await _fresh_agent_authority(current_user, agent)
     await storage.write_bytes(file_key, content, content_type=guess_content_type(filename))
 
     extracted_path = None
@@ -1124,7 +1300,7 @@ async def agent_import_from_clawhub(
     agent_id: uuid.UUID, body: ClawhubImportBody, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Import a skill from ClawHub directly into this agent's skills/ workspace."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
 
     from app.api.skills import (
         _fetch_clawhub_skill_archive,
@@ -1148,6 +1324,9 @@ async def agent_import_from_clawhub(
 
     # 2. Fetch files from the ClawHub archive
     files, _ = await _fetch_clawhub_skill_archive(slug, api_key=api_key, preferred_base=meta_base)
+
+    async with connection_ctx():
+        _ = await _fresh_agent_authority(current_user, agent)
 
     # 3. Write to agent workspace: skills/<slug>/
     base = _agent_base_dir(agent_id)
@@ -1178,7 +1357,7 @@ async def agent_import_from_url(
     agent_id: uuid.UUID, body: UrlImportBody, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Import a skill from a GitHub URL directly into this agent's skills/ workspace."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
 
     from app.api.skills import _fetch_github_directory, _get_github_token, _parse_github_url
 
@@ -1192,6 +1371,9 @@ async def agent_import_from_url(
     files = await _fetch_github_directory(owner, repo, path, branch, token)
     if not files:
         raise HTTPException(404, "No files found")
+
+    async with connection_ctx():
+        _ = await _fresh_agent_authority(current_user, agent)
 
     # Derive folder name
     folder_name = path.rstrip("/").split("/")[-1] if path else repo

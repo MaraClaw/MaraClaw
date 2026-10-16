@@ -1,6 +1,8 @@
 import base64
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -58,8 +60,10 @@ async def test_install_from_clawhub_defaults_null_moderation_to_empty(monkeypatc
     monkeypatch.setattr(skills, "_fetch_clawhub_skill_meta", fetch_metadata)
     monkeypatch.setattr(skills, "_fetch_clawhub_skill_archive", fetch_archive)
     monkeypatch.setattr(skills, "_save_skill_to_db", save_skill)
+    monkeypatch.setattr(skills, "connection_ctx", nullcontext)
 
     user: Any = SimpleNamespace(display_name="Test User", tenant_id=None, id=None, role="member")
+    monkeypatch.setattr(skills, "_fresh_import_actor", AsyncMock(return_value=user))
     result = await skills.install_from_clawhub(
         skills.ClawhubInstallIn(slug="research"),
         user,

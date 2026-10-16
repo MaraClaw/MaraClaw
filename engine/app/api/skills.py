@@ -13,9 +13,11 @@ from pydantic import BaseModel
 
 from app.core.json_types import JsonObject, http_header, json_as_str, mapping_from_row
 from app.core.logging import logger
-from app.core.security import get_current_admin, get_current_user, require_role
+from app.core.security import get_current_admin, get_current_user, raise_if_password_change_required, require_role
 from app.dao.skill_dao import skill_dao, skill_file_dao
-from app.db.session import connection_ctx
+from app.dao.tenant_dao import tenant_dao
+from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx, optional_connection_ctx
 from app.db.types import as_jsonb
 from app.records.skill import SkillRecord
 from app.records.user import UserRecord
@@ -246,6 +248,20 @@ def _ensure_skill_write_access(skill: SkillRecord, current_user: UserRecord):
         raise HTTPException(403, "Cannot modify other-tenant skills")
 
 
+async def _fresh_import_actor(current_user: UserRecord) -> UserRecord:
+    actor = await user_dao.get_with_identity(current_user.id, fresh=True)
+    if actor is None or not actor.is_active or actor.identity is None or not actor.identity.is_active:
+        raise HTTPException(401, "User not found or inactive")
+    raise_if_password_change_required(actor)
+    if actor.tenant_id != current_user.tenant_id or actor.identity_id != current_user.identity_id:
+        raise HTTPException(403, "Membership changed during import")
+    if actor.tenant_id is not None:
+        tenants = await tenant_dao.get_many([actor.tenant_id])
+        if not tenants or not tenants[0].is_active:
+            raise HTTPException(403, "Tenant not found or inactive")
+    return actor
+
+
 async def _save_skill_to_db(
     folder_name: str,
     name: str,
@@ -257,29 +273,30 @@ async def _save_skill_to_db(
     tenant_id: str | None = None,
 ) -> SavedSkillResult:
     """Create a Skill + SkillFile records in the database."""
-    tid = _uuid.UUID(tenant_id) if tenant_id not in (None, "") else None
-    existing = await skill_dao.get_by_folder_name(folder_name, tenant_id=tid, tenant_scoped=True)
-    if existing:
-        raise HTTPException(
-            409,
-            f"A skill with folder name '{folder_name}' already exists. Delete it first or use a different name.",
+    async with optional_connection_ctx():
+        tid = _uuid.UUID(tenant_id) if tenant_id not in (None, "") else None
+        existing = await skill_dao.get_by_folder_name(folder_name, tenant_id=tid, tenant_scoped=True)
+        if existing:
+            raise HTTPException(
+                409,
+                f"A skill with folder name '{folder_name}' already exists. Delete it first or use a different name.",
+            )
+
+        skill = await skill_dao.create(
+            obj_in={
+                "name": name,
+                "description": description,
+                "category": category,
+                "icon": icon,
+                "folder_name": folder_name,
+                "is_builtin": False,
+                "tenant_id": tid,
+            }
         )
 
-    skill = await skill_dao.create(
-        obj_in={
-            "name": name,
-            "description": description,
-            "category": category,
-            "icon": icon,
-            "folder_name": folder_name,
-            "is_builtin": False,
-            "tenant_id": tid,
-        }
-    )
-
-    for f in files:
-        content = f["content"].replace("\x00", "")
-        _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f["path"], "content": content})
+        for f in files:
+            content = f["content"].replace("\x00", "")
+            _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f["path"], "content": content})
 
     return {"id": str(skill.id), "name": skill.name, "folder_name": skill.folder_name}
 
@@ -383,16 +400,18 @@ async def install_from_clawhub(body: ClawhubInstallIn, current_user: UserRecord 
     has_scripts = any("/" in f["path"] for f in files if f["path"] != "SKILL.md")
 
     # 6. Save to DB
-    result = await _save_skill_to_db(
-        folder_name=slug,
-        name=name,
-        description=description,
-        category=tier_labels.get(tier, "clawhub"),
-        icon="",
-        files=files,
-        source_url=_public_clawhub_url(archive_base, slug),
-        tenant_id=tenant_id,
-    )
+    async with connection_ctx():
+        _ = await _fresh_import_actor(current_user)
+        result = await _save_skill_to_db(
+            folder_name=slug,
+            name=name,
+            description=description,
+            category=tier_labels.get(tier, "clawhub"),
+            icon="",
+            files=files,
+            source_url=_public_clawhub_url(archive_base, slug),
+            tenant_id=tenant_id,
+        )
 
     result["tier"] = tier
     result["is_suspicious"] = is_suspicious
@@ -437,16 +456,18 @@ async def import_from_url(body: UrlImportIn, current_user: UserRecord = Depends(
     tier = classify_portability(skill_md["content"])
     tier_labels = {1: "url-import-tier1", 2: "url-import-tier2", 3: "url-import-tier3"}
 
-    result = await _save_skill_to_db(
-        folder_name=folder_name,
-        name=name,
-        description=description,
-        category=tier_labels.get(tier, "url-import"),
-        icon="",
-        files=files,
-        source_url=body.url,
-        tenant_id=tenant_id,
-    )
+    async with connection_ctx():
+        _ = await _fresh_import_actor(current_user)
+        result = await _save_skill_to_db(
+            folder_name=folder_name,
+            name=name,
+            description=description,
+            category=tier_labels.get(tier, "url-import"),
+            icon="",
+            files=files,
+            source_url=body.url,
+            tenant_id=tenant_id,
+        )
 
     result["tier"] = tier
     result["file_count"] = len(files)
@@ -535,32 +556,33 @@ async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_curren
 @router.post("/")
 async def create_skill(body: SkillCreateIn, current_user: UserRecord = Depends(get_current_admin)):
     """Create a custom skill."""
-    skill = await skill_dao.create(
-        obj_in={
-            "name": body.name,
-            "description": body.description,
-            "category": body.category,
-            "icon": body.icon,
-            "folder_name": body.folder_name,
-            "is_builtin": False,
-            "tenant_id": current_user.tenant_id,
-        }
-    )
-
-    if not body.files:
-        _ = await skill_file_dao.create(
+    async with optional_connection_ctx():
+        skill = await skill_dao.create(
             obj_in={
-                "skill_id": skill.id,
-                "path": "SKILL.md",
-                "content": (
-                    f"---\nname: {body.name}\ndescription: {body.description}\n---\n\n"
-                    + f"# {body.name}\n\n## Overview\n{body.description}\n"
-                ),
+                "name": body.name,
+                "description": body.description,
+                "category": body.category,
+                "icon": body.icon,
+                "folder_name": body.folder_name,
+                "is_builtin": False,
+                "tenant_id": current_user.tenant_id,
             }
         )
-    else:
-        for f in body.files:
-            _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f.path, "content": f.content})
+
+        if not body.files:
+            _ = await skill_file_dao.create(
+                obj_in={
+                    "skill_id": skill.id,
+                    "path": "SKILL.md",
+                    "content": (
+                        f"---\nname: {body.name}\ndescription: {body.description}\n---\n\n"
+                        + f"# {body.name}\n\n## Overview\n{body.description}\n"
+                    ),
+                }
+            )
+        else:
+            for f in body.files:
+                _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f.path, "content": f.content})
 
     return {"id": str(skill.id), "name": skill.name}
 
@@ -576,30 +598,31 @@ class SkillUpdateIn(BaseModel):
 @router.put("/{skill_id}")
 async def update_skill(skill_id: str, body: SkillUpdateIn, current_user: UserRecord = Depends(get_current_admin)):
     """Update a skill's metadata and/or files."""
-    skill = await skill_dao.get_for_tenant_scope(
-        skill_id,
-        tenant_id=current_user.tenant_id,
-        role=current_user.role,
-        with_files=True,
-    )
-    if not skill:
-        raise HTTPException(404, "Skill not found")
-    _ensure_skill_write_access(skill, current_user)
+    async with optional_connection_ctx():
+        skill = await skill_dao.get_for_tenant_scope(
+            skill_id,
+            tenant_id=current_user.tenant_id,
+            role=current_user.role,
+            with_files=True,
+        )
+        if not skill:
+            raise HTTPException(404, "Skill not found")
+        _ensure_skill_write_access(skill, current_user)
 
-    updates = {}
-    if body.name is not None:
-        updates["name"] = body.name
-    if body.description is not None:
-        updates["description"] = body.description
-    if body.category is not None:
-        updates["category"] = body.category
-    if body.icon is not None:
-        updates["icon"] = body.icon
-    if updates:
-        skill = await skill_dao.update(db_obj=skill, obj_in=updates) or skill
+        updates = {}
+        if body.name is not None:
+            updates["name"] = body.name
+        if body.description is not None:
+            updates["description"] = body.description
+        if body.category is not None:
+            updates["category"] = body.category
+        if body.icon is not None:
+            updates["icon"] = body.icon
+        if updates:
+            skill = await skill_dao.update(db_obj=skill, obj_in=updates) or skill
 
-    if body.files is not None:
-        await skill_dao.replace_files(skill.id, [(f.path, f.content) for f in body.files])
+        if body.files is not None:
+            await skill_dao.replace_files(skill.id, [(f.path, f.content) for f in body.files])
 
     return {"id": str(skill.id), "name": skill.name}
 
@@ -607,15 +630,16 @@ async def update_skill(skill_id: str, body: SkillUpdateIn, current_user: UserRec
 @router.delete("/{skill_id}")
 async def delete_skill(skill_id: str, current_user: UserRecord = Depends(get_current_admin)):
     """Delete a skill (not builtin)."""
-    skill = await skill_dao.get_for_tenant_scope(
-        skill_id,
-        tenant_id=current_user.tenant_id,
-        role=current_user.role,
-    )
-    if not skill:
-        raise HTTPException(404, "Skill not found")
-    _ensure_skill_write_access(skill, current_user)
-    await skill_dao.delete_with_files(skill.id)
+    async with optional_connection_ctx():
+        skill = await skill_dao.get_for_tenant_scope(
+            skill_id,
+            tenant_id=current_user.tenant_id,
+            role=current_user.role,
+        )
+        if not skill:
+            raise HTTPException(404, "Skill not found")
+        _ensure_skill_write_access(skill, current_user)
+        await skill_dao.delete_with_files(skill.id)
     return {"ok": True}
 
 
@@ -687,10 +711,11 @@ async def set_skill_token(
     if not current_user.tenant_id:
         raise HTTPException(400, "No tenant associated")
 
-    if body.github_token is not None:
-        await _upsert_tenant_setting(current_user.tenant_id, "github_token", body.github_token)
-    if body.clawhub_key is not None:
-        await _upsert_tenant_setting(current_user.tenant_id, "clawhub_key", body.clawhub_key)
+    async with connection_ctx():
+        if body.github_token is not None:
+            await _upsert_tenant_setting(current_user.tenant_id, "github_token", body.github_token)
+        if body.clawhub_key is not None:
+            await _upsert_tenant_setting(current_user.tenant_id, "clawhub_key", body.clawhub_key)
     return {"ok": True}
 
 
@@ -773,37 +798,38 @@ async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(g
     if len(parts) < 2:
         raise HTTPException(400, "Path must include folder and file")
     folder, file_path = parts
-    skill = await skill_dao.get_by_folder_for_tenant_scope(
-        folder,
-        tenant_id=current_user.tenant_id,
-        role=current_user.role,
-        with_files=True,
-    )
-    if not skill:
-        skill = await skill_dao.create(
-            obj_in={
-                "name": folder.replace("-", " ").title(),
-                "description": "",
-                "category": "custom",
-                "icon": "--",
-                "folder_name": folder,
-                "is_builtin": False,
-                "tenant_id": current_user.tenant_id,
-            }
+    async with optional_connection_ctx():
+        skill = await skill_dao.get_by_folder_for_tenant_scope(
+            folder,
+            tenant_id=current_user.tenant_id,
+            role=current_user.role,
+            with_files=True,
         )
-        skill.files = []
-    else:
-        _ensure_skill_write_access(skill, current_user)
+        if not skill:
+            skill = await skill_dao.create(
+                obj_in={
+                    "name": folder.replace("-", " ").title(),
+                    "description": "",
+                    "category": "custom",
+                    "icon": "--",
+                    "folder_name": folder,
+                    "is_builtin": False,
+                    "tenant_id": current_user.tenant_id,
+                }
+            )
+            skill.files = []
+        else:
+            _ensure_skill_write_access(skill, current_user)
 
-    existing = None
-    for f in skill.files:
-        if f.path == file_path:
-            existing = f
-            break
-    if existing:
-        _ = await skill_file_dao.update(db_obj=existing, obj_in={"content": body.content})
-    else:
-        _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": file_path, "content": body.content})
+        existing = None
+        for f in skill.files:
+            if f.path == file_path:
+                existing = f
+                break
+        if existing:
+            _ = await skill_file_dao.update(db_obj=existing, obj_in={"content": body.content})
+        else:
+            _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": file_path, "content": body.content})
     return {"ok": True}
 
 
@@ -812,18 +838,19 @@ async def browse_delete(path: str, current_user: UserRecord = Depends(get_curren
     """Delete a file or an entire skill folder."""
     parts = path.strip("/").split("/", 1)
     folder = parts[0]
-    skill = await skill_dao.get_by_folder_for_tenant_scope(
-        folder,
-        tenant_id=current_user.tenant_id,
-        role=current_user.role,
-        with_files=True,
-    )
-    if not skill:
-        raise HTTPException(404, "Skill not found")
-    _ensure_skill_write_access(skill, current_user)
+    async with optional_connection_ctx():
+        skill = await skill_dao.get_by_folder_for_tenant_scope(
+            folder,
+            tenant_id=current_user.tenant_id,
+            role=current_user.role,
+            with_files=True,
+        )
+        if not skill:
+            raise HTTPException(404, "Skill not found")
+        _ensure_skill_write_access(skill, current_user)
 
-    if len(parts) == 1:
-        await skill_dao.delete_with_files(skill.id)
-    else:
-        await skill_file_dao.delete_by_skill_and_path(skill.id, parts[1])
+        if len(parts) == 1:
+            await skill_dao.delete_with_files(skill.id)
+        else:
+            await skill_file_dao.delete_by_skill_and_path(skill.id, parts[1])
     return {"ok": True}
