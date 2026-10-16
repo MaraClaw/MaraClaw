@@ -44,7 +44,7 @@ class MCPClient:
         qs = parse_qs(parsed.query, keep_blank_values=True)
 
         self.api_key: str | None = api_key
-        if not self.api_key and "apiKey" in qs:
+        if self.api_key in (None, "") and "apiKey" in qs:
             self.api_key = qs.pop("apiKey")[0]
 
         # Rebuild URL without apiKey in query string
@@ -62,9 +62,9 @@ class MCPClient:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        if self.api_key:
+        if self.api_key not in (None, ""):
             h["Authorization"] = f"Bearer {self.api_key}"
-        if self._session_id:
+        if self._session_id not in (None, ""):
             h["Mcp-Session-Id"] = self._session_id
         return h
 
@@ -128,7 +128,7 @@ class MCPClient:
     async def _streamable_request(self, method: str, params: Mapping[str, JsonValue] | None = None) -> JsonObject:
         """Send a JSON-RPC request via Streamable HTTP transport."""
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            if not self._session_id:
+            if self._session_id in (None, ""):
                 await self._streamable_initialize(client)
 
             body: JsonObject = {"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})}
@@ -152,7 +152,7 @@ class MCPClient:
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         headers = {"Accept": "text/event-stream"}
-        if self.api_key:
+        if self.api_key not in (None, ""):
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         messages_url = None
@@ -177,7 +177,7 @@ class MCPClient:
                         messages_url = data if data.startswith("http") else base_url + data
                         break
 
-        if not messages_url:
+        if messages_url in (None, ""):
             raise Exception("SSE endpoint did not return a messages URL")
 
         return messages_url
@@ -198,7 +198,7 @@ class MCPClient:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        if self.api_key:
+        if self.api_key not in (None, ""):
             headers_sse["Authorization"] = f"Bearer {self.api_key}"
             headers_post["Authorization"] = f"Bearer {self.api_key}"
 
@@ -228,7 +228,7 @@ class MCPClient:
                         messages_url = data if data.startswith("http") else base_url + data
                         break
 
-            if not messages_url:
+            if messages_url in (None, ""):
                 raise Exception("SSE endpoint did not return a messages URL")
 
             # Phase 2: MCP handshake - initialize + initialized notification

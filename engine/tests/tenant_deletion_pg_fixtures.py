@@ -59,7 +59,7 @@ class DeletionPostgres:
 async def deletion_pg(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> AsyncIterator[DeletionPostgres]:
-    dsn = os.environ.get("MARACLAW_TEST_POSTGRES_DSN")
+    dsn = os.environ.get("MARACLAW_TEST_POSTGRES_DSN", "")
     if not dsn:
         pytest.skip("Set MARACLAW_TEST_POSTGRES_DSN to an isolated PostgreSQL database")
     schema = "tenant_delete_" + uuid4().hex

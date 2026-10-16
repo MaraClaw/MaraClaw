@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Literal, assert_never
+from typing import Any, Literal, assert_never, override
 from uuid import uuid4
 
 import pytest
@@ -25,7 +25,8 @@ class TableCursor(_FakeCursor):
         self.raw = parent
         self.results = []
 
-    async def execute(self, query, params=None):
+    @override
+    async def execute(self, query, params: Any = None):
         await super().execute(query, params)
         self.raw.pool.events.append((self.raw, query, params, self.raw.commits))
         if not query.lstrip().startswith("UPDATE trigger_executions"):
@@ -79,6 +80,7 @@ class TableCursor(_FakeCursor):
             if self.raw.pool.renewals >= self.raw.pool.target:
                 self.raw.pool.renewed.set()
 
+    @override
     async def fetchall(self):
         return self.results
 
@@ -88,6 +90,7 @@ class TableConnection(_FakeRawConnection):
         super().__init__()
         self.pool = pool
 
+    @override
     def cursor(self):
         return TableCursor(self)
 
@@ -97,10 +100,12 @@ class TableCM(_PoolConnectionCM):
         super().__init__(raw)
         self.raw = raw
 
+    @override
     async def __aenter__(self):
         self.raw.pool.open += 1
         return await super().__aenter__()
 
+    @override
     async def __aexit__(self, *args):
         self.raw.pool.open -= 1
         return await super().__aexit__(*args)
@@ -118,6 +123,7 @@ class TablePool(_FakePool):
         self.renewed = asyncio.Event()
         super().__init__(TableConnection(self))
 
+    @override
     def connection(self):
         raw = TableConnection(self)
         self.connections.append(raw)

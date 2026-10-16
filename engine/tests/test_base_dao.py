@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -20,8 +21,8 @@ class _Item:
     name: str
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> _Item:
-        return cls(id=row["id"], name=row["name"])
+    def from_row(cls, row: Mapping[str, object]) -> _Item:
+        return cls(id=row["id"], name=cast(str, row["name"]))
 
 
 class _FakeCursor:

@@ -113,7 +113,7 @@ def _register_agentbay_handler(tool_name: str, helper_name: str) -> None:
         context = current_execution_context()
         ws = (
             context.workspace_root
-            if context is not None and context.workspace_root is not None
+            if context is not None
             else workspace_paths._agent_workspace_root(agent_id, workspace_root=_WORKSPACE_ROOT)
         )
         helper = _load_agentbay_helper(helper_name)

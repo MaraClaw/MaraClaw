@@ -33,11 +33,11 @@ class PlatformService:
         """
         # 1. Try environment variable
         env_url = os.environ.get("PUBLIC_BASE_URL")
-        if env_url:
+        if env_url not in (None, ""):
             return env_url.rstrip("/")
 
         # 2. Fallback to request (browser address)
-        if request:
+        if request is not None and request:
             # Note: request.base_url might include trailing slash
             return str(request.base_url).rstrip("/")
 
@@ -57,7 +57,7 @@ class PlatformService:
         ``system_setting_dao.is_sso_custom_domain_redirect_enabled()`` so this
         method never issues an extra DB round-trip for the setting.
         """
-        if sso_redirect_enabled and tenant.sso_domain:
+        if sso_redirect_enabled and tenant.sso_domain not in (None, ""):
             return tenant.sso_domain.rstrip("/")
 
         if not sso_redirect_enabled:

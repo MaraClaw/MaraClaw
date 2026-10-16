@@ -62,7 +62,7 @@ async def _deliver_feishu(agent: AgentRecord, external: str, content: str) -> No
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="feishu")
     if config is None and agent.tenant_id:
         config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type="feishu")
-    if config is None or not config.app_id or not config.app_secret:
+    if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         logger.warning("[Outbound] no Feishu config for agent %s", agent.id)
         return
     if external.startswith("feishu_group_"):
@@ -130,7 +130,7 @@ async def _deliver_wecom(agent: AgentRecord, external: str, content: str) -> Non
     from app.services.wecom_service import send_wecom_message
 
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="wecom")
-    if config is None or not config.app_id or not config.app_secret:
+    if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         logger.warning("[Outbound] no WeCom config for agent %s", agent.id)
         return
     extra = json_object_from(config.extra_config)
@@ -155,7 +155,7 @@ async def _deliver_dingtalk(agent: AgentRecord, external: str, content: str) -> 
     from app.services.dingtalk_service import send_dingtalk_message
 
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="dingtalk")
-    if config is None or not config.app_id or not config.app_secret:
+    if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         logger.warning("[Outbound] no DingTalk config for agent %s", agent.id)
         return
     extra = json_object_from(config.extra_config)

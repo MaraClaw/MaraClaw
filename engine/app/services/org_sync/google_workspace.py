@@ -96,10 +96,14 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
 
     @override
     async def get_access_token(self) -> str:
-        if self._access_token and self._token_expires_at and datetime.now(UTC) < self._token_expires_at:
+        if (
+            self._access_token not in (None, "")
+            and self._token_expires_at
+            and datetime.now(UTC) < self._token_expires_at
+        ):
             return self._access_token
 
-        if self.admin_refresh_token:
+        if self.admin_refresh_token not in (None, ""):
             return await self._refresh_user_access_token()
 
         if self.service_account:
@@ -163,7 +167,7 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
     async def _refresh_user_access_token(self) -> str:
         if not self.client_id or not self.client_secret:
             raise ValueError("Google Workspace client_id and client_secret are required")
-        if not self.admin_refresh_token:
+        if self.admin_refresh_token in (None, ""):
             raise ValueError("Google Workspace admin authorization is required before directory sync")
 
         now = datetime.now(UTC)

@@ -19,7 +19,7 @@ def compute_period_for_date(frequency: str, length_days: int | None, target: dat
             end = target.replace(month=12, day=31)
         else:
             end = target.replace(month=target.month + 1, day=1) - timedelta(days=1)
-    elif frequency == "custom" and length_days:
+    elif frequency == "custom" and length_days not in (None, 0):
         epoch = date(1970, 1, 1)
         days_since_epoch = (target - epoch).days
         period_index = days_since_epoch // length_days
@@ -39,7 +39,7 @@ def advance_period(start: date, frequency: str, length_days: int | None, steps: 
         year = month_index // 12
         month = month_index % 12 + 1
         return compute_period_for_date(frequency, length_days, date(year, month, 1))
-    if frequency == "custom" and length_days:
+    if frequency == "custom" and length_days not in (None, 0):
         next_start = start + timedelta(days=length_days * steps)
         return next_start, next_start + timedelta(days=length_days - 1)
     quarter = (start.month - 1) // 3

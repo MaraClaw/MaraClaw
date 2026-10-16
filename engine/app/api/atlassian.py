@@ -110,7 +110,7 @@ async def check_atlassian_channel(
     """Test connectivity to Atlassian Rovo MCP and list available tools."""
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
-    if not config or not config.app_secret:
+    if not config or config.app_secret in (None, ""):
         raise HTTPException(status_code=400, detail="Atlassian not configured")
 
     from app.services.mcp_client import MCPClient
@@ -148,7 +148,7 @@ async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID) -> str | None:
     from app.core.security import decrypt_data
 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
-    if not config or not config.is_configured or not config.app_secret:
+    if not config or not config.is_configured or config.app_secret in (None, ""):
         return None
 
     try:

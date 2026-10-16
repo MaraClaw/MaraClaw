@@ -118,9 +118,9 @@ class BaseSandboxBackend(ABC):
             result_parts.append(f"📤 Output:\n{result.stdout}")
         if result.stderr.strip():
             result_parts.append(f"⚠️ Stderr:\n{result.stderr}")
-        if result.error:
+        if result.error not in (None, ""):
             result_parts.append(f"❌ Error: {result.error}")
-        if result.exit_code != 0 and not result.error:
+        if result.exit_code != 0 and result.error in (None, ""):
             result_parts.append(f"Exit code: {result.exit_code}")
 
         if not result_parts:

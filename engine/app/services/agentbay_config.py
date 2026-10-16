@@ -55,7 +55,7 @@ def _tool_api_key(tool: ToolRecord) -> str | None:
 async def _resolve_with_daos(agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
     if agent_id is not None:
         channel_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="agentbay")
-        if channel_config is not None and channel_config.is_configured and channel_config.app_secret:
+        if channel_config is not None and channel_config.is_configured and channel_config.app_secret not in (None, ""):
             api_key = _resolve_stored_api_key(channel_config.app_secret)
             if api_key is not None:
                 return AgentBayConfigResolution(AgentBayConfigSource.PER_AGENT_CHANNEL, api_key)

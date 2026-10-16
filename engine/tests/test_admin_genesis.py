@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -145,7 +146,7 @@ async def test_login_returns_must_change_password(monkeypatch):
     monkeypatch.setattr("app.dao.user_dao.get_by_identity_id", AsyncMock(return_value=[user]))
     monkeypatch.setattr("app.dao.tenant_dao.get", AsyncMock(return_value=tenant))
 
-    data = SimpleNamespace(
+    data: Any = SimpleNamespace(
         login_identifier=identity.email,
         password="initial-password",
         tenant_id=None,
@@ -195,7 +196,8 @@ async def test_load_user_from_access_token_enforces_password_change(monkeypatch)
     with pytest.raises(HTTPException) as exc:
         await security_mod.load_user_from_access_token(token, enforce_password_change=True)
     assert exc.value.status_code == 403
-    assert exc.value.detail["must_change_password"] is True
+    detail: Any = exc.value.detail
+    assert detail["must_change_password"] is True
 
 
 @pytest.mark.asyncio
@@ -214,7 +216,7 @@ async def test_change_password_clears_must_change_flag(monkeypatch):
     monkeypatch.setattr("app.dao.identity_dao.get", AsyncMock(return_value=identity))
     monkeypatch.setattr("app.dao.identity_dao.update", fake_update)
 
-    data = SimpleNamespace(old_password="old-password", new_password="new-secure-password")
+    data: Any = SimpleNamespace(old_password="old-password", new_password="new-secure-password")
     result = await auth_api.change_password(data, current_user=user)
     assert result["ok"] is True
     assert result["must_change_password"] is False
@@ -225,7 +227,7 @@ async def test_change_password_clears_must_change_flag(monkeypatch):
 async def test_change_password_rejects_same_password(monkeypatch):
     identity = _identity_ns(must_change_password=True, password="same-password")
     user = _user_ns(identity)
-    data = SimpleNamespace(old_password="same-password", new_password="same-password")
+    data: Any = SimpleNamespace(old_password="same-password", new_password="same-password")
     with pytest.raises(HTTPException) as exc:
         await auth_api.change_password(data, current_user=user)
     assert exc.value.status_code == 400
@@ -248,7 +250,7 @@ async def test_reset_password_clears_must_change_flag(monkeypatch):
     monkeypatch.setattr("app.dao.identity_dao.get", AsyncMock(return_value=identity))
     monkeypatch.setattr("app.dao.identity_dao.update", fake_update)
 
-    data = SimpleNamespace(token="a" * 32, new_password="brand-new-password")
+    data: Any = SimpleNamespace(token="a" * 32, new_password="brand-new-password")
     result = await auth_api.reset_password(data)
     assert result["ok"] is True
     assert updated[0]["must_change_password"] is False
@@ -270,7 +272,7 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
         org_admin=SimpleNamespace(id=uuid.uuid4(), role="org_admin"),
         admin_email="orgadmin@acme.com",
     )
-    platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None)
+    platform_user: Any = SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None)
     monkeypatch.setattr("app.api.admin.create_tenant_with_org_admin", AsyncMock(return_value=provisioned))
 
     result = await admin_api.create_company(
@@ -297,7 +299,7 @@ async def test_create_company_rejects_claimed_admin_domain(monkeypatch):
         "app.api.admin.create_tenant_with_org_admin",
         AsyncMock(side_effect=DomainClaimedError("Email domain is already claimed")),
     )
-    platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
+    platform_user: Any = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
 
     with pytest.raises(HTTPException) as exc:
         await admin_api.create_company(
@@ -320,7 +322,7 @@ async def test_create_company_rejects_existing_admin_email(monkeypatch):
         "app.api.admin.create_tenant_with_org_admin",
         AsyncMock(side_effect=AdminEmailTakenError("taken@example.com")),
     )
-    platform_user = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
+    platform_user: Any = SimpleNamespace(id=uuid.uuid4(), role="platform_admin")
 
     with pytest.raises(HTTPException) as exc:
         await admin_api.create_company(
@@ -464,7 +466,8 @@ async def test_ensure_platform_admin_elevates_when_password_matches(monkeypatch)
     monkeypatch.setattr(seeder.identity_dao, "update", fake_identity_update)
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[user]))
     monkeypatch.setattr(seeder.user_dao, "update", fake_user_update)
-    monkeypatch.setattr(seeder.identity_dao, "create_identity", AsyncMock())
+    create_identity = AsyncMock()
+    monkeypatch.setattr(seeder.identity_dao, "create_identity", create_identity)
     _patch_maraclaw(monkeypatch, seeder)
 
     with patch.object(seeder, "connection_ctx") as ctx:
@@ -476,7 +479,7 @@ async def test_ensure_platform_admin_elevates_when_password_matches(monkeypatch)
     assert updates
     assert updates[0]["is_platform_admin"] is True
     assert updates[0]["must_change_password"] is True
-    seeder.identity_dao.create_identity.assert_not_awaited()
+    create_identity.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -500,7 +503,8 @@ async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     monkeypatch.setattr(seeder, "get_settings", lambda: settings)
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=admin))
     monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
-    monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock())
+    get_by_email = AsyncMock()
+    monkeypatch.setattr(seeder.identity_dao, "get_by_email", get_by_email)
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
 
     async def fake_update(*, db_obj, obj_in):
@@ -515,7 +519,7 @@ async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     result = await seeder.ensure_platform_admin()
     assert result is admin
     assert result.tenant_id == _MARACLAW_ID
-    seeder.identity_dao.get_by_email.assert_not_awaited()
+    get_by_email.assert_not_awaited()
     assert warned
     assert "does not match genesis platform admin" in warned[0][0]
 
@@ -695,7 +699,7 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        data = SimpleNamespace(
+        data: Any = SimpleNamespace(
             email="new@example.com",
             username="newuser",
             password="password123",

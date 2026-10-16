@@ -80,7 +80,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
         # Fetch conversation history (last 10 messages) for context
         history = []
-        if msg.conversation_id:
+        if msg.conversation_id not in (None, ""):
             hist_msgs = await chat_message_dao.list_for_session(
                 conversation_id=msg.conversation_id,
                 limit=10,
@@ -277,7 +277,9 @@ async def send_message(
         raise HTTPException(status_code=404, detail=f"Target '{target_name}' not found. Check your relationships list.")
 
     # Send via feishu if available
-    if (target_member.external_id or target_member.open_id) and (not channel_hint or channel_hint == "feishu"):
+    if (target_member.external_id or target_member.open_id) not in (None, "") and (
+        channel_hint in (None, "") or channel_hint == "feishu"
+    ):
         import json as _json
 
         from app.services.feishu_service import feishu_service
@@ -306,7 +308,7 @@ async def send_message(
 
         # Prefer user_id (tenant-stable, works across apps), fallback to open_id
         resp = None
-        if target_member.external_id:
+        if target_member.external_id not in (None, ""):
             resp = await feishu_service.send_message(
                 _cfg_app_id,
                 _cfg_app_secret,
@@ -315,7 +317,7 @@ async def send_message(
                 content=_json.dumps({"text": content}, ensure_ascii=False),
                 receive_id_type="user_id",
             )
-        if (resp is None or resp.get("code") != 0) and target_member.open_id:
+        if (resp is None or resp.get("code") != 0) and target_member.open_id not in (None, ""):
             resp = await feishu_service.send_message(
                 _cfg_app_id,
                 _cfg_app_secret,
@@ -325,7 +327,7 @@ async def send_message(
                 receive_id_type="open_id",
             )
 
-        if resp and resp.get("code") == 0:
+        if resp is not None and resp and resp.get("code") == 0:
             return {
                 "status": "sent",
                 "target": target_member.name,
@@ -334,12 +336,12 @@ async def send_message(
             }
         raise HTTPException(
             status_code=502,
-            detail=f"Feishu send failed: {resp.get('msg') if resp else 'no ID available'} (code {resp.get('code') if resp else 'N/A'})",
+            detail=f"Feishu send failed: {resp.get('msg') if resp is not None and resp else 'no ID available'} (code {resp.get('code') if resp is not None and resp else 'N/A'})",
         )
 
     raise HTTPException(
         status_code=400,
-        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.external_id else 'no'}, feishu_open_id={'yes' if target_member.open_id else 'no'}",
+        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.external_id not in (None, '') else 'no'}, feishu_open_id={'yes' if target_member.open_id not in (None, '') else 'no'}",
     )
 
 

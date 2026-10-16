@@ -49,10 +49,10 @@ class TaskDAO(BaseDAO[TaskRecord]):
     ) -> Sequence[TaskRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
         clauses = ["agent_id = %(agent_id)s"]
-        if status:
+        if status not in (None, ""):
             clauses.append("status = %(status)s")
             params["status"] = status
-        if type:
+        if type not in (None, ""):
             clauses.append("type = %(type)s")
             params["type"] = type
         where = " AND ".join(clauses)
@@ -70,12 +70,12 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 f"SELECT {self._select_list()} FROM tasks WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": task_id, "agent_id": agent_id},
             )
-            return TaskRecord.from_row(row) if row else None
+            return TaskRecord.from_row(row) if row is not None else None
 
     async def count_for_agent(self, agent_id: UUID, *, status: str | None = None) -> int:
         params: dict[str, Any] = {"agent_id": agent_id}
         status_sql = ""
-        if status:
+        if status not in (None, ""):
             status_sql = " AND status = %(status)s"
             params["status"] = status
         async with self.session() as db:
@@ -112,7 +112,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 + "ORDER BY created_at DESC LIMIT 1",
                 {"agent_id": agent_id, "pattern": f"%{title}%"},
             )
-            return TaskRecord.from_row(row) if row else None
+            return TaskRecord.from_row(row) if row is not None else None
 
     async def delete_with_logs(self, task_id: UUID) -> TaskRecord | None:
         """Delete task logs then the task row; return the deleted task when present."""
@@ -125,7 +125,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 f"DELETE FROM tasks WHERE id = %(id)s RETURNING {self._select_list()}",
                 {"id": task_id},
             )
-            return TaskRecord.from_row(row) if row else None
+            return TaskRecord.from_row(row) if row is not None else None
 
 
 @final
@@ -149,7 +149,7 @@ class TaskLogDAO(BaseDAO[TaskLogRecord]):
                 + "WHERE task_id = %(task_id)s ORDER BY created_at DESC LIMIT 1",
                 {"task_id": task_id},
             )
-            return TaskLogRecord.from_row(row) if row else None
+            return TaskLogRecord.from_row(row) if row is not None else None
 
 
 task_dao = TaskDAO()

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
 from app.services.llm import router
 from app.services.llm.turn import ModelBundle
+from app.services.llm.types import OpenAIMessage
 
 
-def _model(*, enabled: bool = True, vision: bool = False, name: str = "m") -> SimpleNamespace:
+def _model(*, enabled: bool = True, vision: bool = False, name: str = "m") -> Any:
     return SimpleNamespace(id=uuid4(), model=name, enabled=enabled, supports_vision=vision, provider="grok")
 
 
@@ -29,7 +31,7 @@ def test_heuristic_force_complex() -> None:
     assert router.heuristic_complexity("Please design the migration") == "complex"
     assert router.heuristic_complexity("investigate the root cause") == "complex"
     assert router.heuristic_complexity("look in the repo") == "complex"
-    history = [{"role": "assistant", "tool_calls": [{"id": "1"}]}]
+    history: list[OpenAIMessage] = [{"role": "assistant", "tool_calls": [{"id": "1"}]}]
     assert router.heuristic_complexity("ok next", history=history) == "complex"
     assert router.heuristic_complexity("What is the status? And the owner?\n1. first\n2. second") == "complex"
 
@@ -55,7 +57,7 @@ def test_turn_has_images() -> None:
 
 def test_history_without_current_user_drops_duplicate() -> None:
     current = "do the second one"
-    history = [
+    history: list[OpenAIMessage] = [
         {"role": "user", "content": "compare A and B"},
         {"role": "assistant", "content": "ok"},
         {"role": "user", "content": current},
@@ -66,7 +68,7 @@ def test_history_without_current_user_drops_duplicate() -> None:
 
 def test_classifier_payload_skips_appended_current_and_strips_images() -> None:
     current = "what is this"
-    history = [
+    history: list[OpenAIMessage] = [
         {"role": "user", "content": "earlier [image_data:data:image/png;base64,AAA]"},
         {"role": "user", "content": current},
     ]
@@ -313,7 +315,7 @@ async def test_load_bundle_fetches_missing_ids(monkeypatch: pytest.MonkeyPatch) 
     from app.dao.llm_dao import llm_model_dao
 
     monkeypatch.setattr(llm_model_dao, "get_many", fake_get_many)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         primary_model_id=None,
         secondary_model_id=secondary_id,
         fallback_model_id=None,
@@ -334,7 +336,7 @@ async def test_load_bundle_drops_foreign_tenant_model(monkeypatch: pytest.Monkey
     from app.dao.llm_dao import llm_model_dao
 
     monkeypatch.setattr(llm_model_dao, "get_many", fake_get_many)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         primary_model_id=foreign.id,
         secondary_model_id=None,
         fallback_model_id=None,

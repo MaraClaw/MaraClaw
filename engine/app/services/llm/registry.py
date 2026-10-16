@@ -261,7 +261,7 @@ MAX_TOKENS_BY_MODEL: dict[str, int] = {
 
 def get_provider_base_url(provider: str, custom_base_url: str | None = None) -> str | None:
     """Return the API base URL for a provider."""
-    if custom_base_url:
+    if custom_base_url not in (None, ""):
         return custom_base_url
     spec = get_provider_spec(provider)
     if spec:
@@ -277,7 +277,7 @@ def get_max_tokens(provider: str, model: str | None = None, max_output_tokens: i
     if isinstance(max_output_tokens, int) and max_output_tokens > 0:
         return max_output_tokens
 
-    if model:
+    if model not in (None, ""):
         for prefix, limit in model_limits.items():
             if model.lower().startswith(prefix):
                 return limit

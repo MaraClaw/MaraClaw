@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -19,7 +20,7 @@ from app.services.agent_manager import AgentManager, guest_model_ref
 from app.services.llm.turn import ModelBundle
 
 
-def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> SimpleNamespace:
+def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> Any:
     return SimpleNamespace(
         id=uuid.uuid4(),
         provider=provider,
@@ -43,10 +44,10 @@ def _message(*, slot: str | None, ref: str | None = None) -> GatewayMessageRecor
 
 def test_guest_model_ref_requires_both_parts() -> None:
     assert guest_model_ref(None) is None
-    assert guest_model_ref(SimpleNamespace(provider="openai", model="")) is None
-    assert guest_model_ref(SimpleNamespace(provider="openai", model="gpt-5.4")) == "openai/gpt-5.4"
-    assert guest_model_ref(SimpleNamespace(provider="grok", model="grok-4.6")) == "xai/grok-4.6"
-    assert guest_model_ref(SimpleNamespace(provider="xai", model="auto")) == "xai/auto"
+    assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model=""))) is None
+    assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model="gpt-5.4"))) == "openai/gpt-5.4"
+    assert guest_model_ref(cast(Any, SimpleNamespace(provider="grok", model="grok-4.6"))) == "xai/grok-4.6"
+    assert guest_model_ref(cast(Any, SimpleNamespace(provider="xai", model="auto"))) == "xai/auto"
 
 
 def test_requires_primary_treats_missing_slot_as_primary() -> None:
@@ -77,12 +78,12 @@ def test_applied_guest_model_does_not_downgrade_when_primary_pending() -> None:
 
 def test_generate_openclaw_config_registers_secondary_and_selects_it() -> None:
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Guest")
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Guest")
     primary = _model(name="opus", provider="anthropic", key="sk-opus")
     secondary = _model(name="haiku", provider="anthropic", key="sk-haiku")
     fallback = _model(name="gpt-5.4", provider="openai", key="sk-gpt")
 
-    config = manager._generate_openclaw_config(
+    config: dict[str, Any] = manager._generate_openclaw_config(
         agent,
         primary,
         secondary=secondary,
@@ -105,7 +106,7 @@ def test_write_guest_config_skips_missing_dir(tmp_path, monkeypatch: pytest.Monk
     manager = AgentManager.__new__(AgentManager)
     missing = tmp_path / "nope"
     monkeypatch.setattr(manager, "_agent_dir", lambda _agent_id: missing)
-    agent = SimpleNamespace(id=uuid.uuid4())
+    agent: Any = SimpleNamespace(id=uuid.uuid4())
     assert manager.write_guest_config(agent, primary=None) is None
 
 
@@ -116,7 +117,7 @@ def test_write_guest_config_skips_unchanged_fingerprint(tmp_path, monkeypatch: p
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     monkeypatch.setattr(manager, "_agent_dir", lambda _agent_id: agent_dir)
-    agent = SimpleNamespace(id=agent_id)
+    agent: Any = SimpleNamespace(id=agent_id)
     primary = _model(name="opus")
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
     assert path is not None
@@ -133,7 +134,7 @@ def test_write_guest_config_rewrites_when_api_key_changes(tmp_path, monkeypatch:
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     monkeypatch.setattr(manager, "_agent_dir", lambda _agent_id: agent_dir)
-    agent = SimpleNamespace(id=agent_id)
+    agent: Any = SimpleNamespace(id=agent_id)
     primary = _model(name="opus", key="sk-old")
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
     assert path is not None
@@ -150,7 +151,7 @@ def test_write_guest_config_rewrites_selected_model(tmp_path, monkeypatch: pytes
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     monkeypatch.setattr(manager, "_agent_dir", lambda _agent_id: agent_dir)
-    agent = SimpleNamespace(id=agent_id)
+    agent: Any = SimpleNamespace(id=agent_id)
     primary = _model(name="opus")
     secondary = _model(name="haiku")
 
@@ -165,7 +166,7 @@ def test_write_guest_config_rewrites_selected_model(tmp_path, monkeypatch: pytes
 async def test_enqueue_hi_selects_secondary_and_writes_guest_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     secondary = _model(name="haiku")
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=secondary.id,
@@ -190,7 +191,7 @@ async def test_enqueue_hi_selects_secondary_and_writes_guest_config(tmp_path, mo
             guest_model_ref=str(obj_in.get("guest_model_ref") or "") or None,
         )
 
-    writes: list[object] = []
+    writes: list[dict[str, Any]] = []
 
     def fake_write(loaded_agent, **kwargs):
         writes.append(kwargs)
@@ -215,13 +216,13 @@ async def test_enqueue_does_not_downgrade_guest_when_primary_is_pending(
 ) -> None:
     primary = _model(name="opus")
     secondary = _model(name="haiku")
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=secondary.id,
         fallback_model_id=None,
     )
-    writes: list[object] = []
+    writes: list[dict[str, Any]] = []
 
     async def fake_load(_agent, **_kwargs):
         return ModelBundle(primary=primary, secondary=secondary)
@@ -255,7 +256,7 @@ async def test_enqueue_does_not_downgrade_guest_when_primary_is_pending(
 
 @pytest.mark.asyncio
 async def test_enqueue_raises_when_company_has_no_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    agent = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), primary_model_id=None)
 
     async def fake_ensure(loaded):
         return loaded
@@ -274,7 +275,7 @@ async def test_enqueue_raises_when_company_has_no_model(monkeypatch: pytest.Monk
 async def test_enqueue_skips_llm_classifier_for_ambiguous_text(monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     secondary = _model(name="haiku")
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=secondary.id,
@@ -324,7 +325,7 @@ async def test_enqueue_reuses_cached_bundle(monkeypatch: pytest.MonkeyPatch) -> 
 
     openclaw_hot_cache.reset()
     primary = _model(name="opus")
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=None,
@@ -369,7 +370,7 @@ async def test_enqueue_reuses_cached_bundle(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_enqueue_skips_duplicate_pending_from_same_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     user_id = uuid.uuid4()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=None,
@@ -421,7 +422,7 @@ async def test_enqueue_skips_duplicate_pending_from_same_sender(monkeypatch: pyt
 async def test_enqueue_same_text_in_other_session_is_not_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     user_id = uuid.uuid4()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=None,
@@ -469,7 +470,7 @@ async def test_enqueue_does_not_cache_empty_bundle(monkeypatch: pytest.MonkeyPat
 
     openclaw_hot_cache.reset()
     primary = _model(name="opus")
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         primary_model_id=None,
         secondary_model_id=None,

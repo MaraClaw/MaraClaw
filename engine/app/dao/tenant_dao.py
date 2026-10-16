@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_findall, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
-from app.dao.base import BaseDAO
+from app.dao.base import BaseDAO, as_uuid
 from app.records.tenant import TenantRecord
 
 _SEARCH_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -64,12 +64,13 @@ class TenantDAO(BaseDAO[TenantRecord]):
     columns: ClassVar[tuple[str, ...]] = _TENANT_COLUMNS
     record_factory = staticmethod(TenantRecord.from_row)
 
+    @override
     async def get(self, id: UUID) -> TenantRecord | None:
         cached = memo_get("tenant", id)
         if isinstance(cached, TenantRecord):
             return cached
         try:
-            tenant_id = id if isinstance(id, UUID) else UUID(str(id))
+            tenant_id = as_uuid(id)
         except TypeError, ValueError:
             tenant_id = None
         observed_ver = "0"
@@ -85,6 +86,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             await set_cached_tenant(tenant, observed_ver=observed_ver)
         return tenant
 
+    @override
     async def update(self, *, db_obj: TenantRecord, obj_in: Mapping[str, Any]) -> TenantRecord:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
         from app.db.session import optional_connection_ctx
@@ -99,6 +101,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             await bump_tenant_cache(updated.id)
             return updated
 
+    @override
     async def delete(self, *, id: UUID) -> TenantRecord | None:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
         from app.db.session import optional_connection_ctx
@@ -119,7 +122,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants "
                 + "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def get_by_slug(self, slug: str) -> TenantRecord | None:
         async with self.session() as db:
@@ -127,18 +130,19 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants WHERE slug = %(slug)s LIMIT 1",
                 {"slug": slug},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def get_first_by_created_at(self) -> TenantRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenants ORDER BY created_at ASC NULLS LAST LIMIT 1"
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def get_by_ids(self, ids: Sequence[UUID]) -> Sequence[TenantRecord]:
         if not ids:
-            return []
+            empty: list[TenantRecord] = []
+            return empty
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants WHERE id = ANY(%(ids)s)",
@@ -153,7 +157,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 + "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
                 {"domain": domain.lower()},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def find_by_sso_domain_ilike(self, domain: str) -> TenantRecord | None:
         async with self.session() as db:
@@ -161,7 +165,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants WHERE sso_domain ILIKE %(pattern)s LIMIT 1",
                 {"pattern": f"%{domain}%"},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def find_by_name_ilike(self, name_fragment: str) -> TenantRecord | None:
         async with self.session() as db:
@@ -169,7 +173,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants WHERE name ILIKE %(pattern)s LIMIT 1",
                 {"pattern": f"%{name_fragment}%"},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def list_ordered_by_created_at(self, *, desc: bool = True) -> Sequence[TenantRecord]:
         order = "DESC" if desc else "ASC"
@@ -200,7 +204,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants WHERE sso_domain = %(domain)s LIMIT 1",
                 {"domain": sso_domain},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def get_by_sso_domain_like(self, prefix: str) -> TenantRecord | None:
         async with self.session() as db:
@@ -208,7 +212,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 f"SELECT {self._select_list()} FROM tenants WHERE sso_domain LIKE %(pattern)s LIMIT 1",
                 {"pattern": f"{prefix}%"},
             )
-            return TenantRecord.from_row(row) if row else None
+            return TenantRecord.from_row(row) if row is not None else None
 
     async def count_created_before(self, before: object) -> int:
         async with self.session() as db:

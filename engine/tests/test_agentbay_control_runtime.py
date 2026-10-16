@@ -1,3 +1,5 @@
+from typing import Any
+
 from app.api.agentbay_control import _perform_drag
 
 
@@ -12,7 +14,7 @@ class DesktopClient:
 
 
 async def test_perform_drag_uses_computer_api_for_desktop_sessions() -> None:
-    client = DesktopClient()
+    client: Any = DesktopClient()
     result = await _perform_drag(client, 10, 20, 30, 40)
     assert client.drag_calls == [(10, 20, 30, 40)]
     assert result == {

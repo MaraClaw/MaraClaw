@@ -122,7 +122,7 @@ class RealtimeRouter:
             if user_id is not None and record.get("user_id") != user_id:
                 continue
             target_instance = record.get("instance_id")
-            if target_instance:
+            if target_instance not in (None, ""):
                 remote_targets[target_instance] = remote_targets.get(target_instance, 0) + 1
 
         if not remote_targets:
@@ -212,16 +212,10 @@ class RealtimeRouter:
         for connection_id in connection_ids:
             connection_id_text = _redis_text(connection_id)
             presence_raw: object = await redis_client.hgetall(self._connection_key(connection_id_text))
-            if not presence_raw or not isinstance(presence_raw, dict):
+            if not presence_raw:
                 stale_ids.append(connection_id_text)
                 continue
-            records.append(
-                {
-                    _redis_text(key): _redis_text(value)
-                    for key, value in presence_raw.items()
-                    if isinstance(key, (str, bytes)) and isinstance(value, (str, bytes))
-                }
-            )
+            records.append({_redis_text(key): _redis_text(value) for key, value in presence_raw.items()})
         if stale_ids:
             _ = await redis_client.srem(self._agent_index_key(agent_id), *stale_ids)
         return records

@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -185,9 +186,9 @@ def _http_request(*, origin: str | None = None, referer: str | None = None):
     from starlette.requests import Request
 
     headers: list[tuple[bytes, bytes]] = []
-    if origin:
+    if origin is not None and origin != "":
         headers.append((b"origin", origin.encode()))
-    if referer:
+    if referer is not None and referer != "":
         headers.append((b"referer", referer.encode()))
     return Request(
         {
@@ -405,7 +406,7 @@ async def test_reset_password_updates_user(monkeypatch):
         password_hash=hash_password("old-password"),
         is_active=True,
     )
-    updates: list[dict] = []
+    updates: list[dict[str, Any]] = []
 
     async def fake_consume_password_reset_token(*_args, **_kwargs):
         return {"identity_id": identity.id}
@@ -428,6 +429,7 @@ async def test_reset_password_updates_user(monkeypatch):
     assert response == {"ok": True}
     assert updates
     assert "password_hash" in updates[0]
+    assert identity.password_hash is not None
     assert verify_password("new-password", identity.password_hash)
 
 

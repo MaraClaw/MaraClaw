@@ -51,7 +51,7 @@ def build_wechat_headers(token: str, route_tag: str | None = None) -> dict[str, 
         "Authorization": f"Bearer {token}",
         "X-WECHAT-UIN": random_wechat_uin(),
     }
-    if route_tag:
+    if route_tag not in (None, ""):
         headers["SKRouteTag"] = route_tag
     return headers
 
@@ -270,7 +270,7 @@ class WeChatPollManager:
                     data = await self._fetch_updates(token=token, base_url=base_url, cursor=cursor, route_tag=route_tag)
                     self._connected[agent_id] = True
                     await self._set_connected(agent_id, True)
-                    if extra.get("session_expired"):
+                    if (session_expired := extra.get("session_expired")) is not None and session_expired:
                         await self._update_extra(agent_id, {"session_expired": False})
                     retry_delay = 2
 

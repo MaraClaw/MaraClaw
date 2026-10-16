@@ -50,7 +50,7 @@ async def _channel_presence(agent_id: uuid.UUID) -> tuple[bool, bool]:
                 """,
                 {"agent_id": agent_id},
             )
-            if not row:
+            if row is None:
                 return False, False
             return bool(row["has_feishu"]), bool(row["has_any"])
     except Exception:

@@ -191,7 +191,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
         for objective in objectives:
             krs = krs_by_obj.get(str(objective.id), [])
             lines.append(f"**O: {objective.title}**  objective_id={objective.id}")
-            if objective.description:
+            if objective.description not in (None, ""):
                 lines.append(f"  {objective.description}")
             lines.extend(
                 (

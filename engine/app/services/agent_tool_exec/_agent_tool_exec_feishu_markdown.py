@@ -15,7 +15,7 @@ _HEADING_BLOCKS: Final[dict[int, tuple[int, str]]] = {
 
 def _make_run(content: str, style: dict[str, ToolArgumentValue] | None = None) -> dict[str, ToolArgumentValue]:
     run: dict[str, ToolArgumentValue] = {"content": content}
-    if style:
+    if style is not None and style:
         run["text_element_style"] = style
     return {"text_run": run}
 

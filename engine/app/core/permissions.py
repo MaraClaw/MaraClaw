@@ -174,6 +174,10 @@ async def user_can_manage_agent_id(
     return (await get_agent_access_level_for_user_id(user_id, agent)) == "manage"
 
 
+def _agent_tenant_id(agent: AgentRecord) -> uuid.UUID | None:
+    return agent.tenant_id
+
+
 async def get_agent_accessible_user_ids(agent: AgentRecord) -> set[uuid.UUID]:
     """Return platform users who can access an agent under current policy."""
     access_mode = agent.access_mode or "company"
@@ -185,15 +189,15 @@ async def get_agent_accessible_user_ids(agent: AgentRecord) -> set[uuid.UUID]:
         ids.add(agent.creator_id)
 
     if access_mode == "company":
-        if agent.tenant_id is not None:
-            ids.update(await user_dao.list_active_ids_for_tenant(agent.tenant_id))
+        if (tenant_id := _agent_tenant_id(agent)) is not None:
+            ids.update(await user_dao.list_active_ids_for_tenant(tenant_id))
         return ids & active_ids
 
     if access_mode == "custom":
         ids.update(await agent_permission_dao.list_user_scope_ids(agent.id))
         ids.update(await local_department_dao.accessible_user_ids(agent.id))
-        if agent.tenant_id is not None:
-            ids.update(await user_dao.list_active_admin_ids_for_tenant(agent.tenant_id))
+        if (tenant_id := _agent_tenant_id(agent)) is not None:
+            ids.update(await user_dao.list_active_admin_ids_for_tenant(tenant_id))
 
     return ids & active_ids
 
@@ -319,7 +323,7 @@ async def evaluate_human_relationship_status(
         }
     if member.user_id:
         access_level = await get_agent_access_level_for_user_id(member.user_id, source_agent)
-        if not access_level:
+        if access_level in (None, ""):
             return {
                 "access_allowed": False,
                 "access_status": "restricted",

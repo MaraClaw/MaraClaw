@@ -47,7 +47,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
                 f"SELECT {self._select_list()} FROM agent_schedules WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": schedule_id, "agent_id": agent_id},
             )
-            return AgentScheduleRecord.from_row(row) if row else None
+            return AgentScheduleRecord.from_row(row) if row is not None else None
 
     async def list_due(self, now: datetime) -> Sequence[AgentScheduleRecord]:
         async with self.session() as db:

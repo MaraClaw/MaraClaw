@@ -7,48 +7,6 @@ import uuid
 from app.services.agent_tool_exec.registry import ToolArguments, ToolOutputCallback, register
 
 
-def _agent_tools():
-    from app.services import agent_tools
-
-    return agent_tools
-
-
-def _mcp_tools():
-    from app.services.agent_tool_exec import mcp_tools
-
-    return mcp_tools
-
-
-def _okr_read():
-    from app.services.agent_tool_exec import _agent_tool_exec_okr_read
-
-    return _agent_tool_exec_okr_read
-
-
-def _okr_write():
-    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
-
-    return _agent_tool_exec_okr_write
-
-
-def _okr_reports():
-    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
-
-    return _agent_tool_exec_okr_reports
-
-
-def _deploy():
-    from app.services.agent_tool_exec import _agent_tool_exec_deploy
-
-    return _agent_tool_exec_deploy
-
-
-def _deploy_ops():
-    from app.services.agent_tool_exec import _agent_tool_exec_deploy_ops
-
-    return _agent_tool_exec_deploy_ops
-
-
 @register("manage_tasks")
 async def manage_tasks(
     *,
@@ -59,7 +17,8 @@ async def manage_tasks(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     return await tools._manage_tasks(agent_id, user_id, tools._agent_workspace_root(agent_id), arguments)
 
 
@@ -73,7 +32,9 @@ async def send_platform_message(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._send_platform_message(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._send_platform_message(agent_id, arguments)
 
 
 @register("send_channel_message")
@@ -86,7 +47,9 @@ async def send_channel_message(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._send_channel_message(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._send_channel_message(agent_id, arguments)
 
 
 @register("send_channel_file")
@@ -103,9 +66,9 @@ async def send_channel_file(
     file_path = file_path_value.strip() if isinstance(file_path_value, str) else ""
     if not file_path:
         return "Error: file_path is required"
+    from app.services import agent_tools as tools
     from app.services.agent_tool_exec.channel_files import _send_channel_file
 
-    tools = _agent_tools()
     tenant_id = await tools._get_agent_tenant_id(agent_id)
     return await tools._run_with_temp_workspace(
         agent_id,
@@ -125,7 +88,9 @@ async def plaza_get_new_posts(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._plaza_get_new_posts(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._plaza_get_new_posts(agent_id, arguments)
 
 
 @register("plaza_create_post")
@@ -138,7 +103,9 @@ async def plaza_create_post(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._plaza_create_post(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._plaza_create_post(agent_id, arguments)
 
 
 @register("plaza_add_comment")
@@ -151,7 +118,9 @@ async def plaza_add_comment(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._plaza_add_comment(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._plaza_add_comment(agent_id, arguments)
 
 
 @register("execute_code")
@@ -164,7 +133,8 @@ async def execute_code(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     tenant_id = await tools._get_agent_tenant_id(agent_id)
     return await tools._run_with_temp_workspace(
         agent_id,
@@ -186,7 +156,8 @@ async def execute_code_e2b(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     tenant_id = await tools._get_agent_tenant_id(agent_id)
     return await tools._run_with_temp_workspace(
         agent_id,
@@ -208,7 +179,8 @@ async def upload_image(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     file_path_value = arguments.get("file_path")
     file_path = file_path_value.strip() if isinstance(file_path_value, str) else ""
     tenant_id = await tools._get_agent_tenant_id(agent_id)
@@ -231,7 +203,8 @@ def _register_generate_image(name: str, provider: str) -> None:
         on_output: ToolOutputCallback | None,
     ) -> str:
         del user_id, session_id, on_output
-        tools = _agent_tools()
+        from app.services import agent_tools as tools
+
         tenant_id = await tools._get_agent_tenant_id(agent_id)
         return await tools._run_with_temp_workspace(
             agent_id,
@@ -258,7 +231,9 @@ async def discover_resources(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _mcp_tools()._discover_resources(agent_id, arguments)
+    from app.services.agent_tool_exec import mcp_tools
+
+    return await mcp_tools._discover_resources(agent_id, arguments)
 
 
 @register("import_mcp_server")
@@ -271,7 +246,9 @@ async def import_mcp_server(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _mcp_tools()._import_mcp_server(agent_id, arguments)
+    from app.services.agent_tool_exec import mcp_tools
+
+    return await mcp_tools._import_mcp_server(agent_id, arguments)
 
 
 def _register_email(name: str) -> None:
@@ -285,7 +262,8 @@ def _register_email(name: str) -> None:
         on_output: ToolOutputCallback | None,
     ) -> str:
         del user_id, session_id, on_output
-        tools = _agent_tools()
+        from app.services import agent_tools as tools
+
         return await tools._handle_email_tool(name, agent_id, tools._agent_workspace_root(agent_id), arguments)
 
 
@@ -304,7 +282,8 @@ async def publish_page(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     return await tools._publish_page(agent_id, user_id, tools._agent_workspace_root(agent_id), arguments)
 
 
@@ -318,7 +297,9 @@ async def list_published_pages(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del arguments, user_id, session_id, on_output
-    return await _agent_tools()._list_published_pages(agent_id)
+    from app.services import agent_tools as tools
+
+    return await tools._list_published_pages(agent_id)
 
 
 @register("search_clawhub")
@@ -331,7 +312,9 @@ async def search_clawhub(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _agent_tools()._search_clawhub(agent_id, arguments)
+    from app.services import agent_tools as tools
+
+    return await tools._search_clawhub(agent_id, arguments)
 
 
 @register("install_skill")
@@ -344,7 +327,8 @@ async def install_skill(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    tools = _agent_tools()
+    from app.services import agent_tools as tools
+
     return await tools._install_skill(agent_id, tools._agent_workspace_root(agent_id), arguments)
 
 
@@ -358,7 +342,9 @@ async def get_okr(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _okr_read()._get_okr(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_read
+
+    return await _agent_tool_exec_okr_read._get_okr(agent_id, arguments)
 
 
 @register("get_my_okr")
@@ -371,7 +357,9 @@ async def get_my_okr(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _okr_read()._get_my_okr(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_read
+
+    return await _agent_tool_exec_okr_read._get_my_okr(agent_id, arguments)
 
 
 @register("update_kr_content")
@@ -384,7 +372,9 @@ async def update_kr_content(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._update_kr_content(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._update_kr_content(agent_id, user_id, arguments)
 
 
 @register("update_kr_progress")
@@ -397,7 +387,9 @@ async def update_kr_progress(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._update_kr_progress(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._update_kr_progress(agent_id, user_id, arguments)
 
 
 @register("collect_okr_progress")
@@ -410,7 +402,9 @@ async def collect_okr_progress(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del arguments, user_id, session_id, on_output
-    return await _okr_reports()._collect_okr_progress(agent_id)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
+
+    return await _agent_tool_exec_okr_reports._collect_okr_progress(agent_id)
 
 
 @register("generate_okr_report")
@@ -423,7 +417,9 @@ async def generate_okr_report(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _okr_reports()._generate_okr_report(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
+
+    return await _agent_tool_exec_okr_reports._generate_okr_report(agent_id, arguments)
 
 
 @register("get_okr_settings")
@@ -436,7 +432,9 @@ async def get_okr_settings(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del arguments, user_id, session_id, on_output
-    return await _okr_read()._get_okr_settings_tool(agent_id)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_read
+
+    return await _agent_tool_exec_okr_read._get_okr_settings_tool(agent_id)
 
 
 @register("create_objective")
@@ -449,7 +447,9 @@ async def create_objective(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._create_objective(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._create_objective(agent_id, user_id, arguments)
 
 
 @register("create_key_result")
@@ -462,7 +462,9 @@ async def create_key_result(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._create_key_result(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._create_key_result(agent_id, user_id, arguments)
 
 
 @register("update_objective")
@@ -475,7 +477,9 @@ async def update_objective(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._update_objective(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._update_objective(agent_id, user_id, arguments)
 
 
 @register("update_any_kr_progress")
@@ -488,7 +492,9 @@ async def update_any_kr_progress(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del session_id, on_output
-    return await _okr_write()._update_any_kr_progress(agent_id, user_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_write
+
+    return await _agent_tool_exec_okr_write._update_any_kr_progress(agent_id, user_id, arguments)
 
 
 @register("generate_monthly_okr_report")
@@ -501,7 +507,9 @@ async def generate_monthly_okr_report(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del arguments, user_id, session_id, on_output
-    return await _okr_reports()._generate_monthly_okr_report(agent_id)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
+
+    return await _agent_tool_exec_okr_reports._generate_monthly_okr_report(agent_id)
 
 
 @register("upsert_member_daily_report")
@@ -514,7 +522,9 @@ async def upsert_member_daily_report(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _okr_reports()._upsert_member_daily_report(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_okr_reports
+
+    return await _agent_tool_exec_okr_reports._upsert_member_daily_report(agent_id, arguments)
 
 
 @register("vercel_deploy")
@@ -527,8 +537,10 @@ async def vercel_deploy(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    tools = _agent_tools()
-    return await _deploy()._vercel_deploy(agent_id, tools._agent_workspace_root(agent_id), arguments)
+    from app.services import agent_tools as tools
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy
+
+    return await _agent_tool_exec_deploy._vercel_deploy(agent_id, tools._agent_workspace_root(agent_id), arguments)
 
 
 @register("vercel_list_deployments")
@@ -541,7 +553,9 @@ async def vercel_list_deployments(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _deploy()._vercel_list_deployments(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy
+
+    return await _agent_tool_exec_deploy._vercel_list_deployments(agent_id, arguments)
 
 
 @register("vercel_get_deploy_logs")
@@ -554,7 +568,9 @@ async def vercel_get_deploy_logs(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _deploy()._vercel_get_deploy_logs(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy
+
+    return await _agent_tool_exec_deploy._vercel_get_deploy_logs(agent_id, arguments)
 
 
 @register("vercel_set_env")
@@ -567,7 +583,9 @@ async def vercel_set_env(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _deploy_ops()._vercel_set_env(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy_ops
+
+    return await _agent_tool_exec_deploy_ops._vercel_set_env(agent_id, arguments)
 
 
 @register("vercel_manage_domain")
@@ -580,7 +598,9 @@ async def vercel_manage_domain(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _deploy_ops()._vercel_manage_domain(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy_ops
+
+    return await _agent_tool_exec_deploy_ops._vercel_manage_domain(agent_id, arguments)
 
 
 @register("neon_create_database")
@@ -593,4 +613,6 @@ async def neon_create_database(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, session_id, on_output
-    return await _deploy_ops()._neon_create_database(agent_id, arguments)
+    from app.services.agent_tool_exec import _agent_tool_exec_deploy_ops
+
+    return await _agent_tool_exec_deploy_ops._neon_create_database(agent_id, arguments)

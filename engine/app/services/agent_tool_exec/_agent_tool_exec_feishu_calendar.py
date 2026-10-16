@@ -162,7 +162,7 @@ async def _feishu_resolve_open_id(token: str, email: str) -> str | None:
         return None
     for user in _object_items(_nested_mapping(data.get("data")).get("user_list")):
         open_id = json_as_str(user.get("user_id"))
-        if open_id:
+        if open_id not in (None, ""):
             return open_id
     return None
 
@@ -192,16 +192,18 @@ async def _feishu_calendar_list(agent_id: uuid.UUID, arguments: ToolArguments) -
     end_iso = _to_iso(end_arg, now + timedelta(days=7))
 
     sender_open_id = channel_feishu_sender_open_id.get(None)
-    if arguments.get("user_open_id"):
+    if (user_open_id := arguments.get("user_open_id")) is not None and user_open_id:
         sender_open_id = _string_argument(arguments, "user_open_id")
     elif user_email:
         resolved = await agent_tools._feishu_resolve_open_id(token, user_email)
-        if resolved:
+        if resolved not in (None, ""):
             sender_open_id = resolved
 
-    freebusy_section = await _freebusy_section(sender_open_id, token, start_iso, end_iso) if sender_open_id else ""
+    freebusy_section = (
+        await _freebusy_section(sender_open_id, token, start_iso, end_iso) if sender_open_id not in (None, "") else ""
+    )
     agent_cal_id, cal_err = await agent_tools._get_agent_calendar_id(token)
-    if not agent_cal_id:
+    if agent_cal_id in (None, ""):
         if freebusy_section:
             return freebusy_section.strip()
         return cal_err or "❌ Failed to retrieve agent's primary calendar ID."
@@ -277,13 +279,13 @@ async def _feishu_calendar_create(agent_id: uuid.UUID, arguments: ToolArguments)
     if not app_id or not app_secret:
         return "❌ Agent has no Feishu channel configured."
     token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
-    if user_email and not await agent_tools._feishu_resolve_open_id(token, user_email):
+    if user_email and (await agent_tools._feishu_resolve_open_id(token, user_email)) in (None, ""):
         logger.warning(
             f"[Feishu Calendar] Could not resolve open_id for '{user_email}', continuing without organizer invite"
         )
 
     agent_cal_id, cal_err = await agent_tools._get_agent_calendar_id(token)
-    if not agent_cal_id:
+    if agent_cal_id in (None, ""):
         return cal_err or "❌ Failed to retrieve agent's primary calendar ID."
 
     timezone = _string_argument(arguments, "timezone", "Asia/Shanghai")

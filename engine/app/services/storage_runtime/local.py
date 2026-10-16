@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import override
+from typing import cast, override
 
 import aiofiles
 from fastapi import HTTPException, status
@@ -78,7 +78,7 @@ class LocalStorageBackend(StorageBackend):
     async def read_bytes(self, key: str) -> bytes:
         path = self._full_path(key)
         async with aiofiles.open(path, "rb") as f:
-            return await f.read()
+            return cast(bytes, await f.read())
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

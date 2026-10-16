@@ -52,7 +52,11 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
 
     @override
     async def get_access_token(self) -> str:
-        if self._access_token and self._token_expires_at and datetime.now(UTC) < self._token_expires_at:
+        if (
+            self._access_token not in (None, "")
+            and self._token_expires_at
+            and datetime.now(UTC) < self._token_expires_at
+        ):
             return self._access_token
 
         if not self.app_key or not self.app_secret:
@@ -132,7 +136,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                         parent_int = int(raw_parent_id)
                     else:
                         parent_int = None
-                    if dept_id == 1 or not parent_int or parent_int == dept_id:
+                    if dept_id == 1 or parent_int in (None, 0) or parent_int == dept_id:
                         parent_external = None  # Root has no parent
                     else:
                         parent_external = str(parent_int)
@@ -218,7 +222,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                     )
                     users.append(user)
 
-                if not result.get("has_more"):
+                if (has_more := result.get("has_more")) is None or not has_more:
                     break
                 next_cursor = result.get("next_cursor") or 0
                 cursor = (
@@ -241,7 +245,7 @@ class DingTalkOrgSyncAdapter(BaseOrgSyncAdapter):
                 return dept_id
             visited.add(dept_id)
             name, parent_id = dept_index.get(dept_id, ("", None))
-            if not parent_id or parent_id not in dept_index:
+            if parent_id in (None, "") or parent_id not in dept_index:
                 paths[dept_id] = name
                 return name
             parent_path = compute_path(parent_id, visited)

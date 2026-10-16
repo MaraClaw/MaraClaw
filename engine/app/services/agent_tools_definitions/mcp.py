@@ -1,6 +1,8 @@
 """OpenAI function-calling catalog slice. Data only."""
 
-MCP_AGENT_TOOLS: list[object] = [
+from app.core.tool_types import ToolDefinition
+
+MCP_AGENT_TOOLS: list[ToolDefinition] = [
     {
         "type": "function",
         "function": {

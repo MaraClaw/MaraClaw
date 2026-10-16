@@ -37,7 +37,7 @@ class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
                 f"SELECT {self._select_list()} FROM gogcli_credential_states WHERE agent_id = %(agent_id)s LIMIT 1",
                 {"agent_id": agent_id},
             )
-            return GogcliCredentialStateRecord.from_row(row) if row else None
+            return GogcliCredentialStateRecord.from_row(row) if row is not None else None
 
     async def upsert_fields(self, agent_id: UUID, fields: dict[str, Any]) -> GogcliCredentialStateRecord:
         existing = await self.get_by_agent(agent_id)

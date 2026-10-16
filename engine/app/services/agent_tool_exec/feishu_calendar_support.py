@@ -26,7 +26,7 @@ def _is_dateutil_parser(value: object) -> TypeIs[_DateUtilParser]:
 
 
 def _to_iso(value: str | None, default: datetime) -> str:
-    if not value:
+    if value in (None, ""):
         return default.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     if re.fullmatch(r"\d+", value.strip()):
         return datetime.fromtimestamp(int(value.strip()), tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -34,7 +34,7 @@ def _to_iso(value: str | None, default: datetime) -> str:
 
 
 def _to_unix(value: str | None, default: datetime) -> str:
-    if not value:
+    if value in (None, ""):
         return str(int(default.timestamp()))
     if re.fullmatch(r"\d+", value.strip()):
         return value.strip()
@@ -89,10 +89,10 @@ async def _calendar_write_context(agent_id: uuid.UUID, user_email: str) -> tuple
         return agent_tools, "", "", "❌ Agent has no Feishu channel configured."
     token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
     open_id = await agent_tools._feishu_resolve_open_id(token, user_email)
-    if not open_id:
+    if open_id in (None, ""):
         return agent_tools, token, "", f"❌ User '{user_email}' not found."
     agent_cal_id, cal_err = await agent_tools._get_agent_calendar_id(token)
-    if not agent_cal_id:
+    if agent_cal_id in (None, ""):
         return agent_tools, token, "", cal_err or "❌ Failed to retrieve agent's primary calendar ID."
     return agent_tools, token, agent_cal_id, ""
 
@@ -132,10 +132,10 @@ async def _calendar_attendees(
         attendee_emails.append(user_email)
     for email in attendee_emails[:20]:
         open_id = await agent_tools._feishu_resolve_open_id(token, email)
-        if open_id and open_id not in attendee_open_ids:
+        if open_id not in (None, "") and open_id not in attendee_open_ids:
             attendee_open_ids.append(open_id)
             attendee_display.append(email)
     sender_open_id = channel_feishu_sender_open_id.get(None)
-    if sender_open_id and sender_open_id not in attendee_open_ids:
+    if sender_open_id not in (None, "") and sender_open_id not in attendee_open_ids:
         attendee_open_ids.append(sender_open_id)
     return attendee_open_ids, attendee_display

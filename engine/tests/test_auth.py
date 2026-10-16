@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -231,7 +232,7 @@ async def test_get_me_returns_user():
         username="testuser",
         password_hash=hash_password(DEFAULT_TEST_CREDENTIAL),
     )
-    user = SimpleNamespace(
+    user: Any = SimpleNamespace(
         id=uuid.uuid4(),
         identity_id=identity.id,
         identity=identity,
@@ -268,7 +269,7 @@ async def test_oauth_callback_passes_redirect_uri():
     provider.exchange_code_for_token = AsyncMock(return_value={"access_token": "provider-token"})
     provider.get_user_info = AsyncMock(return_value=SimpleNamespace())
     provider.find_or_create_user = AsyncMock(return_value=(user, False))
-    data = SimpleNamespace(
+    data: Any = SimpleNamespace(
         code="oauth-code",
         state="oauth-state",
         redirect_uri="https://example.com/oauth/callback/google",

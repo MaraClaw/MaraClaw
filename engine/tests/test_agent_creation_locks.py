@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from importlib import import_module
+from typing import override
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +22,7 @@ class CreationConnection(DbConnection):
         self.commits = 0
         self.rollbacks = 0
 
+    @override
     async def fetchone(self, query: str, params: Params = None) -> Row | None:
         assert isinstance(params, Mapping)
         assert session.get_connection() is self
@@ -43,9 +45,11 @@ class CreationConnection(DbConnection):
             return dict(params)
         raise AssertionError(query)
 
+    @override
     async def commit(self):
         self.commits += 1
 
+    @override
     async def rollback(self):
         self.rollbacks += 1
 

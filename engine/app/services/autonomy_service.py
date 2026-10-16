@@ -142,7 +142,7 @@ class AutonomyService:
 
             status_label = "approved" if approval.status == "approved" else "rejected"
             body_text = json.dumps(approval.details, ensure_ascii=False)[:200]
-            if execution_result:
+            if execution_result not in (None, ""):
                 body_text = f"Result: {execution_result}"
             _ = await send_notification(
                 user_id=agent.creator_id,
@@ -215,7 +215,7 @@ class AutonomyService:
         )
 
         channel = await channel_config_dao.get_first_for_agent(agent.id)
-        if not channel or not channel.app_id or not channel.app_secret:
+        if not channel or channel.app_id in (None, "") or channel.app_secret in (None, ""):
             return
 
         creator = await user_dao.get(agent.creator_id)
@@ -264,7 +264,7 @@ class AutonomyService:
         )
 
         channel = await channel_config_dao.get_first_for_agent(agent.id)
-        if not channel or not channel.app_id or not channel.app_secret:
+        if not channel or channel.app_id in (None, "") or channel.app_secret in (None, ""):
             return
 
         creator = await user_dao.get(agent.creator_id)

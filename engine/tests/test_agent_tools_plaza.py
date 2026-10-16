@@ -300,6 +300,7 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     result = await agent_tools._plaza_add_comment(agent_id, {"post_id": post_id, "content": content})
 
     assert result == "Comment added to post by Mira."
+    assert create_comment.await_args is not None
     obj_in = (
         create_comment.await_args.args[0]
         if create_comment.await_args.args

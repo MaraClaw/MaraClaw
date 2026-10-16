@@ -300,7 +300,7 @@ def try_inject_screenshot_vision(
             coordinate_grid=add_coordinate_grid,
             grid_options=grid_options,
         )
-        if not data_url:
+        if data_url in (None, ""):
             return None
         # Strip the [ImageID: ...] marker from the text that goes to the LLM
         clean_text = _IMAGE_ID_RE.sub("", result_text).strip()

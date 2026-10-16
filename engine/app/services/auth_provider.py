@@ -159,10 +159,10 @@ class BaseAuthProvider(ABC):
         if not user:
             if user_info.email:
                 user = await sso_service.match_user_by_email(user_info.email, tenant_id)
-            if not user and user_info.mobile and tenant_id:
+            if not user and user_info.mobile and tenant_id not in (None, ""):
                 user = await sso_service.match_user_by_mobile(user_info.mobile, tenant_id)
 
-            if user and tenant_id and str(user.tenant_id) != tenant_id:
+            if user and tenant_id not in (None, "") and str(user.tenant_id) != tenant_id:
                 user = None
 
         if user:
@@ -212,11 +212,11 @@ class BaseAuthProvider(ABC):
         identity_fields: dict[str, object] = {}
         if user_info.name and not user.display_name:
             user_fields["display_name"] = user_info.name
-        if user_info.avatar_url and not user.avatar_url:
+        if user_info.avatar_url and user.avatar_url in (None, ""):
             user_fields["avatar_url"] = user_info.avatar_url
-        if user_info.email and not user.email:
+        if user_info.email and user.email in (None, ""):
             identity_fields["email"] = user_info.email
-        if user_info.mobile and not user.primary_mobile:
+        if user_info.mobile and user.primary_mobile in (None, ""):
             identity_fields["phone"] = user_info.mobile
 
         if identity_fields and user.identity is not None:
@@ -284,7 +284,7 @@ class FeishuAuthProvider(BaseAuthProvider):
         return f"{base_url}?{params}"
 
     async def get_app_access_token(self) -> str:
-        if self._app_access_token:
+        if self._app_access_token not in (None, ""):
             return self._app_access_token
 
         async with httpx.AsyncClient() as client:
@@ -903,8 +903,12 @@ class GitHubAuthProvider(BaseAuthProvider):
                 emails_raw = json_value_from_response(emails_resp)
                 if emails_resp.status_code == 200 and isinstance(emails_raw, list):
                     emails: list[AuthProviderPayload] = [item for item in list[object](emails_raw) if _is_payload(item)]
-                    primary = next((item for item in emails if item.get("primary")), None)
-                    verified = next((item for item in emails if item.get("verified")), None)
+                    primary = next(
+                        (item for item in emails if (flag := item.get("primary")) is not None and flag), None
+                    )
+                    verified = next(
+                        (item for item in emails if (flag := item.get("verified")) is not None and flag), None
+                    )
                     fallback: AuthProviderPayload = primary or verified or (emails[0] if emails else {})
                     email = self._payload_string(fallback, "email")
 

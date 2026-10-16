@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -62,7 +63,7 @@ def _user(
 
 
 def _tenant(**kwargs):
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
         "name": "Acme",
         "slug": "acme-abc",
@@ -143,6 +144,7 @@ async def test_toggle_company_pauses_when_disabling(monkeypatch):
     result = await admin_api.toggle_company(tenant.id, _user())
     assert result["is_active"] is False
     set_active.assert_awaited_once()
+    assert set_active.await_args is not None
     assert set_active.await_args.kwargs["is_active"] is False
 
 
@@ -401,6 +403,7 @@ async def test_list_users_org_admin_ignores_foreign_tenant_id(monkeypatch):
     rows = await users_api.list_users(tenant_id=str(uuid.uuid4()), current_user=org)
     assert len(rows) == 1
     listed.assert_awaited_once()
+    assert listed.await_args is not None
     assert listed.await_args.args[0] == tenant_id
 
 
@@ -610,7 +613,7 @@ async def test_update_me_clears_email_verified_and_checks_global_email(monkeypat
     identity = SimpleNamespace(id=uuid.uuid4(), email="old@a.com", username="ada", phone=None, email_verified=True)
     user = _user(role="member", tenant_id=uuid.uuid4(), email="old@a.com")
     user.identity = identity
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
     async def _update_identity(*, db_obj, obj_in):
         captured.update(obj_in)
@@ -863,7 +866,7 @@ async def test_seeder_unique_username_and_existing_platform_user(monkeypatch):
     name = await seeder._unique_username("admin@example.com")
     assert name.startswith("admin_")
 
-    identity = SimpleNamespace(id=uuid.uuid4(), username="admin")
+    identity: Any = SimpleNamespace(id=uuid.uuid4(), username="admin")
     existing = _user(role="platform_admin", is_active=False, tenant_id=uuid.uuid4())
     existing.identity = None
     monkeypatch.setattr(
@@ -1180,7 +1183,7 @@ async def test_upload_tenant_logo_happy_path(monkeypatch):
     buf = BytesIO()
     image.save(buf, format="PNG")
     payload = buf.getvalue()
-    upload = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=payload))
+    upload: Any = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=payload))
     storage = SimpleNamespace(write_bytes=AsyncMock())
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenants_api, "get_storage_backend", lambda: storage)
@@ -1212,10 +1215,11 @@ async def test_login_skips_inactive_memberships(monkeypatch):
     monkeypatch.setattr(auth_api.identity_dao, "get_by_login_identifier", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth_api, "verify_password_async", AsyncMock(return_value=True))
     monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive]))
+    background_tasks: Any = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
         await auth_api.login(
             auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
-            background_tasks=SimpleNamespace(),
+            background_tasks=background_tasks,
             request=Request(
                 {
                     "type": "http",
@@ -1236,9 +1240,10 @@ async def test_login_skips_inactive_memberships(monkeypatch):
 
     monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive, active]))
     monkeypatch.setattr(auth_api.tenant_dao, "get", AsyncMock(return_value=_tenant(id=active.tenant_id)))
+    active_background_tasks: Any = SimpleNamespace()
     result = await auth_api.login(
         auth_api.UserLogin(login_identifier="oa@acme.com", password="secret1"),
-        background_tasks=SimpleNamespace(),
+        background_tasks=active_background_tasks,
         request=Request(
             {
                 "type": "http",
@@ -1264,17 +1269,17 @@ async def test_logo_and_repair_error_branches(monkeypatch):
     org = _user(role="org_admin", tenant_id=tenant.id)
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
 
-    bad_type = SimpleNamespace(content_type="text/plain", read=AsyncMock(return_value=b"x"))
+    bad_type: Any = SimpleNamespace(content_type="text/plain", read=AsyncMock(return_value=b"x"))
     with pytest.raises(HTTPException) as exc:
         await tenants_api.upload_tenant_logo(tenant.id, bad_type, org)
     assert exc.value.status_code == 400
 
-    huge = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"x" * (1024 * 1024 + 1)))
+    huge: Any = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"x" * (1024 * 1024 + 1)))
     with pytest.raises(HTTPException) as exc:
         await tenants_api.upload_tenant_logo(tenant.id, huge, org)
     assert exc.value.status_code == 400
 
-    invalid = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"not-an-image"))
+    invalid: Any = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"not-an-image"))
     with pytest.raises(HTTPException) as exc:
         await tenants_api.upload_tenant_logo(tenant.id, invalid, org)
     assert exc.value.status_code == 400
@@ -1286,7 +1291,7 @@ async def test_logo_and_repair_error_branches(monkeypatch):
     image = Image.new("RGB", (32, 16), color="red")
     buf = BytesIO()
     image.save(buf, format="PNG")
-    rect = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=buf.getvalue()))
+    rect: Any = SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=buf.getvalue()))
     with pytest.raises(HTTPException) as exc:
         await tenants_api.upload_tenant_logo(tenant.id, rect, org)
     assert exc.value.status_code == 400
@@ -1783,6 +1788,7 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
     user.identity_id = identity.id
     monkeypatch.setattr(seeder.identity_dao, "get", AsyncMock(return_value=identity))
     rehydrated = await seeder._rehydrate_identity_hash(user)
+    assert rehydrated.identity is not None
     assert rehydrated.identity.password_hash == "h"
     assert seeder._has_login_credentials(rehydrated) is True
     assert seeder._has_login_credentials(_user()) is False

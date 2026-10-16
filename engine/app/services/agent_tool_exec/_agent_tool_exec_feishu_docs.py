@@ -138,7 +138,7 @@ async def _feishu_doc_search(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         )
     data = _response_mapping(response)
     error = agent_tools._check_feishu_err(data)
-    if error:
+    if error not in (None, ""):
         return error
 
     result = json_object_from(data.get("data"))
@@ -205,13 +205,13 @@ async def _feishu_wiki_list(agent_id: uuid.UUID, arguments: ToolArguments) -> st
         return "❌ Agent has no Feishu channel configured."
     tenant_token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
     node_info = await agent_tools._feishu_wiki_get_node(node_token, tenant_token)
-    if not node_info:
+    if node_info is None or not node_info:
         return (
             f"❌ 无法解析 Wiki 节点 `{node_token}`。\n请确认 token 来自飞书知识库 URL"
             + f"{_FW_LEFT_PAREN}https://xxx.feishu.cn/wiki/NodeToken{_FW_RIGHT_PAREN}{_FW_COMMA}而非普通文档 URL。"
         )
     space_id = tool_arg_str(node_info.get("space_id"))
-    if not space_id:
+    if space_id in (None, ""):
         return f"❌ 无法获取知识库 space_id{_FW_COMMA}请检查 token 是否正确。"
 
     pages = await _list_wiki_children(space_id, node_token, tenant_token, recursive, 0)
@@ -282,10 +282,10 @@ async def _feishu_doc_read(agent_id: uuid.UUID, arguments: ToolArguments) -> str
     read_token = document_token
     wiki_hint = ""
     node_info = await agent_tools._feishu_wiki_get_node(document_token, tenant_token)
-    obj_token = json_as_str(node_info.get("obj_token")) if node_info else None
-    if obj_token:
+    obj_token = json_as_str(node_info.get("obj_token")) if node_info is not None and node_info else None
+    if obj_token not in (None, ""):
         read_token = obj_token
-        if node_info and node_info.get("has_child"):
+        if node_info is not None and node_info and (has_child := node_info.get("has_child")) is not None and has_child:
             wiki_hint = (
                 f"\n\n> 💡 这是一个 Wiki 目录页{_FW_COMMA}它有多个子页面。"
                 + f"使用 `feishu_wiki_list` 工具{_FW_LEFT_PAREN}传入相同的 node_token{_FW_RIGHT_PAREN}可以查看所有子页面列表。"
@@ -294,7 +294,7 @@ async def _feishu_doc_read(agent_id: uuid.UUID, arguments: ToolArguments) -> str
     try:
         response = await _feishu_service().read_feishu_doc(app_id, app_secret, read_token)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         content = json_as_str_or(json_object_from(response.get("data")).get("content"))
         if not content:

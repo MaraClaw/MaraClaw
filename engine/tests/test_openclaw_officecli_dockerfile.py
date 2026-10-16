@@ -2,7 +2,7 @@ import json
 import re
 import shlex
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 DOCKERFILE: Final = REPO_ROOT / "Dockerfile.openclaw"
@@ -158,7 +158,7 @@ def _json_array(body: str) -> tuple[str, ...]:
         return ()
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         return ()
-    return tuple(values)
+    return tuple(cast(list[str], values))
 
 
 def _instruction_values(instructions: tuple[Instruction, ...], keyword: str) -> tuple[str, ...]:

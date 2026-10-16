@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, ClassVar, override
+from collections.abc import Mapping
+from typing import Any, ClassVar, cast, override
 
 import httpx
 
@@ -109,7 +110,7 @@ class OpenAIResponsesClient(LLMClient):
             # Handle system messages with dynamic_content
             if msg.role == "system" and msg.content is not None:
                 content = msg.content
-                if msg.dynamic_content:
+                if msg.dynamic_content not in (None, ""):
                     content = f"{content}\n\n{msg.dynamic_content}"
                 input_items.append(
                     {
@@ -125,13 +126,16 @@ class OpenAIResponsesClient(LLMClient):
                     }
                 )
 
-            if msg.role == "assistant" and msg.provider_items:
+            if msg.role == "assistant" and msg.provider_items is not None and msg.provider_items:
                 for raw_item in msg.provider_items:
                     item = dict(raw_item)
-                    if json_as_str(item.get("type")) == "reasoning" and not json_as_str(item.get("encrypted_content")):
+                    if json_as_str(item.get("type")) == "reasoning" and json_as_str(item.get("encrypted_content")) in (
+                        None,
+                        "",
+                    ):
                         continue
                     input_items.append(item)
-            if msg.role == "assistant" and msg.tool_calls:
+            if msg.role == "assistant" and msg.tool_calls is not None and msg.tool_calls:
                 for tc in msg.tool_calls:
                     fn = tc.get("function", {})
                     args = fn.get("arguments", "{}")
@@ -215,15 +219,16 @@ class OpenAIResponsesClient(LLMClient):
 
     def _convert_tools(self, tools: list[ToolDefinition] | None) -> list[dict[str, Any]] | None:
         """Convert OpenAI tool schema to Responses API function tool schema."""
-        if not tools:
+        if tools is None or not tools:
             return None
 
         converted: list[dict[str, Any]] = []
         for tool in tools:
-            if tool.get("type") != "function":
+            tool_data = cast(Mapping[str, object], tool)
+            if tool_data.get("type") != "function":
                 continue
             function = tool.get("function")
-            if function is None:
+            if tool_data.get("function") is None:
                 continue
             converted.append(
                 {
@@ -256,11 +261,11 @@ class OpenAIResponsesClient(LLMClient):
             payload["store"] = False
             payload["include"] = ["reasoning.encrypted_content"]
 
-        if max_tokens and not self.stateless:
+        if max_tokens not in (None, 0) and not self.stateless:
             payload["max_output_tokens"] = max_tokens
 
         converted_tools = self._convert_tools(tools)
-        if converted_tools:
+        if converted_tools is not None and converted_tools:
             payload["tools"] = converted_tools
             if self.supports_tool_choice:
                 payload["tool_choice"] = "auto"
@@ -293,7 +298,7 @@ class OpenAIResponsesClient(LLMClient):
                 if encrypted:
                     replay: dict[str, object] = {"type": "reasoning", "encrypted_content": encrypted}
                     rid = json_as_str(item.get("id"))
-                    if rid:
+                    if rid not in (None, ""):
                         replay["id"] = rid
                     provider_items.append(replay)
                 summary = item.get("summary")
@@ -333,7 +338,7 @@ class OpenAIResponsesClient(LLMClient):
         # Some Responses payloads include a pre-aggregated output_text field.
         # Use it as a fallback when output blocks are empty.
         output_text = json_as_str(data.get("output_text"))
-        if not content_parts and output_text:
+        if not content_parts and output_text not in (None, ""):
             content_parts.append(output_text)
 
         finish_reason = "tool_calls" if tool_calls else "stop"
@@ -353,16 +358,16 @@ class OpenAIResponsesClient(LLMClient):
         # OpenAI Responses often returns `"error": null` on success,
         # so we must only treat it as error when it's truthy.
         err_raw: object = data.get("error")
-        if err_raw:
+        if err_raw is not None and err_raw:
             if is_str_dict(err_raw):
                 err = json_object_from(err_raw)
                 msg = json_as_str(err.get("message")) or str(err_raw)
                 err_type = json_as_str(err.get("type"))
                 err_code = json_as_str(err.get("code"))
                 extra = []
-                if err_type:
+                if err_type not in (None, ""):
                     extra.append(f"type={err_type}")
-                if err_code:
+                if err_code not in (None, ""):
                     extra.append(f"code={err_code}")
                 suffix = f" ({', '.join(extra)})" if extra else ""
                 return f"{msg}{suffix}"
@@ -374,11 +379,11 @@ class OpenAIResponsesClient(LLMClient):
             incomplete = data.get("incomplete_details")
             rid = data.get("id")
             details: list[str] = [f"status={status}"]
-            if rid:
+            if rid is not None and rid:
                 details.append(f"id={rid}")
-            if last_error:
+            if last_error is not None and last_error:
                 details.append(f"last_error={last_error}")
-            if incomplete:
+            if incomplete is not None and incomplete:
                 details.append(f"incomplete_details={incomplete}")
             return "Responses API returned non-success status: " + "; ".join(details)
 
@@ -418,7 +423,7 @@ class OpenAIResponsesClient(LLMClient):
 
         data = json_object_from_response(response)
         api_error = self._extract_api_error(data)
-        if api_error:
+        if api_error not in (None, ""):
             ctx = self._build_error_log_context(data)
             logger.error(
                 "OpenAIResponses API error: %s | context=%s",
@@ -454,7 +459,7 @@ class OpenAIResponsesClient(LLMClient):
         )
         if on_chunk and response.content:
             await on_chunk(response.content)
-        if on_thinking and response.reasoning_content:
+        if on_thinking and response.reasoning_content not in (None, ""):
             await on_thinking(response.reasoning_content)
         return response
 

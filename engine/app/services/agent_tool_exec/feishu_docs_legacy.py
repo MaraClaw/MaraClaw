@@ -42,16 +42,16 @@ def _feishu_service() -> _FeishuDocsService:
 
 async def _resolve_docx_document_token(agent_id: uuid.UUID, parsed_url: dict[str, str]) -> str | None:
     doc_token = parsed_url.get("document_token")
-    if doc_token:
+    if doc_token not in (None, ""):
         return doc_token
     wiki_token = parsed_url.get("wiki_token")
-    if wiki_token:
+    if wiki_token not in (None, ""):
         app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
         if app_id and app_secret:
             tenant_token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
             node_info = await agent_tools._feishu_wiki_get_node(wiki_token, tenant_token)
-            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info else None
-            if obj_token:
+            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info is not None and node_info else None
+            if obj_token not in (None, ""):
                 return obj_token
     return None
 
@@ -60,7 +60,7 @@ async def _feishu_read_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> str
     url_value = arguments.get("url", "")
     url = url_value if isinstance(url_value, str) else ""
     doc_token = await agent_tools._resolve_docx_document_token(agent_id, agent_tools._parse_feishu_url(url))
-    if not doc_token:
+    if doc_token in (None, ""):
         return "Failed: Could not extract Document token from the URL."
 
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
@@ -70,7 +70,7 @@ async def _feishu_read_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> str
     try:
         response = await _feishu_service().read_feishu_doc(app_id, app_secret, doc_token)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         content = json_as_str_or(json_object_from(response.get("data")).get("content"))
         if not content:
@@ -93,7 +93,7 @@ async def _feishu_create_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         service = _feishu_service()
         response = await service.create_feishu_doc(app_id, app_secret, folder_token or None, title)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         doc_id = json_as_str_or(
             json_object_from(json_object_from(response.get("data")).get("document")).get("document_id")
@@ -113,7 +113,7 @@ async def _feishu_append_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     url_value = arguments.get("url", "")
     url = url_value if isinstance(url_value, str) else ""
     doc_token = await agent_tools._resolve_docx_document_token(agent_id, agent_tools._parse_feishu_url(url))
-    if not doc_token:
+    if doc_token in (None, ""):
         return "Failed: Could not extract Document token from the URL."
 
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
@@ -123,7 +123,7 @@ async def _feishu_append_doc(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     try:
         response = await _feishu_service().append_feishu_doc(app_id, app_secret, doc_token, content)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         return "OK: Content appended successfully to the end of the document."
     except Exception as error:

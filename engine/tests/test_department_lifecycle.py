@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from importlib import import_module
@@ -47,7 +47,7 @@ async def test_transfer_clears_local_assignment_before_tenant_change_and_invalid
     db.tenant_agents[target] = uuid4()
 
     @asynccontextmanager
-    async def context() -> AsyncIterator[DirectoryConnection]:
+    async def context() -> AsyncGenerator[DirectoryConnection]:
         yield db
 
     async def update(_self, *, db_obj, obj_in):
@@ -78,7 +78,7 @@ async def test_moved_user_precondition_rejects_update_before_assignment_delete(m
     db = DirectoryConnection(current)
 
     @asynccontextmanager
-    async def context() -> AsyncIterator[DirectoryConnection]:
+    async def context() -> AsyncGenerator[DirectoryConnection]:
         yield db
 
     monkeypatch.setattr(session, "optional_connection_ctx", context)

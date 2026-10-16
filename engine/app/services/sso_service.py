@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, tenant_dao, user_dao
@@ -111,7 +111,7 @@ class SSOService:
         return await user_dao.get_with_identity(member.user_id)
 
     def _get_identity_payload(self, identity_data: dict[str, Any] | None) -> dict[str, Any]:
-        if not identity_data:
+        if identity_data is None or not identity_data:
             return {}
         raw_data = identity_data.get("raw_data")
         if isinstance(raw_data, dict):
@@ -153,10 +153,10 @@ class SSOService:
         elif provider_type == "wecom":
             external_id = provider_user_id
 
-        open_id = (raw_open_id or "").strip() or None
-        union_id = (raw_union_id or "").strip() or None
-        external_id = (external_id or "").strip() or None
-        return union_id, open_id, external_id
+        open_id = cast(str, (raw_open_id or "").strip())
+        union_id = cast(str, (raw_union_id or "").strip())
+        normalized_external_id = cast(str, (external_id or "").strip())
+        return union_id or None, open_id or None, normalized_external_id or None
 
     def _identity_lookup_chain(
         self,
@@ -198,7 +198,7 @@ class SSOService:
 
     async def link_identity(
         self,
-        user_id: str,
+        user_id: uuid.UUID | str,
         provider_type: str,
         provider_user_id: str,
         identity_data: dict[str, Any] | None = None,
@@ -222,18 +222,21 @@ class SSOService:
 
         if member:
             fields: dict[str, Any] = {"user_id": uid}
-            if raw_external_id and not member.external_id:
+            if raw_external_id not in (None, "") and member.external_id in (None, ""):
                 fields["external_id"] = raw_external_id
-            if raw_open_id and not member.open_id:
+            if raw_open_id not in (None, "") and member.open_id in (None, ""):
                 fields["open_id"] = raw_open_id
             if (
-                raw_union_id
+                raw_union_id not in (None, "")
                 and member.unionid != raw_union_id
-                and (not member.unionid or member.unionid in {provider_user_id, member.open_id, member.external_id})
+                and (
+                    member.unionid in (None, "")
+                    or member.unionid in {provider_user_id, member.open_id, member.external_id}
+                )
             ):
                 fields["unionid"] = raw_union_id
 
-            if identity_data:
+            if identity_data is not None and identity_data:
                 incoming_name = identity_data.get("name") or identity_data.get("display_name")
                 is_placeholder_name = (
                     not member.name
@@ -245,27 +248,33 @@ class SSOService:
                     fields["name"] = incoming_name
 
                 incoming_email = identity_data.get("email") or identity_data.get("biz_mail")
-                if incoming_email and not member.email:
+                if incoming_email and member.email in (None, ""):
                     fields["email"] = incoming_email
 
                 incoming_avatar = identity_data.get("avatar")
-                if incoming_avatar and not member.avatar_url:
+                if incoming_avatar and member.avatar_url in (None, ""):
                     fields["avatar_url"] = incoming_avatar
 
                 incoming_mobile = identity_data.get("mobile")
-                if incoming_mobile and not member.phone:
+                if incoming_mobile and member.phone in (None, ""):
                     fields["phone"] = incoming_mobile
 
             updated = await org_member_dao.update_fields(member.id, fields)
             return updated or member
 
-        member_name = (identity_data.get("name") or identity_data.get("display_name")) if identity_data else None
+        member_name = (
+            (identity_data.get("name") or identity_data.get("display_name"))
+            if identity_data is not None and identity_data
+            else None
+        )
         return await org_member_dao.create(
             obj_in={
                 "name": member_name or f"{provider_type.capitalize()} User {provider_user_id[:8]}",
-                "email": (identity_data.get("email") or identity_data.get("biz_mail")) if identity_data else None,
-                "avatar_url": identity_data.get("avatar") if identity_data else None,
-                "phone": identity_data.get("mobile") if identity_data else None,
+                "email": (identity_data.get("email") or identity_data.get("biz_mail"))
+                if identity_data is not None and identity_data
+                else None,
+                "avatar_url": identity_data.get("avatar") if identity_data is not None and identity_data else None,
+                "phone": identity_data.get("mobile") if identity_data is not None and identity_data else None,
                 "provider_id": provider.id,
                 "user_id": uid,
                 "tenant_id": tenant_id,
@@ -278,7 +287,7 @@ class SSOService:
 
     async def unlink_identity(
         self,
-        user_id: str,
+        user_id: uuid.UUID | str,
         provider_type: str,
         tenant_id: str | None = None,
     ) -> bool:

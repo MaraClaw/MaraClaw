@@ -101,16 +101,16 @@ class LLMMessage:
         msg: OpenAIMessage = {"role": self.role}
 
         content = self.content
-        if self.role == "system" and self.dynamic_content:
+        if self.role == "system" and self.dynamic_content not in (None, ""):
             content = f"{content}\n\n{self.dynamic_content}"
 
         if content is not None:
             msg["content"] = content
-        if self.tool_calls:
+        if self.tool_calls is not None and self.tool_calls:
             msg["tool_calls"] = self.tool_calls
-        if self.tool_call_id:
+        if self.tool_call_id not in (None, ""):
             msg["tool_call_id"] = self.tool_call_id
-        if self.reasoning_content:
+        if self.reasoning_content not in (None, ""):
             msg["reasoning_content"] = self.reasoning_content
         return msg
 
@@ -165,7 +165,7 @@ class LLMMessage:
         content_blocks: list[AnthropicContentBlock] = []
 
         # Add reasoning/thinking content if present
-        if self.role == "assistant" and self.reasoning_content:
+        if self.role == "assistant" and self.reasoning_content not in (None, ""):
             content_blocks.append(
                 {
                     "type": "thinking",
@@ -174,7 +174,7 @@ class LLMMessage:
                 }
             )
 
-        if self.content:
+        if self.content is not None and self.content:
             if isinstance(self.content, list):
                 for part in self.content:
                     if part.get("type") == "text":
@@ -198,7 +198,7 @@ class LLMMessage:
                 content_blocks.append({"type": "text", "text": self.content})
 
         # Tool requests (from assistant to user)
-        if self.tool_calls:
+        if self.tool_calls is not None and self.tool_calls:
             for tc in self.tool_calls:
                 function_call = tc.get("function", LLMToolFunction())
                 args_raw = function_call.get("arguments", "{}")

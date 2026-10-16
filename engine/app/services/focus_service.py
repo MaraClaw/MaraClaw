@@ -99,7 +99,7 @@ async def upsert_focus_item(
         }
         if title is not None:
             updates["title"] = title
-        if metadata:
+        if metadata is not None and metadata:
             updates["item_metadata"] = {**(item.item_metadata or {}), **metadata}
         updated = await agent_focus_item_dao.update(db_obj=item, obj_in=updates)
         return _serialize_focus_item(updated)
@@ -163,7 +163,7 @@ async def render_focus_context(agent_id: uuid.UUID) -> str:
     if active:
         lines.append("In Progress")
         for i in active:
-            if i.get("title"):
+            if i.get("title") not in (None, ""):
                 lines.append(f"- {i['title']} ({i['key']}): {i['description']}")
             else:
                 lines.append(f"- {i['key']}: {i['description']}")
@@ -172,7 +172,7 @@ async def render_focus_context(agent_id: uuid.UUID) -> str:
             lines.append("")
         lines.append("System Focus")
         for i in system:
-            if i.get("title"):
+            if i.get("title") not in (None, ""):
                 lines.append(f"- {i['title']} ({i['key']}): {i['description']}")
             else:
                 lines.append(f"- {i['key']}: {i['description']}")
@@ -181,7 +181,7 @@ async def render_focus_context(agent_id: uuid.UUID) -> str:
             lines.append("")
         lines.append("Recently Completed")
         for i in completed:
-            if i.get("title"):
+            if i.get("title") not in (None, ""):
                 lines.append(f"- {i['title']} ({i['key']}): {i['description']}")
             else:
                 lines.append(f"- {i['key']}: {i['description']}")

@@ -2,6 +2,7 @@
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -35,7 +36,7 @@ def patch_daos(
     *,
     channel=None,
     browser_tool=None,
-    category_tools: list | None = None,
+    category_tools: list[Any] | None = None,
 ) -> None:
     monkeypatch.setattr(
         agentbay_config.channel_config_dao,

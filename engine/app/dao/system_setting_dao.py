@@ -26,7 +26,7 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
                 f"SELECT {self._select_list()} FROM system_settings WHERE key = %(key)s",
                 {"key": key},
             )
-            return SystemSettingRecord.from_row(row) if row else None
+            return SystemSettingRecord.from_row(row) if row is not None else None
 
     async def get_value(self, key: str, default: object = None) -> object:
         setting = await self.get_by_key(key)

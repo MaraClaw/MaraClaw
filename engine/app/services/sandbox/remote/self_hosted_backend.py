@@ -109,7 +109,7 @@ class SelfHostedBackend(BaseSandboxBackend):
         # Build payload based on the API endpoint
         # For shell exec: {"cmd": "..."}
         # For jupyter: {"code": "..."}
-        payload = {}
+        payload: dict[str, object] = {}
 
         # Detect endpoint type from URL and build appropriate payload
         url_lower = self.api_url.lower()
@@ -123,7 +123,7 @@ class SelfHostedBackend(BaseSandboxBackend):
                 cmd = f"node -e {code!r}"
             else:
                 cmd = code
-            payload: dict[str, object] = {"cmd": cmd}
+            payload = {"cmd": cmd}
         elif "jupyter" in url_lower:
             # aio-sandbox jupyter
             payload = {"code": code}

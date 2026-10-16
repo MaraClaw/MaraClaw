@@ -59,7 +59,7 @@ def native_reasoning_effort(provider: str, effort: ReasoningEffort) -> str:
     """Map a canonical effort onto the provider's native enum value."""
     key = normalize_provider(provider)
     table = _NATIVE_EFFORT.get(key)
-    if table:
+    if table is not None and table:
         return table[effort]
     return effort
 

@@ -20,7 +20,7 @@ async def add_thinking_reaction(
 
     try:
         token = await dingtalk_token_manager.get_token(app_key, app_secret)
-        if not token:
+        if token in (None, ""):
             logger.warning("[DingTalk Reaction] Failed to get access token")
             return False
 
@@ -75,7 +75,7 @@ async def recall_thinking_reaction(
 
         try:
             token = await dingtalk_token_manager.get_token(app_key, app_secret)
-            if not token:
+            if token in (None, ""):
                 continue
 
             async with httpx.AsyncClient(timeout=5) as client:

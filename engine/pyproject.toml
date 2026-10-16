@@ -5,7 +5,7 @@ description = "Backend workspace for the MaraClaw enterprise digital employee pl
 requires-python = ">=3.14.8"
 dependencies = [
     "alibabacloud-credentials>=1.0.12",
-    "fastapi[standard]>=0.143.1",
+    "fastapi[standard]>=0.143.2",
     "uvicorn[standard]>=0.54.0",
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
@@ -28,7 +28,7 @@ dependencies = [
     "python-docx>=1.2.0",
     "openpyxl>=3.1.5",
     "python-pptx>=1.0.2",
-    "lark-oapi>=1.7.4",
+    "lark-oapi>=1.7.5",
     "dingtalk-stream>=0.24.3",
     "wecom-aibot-sdk-python>=0.1.7",
     "pycryptodome>=4.0.0",
@@ -69,8 +69,8 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "httpx>=0.28.1",
-    "ruff>=0.17.0",
-    "ty>=0.0.87",
+    "ruff>=0.17.1",
+    "ty>=0.0.88",
     "basedpyright>=1.40.2",
 ]
 
@@ -211,6 +211,8 @@ exclude = [
     "agent_templates/**",
     "app/services/skill_creator_files/**",
     "app/services/linkup_skill_files/**",
+    "app/services/clawsec_skill_files/**",
+    "app/services/gogcli_skill_files/**",
 ]
 
 [tool.pytest.ini_options]

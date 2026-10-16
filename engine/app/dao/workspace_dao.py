@@ -53,7 +53,7 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
                 + "WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": revision_id, "agent_id": agent_id},
             )
-            return WorkspaceFileRevisionRecord.from_row(row) if row else None
+            return WorkspaceFileRevisionRecord.from_row(row) if row is not None else None
 
     async def list_for_path(
         self,
@@ -96,7 +96,7 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
                     "cutoff": cutoff,
                 },
             )
-            return WorkspaceFileRevisionRecord.from_row(row) if row else None
+            return WorkspaceFileRevisionRecord.from_row(row) if row is not None else None
 
 
 @final
@@ -112,7 +112,7 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
                 + "WHERE agent_id = %(agent_id)s AND path = %(path)s",
                 {"agent_id": agent_id, "path": path},
             )
-            return WorkspaceEditLockRecord.from_row(row) if row else None
+            return WorkspaceEditLockRecord.from_row(row) if row is not None else None
 
     async def list_active(self, agent_id: UUID, *, now: datetime) -> Sequence[WorkspaceEditLockRecord]:
         async with self.session() as db:

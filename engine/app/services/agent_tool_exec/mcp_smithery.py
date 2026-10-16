@@ -1,6 +1,7 @@
 """Smithery Connect execution and recovery helpers."""
 
 import uuid
+from typing import cast
 
 from app.core.json_types import JsonObject, json_as_str, json_loads_value
 
@@ -45,7 +46,7 @@ async def _execute_via_smithery_connect(
     namespace = _string_config_value(config, "smithery_namespace")
     connection_id = _string_config_value(config, "smithery_connection_id")
 
-    if not namespace or not connection_id:
+    if namespace in (None, "") or connection_id in (None, ""):
         # Fallback: try to get from Smithery settings
         try:
             from app.dao.tool_dao import tool_dao
@@ -61,7 +62,7 @@ async def _execute_via_smithery_connect(
         except Exception:
             _ = None
 
-    if not namespace or not connection_id:
+    if namespace in (None, "") or connection_id in (None, ""):
         return (
             "❌ Smithery Connect namespace/connection not configured. "
             + "Please set smithery_namespace and smithery_connection_id in the tool configuration."
@@ -97,7 +98,7 @@ async def _execute_via_smithery_connect(
             # Detect auth/connection failures and attempt auto-recovery
             if tool_resp.status_code in (401, 403, 404):
                 recovery_result = await _smithery_auto_recover(api_key, mcp_url, namespace, connection_id, agent_id)
-                if recovery_result:
+                if recovery_result not in (None, ""):
                     return recovery_result
                 # If recovery returned None, fall through to normal parsing
 
@@ -111,7 +112,7 @@ async def _execute_via_smithery_connect(
                 if line.startswith("data: "):
                     try:
                         parsed = json_loads_value(line[6:])
-                        data = parsed if isinstance(parsed, dict) else None
+                        data = cast(JsonObject, parsed) if isinstance(parsed, dict) else None
                         break
                     except json_mod.JSONDecodeError:
                         pass
@@ -122,20 +123,20 @@ async def _execute_via_smithery_connect(
                     parsed = json_loads_value(raw)
                     if not isinstance(parsed, dict):
                         return f"❌ Unexpected response from Smithery: {raw[:300]}"
-                    data = parsed
+                    data = cast(JsonObject, parsed)
                 except json_mod.JSONDecodeError:
                     return f"❌ Unexpected response from Smithery: {raw[:300]}"
 
             if "error" in data:
                 err = data["error"]
                 msg = json_as_str(err.get("message")) if isinstance(err, dict) else str(err)
-                if not msg:
+                if msg in (None, ""):
                     msg = str(err)
                 # Check if error indicates auth/connection issue
                 auth_keywords = ["auth", "unauthorized", "forbidden", "expired", "not found", "connection"]
                 if any(kw in msg.lower() for kw in auth_keywords):
                     recovery_result = await _smithery_auto_recover(api_key, mcp_url, namespace, connection_id, agent_id)
-                    if recovery_result:
+                    if recovery_result not in (None, ""):
                         return recovery_result
                 return f"❌ MCP tool error: {msg[:300]}"
 
@@ -187,7 +188,7 @@ async def _smithery_auto_recover(
             )
 
         auth_url = conn_result.get("auth_url")
-        if auth_url:
+        if auth_url not in (None, ""):
             # A newly-created Smithery connection is not usable until the user
             # completes OAuth. Keep the existing stored connection in place so
             # a still-valid old connection is not overwritten by an unauthenticated

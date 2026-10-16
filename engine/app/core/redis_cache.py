@@ -173,7 +173,7 @@ async def drop_version(version_key: str) -> None:
 
 
 async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None:
-    expire_for = ttl if ttl and ttl > 0 else 3600
+    expire_for = ttl if ttl not in (None, 0) and ttl > 0 else 3600
     try:
         client = await _client()
         _ = await client.incr(version_key)

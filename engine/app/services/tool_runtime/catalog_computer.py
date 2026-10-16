@@ -24,7 +24,7 @@ async def get_computer_os_type(
     """Return the configured computer OS, defaulting to AgentBay's Windows default."""
     try:
         config = await get_tool_config(agent_id, "agentbay_browser_navigate")
-        return config["os_type"] if config and "os_type" in config else "windows"
+        return config["os_type"] if config is not None and config and "os_type" in config else "windows"
     except Exception:
         return "windows"
 

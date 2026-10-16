@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 from app.core.logging import logger
 from app.dao import skill_dao
@@ -42,13 +42,7 @@ def load_linkup_manifest() -> dict[str, object]:
     from app.core.json_types import json_loads_object
 
     payload = json_loads_object(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        return {
-            "skills": [],
-            "default_skills": [],
-            "catalog_only_skills": [],
-        }
-    return dict[str, Any](payload)
+    return dict[str, object](payload)
 
 
 def _frontmatter_value(content: str, key: str, default: str) -> str:

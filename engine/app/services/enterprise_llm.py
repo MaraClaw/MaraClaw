@@ -42,7 +42,7 @@ def resolve_llm_pool_tenant_id(user: UserRecord, requested: str | None) -> uuid.
     Everyone else is locked to their own company. Members without a tenant
     get ``None`` so callers can return an empty list instead of every row.
     """
-    if requested:
+    if requested not in (None, ""):
         try:
             tid = uuid.UUID(requested)
         except ValueError:
@@ -60,7 +60,7 @@ def resolve_llm_pool_tenant_id(user: UserRecord, requested: str | None) -> uuid.
 def require_llm_pool_tenant_id(user: UserRecord, requested: str | None) -> uuid.UUID:
     """Resolve the company for a pool write. Platform admins must pass one."""
     assert_llm_pool_admin(user)
-    if is_platform_admin(user) and not requested:
+    if is_platform_admin(user) and requested in (None, ""):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Select a company to add a model",
@@ -147,14 +147,14 @@ def is_grok_api_key_row(model: LLMModelRecord | None) -> bool:
     """True for a company Grok/xAI console-key row (not SuperGrok OAuth)."""
     if model is None or not is_grok_family(model):
         return False
-    return (getattr(model, "auth_kind", None) or "api_key") != "grok_subscription"
+    return bool((getattr(model, "auth_kind", None) or "api_key") != "grok_subscription")
 
 
 def is_openai_api_key_row(model: LLMModelRecord | None) -> bool:
     """True for a company OpenAI console-key row (not ChatGPT OAuth)."""
     if model is None or not is_openai_family(model):
         return False
-    return (getattr(model, "auth_kind", None) or "api_key") != "chatgpt_subscription"
+    return bool((getattr(model, "auth_kind", None) or "api_key") != "chatgpt_subscription")
 
 
 def is_subscription_row(model: LLMModelRecord | None) -> bool:

@@ -84,7 +84,7 @@ async def upload_file(
     current_user: UserRecord = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Upload a file for chat context. Saves to agent workspace/uploads/ and returns extracted text."""
-    if not file.filename:
+    if file.filename in (None, ""):
         raise HTTPException(status_code=400, detail="No filename")
 
     try:

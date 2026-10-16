@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 from app.services import openclaw_inbox
 from app.services.openclaw_inbox import (
@@ -33,7 +34,7 @@ def test_write_skill_uses_engine_alias(tmp_path) -> None:
 
 def test_wake_urls_prefer_container_name() -> None:
     agent_id = uuid.uuid4()
-    agent = SimpleNamespace(id=agent_id, container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_port=19876)
     urls = wake_urls(agent)
     assert urls[0] == f"http://{openclaw_container_name(agent_id)}:18789/hooks/agent"
     assert urls[1] == "http://host.docker.internal:19876/hooks/agent"
@@ -44,7 +45,7 @@ async def test_wake_uses_http_hooks_when_reachable(tmp_path, monkeypatch) -> Non
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[object] = []
 
     class FakeDocker:
@@ -71,8 +72,8 @@ async def test_wake_uses_docker_exec_on_loopback(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[object] = []
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    execute_calls: list[tuple[str, list[str], bool]] = []
 
     class FakeDocker:
         def __init__(self) -> None:
@@ -110,7 +111,7 @@ async def test_wake_leaves_pending_when_hooks_refuse(tmp_path, monkeypatch) -> N
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
     class FakeDocker:
@@ -145,7 +146,7 @@ async def test_wake_starts_guest_gateway_then_hooks(tmp_path, monkeypatch) -> No
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
     started = False
 
@@ -195,7 +196,7 @@ async def test_wake_skips_in_guest_hooks_after_recent_econnrefused(tmp_path, mon
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
     class FakeDocker:
@@ -224,7 +225,7 @@ async def test_http_refuse_still_tries_in_guest_hooks(tmp_path, monkeypatch) -> 
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
     class FakeDocker:
@@ -255,7 +256,7 @@ async def test_skips_cli_when_inbox_already_reported(tmp_path, monkeypatch) -> N
     message_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
     class FakeDocker:
@@ -295,7 +296,7 @@ async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> N
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
     class FakeDocker:

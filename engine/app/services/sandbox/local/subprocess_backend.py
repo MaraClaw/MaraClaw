@@ -183,7 +183,7 @@ class SubprocessBackend(BaseSandboxBackend):
         if language == "python":
             return ["/workspace/.venv/bin/python", "-I", "-B", str(script_path)]
         executable = shutil.which("bash") if language == "bash" else shutil.which("node")
-        if not executable:
+        if executable in (None, ""):
             raise RuntimeError(f"{language} executable is unavailable")
         return (
             [executable, "--noprofile", "--norc", str(script_path)]
@@ -195,7 +195,7 @@ class SubprocessBackend(BaseSandboxBackend):
         if language == "python":
             return [self._host_venv_python(work_path), "-I", "-B", str(script_path)]
         executable = shutil.which("bash") if language == "bash" else shutil.which("node")
-        if not executable:
+        if executable in (None, ""):
             raise RuntimeError(f"{language} executable is unavailable")
         return (
             [executable, "--noprofile", "--norc", str(script_path)]
@@ -236,7 +236,7 @@ class SubprocessBackend(BaseSandboxBackend):
         venv_python = venv_path / "bin" / "python"
         if not venv_python.exists():
             uv_executable = shutil.which("uv")
-            if not uv_executable:
+            if uv_executable in (None, ""):
                 raise RuntimeError("uv executable is required to create the sandbox virtual environment")
             process = await asyncio.create_subprocess_exec(
                 uv_executable,
@@ -319,7 +319,7 @@ class SubprocessBackend(BaseSandboxBackend):
 
     def _build_bwrap_command(self, command: list[str], work_path: Path, venv_path: Path) -> list[str] | None:
         bwrap = shutil.which("bwrap")
-        if not bwrap:
+        if bwrap in (None, ""):
             if not SubprocessBackend._bwrap_missing_warned:
                 logger.warning(
                     "[Subprocess] bubblewrap (bwrap) is not available. "
@@ -467,7 +467,7 @@ class SubprocessBackend(BaseSandboxBackend):
 
         # Security check - pass allow_network config
         safety_error = _check_code_safety(language, code, self.config.allow_network)
-        if safety_error:
+        if safety_error not in (None, ""):
             return ExecutionResult(
                 success=False,
                 stdout="",
@@ -478,7 +478,9 @@ class SubprocessBackend(BaseSandboxBackend):
             )
 
         # Determine work directory and ensure it cannot escape its own root.
-        work_path = await asyncio.to_thread(Path(work_dir).resolve if work_dir else (Path.cwd() / "workspace").resolve)
+        work_path = await asyncio.to_thread(
+            Path(work_dir).resolve if work_dir not in (None, "") else (Path.cwd() / "workspace").resolve
+        )
         try:
             work_path = resolve_path_within_root(work_path, "", label="work_dir")
         except WorkspacePathError as exc:
@@ -512,7 +514,7 @@ class SubprocessBackend(BaseSandboxBackend):
             ext = ".py"
         elif language == "bash":
             ext = ".sh"
-        elif language == "node":
+        else:
             ext = ".js"
 
         # Write code to temp file
@@ -525,7 +527,7 @@ class SubprocessBackend(BaseSandboxBackend):
 
             sandbox_command = self._build_command(language, f"/workspace/{script_path.name}")
             bwrap_command = self._build_bwrap_command(sandbox_command, work_path, venv_path)
-            if not bwrap_command:
+            if bwrap_command is None or not bwrap_command:
                 if not self.config.allow_unsafe_fallback_when_bwrap_missing:
                     duration_ms = int((time.time() - start_time) * 1000)
                     return ExecutionResult(

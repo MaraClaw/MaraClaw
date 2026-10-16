@@ -11,7 +11,7 @@ import threading
 import uuid
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast, override
 
 import httpx
 
@@ -130,7 +130,7 @@ async def _get_media_download_url(access_token: str, download_code: str, robot_c
             )
             data = json_object_from_response(resp)
             url = json_as_str(data.get("downloadUrl"))
-            if url:
+            if url not in (None, ""):
                 return url
             logger.error(f"[DingTalk] Failed to get download URL: {data}")
             return None
@@ -157,11 +157,11 @@ async def download_dingtalk_media(app_key: str, app_secret: str, download_code: 
     Steps: get access_token -> get download URL -> download file bytes.
     """
     access_token = await dingtalk_token_manager.get_token(app_key, app_secret)
-    if not access_token:
+    if access_token in (None, ""):
         return None
 
     download_url = await _get_media_download_url(access_token, download_code, app_key)
-    if not download_url:
+    if download_url in (None, ""):
         return None
 
     return await _download_file(download_url)
@@ -200,7 +200,7 @@ async def _process_media_message(
             return "[User sent an image, but it could not be downloaded]", None, None
 
         file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
-        if not file_bytes:
+        if file_bytes in (None, b""):
             return "[User sent an image, but download failed]", None, None
 
         filename = f"dingtalk_img_{uuid.uuid4().hex[:8]}.jpg"
@@ -230,7 +230,7 @@ async def _process_media_message(
                     text_parts.append(item["text"])
                 elif "downloadCode" in item:
                     file_bytes = await download_dingtalk_media(app_key, app_secret, item["downloadCode"])
-                    if file_bytes:
+                    if file_bytes not in (None, b""):
                         filename = f"dingtalk_richimg_{uuid.uuid4().hex[:8]}.jpg"
                         _, workspace_path, _ = await store_agent_upload(
                             agent_id,
@@ -266,7 +266,7 @@ async def _process_media_message(
         download_code = content.get("downloadCode", "")
         if download_code:
             file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
-            if file_bytes:
+            if file_bytes not in (None, b""):
                 duration = content.get("duration", "unknown")
                 filename = f"dingtalk_audio_{uuid.uuid4().hex[:8]}.amr"
                 _, workspace_path, _ = await store_agent_upload(agent_id, filename, file_bytes)
@@ -283,7 +283,7 @@ async def _process_media_message(
         download_code = content.get("downloadCode", "")
         if download_code:
             file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
-            if file_bytes:
+            if file_bytes not in (None, b""):
                 duration = content.get("duration", "unknown")
                 filename = f"dingtalk_video_{uuid.uuid4().hex[:8]}.mp4"
                 _, workspace_path, _ = await store_agent_upload(agent_id, filename, file_bytes)
@@ -301,7 +301,7 @@ async def _process_media_message(
         original_filename = content.get("fileName", "unknown_file")
         if download_code:
             file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
-            if file_bytes:
+            if file_bytes not in (None, b""):
                 safe_name = f"dingtalk_{uuid.uuid4().hex[:8]}_{original_filename}"
                 _, workspace_path, _ = await store_agent_upload(agent_id, safe_name, file_bytes)
                 logger.info(
@@ -339,7 +339,7 @@ async def _upload_dingtalk_media(
         mediaId string on success, None on failure.
     """
     access_token = await dingtalk_token_manager.get_token(app_key, app_secret)
-    if not access_token:
+    if access_token in (None, ""):
         return None
 
     file_p = Path(file_path)
@@ -359,7 +359,7 @@ async def _upload_dingtalk_media(
             data = json_object_from_response(resp)
             # Legacy API returns media_id (snake_case), new API returns mediaId
             media_id = json_as_str(data.get("media_id")) or json_as_str(data.get("mediaId"))
-            if media_id and data.get("errcode", 0) == 0:
+            if media_id not in (None, "") and data.get("errcode", 0) == 0:
                 logger.info(f"[DingTalk] Uploaded {media_type} '{file_p.name}' -> mediaId={media_id[:20]}...")
                 return media_id
             logger.error(f"[DingTalk] Upload failed: {data}")
@@ -393,7 +393,7 @@ async def _send_dingtalk_media_message(
         True on success, False on failure.
     """
     access_token = await dingtalk_token_manager.get_token(app_key, app_secret)
-    if not access_token:
+    if access_token in (None, ""):
         return False
 
     headers = {"x-acs-dingtalk-access-token": access_token}
@@ -457,7 +457,7 @@ async def _send_dingtalk_media_message(
                 )
 
             data = json_object_from_response(resp)
-            if resp.status_code >= 400 or data.get("errcode"):
+            if resp.status_code >= 400 or ((errcode := data.get("errcode")) is not None and errcode):
                 logger.error(f"[DingTalk] Send media failed: {data}")
                 return False
 
@@ -571,10 +571,11 @@ class DingTalkStreamManager:
             try:
                 # Parse the raw data
                 incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
-                if isinstance(message.data, dict):
-                    parsed_data = json_object_from(message.data)
-                elif isinstance(message.data, (str, bytes, bytearray)):
-                    loaded = json_loads_value(message.data)
+                raw_data = cast(object, message.data)
+                if isinstance(raw_data, dict):
+                    parsed_data = json_object_from(raw_data)
+                elif isinstance(raw_data, (str, bytes, bytearray)):
+                    loaded = json_loads_value(raw_data)
                     if not isinstance(loaded, dict):
                         raise ValueError("DingTalk callback payload must be an object")
                     parsed_data = json_object_from(loaded)
@@ -667,6 +668,7 @@ class DingTalkStreamManager:
         class MaraClawChatbotHandler(dingtalk_stream.ChatbotHandler):
             """Dispatches DingTalk stream messages to the MaraClaw LLM pipeline."""
 
+            @override
             async def raw_process(
                 self, callback_message: dingtalk_stream.CallbackMessage
             ) -> dingtalk_stream.AckMessage:
@@ -804,7 +806,7 @@ class DingTalkStreamManager:
         logger.info(f"[DingTalk Stream] Found {len(configs)} configured DingTalk channel(s)")
 
         for config in configs:
-            if config.app_id and config.app_secret:
+            if config.app_id not in (None, "") and config.app_secret not in (None, ""):
                 await self.start_client(
                     config.agent_id,
                     config.app_id,

@@ -7,9 +7,10 @@ No callback URL or domain verification needed.
 import asyncio
 import inspect
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC
-from typing import TypeIs
+from typing import TypeIs, cast
 from unittest.mock import patch
 
 from app.core.json_types import JsonObject, JsonValue
@@ -55,11 +56,14 @@ def _disable_wecom_sdk_proxy() -> None:
 
     original_connect = sdk_ws.websockets.connect
 
-    def connect_no_proxy(uri: str, *args: object, **kwargs: object) -> object:
-        _ = kwargs.setdefault("proxy", None)
-        return original_connect(uri, *args, **kwargs)
+    def without_proxy[**P, R](original: Callable[P, R]) -> Callable[P, R]:
+        def connect_no_proxy(*args: P.args, **kwargs: P.kwargs) -> R:
+            _ = cast(dict[str, object], kwargs).setdefault("proxy", None)
+            return original(*args, **kwargs)
 
-    _ = patch.object(sdk_ws.websockets, "connect", connect_no_proxy).start()
+        return connect_no_proxy
+
+    _ = patch.object(sdk_ws.websockets, "connect", without_proxy(original_connect)).start()
     _WECOM_SDK_PROXY_DISABLED = True
 
 
@@ -100,7 +104,7 @@ def _extract_wecom_sender_id(body: JsonObject) -> str:
     sender = body.get("from")
     if isinstance(sender, dict):
         sender_id = sender.get("user_id") or sender.get("userid")
-        if sender_id:
+        if sender_id is not None and sender_id:
             return str(sender_id).strip()
     return str(body.get("from_userid") or body.get("userid") or "").strip()
 

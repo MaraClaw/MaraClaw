@@ -209,7 +209,6 @@ def get_skill_creator_files() -> list[SkillCreatorFile]:
 
     for flat_name, original_path in _FILE_MAP.items():
         content = _load_file(flat_name)
-        if content is not None:  # include even empty __init__.py
-            files.append({"path": original_path, "content": content})
+        files.append({"path": original_path, "content": content})  # include even empty __init__.py
 
     return files

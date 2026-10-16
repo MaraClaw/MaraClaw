@@ -54,7 +54,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE email = %(email)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
                 {"email": email, "tenant_id": tenant_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_unbound_by_phone(self, phone: str, tenant_id: UUID) -> OrgMemberRecord | None:
         async with self.session() as db:
@@ -63,7 +63,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE phone = %(phone)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
                 {"phone": phone, "tenant_id": tenant_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def get_by_user_and_provider(
         self,
@@ -78,7 +78,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "AND provider_id = %(provider_id)s LIMIT 1",
                 {"user_id": user_id, "tenant_id": tenant_id, "provider_id": provider_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_unbound_by_email_and_provider(
         self,
@@ -93,7 +93,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
                 {"email": email, "tenant_id": tenant_id, "provider_id": provider_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_unbound_by_phone_and_provider(
         self,
@@ -108,7 +108,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
                 {"phone": phone, "tenant_id": tenant_id, "provider_id": provider_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def get_by_user_and_tenant_and_provider(
         self,
@@ -148,7 +148,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "LIMIT 1",
                 {"provider_id": provider_id, "value": value},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def list_by_user_and_provider(
         self,
@@ -170,7 +170,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE provider_id = %(provider_id)s AND unionid = %(unionid)s LIMIT 1",
                 {"provider_id": provider_id, "unionid": unionid},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_by_external_or_open_id(
         self,
@@ -182,18 +182,18 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         unionid: str | None = None,
     ) -> OrgMemberRecord | None:
         """Fallback lookup when unionid is missing or shell records need attachment."""
-        if not external_id and not open_id:
+        if external_id in (None, "") and open_id in (None, ""):
             return None
         params: dict[str, Any] = {"provider_id": provider_id}
         or_parts: list[str] = []
-        if external_id:
+        if external_id not in (None, ""):
             or_parts.append("external_id = %(external_id)s")
             params["external_id"] = external_id
-        if open_id:
+        if open_id not in (None, ""):
             or_parts.append("open_id = %(open_id)s")
             params["open_id"] = open_id
         unionid_sql = ""
-        if require_unionid_compatible and unionid:
+        if require_unionid_compatible and unionid not in (None, ""):
             unionid_sql = " AND (unionid IS NULL OR unionid = '' OR unionid = %(unionid)s)"
             params["unionid"] = unionid
         async with self.session() as db:
@@ -203,7 +203,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + f"{unionid_sql} LIMIT 1",
                 params,
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def get_by_provider_and_open_id(self, provider_id: UUID, open_id: str) -> OrgMemberRecord | None:
         async with self.session() as db:
@@ -212,7 +212,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE provider_id = %(provider_id)s AND open_id = %(open_id)s LIMIT 1",
                 {"provider_id": provider_id, "open_id": open_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def get_by_provider_and_external_id(self, provider_id: UUID, external_id: str) -> OrgMemberRecord | None:
         async with self.session() as db:
@@ -221,7 +221,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE provider_id = %(provider_id)s AND external_id = %(external_id)s LIMIT 1",
                 {"provider_id": provider_id, "external_id": external_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_active_by_any_ids(
         self,
@@ -237,13 +237,13 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         """
         or_parts: list[str] = []
         params: dict[str, Any] = {"provider_id": provider_id}
-        if unionid:
+        if unionid not in (None, ""):
             or_parts.append("unionid = %(unionid)s")
             params["unionid"] = unionid
-        if open_id:
+        if open_id not in (None, ""):
             or_parts.append("open_id = %(open_id)s")
             params["open_id"] = open_id
-        if external_id:
+        if external_id not in (None, ""):
             or_parts.append("external_id = %(external_id)s")
             params["external_id"] = external_id
         if not or_parts:
@@ -257,7 +257,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "LIMIT 1",
                 params,
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def get_active_for_user_and_provider(
         self,
@@ -278,7 +278,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + f"AND status = 'active'{tenant_sql} LIMIT 1",
                 params,
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def find_related_to_agent_by_name(self, agent_id: UUID, name: str) -> OrgMemberRecord | None:
         """Find an org member linked to an agent via agent_relationships by display name."""
@@ -289,7 +289,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE r.agent_id = %(agent_id)s AND m.name = %(name)s LIMIT 1",
                 {"agent_id": agent_id, "name": name},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def list_active_with_user_for_tenant(self, tenant_id: UUID) -> Sequence[OrgMemberRecord]:
         async with self.session() as db:
@@ -342,7 +342,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s AND status = 'active' LIMIT 1",
                 {"user_id": user_id, "tenant_id": tenant_id},
             )
-            return OrgMemberRecord.from_row(row) if row else None
+            return OrgMemberRecord.from_row(row) if row is not None else None
 
     async def count_active(
         self,
@@ -387,7 +387,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         if department_ids is not None:
             clauses.append("m.department_id = ANY(%(department_ids)s)")
             params["department_ids"] = list(department_ids)
-        if search:
+        if search not in (None, ""):
             params["search"] = f"%{search}%"
             clauses.append(
                 "(m.name ILIKE %(search)s OR m.name_translit_full ILIKE %(search)s "
@@ -422,7 +422,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         """Active org members for agent permission candidate picker."""
         params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
         search_sql = ""
-        if search:
+        if search not in (None, ""):
             params["search"] = f"%{search}%"
             search_sql = (
                 " AND ("
@@ -454,7 +454,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         """
         params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
         search_sql = ""
-        if search:
+        if search not in (None, ""):
             params["search"] = f"%{search}%"
             search_sql = (
                 " AND ("

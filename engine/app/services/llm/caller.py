@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 from app.core.json_types import str_findall
 from app.core.logging import logger
@@ -87,8 +88,9 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
         fn = tc.get("function") or {}
         tool_name = fn.get("name") or ""
         raw_args = fn.get("arguments", "{}")
+        args_are_container = isinstance(raw_args, (dict, list))
 
-        if raw_args is None or raw_args == "":
+        if raw_args in (None, ""):
             args_str = "{}"
         elif isinstance(raw_args, str):
             try:
@@ -108,7 +110,7 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
                     + "Do not explain; only retry with a valid tool call."
                 )
             args_str = raw_args
-        elif isinstance(raw_args, (dict, list)):
+        elif args_are_container:
             args_str = json.dumps(raw_args, ensure_ascii=False)
         else:
             return None, (
@@ -217,13 +219,16 @@ async def _get_agent_config(agent_id: uuid.UUID | None, agent: AgentRecord | Non
                 if agent is None:
                     max_rounds = fresh.max_tool_rounds or 50
         if tokens_agent:
-            if tokens_agent.max_tokens_per_day and tokens_agent.tokens_used_today >= tokens_agent.max_tokens_per_day:
+            if (
+                tokens_agent.max_tokens_per_day not in (None, 0)
+                and tokens_agent.tokens_used_today >= tokens_agent.max_tokens_per_day
+            ):
                 return (
                     max_rounds,
                     f"⚠️ Daily token usage has reached the limit ({tokens_agent.tokens_used_today:,}/{tokens_agent.max_tokens_per_day:,}). Please try again tomorrow or ask admin to increase the limit.",
                 )
             if (
-                tokens_agent.max_tokens_per_month
+                tokens_agent.max_tokens_per_month not in (None, 0)
                 and tokens_agent.tokens_used_month >= tokens_agent.max_tokens_per_month
             ):
                 return (
@@ -268,7 +273,7 @@ def _convert_messages_for_vision(api_messages: list[LLMMessage], supports_vision
     if supports_vision:
         # Vision format: convert image markers in strings to OpenAI Vision API list format
         for i, msg in enumerate(new_messages):
-            if msg.role != "user" or not msg.content or not isinstance(msg.content, str):
+            if msg.role != "user" or msg.content is None or not msg.content or not isinstance(msg.content, str):
                 continue
 
             content_str = msg.content
@@ -323,7 +328,7 @@ def _check_tool_requires_args(tool_name: str, args: ToolPayload) -> tuple[bool, 
     return True, ""
 
 
-def _allowed_tool_names(tools_for_llm: list[ToolDefinition] | None) -> set[str]:
+def _allowed_tool_names(tools_for_llm: Sequence[Mapping[str, object]] | None) -> set[str]:
     names: set[str] = set()
     for tool in tools_for_llm or []:
         function = tool.get("function")
@@ -359,14 +364,16 @@ async def _process_tool_call(
     fn = tc.get("function") or {}
     tool_name = fn.get("name") or ""
     raw_args = fn.get("arguments", "{}")
+    args_are_mapping = isinstance(raw_args, dict)
     logger.info(f"[LLM] Calling tool: {tool_name}({json.dumps(raw_args, ensure_ascii=False)})")
 
     if isinstance(raw_args, str):
         try:
-            args: ToolPayload = json.loads(raw_args) if raw_args else {}
+            # Provider JSON is not guaranteed to be an object; it is forwarded unchanged.
+            args: ToolPayload = cast(ToolPayload, json.loads(raw_args)) if raw_args else {}
         except json.JSONDecodeError:
             args = {}
-    elif isinstance(raw_args, dict):
+    elif args_are_mapping:
         args = raw_args
     else:
         args = {}
@@ -403,7 +410,7 @@ async def _process_tool_call(
         if side_effect_guard is not None:
             side_effect_guard()
         try:
-            callback_data = {
+            callback_data: ToolCallbackData = {
                 "name": tool_name,
                 "call_id": tc.get("id", ""),
                 "args": args,
@@ -441,7 +448,7 @@ async def _process_tool_call(
             from app.services.vision_inject import try_inject_screenshot_vision
 
             vision_content = try_inject_screenshot_vision(tool_name, str(result))
-            if vision_content:
+            if vision_content is not None and vision_content:
                 tool_content = rebuild_llm_content_parts(vision_content)
                 logger.info(f"[LLM] Injected screenshot vision for {tool_name}")
         except Exception as e:
@@ -452,7 +459,7 @@ async def _process_tool_call(
         if side_effect_guard is not None:
             side_effect_guard()
         try:
-            callback_data: ToolCallbackData = {
+            callback_data = {
                 "name": tool_name,
                 "call_id": tc.get("id", ""),
                 "args": args,
@@ -505,15 +512,15 @@ async def call_llm(
     """Call LLM via unified client with function-calling tool loop."""
     # Get agent config for tool rounds
     _max_tool_rounds, _token_limit_msg = await _get_agent_config(agent_id, agent=turn.agent if turn else None)
-    if _token_limit_msg:
+    if _token_limit_msg not in (None, ""):
         return _token_limit_msg
-    if max_tool_rounds_override and max_tool_rounds_override < _max_tool_rounds:
+    if max_tool_rounds_override not in (None, 0) and max_tool_rounds_override < _max_tool_rounds:
         _max_tool_rounds = max_tool_rounds_override
 
     # Get user's name for personalized context
-    if current_user_name_override:
+    if current_user_name_override not in (None, ""):
         _user_name = current_user_name_override
-    elif turn and turn.user_name:
+    elif turn and turn.user_name not in (None, ""):
         _user_name = turn.user_name
     elif turn and turn.user is not None:
         _user_name = getattr(turn.user, "display_name", None) or getattr(turn.user, "username", None)
@@ -547,7 +554,7 @@ async def call_llm(
     static_prompt, dynamic_prompt = await build_agent_context(
         agent_id, agent_name, role_description, current_user_name=_user_name
     )
-    if system_prompt_suffix:
+    if system_prompt_suffix not in (None, ""):
         dynamic_prompt += system_prompt_suffix
 
     # Load tools dynamically from DB. `skip_tools=True` is set by the WS
@@ -618,7 +625,7 @@ async def call_llm(
             await record_token_usage(agent_id, _unsaved_usage)
             _unsaved_usage = TokenUsage()
             _, _token_limit_msg = await _get_agent_config(agent_id)
-            if _token_limit_msg:
+            if _token_limit_msg not in (None, ""):
                 logger.warning(f"[LLM] Token limit exceeded mid-loop: {_token_limit_msg}")
                 await client.close()
                 return _token_limit_msg
@@ -673,7 +680,7 @@ async def call_llm(
         # Execute tool calls
         logger.info(f"[LLM] Round {round_i + 1}: {len(response.tool_calls)} tool call(s)")
         sanitized_tool_calls, retry_instruction = _sanitize_tool_calls_for_context(response.tool_calls)
-        if retry_instruction:
+        if retry_instruction not in (None, ""):
             api_messages.append(LLMMessage(role="user", content=retry_instruction))
             continue
 
@@ -923,7 +930,7 @@ async def call_agent_llm(
 
     # Build conversation messages
     messages: list[OpenAIMessage] = []
-    if history:
+    if history is not None and history:
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": user_text})
 
@@ -1048,7 +1055,7 @@ async def call_agent_llm_with_tools(
                     await record_token_usage(agent_id, _unsaved_usage)
                     _unsaved_usage = TokenUsage()
                     _, _token_limit_msg = await _get_agent_config(agent_id)
-                    if _token_limit_msg:
+                    if _token_limit_msg not in (None, ""):
                         logger.warning(f"[call_agent_llm_with_tools] Token limit exceeded mid-loop: {_token_limit_msg}")
                         await client.close()
                         return _token_limit_msg, False, tool_executed
@@ -1082,7 +1089,7 @@ async def call_agent_llm_with_tools(
 
                 # Execute tool calls
                 sanitized_tool_calls, retry_instruction = _sanitize_tool_calls_for_context(response.tool_calls)
-                if retry_instruction:
+                if retry_instruction not in (None, ""):
                     api_messages.append(LLMMessage(role="user", content=retry_instruction))
                     continue
 

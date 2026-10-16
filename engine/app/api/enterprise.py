@@ -129,7 +129,7 @@ class LLMTestRequest(BaseModel):
 
 
 async def _load_llm_test_api_key(model_id: str | None) -> str | None:
-    if not model_id:
+    if model_id in (None, ""):
         return None
     try:
         mid = uuid.UUID(model_id)
@@ -149,7 +149,7 @@ async def probe_llm_model(
 
     assert_llm_pool_admin(current_user)
     existing = None
-    if data.model_id:
+    if data.model_id not in (None, ""):
         try:
             existing = await llm_model_dao.get(uuid.UUID(data.model_id))
         except ValueError:
@@ -165,12 +165,12 @@ async def probe_llm_model(
                 existing = await ensure_chatgpt_token(existing)
             else:
                 existing = await ensure_fresh_access_token(existing)
-    api_key = data.api_key if data.api_key and not data.api_key.startswith("****") else None
-    if not api_key and existing is not None:
+    api_key = data.api_key if data.api_key not in (None, "") and not data.api_key.startswith("****") else None
+    if api_key in (None, "") and existing is not None:
         api_key = get_model_api_key(existing)
-    elif not api_key and data.model_id:
+    elif api_key in (None, "") and data.model_id not in (None, ""):
         api_key = await _load_llm_test_api_key(data.model_id)
-    if not api_key:
+    if api_key in (None, ""):
         return {"success": False, "latency_ms": 0, "error": "API Key is required"}
 
     start = time.time()
@@ -478,16 +478,21 @@ async def update_llm_model(
     assert_can_manage_model(current_user, model)
 
     updates: dict[str, Any] = {}
-    if data.provider:
+    if data.provider not in (None, ""):
         updates["provider"] = data.provider
-    if data.model:
+    if data.model not in (None, ""):
         updates["model"] = data.model
     if data.label is not None:
         updates["label"] = data.label
     subscription = getattr(model, "auth_kind", "api_key") in {"grok_subscription", "chatgpt_subscription"}
     if hasattr(data, "base_url") and data.base_url is not None and not subscription:
         updates["base_url"] = data.base_url
-    if not subscription and data.api_key and data.api_key.strip() and not data.api_key.startswith("****"):
+    if (
+        not subscription
+        and data.api_key not in (None, "")
+        and data.api_key.strip()
+        and not data.api_key.startswith("****")
+    ):
         updates["api_key_encrypted"] = encrypt_data(data.api_key.strip(), settings.SECRET_KEY)
     if data.temperature is not None:
         updates["temperature"] = data.temperature
@@ -573,7 +578,7 @@ async def list_approvals(
 ) -> list[ApprovalRequestOut]:
     """List approval requests scoped to a tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
-    tenant_uuid = uuid.UUID(tid) if tid else None
+    tenant_uuid = uuid.UUID(tid) if tid not in (None, "") else None
     creator_id = None if current_user.role == "platform_admin" else current_user.id
 
     approvals = await approval_request_dao.list_scoped(
@@ -617,7 +622,7 @@ async def list_audit_logs(
     _ = current_user
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     logs = await audit_log_dao.list_scoped(
-        tenant_id=uuid.UUID(tid) if tid else None,
+        tenant_id=uuid.UUID(tid) if tid not in (None, "") else None,
         agent_id=agent_id,
         limit=limit,
     )
@@ -630,15 +635,23 @@ async def list_audit_logs(
 @router.get("/stats")
 async def get_enterprise_stats(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)):
     """Get enterprise dashboard statistics, optionally scoped to a tenant."""
-    if tenant_id and current_user.role != "platform_admin" and str(current_user.tenant_id) != tenant_id:
+    if (
+        tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(current_user.tenant_id) != tenant_id
+    ):
         raise HTTPException(status_code=403, detail="Cannot access other tenant's stats")
 
     if current_user.role != "platform_admin":
         if current_user.tenant_id is None:
             raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
         tid: uuid.UUID | None = current_user.tenant_id
-    elif tenant_id:
-        tid = uuid.UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id
+    elif tenant_id not in (None, ""):
+
+        def tenant_uuid(value: str | uuid.UUID) -> uuid.UUID:
+            return uuid.UUID(value) if isinstance(value, str) else value
+
+        tid = tenant_uuid(tenant_id)
     else:
         tid = current_user.tenant_id
 
@@ -861,7 +874,7 @@ async def update_system_setting(
     else:
         setting = await system_setting_dao.create(obj_in={"key": key, "value": data.value})
 
-    if key == "platform" and data.value.get("public_base_url"):
+    if key == "platform" and (public_base_url := data.value.get("public_base_url")) is not None and public_base_url:
         await _regenerate_all_sso_domains()
 
     return {
@@ -883,7 +896,7 @@ async def _sync_tenant_sso_state(tenant_id: uuid.UUID) -> None:
 
     updates: dict[str, Any] = {"sso_enabled": active_sso_count > 0}
 
-    if active_sso_count > 0 and not tenant.sso_domain:
+    if active_sso_count > 0 and tenant.sso_domain in (None, ""):
         sso_base = await platform_service.get_tenant_sso_base_url(tenant)
         host = sso_base.split("://")[-1].split(":")[0].split("/")[0]
         is_ip = platform_service.is_ip_address(host)
@@ -926,7 +939,11 @@ async def list_identity_providers(
     tenant_id: str | None = None, global_only: bool = False, current_user: UserRecord = Depends(get_current_user)
 ):
     """List identity providers configured for the tenant."""
-    if tenant_id and not _is_platform_admin_user(current_user) and str(current_user.tenant_id) != tenant_id:
+    if (
+        tenant_id not in (None, "")
+        and not _is_platform_admin_user(current_user)
+        and str(current_user.tenant_id) != tenant_id
+    ):
         raise HTTPException(status_code=403, detail="Cannot access other tenant's providers")
 
     if global_only:
@@ -935,9 +952,9 @@ async def list_identity_providers(
         providers = await identity_provider_dao.list_global()
     else:
         tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
-        if not tid and not _is_platform_admin_user(current_user):
+        if tid in (None, "") and not _is_platform_admin_user(current_user):
             raise HTTPException(status_code=400, detail="tenant_id is required for identity providers")
-        if tid:
+        if tid not in (None, ""):
             providers = await identity_provider_dao.list_for_tenant(uuid.UUID(tid))
         else:
             providers = await identity_provider_dao.list_global()
@@ -966,19 +983,19 @@ class OAuth2Config(BaseModel):
 
     def to_config_dict(self) -> JsonObject:
         config: JsonObject = {}
-        if self.app_id:
+        if self.app_id not in (None, ""):
             config["app_id"] = self.app_id
             config["client_id"] = self.app_id
-        if self.app_secret:
+        if self.app_secret not in (None, ""):
             config["app_secret"] = self.app_secret
             config["client_secret"] = self.app_secret
-        if self.authorize_url:
+        if self.authorize_url not in (None, ""):
             config["authorize_url"] = self.authorize_url
-        if self.token_url:
+        if self.token_url not in (None, ""):
             config["token_url"] = self.token_url
-        if self.user_info_url:
+        if self.user_info_url not in (None, ""):
             config["user_info_url"] = self.user_info_url
-        if self.scope:
+        if self.scope not in (None, ""):
             config["scope"] = self.scope
         return config
 
@@ -1069,7 +1086,7 @@ def _sanitize_identity_provider_config(provider_type: str, config: JsonObject | 
 def _identity_provider_response(
     provider: IdentityProviderRecord | Any, sso_domain: str | None = None
 ) -> dict[str, object]:
-    data = IdentityProviderOut.model_validate(provider).model_dump()
+    data = dict[str, object](IdentityProviderOut.model_validate(provider).model_dump())
     data["config"] = _sanitize_identity_provider_config(provider.provider_type, provider.config)
     data["last_synced_at"] = (provider.config or {}).get("last_synced_at")
     if sso_domain is not None:
@@ -1307,21 +1324,21 @@ async def list_org_departments(
 ) -> dict[str, Any]:
     """List all departments, optionally filtered by tenant or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    is_global_admin = current_user.role == "platform_admin" and not effective_tenant_id
+    is_global_admin = current_user.role == "platform_admin" and effective_tenant_id in (None, "")
 
-    if tenant_id:
-        if not is_global_admin and effective_tenant_id and effective_tenant_id != tenant_id:
+    if tenant_id not in (None, ""):
+        if not is_global_admin and effective_tenant_id not in (None, "") and effective_tenant_id != tenant_id:
             raise HTTPException(status_code=403, detail="Cannot access other tenant's data")
     else:
         tenant_id = effective_tenant_id
 
     rows = await org_department_dao.list_active_with_provider(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-        provider_id=uuid.UUID(provider_id) if provider_id else None,
+        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
+        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
     )
     total_member = await org_member_dao.count_active(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-        provider_id=uuid.UUID(provider_id) if provider_id else None,
+        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
+        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
     )
 
     items: list[dict[str, object]] = []
@@ -1358,21 +1375,21 @@ async def list_org_members(
 ) -> list[dict[str, Any]]:
     """List org members, optionally filtered by department, search, tenant, or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    is_global_admin = current_user.role == "platform_admin" and not effective_tenant_id
+    is_global_admin = current_user.role == "platform_admin" and effective_tenant_id in (None, "")
 
-    if tenant_id:
-        if not is_global_admin and effective_tenant_id and effective_tenant_id != tenant_id:
+    if tenant_id not in (None, ""):
+        if not is_global_admin and effective_tenant_id not in (None, "") and effective_tenant_id != tenant_id:
             raise HTTPException(status_code=403, detail="Cannot access other tenant's data")
     else:
         tenant_id = effective_tenant_id
 
     dept_ids = None
-    if department_id:
+    if department_id not in (None, ""):
         dept_ids = await org_department_dao.subtree_ids(uuid.UUID(department_id))
 
     pairs = await org_member_dao.list_active_filtered(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-        provider_id=uuid.UUID(provider_id) if provider_id else None,
+        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
+        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
         department_ids=dept_ids,
         search=search,
         limit=100,
@@ -1401,7 +1418,7 @@ async def trigger_org_sync(provider_id: str | None = None, current_user: UserRec
     """Manually trigger org structure sync from a specific identity provider."""
     from app.services.org_sync_service import org_sync_service
 
-    if not provider_id:
+    if provider_id in (None, ""):
         raise HTTPException(status_code=400, detail="provider_id is required")
 
     try:
@@ -1439,7 +1456,7 @@ async def wecom_org_sync_verify(
     token = json_as_str_or(config.get("verify_token"))
     aes_key = json_as_str_or(config.get("verify_aes_key"))
 
-    if not isinstance(token, str) or not isinstance(aes_key, str) or not token or not aes_key:
+    if not token or not aes_key:
         logger.warning(
             f"[WeCom Verify] Provider {provider_id} is missing verify_token or verify_aes_key in config. "
             + "Please configure them in the WeCom provider settings."

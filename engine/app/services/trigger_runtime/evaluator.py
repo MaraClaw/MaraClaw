@@ -155,7 +155,7 @@ async def handle_okr_report_trigger(trigger: AgentTriggerRecord, now: datetime) 
             "SELECT enabled FROM okr_settings WHERE tenant_id = %(tenant_id)s",
             {"tenant_id": tenant_id},
         )
-    if not settings or not settings.get("enabled"):
+    if settings is None or not settings.get("enabled"):
         return True
 
     tz_name = await get_agent_timezone(trigger.agent_id)
@@ -171,7 +171,7 @@ async def handle_okr_report_trigger(trigger: AgentTriggerRecord, now: datetime) 
         previous_week_anchor = local_today - timedelta(days=7)
         week_start = previous_week_anchor - timedelta(days=previous_week_anchor.weekday())
         _ = await generate_company_weekly_report(tenant_id, week_start)
-    elif trigger.name == "monthly_okr_report":
+    else:
         previous_month_end = local_today.replace(day=1) - timedelta(days=1)
         _ = await generate_company_monthly_report(tenant_id, previous_month_end)
 
@@ -196,7 +196,7 @@ async def handle_okr_collection_trigger(trigger: AgentTriggerRecord, now: dateti
             "SELECT enabled, daily_report_enabled FROM okr_settings WHERE tenant_id = %(tenant_id)s",
             {"tenant_id": tenant_id},
         )
-    if not settings or not settings.get("enabled") or not settings.get("daily_report_enabled"):
+    if settings is None or not settings.get("enabled") or not settings.get("daily_report_enabled"):
         return True
 
     _ = await trigger_daily_collection_for_tenant(tenant_id)
@@ -209,7 +209,7 @@ def is_private_url(url: str) -> bool:
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
-        if not hostname:
+        if hostname in (None, ""):
             return True
         if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):  # noqa: S104 - blocks unspecified-interface targets at the SSRF boundary
             return True
@@ -388,7 +388,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
     cfg = _json_config(trigger.config)
     from_agent_name = cfg.get("from_agent_name")
     from_user_name = cfg.get("from_user_name")
-    if not from_agent_name and not from_user_name:
+    if (from_agent_name is None or not from_agent_name) and (from_user_name is None or not from_user_name):
         return False
 
     since = trigger.last_fired_at or trigger.created_at
@@ -401,7 +401,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                 since = trigger.created_at
 
     try:
-        if from_agent_name:
+        if from_agent_name is not None and from_agent_name:
             if isinstance(from_agent_name, list):
                 from_agent_name = from_agent_name[0] if from_agent_name else ""
             if not isinstance(from_agent_name, str):
@@ -412,7 +412,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                     "SELECT id FROM agents WHERE name ILIKE %(pattern)s LIMIT 1",
                     {"pattern": f"%{safe_agent_name}%"},
                 )
-            if not source_agent:
+            if source_agent is None:
                 return False
 
             from_participant = await participant_dao.get_by_type_ref("agent", uuid_from_row(source_agent["id"]))
@@ -438,13 +438,13 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                         "roles": ["assistant", "user"],
                     },
                 )
-            if not msg:
+            if msg is None:
                 return False
             cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
             cfg["_matched_from"] = from_agent_name
             return True
 
-        if from_user_name:
+        if from_user_name is not None and from_user_name:
             agent = await agent_dao.get(trigger.agent_id)
             if isinstance(from_user_name, list):
                 from_user_name = from_user_name[0] if from_user_name else ""
@@ -484,7 +484,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                         {"pattern": pattern},
                     )
 
-                if target_user:
+                if target_user is not None:
                     msg = await db.fetchone(
                         """
                         SELECT cm.content
@@ -530,7 +530,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                         },
                     )
 
-            if not msg:
+            if msg is None:
                 return False
             cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
             cfg["_matched_from"] = from_user_name

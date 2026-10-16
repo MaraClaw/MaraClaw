@@ -143,7 +143,7 @@ def _find_first_image_reference(data: JsonValue) -> JsonValue:
     _ = importlib.import_module("app.services.agent_tools")
     for path in common_paths:
         value = agent_tools._json_path_get(data, path)
-        if value:
+        if value is not None and value:
             return value
 
     def walk(value: JsonValue) -> JsonValue:
@@ -154,16 +154,16 @@ def _find_first_image_reference(data: JsonValue) -> JsonValue:
                     return nested
                 if isinstance(nested, dict):
                     found = walk(nested)
-                    if found:
+                    if found is not None and found:
                         return found
             for nested in value.values():
                 found = walk(nested)
-                if found:
+                if found is not None and found:
                     return found
         elif isinstance(value, list):
             for item in value:
                 found = walk(item)
-                if found:
+                if found is not None and found:
                     return found
         elif isinstance(value, str) and value.startswith(("data:image", "http://", "https://")):
             return value
@@ -275,9 +275,9 @@ async def _generate_image_custom_api(
             raise ValueError("Custom image API returned non-JSON response.") from e
 
         image_ref: JsonValue = agent_tools._json_path_get(data, response_image_path) if response_image_path else None
-        if not image_ref:
+        if image_ref is None or not image_ref:
             image_ref = agent_tools._find_first_image_reference(data)
-        if not image_ref:
+        if image_ref is None or not image_ref:
             preview = json.dumps(agent_tools._json_structure_preview(data), ensure_ascii=False)
             raise ValueError(
                 "No image found in custom image API response. "

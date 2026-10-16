@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
@@ -104,6 +104,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     columns: ClassVar[tuple[str, ...]] = _AGENT_COLUMNS
     record_factory = staticmethod(AgentRecord.from_row)
 
+    @override
     async def create(self, *, obj_in: Mapping[str, object]) -> AgentRecord:
         from app.core.acl_locks import lock_tenants, lock_user
         from app.db.session import connection_ctx
@@ -113,13 +114,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
         target_id = uuid_from_row(target) if target is not None else None
         async with connection_ctx() as db:
             row = await db.fetchone("SELECT tenant_id FROM users WHERE id = %(id)s", {"id": creator_id})
-            creator_tenant = uuid_from_row(row["tenant_id"]) if row and row["tenant_id"] is not None else None
+            creator_tenant = (
+                uuid_from_row(row["tenant_id"]) if row is not None and row["tenant_id"] is not None else None
+            )
             # Take ACL mutexes before INSERT acquires tenant/creator FK KEY SHARE locks.
             # Joining the caller's transaction retains them through initial grants.
             await lock_tenants(db, (target_id, creator_tenant))
             await lock_user(db, creator_id, creator_tenant)
             return await super().create(obj_in=obj_in)
 
+    @override
     async def get(self, id: UUID) -> AgentRecord | None:
         cached = memo_get("agent", id)
         if isinstance(cached, AgentRecord):
@@ -129,6 +133,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             memo_set("agent", agent.id, agent)
         return agent
 
+    @override
     async def update(self, *, db_obj: AgentRecord, obj_in: Mapping[str, object]) -> AgentRecord:
         from app.core.acl_locks import lock_agent, lock_tenants
         from app.db.session import optional_connection_ctx
@@ -150,6 +155,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 await bump_agent_acl_version(updated.id)
             return updated
 
+    @override
     async def delete(self, *, id: UUID) -> AgentRecord | None:
         from app.core.acl_locks import agent_acl_mutation
 
@@ -166,7 +172,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 f"SELECT {self._select_list()} FROM agents WHERE name = %(name)s LIMIT 1",
                 {"name": name},
             )
-            return AgentRecord.from_row(row) if row else None
+            return AgentRecord.from_row(row) if row is not None else None
 
     async def get_system_by_name(self, tenant_id: UUID, name: str) -> AgentRecord | None:
         async with self.session() as db:
@@ -175,7 +181,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "WHERE tenant_id = %(tenant_id)s AND is_system IS TRUE AND name = %(name)s LIMIT 1",
                 {"tenant_id": tenant_id, "name": name},
             )
-            return AgentRecord.from_row(row) if row else None
+            return AgentRecord.from_row(row) if row is not None else None
 
     async def get_system_by_name_any(self, name: str) -> AgentRecord | None:
         async with self.session() as db:
@@ -184,7 +190,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "WHERE is_system IS TRUE AND name = %(name)s AND status <> 'stopped' LIMIT 1",
                 {"name": name},
             )
-            return AgentRecord.from_row(row) if row else None
+            return AgentRecord.from_row(row) if row is not None else None
 
     async def list_system_by_name(self, name: str, *, exclude_stopped: bool = True) -> Sequence[AgentRecord]:
         params: dict[str, Any] = {"name": name}
@@ -221,7 +227,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
     ) -> Sequence[AgentRecord]:
         """Return agents visible under the same rules as build_visible_agents_query."""
         if tenant_id is None:
-            return []
+            empty: list[AgentRecord] = []
+            return empty
 
         params: dict[str, Any] = {"tenant_id": tenant_id, "user_id": user_id}
         exclude_sql = ""
@@ -230,7 +237,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             params["exclude_agent_id"] = exclude_agent_id
 
         search_sql = ""
-        if search:
+        if search not in (None, ""):
             search_sql = " AND (a.name ILIKE %(search)s OR COALESCE(a.role_description, '') ILIKE %(search)s)"
             params["search"] = f"%{search}%"
 
@@ -280,7 +287,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + " LIMIT 1",
                 {"key": key_hash},
             )
-            return AgentRecord.from_row(row) if row else None
+            return AgentRecord.from_row(row) if row is not None else None
 
     async def lock_openclaw(self, agent: AgentRecord) -> AgentRecord | None:
         from app.core.acl_locks import lock_agent, lock_tenants
@@ -292,7 +299,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 f"SELECT {self._select_list()} FROM agents WHERE id = %(id)s AND " + _GATEWAY_ACTIVE_SQL,
                 {"id": agent.id},
             )
-            return AgentRecord.from_row(row) if row else None
+            return AgentRecord.from_row(row) if row is not None else None
 
     async def touch_openclaw(self, agent: AgentRecord, *, touch_last_seen: bool = True) -> AgentRecord | None:
         from app.core.acl_locks import lock_agent, lock_tenants
@@ -309,7 +316,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"id": agent.id},
             )
         memo_drop("agent", agent.id)
-        return AgentRecord.from_row(row) if row else None
+        return AgentRecord.from_row(row) if row is not None else None
 
     async def prepare_container_stops(self, now: datetime) -> Sequence[AgentRecord]:
         from app.core.acl_locks import lock_tenants
@@ -565,7 +572,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         exclude_stopped: bool = True,
     ) -> Sequence[AgentRecord]:
         if not names:
-            return []
+            empty: list[AgentRecord] = []
+            return empty
         params: dict[str, Any] = {"tenant_id": tenant_id, "names": list(names)}
         clauses = ["tenant_id = %(tenant_id)s", "name = ANY(%(names)s)"]
         if agent_type is not None:
@@ -645,7 +653,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     "cache_creation": cache_creation_tokens,
                 },
             )
-            agent = AgentRecord.from_row(row) if row else None
+            agent = AgentRecord.from_row(row) if row is not None else None
             if agent is not None:
                 memo_set("agent", agent.id, agent)
             return agent
@@ -671,7 +679,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
-            if not row:
+            if row is None:
                 return 0, 0
             return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
@@ -734,7 +742,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
-            if not row:
+            if row is None:
                 return {
                     "tokens_today": 0,
                     "tokens_month": 0,
@@ -756,7 +764,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "FROM agents WHERE created_at < %(before)s",
                 {"before": before},
             )
-            if not row:
+            if row is None:
                 return 0, 0
             return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
@@ -1008,6 +1016,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
     columns: ClassVar[tuple[str, ...]] = _PERM_COLUMNS
     record_factory = staticmethod(AgentPermissionRecord.from_row)
 
+    @override
     async def create(self, *, obj_in: Mapping[str, object]) -> AgentPermissionRecord:
         from app.core.acl_locks import agent_acl_mutation
 
@@ -1016,6 +1025,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
             await bump_agent_acl_version(created.agent_id)
             return created
 
+    @override
     async def update(self, *, db_obj: AgentPermissionRecord, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
         from app.core.acl_locks import agent_acl_mutation
 
@@ -1024,6 +1034,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
             await bump_agent_acl_version(updated.agent_id)
             return updated
 
+    @override
     async def delete(self, *, id: UUID) -> AgentPermissionRecord | None:
         from app.core.acl_locks import agent_acl_mutation
         from app.db.session import optional_connection_ctx

@@ -15,7 +15,7 @@ from app.core.json_types import json_as_str, json_object_from_response
 
 def trusted_executable(candidate: str | Path | None) -> Path | None:
     """Return an executable absolute path, or None when it is not launchable."""
-    if not candidate:
+    if candidate is None or not candidate:
         return None
     path = Path(candidate)
     if not path.is_absolute() or not path.is_file() or not path.stat().st_mode & 0o111:

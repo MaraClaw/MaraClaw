@@ -53,7 +53,7 @@ def _env_int(name: str, default: int) -> int:
 
 def _default_level_name() -> str:
     explicit = os.environ.get("LOG_LEVEL")
-    if explicit:
+    if explicit not in (None, ""):
         return explicit
     if os.environ.get("DEBUG", "").strip().lower() in _TRUE:
         return "DEBUG"
@@ -351,12 +351,17 @@ _service: LoggingService | None = None
 _service_lock = threading.Lock()
 
 
+def _current_service() -> LoggingService | None:
+    return _service
+
+
 def get_logging_service() -> LoggingService:
     """Return the process logger, creating it from the environment if needed."""
     global _service
     if _service is not None:
         return _service
     with _service_lock:
+        _service = _current_service()
         if _service is None:
             _service = LoggingService.from_env()
             _service.start()

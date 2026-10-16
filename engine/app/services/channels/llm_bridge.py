@@ -24,7 +24,7 @@ _LLM_TIMEOUT_SECONDS_DEFAULT = 180.0
 
 def _get_llm_timeout(model: LLMModelRecord) -> float:
     timeout = model.request_timeout
-    if timeout and timeout > 0:
+    if timeout not in (None, 0) and timeout > 0:
         return float(timeout)
     return _LLM_TIMEOUT_SECONDS_DEFAULT
 
@@ -92,7 +92,7 @@ async def _call_llm_with_config(
 
     messages: list[OpenAIMessage] = []
     ctx_size = agent.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
-    if history:
+    if history is not None and history:
         messages.extend(truncate_messages_with_pair_integrity(history, ctx_size))
     messages.append({"role": "user", "content": user_text})
 

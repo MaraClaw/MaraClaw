@@ -162,7 +162,7 @@ async def test_call_agent_llm_skips_dao_when_turn_preloaded(monkeypatch: pytest.
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
     tenant_id = uuid4()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
@@ -172,8 +172,8 @@ async def test_call_agent_llm_skips_dao_when_turn_preloaded(monkeypatch: pytest.
         is_expired=False,
         expires_at=None,
     )
-    primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
-    fallback = SimpleNamespace(model="f", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    primary: Any = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    fallback: Any = SimpleNamespace(model="f", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
         agent.id,
         "hello",
@@ -237,7 +237,7 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
     tenant_id = uuid4()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
@@ -247,7 +247,7 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
         is_expired=False,
         expires_at=None,
     )
-    primary = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    primary: Any = SimpleNamespace(model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
     result = await caller.call_agent_llm(
         agent.id,
         "hello",
@@ -272,9 +272,9 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
     monkeypatch.setattr(caller, "call_llm_with_failover", fake_failover)
 
     tenant_id = uuid4()
-    primary = SimpleNamespace(id=uuid4(), model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
-    secondary = SimpleNamespace(id=uuid4(), model="s", enabled=True, tenant_id=tenant_id, supports_vision=False)
-    agent = SimpleNamespace(
+    primary: Any = SimpleNamespace(id=uuid4(), model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    secondary: Any = SimpleNamespace(id=uuid4(), model="s", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    agent: Any = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
@@ -298,7 +298,7 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
 @pytest.mark.asyncio
 async def test_get_agent_config_reloads_token_counters(monkeypatch: pytest.MonkeyPatch) -> None:
     agent_id = uuid4()
-    handshake = SimpleNamespace(
+    handshake: Any = SimpleNamespace(
         max_tool_rounds=7,
         max_tokens_per_day=10,
         tokens_used_today=1,
@@ -471,7 +471,7 @@ async def test_apply_token_counter_resets_many_batches(raw: _FakeRawConnection) 
     from datetime import UTC, datetime, timedelta
 
     now = datetime.now(UTC)
-    agents = [
+    agents: list[Any] = [
         SimpleNamespace(
             id=uuid4(),
             last_daily_reset=now - timedelta(days=2),
@@ -515,7 +515,7 @@ async def test_catalog_defaults_use_one_channel_query(raw: _FakeRawConnection, m
         return await real(agent_id)
 
     monkeypatch.setattr(catalog, "_channel_presence", wrapped)
-    deps = SimpleNamespace(
+    deps: Any = SimpleNamespace(
         agent_has_feishu=catalog.agent_has_feishu,
         agent_has_any_channel=catalog.agent_has_any_channel,
     )
@@ -554,9 +554,10 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
         assert captured["max_idle"] == 600.0
         assert captured["max_lifetime"] == 1800.0
         assert captured["check"] is pool_module._check_pooled_connection
-        closed = SimpleNamespace(closed=True)
+        closed: Any = SimpleNamespace(closed=True)
         with pytest.raises(OSError, match="closed"):
             await pool_module._check_pooled_connection(closed)
-        await pool_module._check_pooled_connection(SimpleNamespace(closed=False))
+        open_connection: Any = SimpleNamespace(closed=False)
+        await pool_module._check_pooled_connection(open_connection)
     finally:
         pool_module.reset_pool_for_tests()

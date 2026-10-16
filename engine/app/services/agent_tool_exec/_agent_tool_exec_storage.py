@@ -64,7 +64,7 @@ async def list_focus_items(
     for item in items:
         label = "completed" if item["status"] == "completed" else "in_progress"
         kind = f", {item['kind']}" if item.get("kind") == "system" else ""
-        if item.get("title"):
+        if item.get("title") not in (None, ""):
             lines.append(f"- {item['title']} ({item['key']}) [{label}{kind}]: {item['description']}")
         else:
             lines.append(f"- {item['key']} [{label}{kind}]: {item['description']}")
@@ -96,7 +96,7 @@ async def upsert_focus_item(
     )
     return (
         f"✅ Focus item saved: {item['key']} (title: {item['title']}) - {item['description']}"
-        if item.get("title")
+        if item.get("title") not in (None, "")
         else f"✅ Focus item saved: {item['key']} - {item['description']}"
     )
 

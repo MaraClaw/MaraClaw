@@ -2,6 +2,7 @@
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ from app.records.org import OrgMemberRecord
 async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(monkeypatch):
     agent_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
-    current_user = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=tenant_id)
+    current_user: Any = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=tenant_id)
     agent = SimpleNamespace(id=agent_id, tenant_id=tenant_id)
 
     async def fake_check_access(_user, _agent_id):

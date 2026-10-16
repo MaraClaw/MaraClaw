@@ -68,7 +68,7 @@ def _dump(tenant: TenantRecord, ver: str) -> dict[str, object]:
         "name": tenant.name,
         "slug": tenant.slug,
         "im_provider": tenant.im_provider,
-        "im_config": json_object_from(tenant.im_config) if tenant.im_config else None,
+        "im_config": json_object_from(tenant.im_config) if tenant.im_config is not None and tenant.im_config else None,
         "is_active": tenant.is_active,
         "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
         "default_message_limit": tenant.default_message_limit,
@@ -102,7 +102,7 @@ def _load(data: object) -> TenantRecord | None:
     tenant_id = _parse_uuid(payload.get("id"))
     name = json_as_str(payload.get("name"))
     slug = json_as_str(payload.get("slug"))
-    if tenant_id is None or not name or not slug:
+    if tenant_id is None or name in (None, "") or slug in (None, ""):
         return None
     im_raw = payload.get("im_config")
     return TenantRecord(

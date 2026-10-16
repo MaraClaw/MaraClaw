@@ -110,7 +110,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
     resolved_timeout = timeout
     if resolved_timeout is None:
         raw_timeout = model.request_timeout
-        resolved_timeout = float(raw_timeout) if raw_timeout else 120.0
+        resolved_timeout = float(raw_timeout) if raw_timeout not in (None, 0) else 120.0
     enc = getattr(model, "api_key_encrypted", None) or ""
     cache_key = (
         "from_model",
@@ -200,7 +200,7 @@ def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -
                     ],
                 }
                 reasoning_content = json_as_str(tc_data.get("reasoning_content"))
-                if reasoning_content:
+                if reasoning_content not in (None, ""):
                     asst_msg["reasoning_content"] = reasoning_content
                 result.append(asst_msg)
 
@@ -219,12 +219,12 @@ def convert_chat_messages_to_llm_format(messages: Iterable[ChatMessageRecord]) -
             if msg.role == "assistant":
                 entry: OpenAIMessage = {"role": "assistant", "content": msg.content}
             elif msg.role == "system":
-                entry = {"role": "system", "content": msg.content}
+                entry = OpenAIMessage(role="system", content=msg.content)
             elif msg.role == "tool":
-                entry = {"role": "tool", "content": msg.content}
+                entry = OpenAIMessage(role="tool", content=msg.content)
             else:
-                entry = {"role": "user", "content": msg.content}
-            if hasattr(msg, "thinking") and msg.thinking:
+                entry = OpenAIMessage(role="user", content=msg.content)
+            if hasattr(msg, "thinking") and msg.thinking not in (None, ""):
                 entry["reasoning_content"] = msg.thinking
             result.append(entry)
 
@@ -258,7 +258,7 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
 
     for msg in truncated:
         tool_calls = msg.get("tool_calls")
-        if msg.get("role") == "assistant" and tool_calls:
+        if msg.get("role") == "assistant" and tool_calls is not None and tool_calls:
             for tc in tool_calls:
                 tc_id = tc.get("id", "")
                 if tc_id:
@@ -281,7 +281,7 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
         if msg.get("role") == "tool":
             if msg.get("tool_call_id", "") in orphaned_tools:
                 continue  # Remove orphaned tool result
-        elif msg.get("role") == "assistant" and tool_calls:
+        elif msg.get("role") == "assistant" and tool_calls is not None and tool_calls:
             filtered_tcs = [tc for tc in tool_calls if tc.get("id", "") not in orphaned_assistant_calls]
             if filtered_tcs:
                 new_msg: OpenAIMessage = {
@@ -295,11 +295,11 @@ def truncate_messages_with_pair_integrity(messages: list[OpenAIMessage], ctx_siz
                 if isinstance(reasoning_content, str):
                     new_msg["reasoning_content"] = reasoning_content
                 sanitized.append(new_msg)
-            elif msg.get("content"):
+            elif (content := msg.get("content")) is not None and content:
                 content = msg.get("content")
                 if not isinstance(content, (str, list)):
                     continue
-                new_msg = {"role": "assistant", "content": content}
+                new_msg = OpenAIMessage(role="assistant", content=content)
                 reasoning_content = msg.get("reasoning_content")
                 if isinstance(reasoning_content, str):
                     new_msg["reasoning_content"] = reasoning_content

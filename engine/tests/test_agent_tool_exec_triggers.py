@@ -58,7 +58,7 @@ def _set_args(*, name: str = "daily", type_: str = "interval", config=None, reas
 
 def _install_dao_defaults(monkeypatch: pytest.MonkeyPatch, *, agent=None, existing=None, count=0, created=None):
     """Patch agent_dao / agent_trigger_dao for trigger tool tests."""
-    created_holder: list = []
+    created_holder: list[SimpleNamespace] = []
 
     async def get_agent(_id):
         return agent if agent is not None else _agent()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 from app.api import pages as pages_api
 
 
-def _user(*, role: str = "member") -> SimpleNamespace:
+def _user(*, role: str = "member") -> Any:
     return SimpleNamespace(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4())
 
 

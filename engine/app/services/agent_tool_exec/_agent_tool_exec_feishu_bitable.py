@@ -3,10 +3,11 @@ from __future__ import annotations
 import importlib
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from app.core.json_types import JsonObject, json_loads_object, json_loads_value, object_attr
+from app.core.json_types import JsonObject, JsonValue, json_loads_object, json_loads_value, object_attr
 from app.services import agent_tools
 from app.services.feishu_service import FeishuService
 
@@ -37,8 +38,8 @@ def _feishu_service() -> FeishuService:
     return cast(FeishuService, object_attr(module, "feishu_service"))
 
 
-def _nested_mapping(value: object) -> JsonObject:
-    return value if isinstance(value, dict) else {}
+def _nested_mapping(value: object) -> Mapping[object, object]:
+    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -47,22 +48,22 @@ def _object_items(value: object) -> list[JsonObject]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _fields_mapping(value: object) -> dict[str, ToolArgumentValue]:
+def _fields_mapping(value: JsonValue) -> dict[str, ToolArgumentValue]:
     return value if isinstance(value, dict) else {}
 
 
 async def _resolve_bitable_app_token(agent_id: uuid.UUID, parsed_url: dict[str, str]) -> str | None:
     app_token = parsed_url.get("app_token")
-    if app_token:
+    if app_token not in (None, ""):
         return app_token
     wiki_token = parsed_url.get("wiki_token")
-    if wiki_token:
+    if wiki_token not in (None, ""):
         app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
         if app_id and app_secret:
             token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
             node_info = await agent_tools._feishu_wiki_get_node(wiki_token, token)
-            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info else None
-            if obj_token:
+            obj_token = tool_arg_str(node_info.get("obj_token")) if node_info is not None and node_info else None
+            if obj_token not in (None, ""):
                 return obj_token
     return None
 
@@ -72,7 +73,7 @@ def _filters_from(filter_info: ToolArgumentValue) -> dict[str, ToolArgumentValue
         return filter_info
     if isinstance(filter_info, str) and filter_info.strip():
         try:
-            loaded = json_loads_value(filter_info)
+            loaded = cast(JsonValue, json_loads_value(filter_info))
         except json.JSONDecodeError:
             return {}
         return loaded if isinstance(loaded, dict) else {}
@@ -89,7 +90,7 @@ async def _resolved_app_and_table(agent_id: uuid.UUID, arguments: ToolArguments)
 async def _bitable_list_tables(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     parsed = agent_tools._parse_feishu_url(_string_argument(arguments, "url"))
     app_token = await agent_tools._resolve_bitable_app_token(agent_id, parsed)
-    if not app_token:
+    if app_token in (None, ""):
         return "Failed: Could not extract Bitable app_token from the URL (also could not resolve wiki_token)."
 
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
@@ -100,7 +101,7 @@ async def _bitable_list_tables(agent_id: uuid.UUID, arguments: ToolArguments) ->
         service = _feishu_service()
         resp = await service.bitable_list_tables(app_id, app_secret, app_token)
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         tables = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not tables:
@@ -126,7 +127,7 @@ async def _bitable_create_app(agent_id: uuid.UUID, arguments: ToolArguments) -> 
         service = _feishu_service()
         resp = await service.bitable_create_app(app_id, app_secret, name, folder_token)
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         app_info = _nested_mapping(_nested_mapping(resp.get("data")).get("app"))
         app_token = tool_arg_str(app_info.get("app_token")) or ""
@@ -147,15 +148,15 @@ async def _bitable_create_app(agent_id: uuid.UUID, arguments: ToolArguments) -> 
 
 async def _bitable_list_fields(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     app_token, table_id = await _resolved_app_and_table(agent_id, arguments)
-    if not app_token:
+    if app_token in (None, ""):
         return "Failed: Could not extract Bitable app_token from the URL."
-    if not table_id:
+    if table_id in (None, ""):
         return "Failed: table_id is required. Provide it as a parameter or include it in the URL."
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     try:
         resp = await _feishu_service().bitable_list_fields(app_id, app_secret, app_token, table_id)
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         fields = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not fields:
@@ -170,7 +171,7 @@ async def _bitable_list_fields(agent_id: uuid.UUID, arguments: ToolArguments) ->
 
 async def _bitable_query_records(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     app_token, table_id = await _resolved_app_and_table(agent_id, arguments)
-    if not app_token or not table_id:
+    if app_token in (None, "") or table_id in (None, ""):
         return "Failed: Could not resolve app_token or table_id from the provided parameters/URL."
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     try:
@@ -182,7 +183,7 @@ async def _bitable_query_records(agent_id: uuid.UUID, arguments: ToolArguments) 
             _filters_from(arguments.get("filter_info", "")),
         )
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         records = _object_items(_nested_mapping(resp.get("data")).get("items"))
         if not records:
@@ -198,7 +199,7 @@ async def _bitable_query_records(agent_id: uuid.UUID, arguments: ToolArguments) 
 
 async def _bitable_create_record(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     app_token, table_id = await _resolved_app_and_table(agent_id, arguments)
-    if not app_token or not table_id:
+    if app_token in (None, "") or table_id in (None, ""):
         return "Failed: Could not resolve app_token or table_id from the provided parameters/URL."
     try:
         parsed_fields = json_loads_object(_string_argument(arguments, "fields", "{}"))
@@ -213,7 +214,7 @@ async def _bitable_create_record(agent_id: uuid.UUID, arguments: ToolArguments) 
 async def _bitable_update_record(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     app_token, table_id = await _resolved_app_and_table(agent_id, arguments)
     record_id = _string_argument(arguments, "record_id")
-    if not app_token or not table_id or not record_id:
+    if app_token in (None, "") or table_id in (None, "") or not record_id:
         return "Failed: Missing required parameters. Need app_token (from URL), table_id, and record_id."
     try:
         parsed_fields = json_loads_object(_string_argument(arguments, "fields", "{}"))
@@ -254,7 +255,7 @@ async def _write_record(
             )
             verb = "updated"
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         record = _nested_mapping(_nested_mapping(resp.get("data")).get("record"))
         tenant_token = await service.get_tenant_access_token(app_id, app_secret)
@@ -271,14 +272,14 @@ async def _write_record(
 async def _bitable_delete_record(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     app_token, table_id = await _resolved_app_and_table(agent_id, arguments)
     record_id = _string_argument(arguments, "record_id")
-    if not app_token or not table_id or not record_id:
+    if app_token in (None, "") or table_id in (None, "") or not record_id:
         return "Failed: Missing required parameters. Need app_token (from URL), table_id, and record_id."
     app_id, app_secret = await agent_tools._get_feishu_credentials(agent_id)
     try:
         service = _feishu_service()
         resp = await service.bitable_delete_record(app_id, app_secret, app_token, table_id, record_id)
         err = agent_tools._check_feishu_err(resp)
-        if err:
+        if err not in (None, ""):
             return err
         tenant_token = await service.get_tenant_access_token(app_id, app_secret)
         bitable_url = await agent_tools._get_feishu_bitable_url(tenant_token, app_token, table_id)

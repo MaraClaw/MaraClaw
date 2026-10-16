@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local import docker_backend as docker_backend_module
 from app.services.sandbox.local.docker_backend import DockerBackend
@@ -62,7 +64,7 @@ class FakeDockerClient:
         self.run_error = run_error
         self.info_error = info_error
         self.run_args = None
-        self.run_kwargs = None
+        self.run_kwargs: dict[str, Any] | None = None
         self.created_container = FakeContainer()
 
     def info(self):
@@ -86,7 +88,7 @@ def make_backend(
     backend = DockerBackend(
         SandboxConfig(allow_network=allow_network, cpu_limit="0.5", memory_limit="256m", **config_kwargs)
     )
-    backend._client = client
+    backend._client = cast(Any, client)
     return backend
 
 
@@ -138,6 +140,7 @@ async def test_execute_injects_proxy_env_when_network_allowed():
 
     # Then
     assert result.success is True
+    assert client.run_kwargs is not None
     envs = client.run_kwargs["envs"]
     assert envs["http_proxy"] == "http://proxy.example:8080"
     assert envs["HTTP_PROXY"] == "http://proxy.example:8080"
@@ -164,6 +167,7 @@ async def test_execute_omits_proxy_env_when_network_disallowed():
 
     # Then
     assert result.success is True
+    assert client.run_kwargs is not None
     envs = client.run_kwargs["envs"]
     assert client.run_kwargs["networks"] == ["none"]
     for key in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"):

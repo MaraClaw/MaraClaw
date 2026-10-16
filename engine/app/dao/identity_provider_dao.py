@@ -53,7 +53,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
                     + "LIMIT 1",
                     {"provider_type": provider_type, "tenant_id": tenant_id},
                 )
-            return IdentityProviderRecord.from_row(row) if row else None
+            return IdentityProviderRecord.from_row(row) if row is not None else None
 
     async def get_preferred(
         self,
@@ -92,7 +92,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
                 + "LIMIT 1",
                 params,
             )
-            return IdentityProviderRecord.from_row(row) if row else None
+            return IdentityProviderRecord.from_row(row) if row is not None else None
 
     async def list_active_sso_for_tenant(self, tenant_id: UUID | None) -> Sequence[IdentityProviderRecord]:
         """Active providers with SSO login enabled, scoped to tenant or global."""

@@ -33,7 +33,7 @@ def fingerprint_secret(value: str) -> str:
 def _wipe_client(client: LLMClient) -> None:
     client.api_key = ""
     if hasattr(client, "_client"):
-        client._client = None  # type: ignore[attr-defined]
+        client._client = None
 
 
 def cache_get(key: tuple[object, ...]) -> LLMClient | None:

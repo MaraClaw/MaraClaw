@@ -38,7 +38,7 @@ def origin_from_request(request: Request | None) -> str | None:
 async def resolve_frontend_base_url(request: Request | None = None) -> str:
     """Prefer the allowlisted request Origin; otherwise PUBLIC_BASE_URL."""
     origin = origin_from_request(request)
-    if origin:
+    if origin not in (None, ""):
         return origin
     from app.services.platform_service import platform_service
 

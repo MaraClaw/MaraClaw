@@ -106,11 +106,11 @@ def guest_model_ref(model: LLMModelRecord | None) -> str | None:
 
 
 def is_grok_subscription(model: LLMModelRecord | None) -> bool:
-    return (getattr(model, "auth_kind", None) or "") == AUTH_KIND_GROK_SUBSCRIPTION
+    return bool((getattr(model, "auth_kind", None) or "") == AUTH_KIND_GROK_SUBSCRIPTION)
 
 
 def is_chatgpt_subscription(model: LLMModelRecord | None) -> bool:
-    return (getattr(model, "auth_kind", None) or "") == AUTH_KIND_CHATGPT_SUBSCRIPTION
+    return bool((getattr(model, "auth_kind", None) or "") == AUTH_KIND_CHATGPT_SUBSCRIPTION)
 
 
 async def ensure_fresh_access_token(model: LLMModelRecord) -> LLMModelRecord:
@@ -390,14 +390,14 @@ class AgentManager:
         aliases: JsonObject = {}
         for slot, row in (("primary", primary), ("secondary", secondary), ("fallback", fallback)):
             ref = guest_model_ref(row)
-            if ref:
+            if ref not in (None, ""):
                 aliases[ref] = {"alias": slot}
         return aliases
 
     def _defaults_model_block(self, primary_ref: str, fallback: LLMModelRecord | None) -> JsonObject:
         block: JsonObject = {"primary": primary_ref}
         fallback_ref = guest_model_ref(fallback)
-        if fallback_ref and fallback_ref != primary_ref:
+        if fallback_ref not in (None, "") and fallback_ref != primary_ref:
             block["fallbacks"] = [fallback_ref]
         return block
 
@@ -487,7 +487,7 @@ class AgentManager:
                     "clientId": openai["clientId"],
                 }
                 account_id = openai.get("accountId")
-                if account_id:
+                if account_id is not None and account_id:
                     openai_legacy["accountId"] = account_id
                 legacy["openai"] = openai_legacy
         if not profiles:
@@ -751,7 +751,7 @@ class AgentManager:
                 **gogcli_envs,
             }
             gateway_key = _read_gateway_key_file(agent_dir)
-            if gateway_key:
+            if gateway_key not in (None, ""):
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
             container = self.docker_client.run(
                 settings.OPENCLAW_IMAGE,
@@ -817,7 +817,7 @@ class AgentManager:
 
     async def stop_container(self, agent: AgentRecord) -> bool:
         """Stop the agent's Docker container."""
-        if not self.docker_client or not agent.container_id:
+        if not self.docker_client or agent.container_id in (None, ""):
             agent.status = "stopped"
             return True
 
@@ -836,7 +836,7 @@ class AgentManager:
 
     async def remove_container(self, agent: AgentRecord) -> bool:
         """Stop and remove the agent's Docker container."""
-        if not self.docker_client or not agent.container_id:
+        if not self.docker_client or agent.container_id in (None, ""):
             return True
 
         try:
@@ -871,7 +871,7 @@ class AgentManager:
 
     def get_container_status(self, agent: AgentRecord) -> ContainerStatus | InspectedContainerStatus:
         """Get real-time container status."""
-        if not self.docker_client or not agent.container_id:
+        if not self.docker_client or agent.container_id in (None, ""):
             return {"running": False, "status": agent.status}
 
         try:

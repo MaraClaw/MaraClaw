@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -42,7 +43,7 @@ class MemoryKeyDao:
         del now
         return list(await self.list_ordered())
 
-    async def create(self, *, obj_in: dict) -> LinkupApiKeyRecord:
+    async def create(self, *, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
         record = LinkupApiKeyRecord(
             id=uuid4(),
             label=str(obj_in["label"]),
@@ -65,7 +66,7 @@ class MemoryKeyDao:
 
 
 @pytest.fixture
-def admin_user() -> SimpleNamespace:
+def admin_user() -> Any:
     return SimpleNamespace(id=uuid4(), role="platform_admin", email="pa@example.test")
 
 
@@ -85,9 +86,7 @@ def key_store(monkeypatch: pytest.MonkeyPatch) -> MemoryKeyDao:
 
 
 @pytest.mark.asyncio
-async def test_admin_add_list_remove_never_returns_ciphertext(
-    key_store: MemoryKeyDao, admin_user: SimpleNamespace
-) -> None:
+async def test_admin_add_list_remove_never_returns_ciphertext(key_store: MemoryKeyDao, admin_user: Any) -> None:
     created = await create_linkup_key(
         LinkupKeyCreateRequest(label="prod", api_key="lk-secret-1"),
         current_user=admin_user,
@@ -111,7 +110,7 @@ async def test_admin_add_list_remove_never_returns_ciphertext(
 
 
 @pytest.mark.asyncio
-async def test_admin_add_duplicate_returns_409(key_store: MemoryKeyDao, admin_user: SimpleNamespace) -> None:
+async def test_admin_add_duplicate_returns_409(key_store: MemoryKeyDao, admin_user: Any) -> None:
     _ = key_store
     _ = await create_linkup_key(
         LinkupKeyCreateRequest(label="a", api_key="same"),
@@ -129,7 +128,7 @@ async def test_admin_add_duplicate_returns_409(key_store: MemoryKeyDao, admin_us
 
 
 @pytest.mark.asyncio
-async def test_admin_remove_missing_returns_404(key_store: MemoryKeyDao, admin_user: SimpleNamespace) -> None:
+async def test_admin_remove_missing_returns_404(key_store: MemoryKeyDao, admin_user: Any) -> None:
     _ = key_store
     with pytest.raises(Exception) as exc:
         await delete_linkup_key(uuid4(), current_user=admin_user, client_ip=None)
@@ -138,7 +137,7 @@ async def test_admin_remove_missing_returns_404(key_store: MemoryKeyDao, admin_u
 
 def test_create_request_requires_label() -> None:
     with pytest.raises(ValidationError):
-        LinkupKeyCreateRequest(api_key="lk-secret")
+        LinkupKeyCreateRequest.model_validate({"api_key": "lk-secret"})
     with pytest.raises(ValidationError):
         LinkupKeyCreateRequest(label="", api_key="lk-secret")
     with pytest.raises(ValidationError):

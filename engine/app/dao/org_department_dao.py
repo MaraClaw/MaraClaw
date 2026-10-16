@@ -41,7 +41,7 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
                 + "LIMIT 1",
                 {"external_id": external_id, "provider_id": provider_id},
             )
-            return OrgDepartmentRecord.from_row(row) if row else None
+            return OrgDepartmentRecord.from_row(row) if row is not None else None
 
     async def list_for_provider(self, provider_id: UUID) -> Sequence[OrgDepartmentRecord]:
         async with self.session() as db:

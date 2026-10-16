@@ -125,7 +125,7 @@ async def _send_verification_email_task(
         if not identity:
             logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
             return
-        if not identity.email:
+        if identity.email in (None, ""):
             logger.warning(f"No email found for user {user.id}. Cannot send verification.")
             return
 
@@ -197,7 +197,7 @@ async def register_init(
     identity = await identity_dao.get_by_email(data.email)
     if identity:
         # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
-        if identity.email and identity.email != data.email:
+        if identity.email not in (None, "") and identity.email != data.email:
             logger.warning(
                 f"[REGISTER_INIT] Identity email mismatch: submitted={data.email} returned={identity.email} - rejecting"
             )
@@ -296,7 +296,7 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks, request: Req
 
     if (
         not identity
-        or not identity.password_hash
+        or identity.password_hash in (None, "")
         or not await verify_password_async(data.password, identity.password_hash)
     ):
         logger.warning(
@@ -454,7 +454,7 @@ async def forgot_password(
     # Find Identity by email
     identity = await identity_dao.get_by_email(data.email)
 
-    if not identity or not identity.is_active or not identity.email:
+    if not identity or not identity.is_active or identity.email in (None, ""):
         return generic_response
 
     try:
@@ -662,7 +662,7 @@ async def switch_tenant(
         )
 
     # Include token in redirect URL for cross-domain switching if needed
-    if redirect_url:
+    if redirect_url not in (None, ""):
         separator = "&" if "?" in redirect_url else "?"
         redirect_url = f"{redirect_url}{separator}token={token}"
 
@@ -700,7 +700,7 @@ async def change_password(
     # Verify old password outside transaction (CPU intensive)
     if (
         not identity
-        or not identity.password_hash
+        or identity.password_hash in (None, "")
         or not await verify_password_async(old_password, identity.password_hash)
     ):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
@@ -766,7 +766,7 @@ async def _get_oauth_pending(pending_token: str) -> OAuthPendingCache | None:
 
     r = await get_redis()
     raw = await r.get(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
-    if not raw:
+    if raw is None or not raw:
         return None
     # Single-use: delete immediately after retrieval
     _ = await r.delete(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
@@ -817,7 +817,7 @@ async def oauth_callback(
     from app.services.auth_registry import auth_provider_registry
 
     # ── Step 2: User has selected a tenant ───────────────────────────────────
-    if data.pending_token and data.tenant_id:
+    if data.pending_token not in (None, "") and data.tenant_id not in (None, ""):
         pending = await _get_oauth_pending(data.pending_token)
         if not pending:
             raise HTTPException(
@@ -863,7 +863,7 @@ async def oauth_callback(
         )
 
     # ── Step 1: Exchange code, detect multi-tenant ────────────────────────────
-    if not data.code:
+    if data.code in (None, ""):
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
     auth_provider = await auth_provider_registry.get_provider(provider)
@@ -922,7 +922,7 @@ async def oauth_callback(
                 raw_data=user_info.raw_data,
             ),
             token_data,
-            allowed_tenant_ids=[tid for tid in tenant_ids if tid is not None],
+            allowed_tenant_ids=list(tenant_ids),
         )
 
         tenant_choices = [

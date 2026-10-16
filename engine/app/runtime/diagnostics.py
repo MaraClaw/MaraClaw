@@ -11,7 +11,7 @@ from app.core.logging import logger
 def log_bwrap_startup_status() -> None:
     in_container = Path("/.dockerenv").exists()
     bwrap = shutil.which("bwrap")
-    if bwrap:
+    if bwrap not in (None, ""):
         try:
             stat = Path(bwrap).stat()
             logger.info(

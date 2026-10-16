@@ -36,7 +36,7 @@ async def _feishu_approval_create(agent_id: uuid.UUID, arguments: ToolArguments)
         )
         response = json_object_from(response_raw)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         instance_code = json_as_str_or(json_object_from(response.get("data")).get("instance_code"))
         return f"✅ 审批发起成功！\n审批实例 ID: `{instance_code}`"
@@ -62,7 +62,7 @@ async def _feishu_approval_query(agent_id: uuid.UUID, arguments: ToolArguments) 
         )
         response = json_object_from(response_raw)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         instance_codes_raw: object = json_object_from(response.get("data")).get("instance_code_list", [])
         instance_codes = instance_codes_raw if isinstance(instance_codes_raw, list) else []
@@ -85,7 +85,7 @@ async def _feishu_approval_get(agent_id: uuid.UUID, arguments: ToolArguments) ->
         response_raw: object = await _feishu_service().get_approval_instance(app_id, app_secret, instance_id)
         response = json_object_from(response_raw)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         data = json_object_from(response.get("data"))
         return f"✅ 审批实例查询结果:\n```json\n{json.dumps(data, ensure_ascii=False, indent=2)}\n```"

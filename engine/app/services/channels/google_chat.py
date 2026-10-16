@@ -102,7 +102,7 @@ async def verify_google_chat_bearer(authorization: str | None, audience: str) ->
 
     Raises ValueError on failure.
     """
-    if not authorization:
+    if authorization in (None, ""):
         raise ValueError("Missing Authorization header")
     parts = authorization.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
@@ -118,8 +118,8 @@ async def verify_google_chat_bearer(authorization: str | None, audience: str) ->
         raise ValueError(f"Invalid JWT header: {exc}") from exc
     headers = mapping_from_row(headers_raw)
     kid = json_as_str(headers.get("kid"))
-    key = certs.get(kid) if kid else None
-    if key:
+    key = certs.get(kid) if kid not in (None, "") else None
+    if key not in (None, ""):
         try:
             return _decode_with_key(token, key, audience)
         except Exception as exc:
@@ -237,7 +237,7 @@ def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
 
 
 def external_conv_id_for_inbound(event: GoogleChatInbound) -> str:
-    if event.thread_name:
+    if event.thread_name not in (None, ""):
         return f"google_chat_{event.thread_name}"
     if event.space_name:
         return f"google_chat_{event.space_name}"
@@ -256,7 +256,7 @@ def is_group_space(event: GoogleChatInbound) -> bool:
 def sync_text_response(text: str, *, thread_name: str | None = None) -> dict[str, Any]:
     """Build a synchronous Chat app response body."""
     payload: dict[str, Any] = {"text": text}
-    if thread_name:
+    if thread_name not in (None, ""):
         payload["thread"] = {"name": thread_name}
     return payload
 
@@ -342,7 +342,7 @@ async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[st
             "exp": now + 3600,
             "scope": " ".join(scopes),
         },
-        private_key.replace("\\n", "\n") if isinstance(private_key, str) else private_key,
+        private_key.replace("\\n", "\n"),
         algorithm="RS256",
     )
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
@@ -357,7 +357,7 @@ async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[st
             raise ValueError(f"Token exchange failed: {resp.status_code} {resp.text[:200]}")
         data = json_object_from_response(resp)
     token = json_as_str(data.get("access_token"))
-    if not token:
+    if token in (None, ""):
         raise ValueError("Token exchange returned no access_token")
     return token
 
@@ -371,7 +371,7 @@ async def send_google_chat_message(
 ) -> dict[str, Any]:
     """Proactively post a message into a Google Chat space via Chat API."""
     sa_info = _service_account_info(config)
-    if not sa_info:
+    if sa_info is None or not sa_info:
         raise ValueError(
             "Google Chat proactive send requires extra_config.service_account_json "
             + "with client_email and private_key"
@@ -386,7 +386,7 @@ async def send_google_chat_message(
         for chunk in chunks:
             body: dict[str, Any] = {"text": chunk}
             params: dict[str, str] = {}
-            if thread_name:
+            if thread_name not in (None, ""):
                 body["thread"] = {"name": thread_name}
                 params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
             url = f"{CHAT_API_BASE}/{space_name}/messages"

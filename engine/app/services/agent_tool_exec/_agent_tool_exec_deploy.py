@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import os
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from httpx import Response
 
@@ -29,8 +31,8 @@ def _response_mapping(response: Response) -> JsonObject:
     return json_object_from_response(response)
 
 
-def _nested_mapping(value: object) -> JsonObject:
-    return value if isinstance(value, dict) else {}
+def _nested_mapping(value: object) -> Mapping[object, object]:
+    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -56,7 +58,7 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
         return "❌ Missing required argument 'project_name'."
 
     token = await agent_tools._get_vercel_token(agent_id, "vercel_deploy")
-    if not token:
+    if token in (None, ""):
         return "❌ Vercel Access Token is not configured. Please paste your token in the tool settings."
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -195,7 +197,7 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
     if not project_name:
         return "❌ Missing required argument: 'project_name'."
     token = await agent_tools._get_vercel_token(agent_id, "vercel_list_deployments")
-    if not token:
+    if token in (None, ""):
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -234,7 +236,7 @@ async def _vercel_get_deploy_logs(agent_id: uuid.UUID, arguments: ToolArguments)
         deployment_id = deployment_id.replace("https://", "").split("/")[0]
 
     token = await agent_tools._get_vercel_token(agent_id, "vercel_get_deploy_logs")
-    if not token:
+    if token in (None, ""):
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}

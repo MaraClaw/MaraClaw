@@ -37,7 +37,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
                 + "WHERE code = %(code)s AND is_active IS TRUE AND tenant_id IS NOT NULL LIMIT 1",
                 {"code": code},
             )
-            return InvitationCodeRecord.from_row(row) if row else None
+            return InvitationCodeRecord.from_row(row) if row is not None else None
 
     async def get_for_tenant(self, code_id: UUID, tenant_id: UUID) -> InvitationCodeRecord | None:
         async with self.session() as db:
@@ -46,12 +46,12 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
                 + "WHERE id = %(id)s AND tenant_id = %(tenant_id)s LIMIT 1",
                 {"id": code_id, "tenant_id": tenant_id},
             )
-            return InvitationCodeRecord.from_row(row) if row else None
+            return InvitationCodeRecord.from_row(row) if row is not None else None
 
     async def count_for_tenant(self, tenant_id: UUID, *, search: str | None = None) -> int:
         params: dict[str, Any] = {"tenant_id": tenant_id}
         search_sql = ""
-        if search:
+        if search not in (None, ""):
             params["search"] = f"%{search}%"
             search_sql = " AND code ILIKE %(search)s"
         async with self.session() as db:
@@ -75,7 +75,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
             "limit": limit,
         }
         search_sql = ""
-        if search:
+        if search not in (None, ""):
             params["search"] = f"%{search}%"
             search_sql = " AND code ILIKE %(search)s"
         async with self.session() as db:

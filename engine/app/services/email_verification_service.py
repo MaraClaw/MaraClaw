@@ -36,7 +36,7 @@ class EmailVerificationService:
 
         # Invalidate previous code for this user if exists
         old_code_hash = await redis.get(user_key)
-        if old_code_hash:
+        if old_code_hash is not None and old_code_hash:
             _ = await redis.delete(f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{old_code_hash}")
 
         # Generate a random 6-digit code
@@ -77,7 +77,7 @@ class EmailVerificationService:
         token_key = f"{EMAIL_VERIFICATION_CODE_KEY_PREFIX}{token_hash}"
 
         token_data_str = await redis.get(token_key)
-        if not token_data_str:
+        if token_data_str is None or not token_data_str:
             return None
 
         try:

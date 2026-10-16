@@ -49,7 +49,6 @@ from app.services.workspace_collaboration import (
     content_hash,
     delete_workspace_file,
     list_revisions,
-    read_text_if_exists,
     release_edit_lock,
     write_workspace_file,
 )
@@ -406,7 +405,7 @@ async def _persist_office_sidecar(
     random NamedTemporaryFile stem).
     """
     text = await _extract_office_markdown(content, filename)
-    if not text:
+    if text in (None, ""):
         return None
     for rel in _sidecar_rel_options(office_rel, filename):
         key = make_key(rel)
@@ -497,7 +496,6 @@ async def preview_file(
     kind = _file_kind(path)
     mime_type = mimetypes.guess_type(Path(path).name)[0] or "application/octet-stream"
     download_url = f"/api/agents/{agent_id}/files/download?path={path}"
-    local_target: Path | None = None
 
     if kind in {"markdown", "html", "text"}:
         content = await storage.read_text(key, encoding="utf-8", errors="replace")
@@ -532,7 +530,6 @@ async def preview_file(
     if kind == "xlsx":
         try:
             target = await ensure_local_path(key)
-            local_target = target
             try:
                 size = target.stat().st_size
             except OSError as exc:
@@ -566,9 +563,9 @@ async def preview_file(
                 lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
                 path,
             )
-            if companion_content:
+            if companion_content not in (None, ""):
                 text = _preview_text(companion_content)
-            elif sheets:
+            elif sheets is not None and sheets:
                 text = sheets_preview_text(sheets, PREVIEW_MAX_CHARS)
             else:
                 text = await asyncio.to_thread(_extract_document_text, target)
@@ -600,33 +597,18 @@ async def preview_file(
             lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
             path,
         )
-        if companion_content:
+        if companion_content not in (None, ""):
             extracted_text = _preview_text(companion_content)
-            local_target = None
         else:
             target = await ensure_local_path(key)
-            local_target = target
             extracted_text = await asyncio.to_thread(_extract_document_text, target)
         return {
             "path": path,
             "kind": kind,
             "mime_type": mime_type,
             "text": extracted_text,
-            "companion_path": companion_rel if companion_rel and not path.startswith("enterprise_info") else None,
-            "download_url": download_url,
-        }
-
-    companion = _find_companion_text_preview(local_target) if local_target is not None else None
-    if companion is not None:
-        content = await read_text_if_exists(companion)
-        return {
-            "path": path,
-            "kind": "text",
-            "mime_type": "text/markdown" if companion.suffix.lower() == ".md" else "text/plain",
-            "content": content or "",
-            "content_hash": content_hash(content or ""),
-            "companion_path": str(companion.resolve().relative_to(_agent_base_dir(agent_id).resolve()))
-            if not path.startswith("enterprise_info")
+            "companion_path": companion_rel
+            if companion_rel not in (None, "") and not path.startswith("enterprise_info")
             else None,
             "download_url": download_url,
         }
@@ -664,7 +646,7 @@ async def download_file(
     elif token:
         jwt_token = token
 
-    if not jwt_token:
+    if jwt_token in (None, ""):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     user = await load_user_from_access_token(
@@ -679,7 +661,7 @@ async def download_file(
     if not await storage.exists(key) or not await storage.is_file(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     presigned = await storage.presign_download_url(key, filename=Path(path).name, inline=inline)
-    if presigned:
+    if presigned not in (None, ""):
         return Response(
             status_code=302,
             headers={"Location": presigned},

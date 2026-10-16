@@ -25,7 +25,7 @@ CATEGORY_TYPE_MAP: dict[str, list[str]] = {
 
 
 def _types_for_category(category: str | None) -> list[str] | None:
-    if category and category != "all" and category in CATEGORY_TYPE_MAP:
+    if category not in (None, "") and category != "all" and category in CATEGORY_TYPE_MAP:
         return CATEGORY_TYPE_MAP[category]
     return None
 
@@ -152,7 +152,7 @@ async def broadcast_notification(
 
     if req.send_email:
         for user in users:
-            if not user.email:
+            if user.email in (None, ""):
                 continue
             email_recipients.append(
                 BroadcastEmailRecipient(

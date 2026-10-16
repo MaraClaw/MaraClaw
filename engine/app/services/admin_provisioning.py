@@ -33,12 +33,12 @@ def _flag(user: UserRecord, name: str, default: bool = False) -> bool:
 
 async def is_genesis_platform_admin(user: UserRecord) -> bool:
     """True when ``user`` holds the persisted genesis platform-admin flag."""
-    return getattr(user, "role", None) == "platform_admin" and _flag(user, "is_genesis")
+    return bool(getattr(user, "role", None) == "platform_admin" and _flag(user, "is_genesis"))
 
 
 async def is_genesis_org_admin(user: UserRecord) -> bool:
     """True when ``user`` holds the persisted genesis org-admin flag for their tenant."""
-    return (
+    return bool(
         getattr(user, "role", None) == "org_admin"
         and getattr(user, "tenant_id", None) is not None
         and _flag(user, "is_genesis")

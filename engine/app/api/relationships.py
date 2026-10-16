@@ -48,7 +48,7 @@ def _can_manage_relationships(current_user: UserRecord, access_level: str) -> bo
 
 
 def _display_provider_name(provider_name: str | None, provider_type: str | None) -> str | None:
-    if not provider_name and not provider_type:
+    if provider_name in (None, "") and provider_type in (None, ""):
         return None
     if (provider_type or "").lower() in ("web", "platform") or (provider_name or "").lower() == "web":
         return "Platform"
@@ -271,7 +271,7 @@ async def save_relationships(
             platform_user = await user_dao.get_with_identity(platform_user_id)
             if not platform_user or platform_user.tenant_id != _agent.tenant_id or not platform_user.is_active:
                 raise HTTPException(status_code=400, detail="Platform user is not available")
-            if not await get_agent_access_level_for_user_id(platform_user.id, _agent):
+            if await get_agent_access_level_for_user_id(platform_user.id, _agent) in (None, ""):
                 raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
             if _agent.tenant_id is None:
                 raise HTTPException(status_code=400, detail="Agent has no organization")
@@ -302,7 +302,7 @@ async def save_relationships(
         linked_user_id = await _get_valid_member_user_id(member, _agent.tenant_id)
         if member.user_id and not linked_user_id:
             raise HTTPException(status_code=400, detail="Relationship member is linked to an unavailable platform user")
-        if linked_user_id and not await get_agent_access_level_for_user_id(linked_user_id, _agent):
+        if linked_user_id and await get_agent_access_level_for_user_id(linked_user_id, _agent) in (None, ""):
             raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
         existing = existing_by_member.get(member_id)
         _ = await agent_relationship_dao.create(

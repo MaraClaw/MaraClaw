@@ -15,7 +15,7 @@ from app.scripts import bootstrap_db
 
 @pytest.fixture
 async def schema_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DbConnection]:
-    conninfo = os.environ.get("BOOTSTRAP_TEST_DATABASE_URL")
+    conninfo = os.environ.get("BOOTSTRAP_TEST_DATABASE_URL", "")
     if not conninfo:
         pytest.skip("BOOTSTRAP_TEST_DATABASE_URL is required for isolated PostgreSQL QA")
     schema = f"bootstrap_qa_{uuid4().hex}"

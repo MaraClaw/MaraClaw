@@ -223,7 +223,7 @@ async def _search_modelscope_api(
             if resp.status_code != 200:
                 return []
             data = json_object_from_response(resp)
-            if not data.get("success"):
+            if (success := data.get("success")) is None or not success:
                 return []
 
         payload = json_object_from(data.get("data"))
@@ -371,7 +371,7 @@ async def import_mcp_from_smithery(
     and stores the deploymentUrl for runtime execution via Smithery Connect.
     If config contains 'smithery_api_key', it's stored per-agent for future use.
     """
-    server_config: JsonObject = dict(config) if config else {}  # mutable copy
+    server_config: JsonObject = dict(config) if config is not None and config else {}  # mutable copy
 
     # Extract smithery_api_key from config (user-provided) or fallback to stored
     configured_api_key = server_config.pop("smithery_api_key", None)
@@ -458,9 +458,9 @@ async def import_mcp_from_smithery(
                 if qualified in (clean_id, server_id):
                     server_info = s
                     break
-            if not server_info and servers:
+            if (server_info is None or not server_info) and servers:
                 server_info = servers[0]
-            if not server_info:
+            if server_info is None or not server_info:
                 return f"❌ Server '{server_id}' not found on Smithery."
     except Exception as e:
         return f"❌ Failed to fetch server info: {str(e)[:200]}"
@@ -470,7 +470,7 @@ async def import_mcp_from_smithery(
     qualified_name = json_as_str_or(server_info.get("qualifiedName"), server_id.lstrip("@"))
 
     # Check if server supports remote hosting
-    if not server_info.get("remote"):
+    if (remote := server_info.get("remote")) is None or not remote:
         return (
             f"⚠️ **{display_name}** (`{qualified_name}`) does not support remote hosting via Smithery Connect.\n"
             + "This server requires local installation and cannot be imported automatically.\n"
@@ -497,7 +497,7 @@ async def import_mcp_from_smithery(
                         "inputSchema": json_object_from(t.get("inputSchema")),
                     }
                     for t in (raw_tools if isinstance(raw_tools, list) else [])
-                    if is_json_object(t) and t.get("name")
+                    if is_json_object(t) and (name := t.get("name")) is not None and name
                 ]
                 logger.info(f"[ResourceDiscovery] Got {len(tools_discovered)} tools from registry for {qualified_name}")
             else:
@@ -515,7 +515,7 @@ async def import_mcp_from_smithery(
     auth_message = ""
     conn_result = await _ensure_smithery_connection(api_key, base_mcp_url, display_name)
     conn_error = json_as_str(conn_result.get("error"))
-    if conn_error:
+    if conn_error not in (None, ""):
         auth_message = f"\n\n⚠️ Could not auto-create Smithery connection: {conn_error}"
     else:
         smithery_config = {
@@ -523,7 +523,7 @@ async def import_mcp_from_smithery(
             "smithery_connection_id": json_as_str_or(conn_result.get("connection_id")),
         }
         auth_url = json_as_str(conn_result.get("auth_url"))
-        if auth_url:
+        if auth_url not in (None, ""):
             auth_message = (
                 "\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
                 + f"{auth_url}\n"
@@ -566,7 +566,9 @@ async def import_mcp_from_smithery(
                     except ValueError:
                         live_data = None
                 live_payload = live_data if is_json_object(live_data) else None
-                live_result = json_object_from(live_payload.get("result")) if live_payload else {}
+                live_result = (
+                    json_object_from(live_payload.get("result")) if live_payload is not None and live_payload else {}
+                )
                 live_tools_raw = live_result.get("tools", [])
                 live_tools = (
                     [item for item in live_tools_raw if is_json_object(item)]
@@ -581,7 +583,7 @@ async def import_mcp_from_smithery(
                         "inputSchema": json_object_from(t.get("inputSchema")),
                     }
                     for t in live_tools
-                    if t.get("name") and is_json_object(t.get("inputSchema"))
+                    if (name := t.get("name")) is not None and name and is_json_object(t.get("inputSchema"))
                 ]
                 if live_tools_normalized:
                     logger.info(
@@ -720,9 +722,9 @@ async def import_mcp_direct(
 
     # Build URL with apiKey if provided
     full_url = mcp_url
-    if api_key and "?" in mcp_url:
+    if api_key not in (None, "") and "?" in mcp_url:
         full_url = f"{mcp_url}&apiKey={api_key}"
-    elif api_key:
+    elif api_key not in (None, ""):
         full_url = f"{mcp_url}?apiKey={api_key}"
 
     display_name = server_name or mcp_url.split("//")[-1].split("/")[0].split(":")[0]
@@ -739,7 +741,7 @@ async def import_mcp_direct(
 
     # Config to store in AgentTool
     agent_tool_config: JsonObject = {}
-    if api_key:
+    if api_key not in (None, ""):
         agent_tool_config["api_key"] = api_key
 
     imported_tools = []

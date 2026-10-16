@@ -37,14 +37,16 @@ async def test_ensure_openclaw_does_not_reuse_default_slug(monkeypatch):
         return None
 
     monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", get_by_slug)
-    monkeypatch.setattr(seeder.tenant_dao, "create", AsyncMock(return_value=created))
+    create = AsyncMock(return_value=created)
+    monkeypatch.setattr(seeder.tenant_dao, "create", create)
     monkeypatch.setattr(seeder.tenant_dao, "get_default_end_user_org", AsyncMock(side_effect=[None, created]))
     monkeypatch.setattr(seeder.tenant_dao, "update", AsyncMock(return_value=created))
 
     result = await seeder._ensure_openclaw()
     assert result.slug == "openclaw"
-    seeder.tenant_dao.create.assert_awaited()
-    create_kwargs = seeder.tenant_dao.create.await_args.kwargs["obj_in"]
+    create.assert_awaited()
+    assert create.await_args is not None
+    create_kwargs = create.await_args.kwargs["obj_in"]
     assert create_kwargs["slug"] == "openclaw"
 
 
@@ -52,13 +54,14 @@ async def test_ensure_openclaw_does_not_reuse_default_slug(monkeypatch):
 async def test_ensure_openclaw_creates_when_missing(monkeypatch):
     created = _tenant(is_default_end_user_org=True)
     monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", AsyncMock(return_value=None))
-    monkeypatch.setattr(seeder.tenant_dao, "create", AsyncMock(return_value=created))
+    create = AsyncMock(return_value=created)
+    monkeypatch.setattr(seeder.tenant_dao, "create", create)
     monkeypatch.setattr(seeder.tenant_dao, "get_default_end_user_org", AsyncMock(side_effect=[None, created]))
     monkeypatch.setattr(seeder.tenant_dao, "update", AsyncMock(return_value=created))
 
     result = await seeder._ensure_openclaw()
     assert result.slug == "openclaw"
-    seeder.tenant_dao.create.assert_awaited()
+    create.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -71,8 +74,9 @@ async def test_ensure_openclaw_does_not_steal_existing_default_flag(monkeypatch)
 
     monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", get_by_slug)
     monkeypatch.setattr(seeder.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=other))
-    monkeypatch.setattr(seeder.tenant_dao, "update", AsyncMock())
+    update = AsyncMock()
+    monkeypatch.setattr(seeder.tenant_dao, "update", update)
 
     result = await seeder._ensure_openclaw()
     assert result.id == openclaw.id
-    seeder.tenant_dao.update.assert_not_awaited()
+    update.assert_not_awaited()

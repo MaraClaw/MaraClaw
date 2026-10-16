@@ -1,5 +1,6 @@
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -107,7 +108,7 @@ async def test_org_admin_can_delete_custom_skill_directly(monkeypatch, client, o
 
 @pytest.mark.asyncio
 async def test_browse_write_creates_tenant_skill_without_iterating_lazy_files(monkeypatch, client, platform_admin_user):
-    created: dict = {}
+    created: dict[str, Any] = {}
 
     async def fake_get(*args, **kwargs):
         return None

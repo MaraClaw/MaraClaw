@@ -120,7 +120,7 @@ class Judge0Backend(BaseSandboxBackend):
                 submission = json_object_from_response(submit_response)
                 token = json_as_str(submission.get("token"))
 
-                if not token:
+                if token in (None, ""):
                     return ExecutionResult(
                         success=False,
                         stdout="",

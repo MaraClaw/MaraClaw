@@ -47,7 +47,7 @@ async def _read_document_from_storage(
     from app.services.storage import get_storage_backend
 
     storage_key, normalized, is_enterprise = agent_tools._tool_storage_key(agent_id, rel_path, tenant_id)
-    if is_enterprise and not tenant_id:
+    if is_enterprise and tenant_id in (None, ""):
         return f"File not found: {rel_path}"
 
     storage = get_storage_backend()

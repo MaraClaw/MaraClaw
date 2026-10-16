@@ -214,7 +214,7 @@ def history_without_current_user(
     user_text: str,
 ) -> list[OpenAIMessage]:
     """Drop a trailing user turn that duplicates ``user_text`` (WS appends first)."""
-    if not history:
+    if history is None or not history:
         return []
     out = list(history)
     current = (user_text or "").strip()
@@ -234,7 +234,7 @@ def strip_image_payloads(text: str) -> str:
 
 def recent_has_tools(history: list[OpenAIMessage] | None, last_n: int = RECENT_HISTORY_TURNS) -> bool:
     for msg in (history or [])[-last_n:]:
-        if msg.get("tool_calls"):
+        if (tool_calls := msg.get("tool_calls")) is not None and tool_calls:
             return True
         role = msg.get("role")
         if role in {"tool", "tool_call"}:
@@ -243,7 +243,7 @@ def recent_has_tools(history: list[OpenAIMessage] | None, last_n: int = RECENT_H
 
 
 def parse_complexity_label(text: str | None) -> Complexity | None:
-    if not text:
+    if text in (None, ""):
         return None
     stripped = text.strip()
     candidates = [stripped]

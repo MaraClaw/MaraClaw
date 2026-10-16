@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -57,7 +58,7 @@ class MemoryKeyDao:
         ]
         return sorted(active, key=lambda row: (row.position, str(row.id)))
 
-    async def create(self, *, obj_in: dict) -> LinkupApiKeyRecord:
+    async def create(self, *, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
         record = LinkupApiKeyRecord(
             id=uuid4(),
             label=str(obj_in["label"]),
@@ -69,7 +70,7 @@ class MemoryKeyDao:
         self.rows[record.id] = record
         return record
 
-    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict) -> LinkupApiKeyRecord:
+    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
         for key, value in obj_in.items():
             setattr(db_obj, key, value)
         return db_obj
@@ -142,7 +143,9 @@ async def test_picker_cycles_three_keys_and_wraps(key_dao: MemoryKeyDao) -> None
     a = await add_key(label="a", api_key="ka")
     b = await add_key(label="b", api_key="kb")
     c = await add_key(label="c", api_key="kc")
-    assert (await current_key()).id == a.id
+    current = await current_key()
+    assert current is not None
+    assert current.id == a.id
     nxt = await advance_cursor(a.id)
     assert nxt is not None
     assert nxt.id == b.id

@@ -32,7 +32,7 @@ async def create_password_reset_token(identity_id: uuid.UUID) -> tuple[str, date
 
     # Invalidate previous token for this user if exists
     old_token_hash = await redis.get(user_key)
-    if old_token_hash:
+    if old_token_hash is not None and old_token_hash:
         _ = await redis.delete(f"{RESET_REDIS_KEY_PREFIX}{old_token_hash}")
 
     raw_token = secrets.token_urlsafe(32)
@@ -83,7 +83,7 @@ async def consume_password_reset_token(raw_token: str) -> ConsumedPasswordResetT
     token_key = f"{RESET_REDIS_KEY_PREFIX}{token_hash}"
 
     identity_id_str = await redis.get(token_key)
-    if not identity_id_str:
+    if identity_id_str is None or not identity_id_str:
         return None
 
     identity_id_value = identity_id_str.decode("utf-8") if isinstance(identity_id_str, bytes) else identity_id_str

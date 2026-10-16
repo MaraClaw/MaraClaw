@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import ClassVar, override
+from collections.abc import Mapping
+from typing import ClassVar, cast, override
 
 import httpx
 
@@ -100,9 +101,9 @@ class AnthropicClient(LLMClient):
 
         for msg in messages:
             if msg.role == "system":
-                if msg.content:
+                if msg.content is not None and msg.content:
                     system_blocks.append({"type": "text", "text": msg.content, "cache_control": {"type": "ephemeral"}})
-                if msg.dynamic_content:
+                if msg.dynamic_content not in (None, ""):
                     system_blocks.append({"type": "text", "text": f"\n{msg.dynamic_content}"})
             else:
                 formatted = msg.to_anthropic_format()
@@ -152,11 +153,11 @@ class AnthropicClient(LLMClient):
             if "temperature" not in kwargs:
                 payload["temperature"] = 1.0
 
-        if tools:
+        if tools is not None and tools:
             anthropic_tools: list[dict[str, object]] = []
             for tool in tools:
                 function = tool.get("function")
-                if tool.get("type") == "function" and isinstance(function, dict):
+                if cast(Mapping[str, object], tool).get("type") == "function" and isinstance(function, dict):
                     anthropic_tools.append(
                         {
                             "name": function.get("name", ""),
@@ -305,7 +306,7 @@ class AnthropicClient(LLMClient):
                     if current_event == "message_start":
                         msg = json_object_from(data.get("message"))
                         model_name = json_as_str(msg.get("model"))
-                        if model_name:
+                        if model_name not in (None, ""):
                             final_model = model_name
                         usage_raw = msg.get("usage")
                         if is_json_object(usage_raw):
@@ -368,18 +369,18 @@ class AnthropicClient(LLMClient):
                                 )
                                 tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
                                 if on_tool_delta:
-                                    callback_data = {
+                                    delta_callback_data: ToolCallbackData = {
                                         "id": tool_call.get("id") or f"draft-{idx}",
                                         "index": idx,
                                         "name": tool_name,
                                         "arguments": updated_arguments,
                                     }
-                                    await on_tool_delta(callback_data)
+                                    await on_tool_delta(delta_callback_data)
 
                     elif current_event == "message_delta":
                         delta = json_object_from(data.get("delta"))
                         stop_reason = json_as_str(delta.get("stop_reason"))
-                        if stop_reason:
+                        if stop_reason not in (None, ""):
                             last_finish_reason = stop_reason
                         usage_raw = data.get("usage")
                         if is_json_object(usage_raw):

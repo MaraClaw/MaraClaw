@@ -45,7 +45,7 @@ async def record_report(
         won = await gateway_message_dao.complete(message_id, agent.id, result=result, now=at)
         if won is None:
             return None
-        if won.conversation_id and result:
+        if won.conversation_id not in (None, "") and result:
             participant = await participant_dao.get_by_type_ref("agent", agent.id)
             _ = await chat_message_dao.insert_message(
                 agent_id=agent.id,
@@ -61,7 +61,7 @@ async def record_report(
 
 async def publish_report(agent: AgentRecord, message: GatewayMessageRecord, result: str) -> None:
     """Fan out a committed winning report without coupling publisher failures."""
-    if message.conversation_id:
+    if message.conversation_id not in (None, ""):
         try:
             from app.api.websocket import manager
 

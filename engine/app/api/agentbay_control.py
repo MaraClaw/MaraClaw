@@ -923,9 +923,9 @@ async def control_screenshot(
     try:
         # Try browser snapshot first, then desktop
         screenshot_b64 = await client.get_browser_snapshot_base64()
-        if not screenshot_b64:
+        if screenshot_b64 in (None, ""):
             screenshot_b64 = await client.get_desktop_snapshot_base64()
-        if not screenshot_b64:
+        if screenshot_b64 in (None, ""):
             logger.warning(f"[TakeControl] Screenshot returned None for agent={agent_id}")
 
         # Also fetch screen size for coordinate mapping between
@@ -1014,7 +1014,7 @@ async def control_unlock(
 
     try:
         # Export cookies if requested (non-critical - lock is released regardless)
-        if data.export_cookies and data.platform_hint:
+        if data.export_cookies and data.platform_hint not in (None, ""):
             try:
                 locked_env_type = _get_session_env_type(str(agent_id), data.session_id)
                 client = await _get_client(agent_id, data.session_id, env_type=locked_env_type)

@@ -110,7 +110,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                 f"SELECT {self._select_list()} FROM agent_triggers WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": trigger_id, "agent_id": agent_id},
             )
-            return AgentTriggerRecord.from_row(row) if row else None
+            return AgentTriggerRecord.from_row(row) if row is not None else None
 
     async def list_enabled_by_type(self, trigger_type: str) -> list[AgentTriggerRecord]:
         async with self.session() as db:
@@ -134,7 +134,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                 + "AND config->>'token' = %(token)s LIMIT 1",
                 {"token": token},
             )
-            return AgentTriggerRecord.from_row(row) if row else None
+            return AgentTriggerRecord.from_row(row) if row is not None else None
 
     async def get_by_agent_and_name(self, agent_id: UUID, name: str) -> AgentTriggerRecord | None:
         async with self.session() as db:
@@ -143,7 +143,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                 + "WHERE agent_id = %(agent_id)s AND name = %(name)s LIMIT 1",
                 {"agent_id": agent_id, "name": name},
             )
-            return AgentTriggerRecord.from_row(row) if row else None
+            return AgentTriggerRecord.from_row(row) if row is not None else None
 
     async def count_enabled_for_agent(self, agent_id: UUID) -> int:
         async with self.session() as db:

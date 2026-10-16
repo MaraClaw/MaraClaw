@@ -43,7 +43,7 @@ class LinkupApiKeyDAO(BaseDAO[LinkupApiKeyRecord]):
                 f"SELECT {self._select_list()} FROM linkup_api_keys WHERE key_fingerprint = %(fingerprint)s",
                 {"fingerprint": fingerprint},
             )
-            return LinkupApiKeyRecord.from_row(row) if row else None
+            return LinkupApiKeyRecord.from_row(row) if row is not None else None
 
     async def max_position(self) -> int | None:
         async with self.session() as db:
@@ -99,7 +99,7 @@ class LinkupAsyncJobDAO(BaseDAO[LinkupAsyncJobRecord]):
                 f"SELECT {self._select_list()} FROM linkup_async_jobs " + "WHERE upstream_job_id = %(upstream_job_id)s",
                 {"upstream_job_id": upstream_job_id},
             )
-            return LinkupAsyncJobRecord.from_row(row) if row else None
+            return LinkupAsyncJobRecord.from_row(row) if row is not None else None
 
     async def delete_by_job_id(self, upstream_job_id: str) -> None:
         async with self.session() as db:

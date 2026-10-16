@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable
 from contextvars import ContextVar, Token
-from typing import ClassVar, Protocol
+from typing import ClassVar, Protocol, cast
 
 from app.config import get_settings
 from app.core.events import get_redis
@@ -44,7 +45,7 @@ class _DeferredAcl:
 
 def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[AgentRecord, str] | None:
     memo = _request_memo.get()
-    if not memo:
+    if memo is None or not memo:
         return None
     return memo.get((user_id, agent_id))
 
@@ -119,7 +120,7 @@ async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
     if level not in {"manage", "use"}:
         return None
     logger.debug("access_cache hit")
-    return level
+    return "manage" if level == "manage" else "use"
 
 
 async def read_acl_version(agent_id: uuid.UUID) -> str:
@@ -238,7 +239,7 @@ async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
 async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
-        _ = await asyncio.wait_for(client.incr(_ver_key(agent_id)), timeout=_redis_wait_seconds())
+        _ = await asyncio.wait_for(cast(Awaitable[int], client.incr(_ver_key(agent_id))), timeout=_redis_wait_seconds())
         ttl = max(_ttl_seconds() * 40, 3600)
         _ = await asyncio.wait_for(client.expire(_ver_key(agent_id), ttl), timeout=_redis_wait_seconds())
     except Exception as exc:

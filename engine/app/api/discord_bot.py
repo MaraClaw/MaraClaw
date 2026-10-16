@@ -365,7 +365,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             except ValueError, TypeError:
                 pass
 
-            if _bot_token_bg and interaction_token and _app_id_bg:
+            if _bot_token_bg not in (None, "") and interaction_token and _app_id_bg not in (None, ""):
                 try:
                     await _send_discord_followup(_app_id_bg, _bot_token_bg, interaction_token, reply_text)
                 except Exception as e:

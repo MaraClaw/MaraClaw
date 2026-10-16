@@ -76,7 +76,7 @@ async def _get_gogcli_manage_agent(current_user: UserRecord, agent_id: uuid.UUID
 
 def _require_gogcli_container(agent: AgentRecord) -> None:
     """Reject OAuth operations until the agent already has a running container."""
-    if not agent.container_id:
+    if agent.container_id in (None, ""):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent container is not running")
 
 

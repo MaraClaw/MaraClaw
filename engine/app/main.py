@@ -172,7 +172,7 @@ def _load_version_info() -> dict[str, str]:
             continue
     if not commit:
         git_path = shutil.which("git")
-        if git_path:
+        if git_path not in (None, ""):
             try:
                 commit = (
                     subprocess.check_output(  # noqa: S603 - fixed argv, binary from shutil.which

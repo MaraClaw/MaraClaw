@@ -328,7 +328,7 @@ class AgentBayClient:
             selector=selector or None,
         )
         success, extracted = await asyncio.to_thread(session.browser.operator.extract, options)
-        extracted_raw: object = extracted
+        extracted_raw: object = list[object]((extracted,))[0]
         if success and extracted_raw and isinstance(extracted_raw, BaseModel):
             extracted_raw = extracted_raw.model_dump()
         return {"success": success, "data": extracted_raw}
@@ -648,7 +648,7 @@ class AgentBayClient:
 
         try:
             screenshot_data: object = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
-            if not screenshot_data:
+            if not (screenshot_data := list[object]((screenshot_data,))[0]):
                 logger.info("[AgentBay] Browser snapshot returned empty data")
                 return None
 
@@ -726,7 +726,7 @@ async def check_agentbay_channel(
     """Probe AgentBay connectivity for the agent."""
     del current_user
     key = await get_agentbay_api_key_for_agent(agent_id)
-    if not key:
+    if key in (None, ""):
         return {"ok": False, "error": "AgentBay not configured"}
     try:
         from agentbay import AgentBay, CreateSessionParams
@@ -779,7 +779,7 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
     api_key: str | None = None
     stored_api_key = json_as_str(tool_config.get("api_key"))
 
-    if stored_api_key:
+    if stored_api_key not in (None, ""):
         from app.config import get_settings
         from app.core.security import decrypt_data
 
@@ -795,10 +795,10 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
         if not is_plausible_agentbay_api_key(api_key):
             api_key = None
 
-    if not api_key:
+    if api_key in (None, ""):
         api_key = await get_agentbay_api_key_for_agent(agent_id)
 
-    if not api_key:
+    if api_key in (None, ""):
         raise RuntimeError("AgentBay not configured for this agent. Please configure in Tools > AgentBay.")
 
     client = AgentBayClient(api_key)

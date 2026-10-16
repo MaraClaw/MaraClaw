@@ -45,32 +45,31 @@ def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
         return None
     try:
         sched = json_loads_object(remind_schedule)
-        if isinstance(sched, dict):
-            sched_map = dict[str, object](sched)
-            frequency = sched_map.get("freq")
-            interval = sched_map.get("interval")
-            time_of_day = sched_map.get("time")
-            weekdays = sched_map.get("weekdays")
-            if (
-                isinstance(frequency, str)
-                and frequency in {"daily", "weekly"}
-                and isinstance(interval, int)
-                and not isinstance(interval, bool)
-                and interval > 0
-                and isinstance(time_of_day, str)
-                and (
-                    weekdays is None
-                    or (isinstance(weekdays, list) and all(isinstance(day, int) for day in list[object](weekdays)))
-                )
-            ):
-                schedule: ReminderSchedule = {
-                    "freq": frequency,
-                    "interval": interval,
-                    "time": time_of_day,
-                }
-                if weekdays is not None:
-                    schedule["weekdays"] = weekdays
-                return schedule
+        sched_map = dict[str, object](sched)
+        frequency = sched_map.get("freq")
+        interval = sched_map.get("interval")
+        time_of_day = sched_map.get("time")
+        weekdays = sched_map.get("weekdays")
+        if (
+            isinstance(frequency, str)
+            and frequency in {"daily", "weekly"}
+            and isinstance(interval, int)
+            and not isinstance(interval, bool)
+            and interval > 0
+            and isinstance(time_of_day, str)
+            and (
+                weekdays is None
+                or (isinstance(weekdays, list) and all(isinstance(day, int) for day in list[object](weekdays)))
+            )
+        ):
+            schedule: ReminderSchedule = {
+                "freq": frequency,
+                "interval": interval,
+                "time": time_of_day,
+            }
+            if weekdays is not None:
+                schedule["weekdays"] = weekdays
+            return schedule
     except json.JSONDecodeError, TypeError:
         pass
     # Legacy simple preset fallback
@@ -163,7 +162,7 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
         return None
 
     base_url = get_provider_base_url(model.provider, model.base_url)
-    if not base_url:
+    if base_url in (None, ""):
         return None
 
     static_prompt, dynamic_prompt = await build_agent_context(
@@ -201,14 +200,14 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
         from app.services.feishu_service import feishu_service
 
         target_name = task.supervision_target_name
-        if not target_name:
+        if target_name in (None, ""):
             logger.warning(f"Supervision task {task.id} has no target name")
             return
 
         created_at = task.created_at or datetime.now(UTC)
         days_since = (datetime.now(UTC) - created_at).days
         reminder_msg = f"📋 Supervision reminder from {agent_name}\n\nTask: {task.title}\n"
-        if task.description:
+        if task.description not in (None, ""):
             reminder_msg += f"Details: {task.description}\n"
         reminder_msg += f"Created: {days_since} days ago\n"
         if task.due_date:
@@ -264,7 +263,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
 
             try:
                 reply = await _get_agent_reply(target_agent, reminder_msg)
-                if reply:
+                if reply not in (None, ""):
                     _ = await chat_message_dao.insert_message(
                         agent_id=session_agent_id,
                         user_id=owner_id,
@@ -281,7 +280,12 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
             target_member = await org_member_dao.find_related_to_agent_by_name(task.agent_id, target_name)
             if target_member:
                 config = await channel_config_dao.get_for_agent(agent_id=task.agent_id, channel_type="feishu")
-                if config and config.app_id and config.app_secret and (target_member.email or target_member.phone):
+                if (
+                    config
+                    and config.app_id not in (None, "")
+                    and config.app_secret not in (None, "")
+                    and (target_member.email not in (None, "") or target_member.phone not in (None, ""))
+                ):
                     try:
                         resolved = await feishu_service.resolve_open_id(
                             config.app_id,
@@ -289,7 +293,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
                             email=target_member.email,
                             mobile=target_member.phone,
                         )
-                        if resolved:
+                        if resolved not in (None, ""):
                             content = _json.dumps({"text": reminder_msg}, ensure_ascii=False)
                             resp = await feishu_service.send_message(
                                 config.app_id,
@@ -344,7 +348,9 @@ async def _supervision_tick():
                 last_log = await task_log_dao.latest_for_task(task.id)
                 last_reminded = last_log.created_at if last_log else None
 
-                if task.remind_schedule and _is_reminder_due(task.remind_schedule, last_reminded, now):
+                if task.remind_schedule not in (None, "") and _is_reminder_due(
+                    task.remind_schedule, last_reminded, now
+                ):
                     logger.info(f"[supervision] FIRING reminder for '{task.title}' -> {task.supervision_target_name}")
                     await write_audit_log(
                         "supervision_fire",

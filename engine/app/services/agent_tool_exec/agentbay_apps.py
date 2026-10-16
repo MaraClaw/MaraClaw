@@ -40,7 +40,7 @@ def _agentbay_normalize_text(value: object) -> str:
 def _agentbay_app_field(app: _App, *keys: str) -> str:
     for key in keys:
         value = app.get(key)
-        if value:
+        if value is not None and value:
             return str(value)
     return ""
 
@@ -63,7 +63,7 @@ def _agentbay_format_apps(apps: list[_App], limit: int = 40) -> str:
             "stopCmd",
         ):
             value = app.get(key)
-            if value:
+            if value is not None and value:
                 compact[key] = value
         compact_apps.append(compact)
     rendered = json.dumps(compact_apps, ensure_ascii=False, indent=2)
@@ -157,7 +157,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
             if installed_result.get("success"):
                 apps = _apps_from_response(installed_result.get("apps", []))
                 matched_app, score = _agentbay_find_installed_app_match(cmd, apps)
-                if matched_app and score >= 0.58:
+                if matched_app is not None and matched_app and score >= 0.58:
                     matched_name = _agentbay_app_field(matched_app, "name") or "(unnamed app)"
                     matched_cmd = _agentbay_app_field(matched_app, "start_cmd", "startCmd")
                     matched_work_dir = _agentbay_app_field(matched_app, "work_directory", "workDirectory") or work_dir

@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -10,7 +11,7 @@ from app.records.user import UserRecord
 
 
 def make_user(**overrides):
-    values = {
+    values: dict[str, Any] = {
         "id": uuid.uuid4(),
         "identity_id": uuid.uuid4(),
         "display_name": "Alice",

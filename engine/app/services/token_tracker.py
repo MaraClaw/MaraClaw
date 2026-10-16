@@ -58,7 +58,7 @@ def _token_counter(source: Mapping[str, JsonValue], *keys: str) -> int:
 
 def extract_token_usage(usage: Mapping[str, JsonValue] | None) -> TokenUsage | None:
     """Extract normalized token usage, including prompt-cache counters when available."""
-    if not usage:
+    if usage is None or not usage:
         return None
 
     # OpenAI compatible:

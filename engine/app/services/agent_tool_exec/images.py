@@ -88,7 +88,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            if file_content:
+            if file_content not in (None, b""):
                 files = {"file": (file_name, file_content)}
                 resp = await client.post(
                     "https://upload.imagekit.io/api/v2/files/upload",
@@ -164,7 +164,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
 
         api_key = resolve_xai_api_key(api_key)
         base_url, base_error = resolve_xai_base_url(base_url)
-        if base_error:
+        if base_error not in (None, ""):
             return f"❌ {base_error}"
         if not api_key:
             return missing_xai_key_message("Grok Imagine")

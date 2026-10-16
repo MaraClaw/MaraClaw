@@ -8,6 +8,7 @@ import pytest
 from openclaw_tencentdb_patch_verifier_fixtures import (
     CLASSIFIER_BIN,
     ProbeConfig,
+    ProbeResult,
     classifier_decoy_source,
     classifier_verifier_source,
     require_command,
@@ -103,13 +104,13 @@ def _static_contract_errors(dockerfile_source: str, bootstrap_source: str) -> tu
     return tuple(errors)
 
 
-def _node_error(probe) -> bool:
+def _node_error(probe: ProbeResult) -> bool | str:
     expected = ("--expose-internals", str(probe.classifier), str(probe.target))
     forbidden = (str(probe.target), probe.target.name, probe.canary, "selected-hook.js", "noop-patch")
     return probe.result.returncode != 0 or probe.result.stdout or probe.result.stderr or not probe.calls or any(call != expected for call in probe.calls) or any(value in probe.result.stderr for value in forbidden)  # fmt: skip
 
 
-def _failure_error(probe, calls: bool) -> bool:
+def _failure_error(probe: ProbeResult, calls: bool) -> bool | str:
     expected = ("--expose-internals", str(probe.classifier), str(probe.target))
     forbidden = (str(probe.target), probe.target.name, probe.canary, "selected-hook.js", "noop-patch")
     return probe.result.returncode != 1 or probe.result.stdout or probe.result.stderr != "[tencentdb-patch-verify] stage=internal code=unclassified\n" or bool(probe.calls) != calls or (calls and any(call != expected for call in probe.calls)) or any(value in probe.result.stderr for value in forbidden)  # fmt: skip

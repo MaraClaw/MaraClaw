@@ -24,7 +24,7 @@ def _write_file(
     if rel_path and rel_path.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = rel_path[len("enterprise_info") :].lstrip("/")
@@ -86,7 +86,7 @@ def _edit_file(
     if rel_path and rel_path.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = rel_path[len("enterprise_info") :].lstrip("/")

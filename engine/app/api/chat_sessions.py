@@ -289,7 +289,7 @@ async def get_session_messages(
     agent_id: uuid.UUID,
     session_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=500, description="Number of messages to return"),
-    before: str = Query(None, description="Cursor: return messages created before this timestamp (ISO format)"),
+    before: str | None = Query(None, description="Cursor: return messages created before this timestamp (ISO format)"),
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[ChatMessageEntry]:
     """Get chat messages for a specific session."""
@@ -302,7 +302,7 @@ async def get_session_messages(
         raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
     before_dt = None
-    if before:
+    if before not in (None, ""):
         try:
             before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
         except ValueError:
@@ -358,7 +358,7 @@ async def get_session_messages(
                 entry["toolThinking"] = json_as_str_or(data.get("reasoning_content"))
             except json.JSONDecodeError, TypeError, AttributeError:
                 entry["content"] = m.content
-            if sender_name:
+            if sender_name not in (None, ""):
                 entry["sender_name"] = sender_name
             out.append(entry)
             continue
@@ -366,24 +366,24 @@ async def get_session_messages(
         if session.source_channel == "agent" and m.role == "assistant" and "```tool_code" in (m.content or ""):
             parts = _split_inline_tools(m.content)
             for part in parts:
-                if sender_name:
+                if sender_name not in (None, ""):
                     part["sender_name"] = sender_name
                 if m.participant_id:
                     part["participant_id"] = str(m.participant_id)
                 out.append(part)
         else:
-            entry = {
+            message_entry: ChatMessageEntry = {
                 "role": m.role,
                 "content": m.content,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
-            if m.thinking:
-                entry["thinking"] = m.thinking
-            if sender_name:
-                entry["sender_name"] = sender_name
+            if m.thinking not in (None, ""):
+                message_entry["thinking"] = m.thinking
+            if sender_name not in (None, ""):
+                message_entry["sender_name"] = sender_name
             if m.participant_id:
-                entry["participant_id"] = str(m.participant_id)
-            out.append(entry)
+                message_entry["participant_id"] = str(m.participant_id)
+            out.append(message_entry)
 
     return out
 

@@ -18,7 +18,7 @@ class _FakeDb:
 
 class PrefixOnlyStorage(StorageBackend):
     def __init__(self, objects: dict[str, bytes] | None = None):
-        self.objects = dict(objects or {})
+        self.objects: dict[str, bytes] = dict(objects or {})
 
     @override
     async def exists(self, key: str) -> bool:

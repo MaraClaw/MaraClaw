@@ -30,7 +30,7 @@ def _user(*, role="org_admin", tenant_id: uuid.UUID | None = _TENANT):
 
 
 def _model(**kwargs) -> LLMModelRecord:
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
         "provider": "grok",
         "model": "grok-4.6",
@@ -168,6 +168,7 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     token_calls = [call for call in transport.calls if call[0] == XAI_TOKEN_URL]
     assert token_calls, "status must poll the shipped xAI token endpoint"
     create.assert_awaited_once()
+    assert create.await_args is not None
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == "enc:xai-access-LIVE"
     assert obj_in["refresh_token_encrypted"] == "enc:xai-refresh-LIVE"
@@ -272,6 +273,7 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     assert out.model_id == updated.id
     _assert_no_secrets(out.model_dump())
     persist.assert_awaited_once()
+    assert persist.await_args is not None
     obj_in = persist.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == "enc:xai-access-REFRESHED"
     refresh_calls = [
@@ -344,15 +346,17 @@ async def test_persist_assigns_company_primary_and_bare_agents(monkeypatch):
     monkeypatch.setattr(pool.tenant_dao, "update", tenant_update)
     monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", assign)
     await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args is not None
     assert tenant_update.await_args.kwargs["obj_in"]["default_model_id"] == created.id
     assign.assert_awaited_once()
+    assert assign.await_args is not None
     assert assign.await_args.kwargs["model_id"] == created.id
 
 
 @pytest.mark.asyncio
 async def test_ensure_agent_inherits_grok_subscription_when_primary_missing(monkeypatch):
     grok = _model()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=None,
@@ -387,7 +391,7 @@ async def test_ensure_agent_prefers_subscription_over_grok_api_key(monkeypatch):
         api_key_encrypted="enc-short",
         refresh_token_encrypted=None,
     )
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=dummy.id,
@@ -410,6 +414,7 @@ async def test_ensure_agent_prefers_subscription_over_grok_api_key(monkeypatch):
     monkeypatch.setattr(pool.agent_dao, "update", update)
     out = await pool.ensure_agent_company_models(agent)
     assert out.primary_model_id == grok.id
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"]["primary_model_id"] == grok.id
 
 
@@ -429,6 +434,8 @@ async def test_activate_subscription_replaces_grok_api_key_default(monkeypatch):
     monkeypatch.setattr(pool.agent_dao, "migrate_primary_model", migrate)
     monkeypatch.setattr(pool.agent_dao, "assign_primary_where_null", assign)
     await pool.activate_pool_model_for_tenant(created)
+    assert tenant_update.await_args is not None
+    assert migrate.await_args is not None
     assert tenant_update.await_args.kwargs["obj_in"]["default_model_id"] == created.id
     assert migrate.await_args.kwargs["old_model_id"] == dummy_id
     assert migrate.await_args.kwargs["new_model_id"] == created.id
@@ -438,7 +445,7 @@ async def test_activate_subscription_replaces_grok_api_key_default(monkeypatch):
 async def test_ensure_agent_replaces_foreign_primary(monkeypatch):
     grok = _model()
     foreign_id = uuid.uuid4()
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=foreign_id,
@@ -458,6 +465,7 @@ async def test_ensure_agent_replaces_foreign_primary(monkeypatch):
     monkeypatch.setattr(pool.agent_dao, "update", update)
     out = await pool.ensure_agent_company_models(agent)
     assert out.primary_model_id == grok.id
+    assert update.await_args is not None
     assert update.await_args.kwargs["obj_in"]["primary_model_id"] == grok.id
 
 

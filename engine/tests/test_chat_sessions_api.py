@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -14,7 +15,7 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
     owner_id = uuid.uuid4()
     now = datetime.now(UTC)
 
-    current_user = SimpleNamespace(id=viewer_id, role="org_admin", tenant_id=uuid.uuid4())
+    current_user: Any = SimpleNamespace(id=viewer_id, role="org_admin", tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=uuid.uuid4())
     session = SimpleNamespace(
         id=uuid.uuid4(),
@@ -84,7 +85,7 @@ async def test_creator_can_list_all_sessions(monkeypatch):
     other_user_id = uuid.uuid4()
     now = datetime.now(UTC)
 
-    current_user = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
+    current_user: Any = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=creator_id)
     session = SimpleNamespace(
         id=uuid.uuid4(),
@@ -154,7 +155,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
     session_id = uuid.uuid4()
     now = datetime.now(UTC)
 
-    current_user = SimpleNamespace(id=viewer_id, role="org_admin", tenant_id=uuid.uuid4())
+    current_user: Any = SimpleNamespace(id=viewer_id, role="org_admin", tenant_id=uuid.uuid4())
     session = SimpleNamespace(
         id=session_id,
         agent_id=agent_id,
@@ -188,7 +189,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         agent_id=agent_id,
         session_id=session_id,
         limit=20,
-        before=None,
+        before=cast(Any, None),
         current_user=current_user,
     )
 
@@ -209,7 +210,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
     session_id = uuid.uuid4()
     now = datetime.now(UTC)
 
-    current_user = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
+    current_user: Any = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=creator_id)
     session = SimpleNamespace(
         id=session_id,
@@ -244,7 +245,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         agent_id=agent_id,
         session_id=session_id,
         limit=20,
-        before=None,
+        before=cast(Any, None),
         current_user=current_user,
     )
 
@@ -262,7 +263,7 @@ async def test_create_session_returns_web_session_shape(monkeypatch):
     user_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     now = datetime.now(UTC)
-    current_user = SimpleNamespace(id=user_id, role="member", tenant_id=uuid.uuid4())
+    current_user: Any = SimpleNamespace(id=user_id, role="member", tenant_id=uuid.uuid4())
     created = SimpleNamespace(
         id=uuid.uuid4(),
         agent_id=agent_id,

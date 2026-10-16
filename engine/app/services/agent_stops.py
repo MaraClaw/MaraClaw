@@ -9,7 +9,7 @@ from app.services.agent_manager import agent_manager
 
 async def stop_containers(agents: Sequence[AgentRecord]) -> None:
     for agent in agents:
-        if agent.container_id:
+        if agent.container_id not in (None, ""):
             _ = await agent_manager.stop_container(agent)
 
 

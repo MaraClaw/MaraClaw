@@ -106,7 +106,7 @@ async def render_html_to_pptx(
 
         def parse_style(style: str | None) -> dict[str, str]:
             out: dict[str, str] = {}
-            if not style:
+            if style in (None, ""):
                 return out
             for part in style.split(";"):
                 if ":" not in part:
@@ -137,13 +137,13 @@ async def render_html_to_pptx(
             for cls in [str(value) for value in (el.get("class") or [])]:
                 style.update(css_rules.get(f".{cls}", {}))
                 style.update(css_rules.get(f"{el.name}.{cls}", {}))
-            if el.get("id"):
+            if (element_id := el.get("id")) is not None and element_id:
                 style.update(css_rules.get(f"#{el.get('id')}", {}))
             style.update(parse_style(string_attribute(el.get("style"))))
             return style
 
         def color_tuple(value: str | None) -> tuple[int, int, int, float] | None:
-            if not value:
+            if value in (None, ""):
                 return None
             value = value.strip().lower()
             color_match = re.search(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})\b|rgba?\([^)]+\)", value)
@@ -203,7 +203,7 @@ async def render_html_to_pptx(
         def representative_color(
             value: str | None, prefer: str = "last", backdrop: str | RGBColor | None = None
         ) -> RGBColor | None:
-            if not value:
+            if value in (None, ""):
                 return None
             matches = [
                 match.group(0) for match in re.finditer(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b|rgba?\([^)]+\)", value)
@@ -214,7 +214,7 @@ async def render_html_to_pptx(
             return parse_color(chosen, backdrop)
 
         def length_to_inches(value: str | None, axis_total_in: float, axis_px: int) -> float | None:
-            if not value:
+            if value in (None, ""):
                 return None
             value = str(value).strip().lower()
             try:
@@ -234,7 +234,7 @@ async def render_html_to_pptx(
 
         def font_size_pt(style: dict[str, str], default: int) -> float:
             raw = style.get("font-size")
-            if not raw:
+            if raw in (None, ""):
                 return float(default)
             raw = raw.strip().lower()
             try:
@@ -312,7 +312,7 @@ async def render_html_to_pptx(
             bg_clip = (style.get("background-clip") or style.get("-webkit-background-clip") or "").lower()
             if text_fill in ("transparent", "rgba(0, 0, 0, 0)") or "text" in bg_clip:
                 color = representative_color(style.get("background"), "last", style.get("_backdrop-color")) or color
-            if color:
+            if color is not None:
                 font.color.rgb = color
             family = (style.get("font-family") or "").split(",")[0].strip().strip("\"'")
             if family:
@@ -321,7 +321,7 @@ async def render_html_to_pptx(
 
         def add_background(slide: Slide, style: dict[str, str]) -> None:
             color = parse_color(style.get("background") or style.get("background-color"))
-            if color:
+            if color is not None:
                 fill = slide.background.fill
                 fill.solid()
                 fill.fore_color.rgb = color
@@ -334,28 +334,28 @@ async def render_html_to_pptx(
             border_width = str(style.get("border-width") or "0").replace("px", "").strip() or "0"
             if border_width.replace(".", "", 1).isdigit():
                 has_border = has_border or float(border_width) > 0
-            if not bg and has_border:
+            if bg is None and has_border:
                 border = border or RGBColor(220, 224, 232)
             if not has_border:
                 border = None
-            if not bg and not border:
+            if bg is None and border is None:
                 return None
             radius = length_to_inches(style.get("border-radius"), slide_width / 914400, design_w_px) or 0
             shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if radius > 0.03 else MSO_SHAPE.RECTANGLE
             shape = slide.shapes.add_shape(shape_type, Inches(x), Inches(y), Inches(w), Inches(h))
-            if bg:
+            if bg is not None:
                 shape.fill.solid()
                 shape.fill.fore_color.rgb = bg
             else:
                 shape.fill.background()
-            if border:
+            if border is not None:
                 shape.line.color.rgb = border
             else:
                 shape.line.color.rgb = bg or RGBColor(220, 224, 232)
             return shape
 
         def image_path(src: str | None) -> Path | None:
-            if not src or src.startswith(("http://", "https://", "data:")):
+            if src in (None, "") or src.startswith(("http://", "https://", "data:")):
                 return None
             if src.startswith("file://"):
                 from urllib.parse import unquote, urlparse
@@ -611,7 +611,8 @@ async def render_html_to_pptx(
         raw_layout = await collect_browser_layout(src_file, design_w_px, design_h_px, render_mode, render_scale)
         browser_layout = _object_mapping(raw_layout) if raw_layout is not None else None
         if (
-            browser_layout
+            browser_layout is not None
+            and browser_layout
             and render_mode in ("visual", "screenshot", "image", "hybrid")
             and render_browser_screenshots(browser_layout)
         ):
@@ -623,7 +624,7 @@ async def render_html_to_pptx(
                 + "use render_mode='editable' when editable PPT elements are more important than visual fidelity."
             )
 
-        if browser_layout and render_browser_layout(browser_layout):
+        if browser_layout is not None and browser_layout and render_browser_layout(browser_layout):
             await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(prs.save, str(tgt_file))
             return (
@@ -640,8 +641,6 @@ async def render_html_to_pptx(
             slide_nodes = [body]
 
         for slide_node in slide_nodes:
-            if not isinstance(slide_node, Tag):
-                continue
             slide = prs.slides.add_slide(blank_layout)
             add_background(slide, element_style(slide_node) or element_style(body))
             current_y = 0.65
@@ -667,7 +666,7 @@ async def render_html_to_pptx(
         logger.exception(f"Convert HTML to PPTX failed: {e}")
         return f"❌ Conversion failed: {e}"
     finally:
-        if browser_layout:
+        if browser_layout is not None and browser_layout:
             screenshot_paths = _object_list(browser_layout.get("screenshots"))
             background_paths = _object_list(browser_layout.get("backgroundScreenshots"))
             shape_map = _object_mapping(browser_layout.get("shapeScreenshots"))

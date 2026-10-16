@@ -70,7 +70,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 + f"RETURNING {self._select_list()}",
                 {"id": message_id, "agent_id": agent_id, "now": datetime.now(UTC)},
             )
-            return GatewayMessageRecord.from_row(row) if row else None
+            return GatewayMessageRecord.from_row(row) if row is not None else None
 
     async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
         """Return a claimed row to pending, unless a newer claim or a report has moved it since."""
@@ -82,7 +82,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 + f"RETURNING {self._select_list()}",
                 {"id": claimed.id, "agent_id": claimed.agent_id, "delivered_at": claimed.delivered_at},
             )
-            return GatewayMessageRecord.from_row(row) if row else None
+            return GatewayMessageRecord.from_row(row) if row is not None else None
 
     async def requeue_stale_deliveries(self, agent_id: UUID, *, stale_before: datetime) -> list[UUID]:
         """Return delivered rows with no report since ``stale_before`` (or no ``delivered_at``) to pending."""
@@ -107,7 +107,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 + f"RETURNING {self._select_list()}",
                 {"id": message_id, "agent_id": agent_id, "result": result, "now": now},
             )
-            return GatewayMessageRecord.from_row(row) if row else None
+            return GatewayMessageRecord.from_row(row) if row is not None else None
 
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         async with self.session() as db:
@@ -116,7 +116,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 + "WHERE id = %(id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"id": message_id, "agent_id": agent_id},
             )
-            return GatewayMessageRecord.from_row(row) if row else None
+            return GatewayMessageRecord.from_row(row) if row is not None else None
 
     async def list_recent(self, agent_id: UUID, *, limit: int = 50) -> Sequence[GatewayMessageRecord]:
         async with self.session() as db:

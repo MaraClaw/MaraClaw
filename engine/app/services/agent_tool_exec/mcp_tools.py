@@ -35,7 +35,7 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
             at = await agent_tool_dao.get_assignment(agent_id, tool.id)
             agent_config = (at.config or {}) if at else {}
 
-        if not tool.mcp_server_url:
+        if tool.mcp_server_url in (None, ""):
             logger.error(f"[MCP] Tool {tool_name} has no server URL configured")
             return f"❌ MCP tool {tool_name} has no server URL configured"
 
@@ -59,7 +59,7 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
         # 2. Agent's Atlassian channel config (for atlassian_* tools)
         direct_api_key_value = merged_config.get("api_key") or merged_config.get("atlassian_api_key")
         direct_api_key = direct_api_key_value if isinstance(direct_api_key_value, str) else None
-        if not direct_api_key and tool.mcp_server_name == "Atlassian Rovo" and agent_id is not None:
+        if direct_api_key in (None, "") and tool.mcp_server_name == "Atlassian Rovo" and agent_id is not None:
             try:
                 from app.api.atlassian import get_atlassian_api_key_for_agent
 
@@ -100,7 +100,7 @@ async def _import_mcp_server(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     mcp_url_value = config.pop("mcp_url", None)
     mcp_url = mcp_url_value if isinstance(mcp_url_value, str) else None
 
-    if mcp_url:
+    if mcp_url not in (None, ""):
         # Direct URL import - bypass Smithery
         from app.services.resource_discovery import import_mcp_direct
 

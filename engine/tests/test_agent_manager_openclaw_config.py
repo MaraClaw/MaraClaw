@@ -2,6 +2,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 from app.config import Settings
 from app.services import agent_manager as agent_manager_module
@@ -86,11 +87,11 @@ def test_generate_openclaw_config_omits_tencentdb_until_plugin_is_installed(monk
     settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     (tmp_path / str(agent.id)).mkdir()
 
     # When
-    config = manager._generate_openclaw_config(agent, model=None)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
     assert "plugins" not in config
@@ -101,13 +102,13 @@ def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_installe
     settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
     (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.3", encoding="utf-8")
 
     # When
-    config = manager._generate_openclaw_config(agent, model=None)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
     assert config["plugins"]["enabled"] is True
@@ -126,8 +127,8 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-    primary = SimpleNamespace(
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
         model="grok-4.6",
@@ -135,7 +136,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         auth_kind="grok_subscription",
         label="Grok SuperGrok",
     )
-    secondary = SimpleNamespace(
+    secondary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="anthropic",
         model="claude-sonnet-4-5",
@@ -143,7 +144,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         auth_kind="api_key",
         label="Claude",
     )
-    fallback = SimpleNamespace(
+    fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="xai",
         model="grok-4.5",
@@ -152,7 +153,9 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         label="Grok fallback",
     )
 
-    config = manager._generate_openclaw_config(agent, primary, secondary=secondary, fallback=fallback, selected=primary)
+    config: dict[str, Any] = manager._generate_openclaw_config(
+        agent, primary, secondary=secondary, fallback=fallback, selected=primary
+    )
 
     assert "agent" not in config
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
@@ -177,8 +180,8 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-    primary = SimpleNamespace(
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
         model="grok-4.6",
@@ -187,7 +190,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
         label="Grok 4.6",
     )
 
-    config = manager._generate_openclaw_config(agent, primary, selected=primary)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, selected=primary)
 
     assert "XAI_API_KEY" not in config["env"]["vars"]
     assert "auth" not in config
@@ -204,9 +207,9 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     expires = datetime.now(UTC) + timedelta(hours=2)
-    primary = SimpleNamespace(
+    primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
         model="grok-4.6",
@@ -219,6 +222,7 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
 
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
 
+    assert path is not None
     assert path == agent_dir / "openclaw.json"
     config = json.loads(path.read_text(encoding="utf-8"))
     assert "XAI_API_KEY" not in config["env"]["vars"]
@@ -241,8 +245,8 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-    primary = SimpleNamespace(
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
         model="gpt-5.4",
@@ -250,7 +254,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
         auth_kind="chatgpt_subscription",
         label="ChatGPT",
     )
-    fallback = SimpleNamespace(
+    fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
         model="gpt-5.6",
@@ -259,7 +263,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
         label="GPT API",
     )
 
-    config = manager._generate_openclaw_config(agent, primary, fallback=fallback, selected=primary)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, fallback=fallback, selected=primary)
 
     assert config["agents"]["defaults"]["model"]["primary"] == "openai/gpt-5.4"
     assert config["env"]["vars"]["OPENAI_API_KEY"] == "sk-openai-key"
@@ -278,10 +282,10 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent = SimpleNamespace(id=agent_id, name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     expires = datetime.now(UTC) + timedelta(hours=2)
     access = "eyJhbGciOiJub25lIn0.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWxpdmUifQ.sig"
-    primary = SimpleNamespace(
+    primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
         model="gpt-5.4",
@@ -295,6 +299,7 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
 
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
 
+    assert path is not None
     assert path == agent_dir / "openclaw.json"
     config = json.loads(path.read_text(encoding="utf-8"))
     assert "OPENAI_API_KEY" not in config["env"]["vars"]
@@ -318,10 +323,10 @@ def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(m
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "OPENCLAW_MEMORY_TENCENTDB_ENABLED", False)
     manager = AgentManager.__new__(AgentManager)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
 
     # When
-    config = manager._generate_openclaw_config(agent, model=None)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
     assert "plugins" not in config
@@ -345,7 +350,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
     )
 
@@ -414,7 +419,7 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
     )
 
@@ -445,7 +450,7 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
         return agent_dir
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=agent_id, name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
     )
 
@@ -468,7 +473,7 @@ async def test_stop_container_clears_status_and_container_id_when_container_miss
     manager = AgentManager.__new__(AgentManager)
     docker_client = RecordingDockerClient(stop_error=FakeNoSuchContainerError("missing"))
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.status = "running"
 
@@ -491,7 +496,7 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
     manager = AgentManager.__new__(AgentManager)
     docker_client = RecordingDockerClient(stop_error=FakeNoSuchContainerError("missing"))
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.container_port = 19876
     agent.status = "running"
@@ -510,8 +515,8 @@ async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_
     # Given
     manager = AgentManager.__new__(AgentManager)
     docker_client = RecordingDockerClient()
-    manager.docker_client = docker_client
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Running Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    manager.docker_client = cast(Any, docker_client)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Running Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "running-container"
     agent.container_port = 19876
     agent.status = "running"
@@ -544,7 +549,7 @@ def test_get_container_status_reads_python_on_whales_fields(monkeypatch):
     )
     docker_client = RecordingDockerClient(inspect_result=inspected_container)
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Status Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Status Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "status-container"
     agent.status = "running"
 
@@ -570,7 +575,7 @@ def test_get_container_status_returns_not_found_when_python_on_whales_inspect_mi
     manager = AgentManager.__new__(AgentManager)
     docker_client = RecordingDockerClient(inspect_error=FakeNoSuchContainerError("missing"))
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.status = "running"
 
@@ -594,7 +599,7 @@ async def test_lifecycle_methods_treat_missing_python_on_whales_client_as_docker
         stop_error=FakeClientNotFoundError("docker cli missing"),
     )
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         id=uuid.uuid4(), name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None
     )
     agent.container_id = "container-without-cli"

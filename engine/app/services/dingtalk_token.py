@@ -40,7 +40,7 @@ class DingTalkTokenManager:
             if time.time() < expires_at - 300:
                 return token
         shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
-        if shared:
+        if shared not in (None, ""):
             return shared
 
         async with self._get_lock(local_key):
@@ -50,7 +50,7 @@ class DingTalkTokenManager:
                 if time.time() < expires_at - 300:
                     return token
             shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
-            if shared:
+            if shared not in (None, ""):
                 return shared
 
             try:
@@ -63,7 +63,7 @@ class DingTalkTokenManager:
                     token = json_as_str(data.get("accessToken"))
                     expires_in = json_as_int(data.get("expireIn"), 7200)
 
-                    if token:
+                    if token not in (None, ""):
                         self._cache[local_key] = (token, time.time() + expires_in)
                         await set_cached_im_token(
                             "dingtalk",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -289,7 +289,7 @@ class _DeliveryStore:
         self.events: list[str] = []
 
     @asynccontextmanager
-    async def connection_ctx(self) -> AsyncIterator[None]:
+    async def connection_ctx(self) -> AsyncGenerator[None]:
         snapshot = {key: replace(row) for key, row in self.rows.items()}
         self.events.append("enter")
         try:

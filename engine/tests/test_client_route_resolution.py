@@ -281,6 +281,7 @@ class ClientCall:
     raw: str
     function: str
     expansion_reason: str = ""
+    resolution_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,12 +450,16 @@ class Extractor:
         return [(path, reason) for path in paths]
 
     def methods(self, helper: str, args: list[list[Token]], token: Token) -> list[str]:
+        from client_route_context import routing_neutral_context
+
         option_index = 2 if helper == "apiFormRequest" else 1
         default = "POST" if helper == "apiFormRequest" else "GET"
         if len(args) <= option_index or not args[option_index]:
             return [default]
         options = args[option_index]
         if options[0].text != "{" or group_end(options, 0) != len(options) - 1:
+            if routing_neutral_context(self, options):
+                return [default]
             raise self.error(token, "request options must be an object literal")
         method = None
         body = False
@@ -462,6 +467,8 @@ class Extractor:
             if not prop:
                 continue
             if prop[0].text == "...":
+                if routing_neutral_context(self, prop[1:]):
+                    continue
                 raise self.error(token, "top-level spread in request options")
             if prop[0].text == "[":
                 close = group_end(prop, 0)
@@ -509,6 +516,8 @@ class Extractor:
         return True
 
     def calls(self) -> list[ClientCall]:
+        from client_route_declarations import helper_declaration
+
         tokens = self.tokens
         for inner in template_tokens(tokens):
             if inner.text in HELPERS or (inner.kind == "literal" and static_text(inner).startswith(("/api/", "/ws/"))):
@@ -522,10 +531,19 @@ class Extractor:
                 continue
             if self.specifier(index):
                 continue
+            if helper_declaration(tokens, index):
+                continue
             cursor = index + 1
             if cursor < len(tokens) and tokens[cursor].text == "<":
                 cursor = group_end(tokens, cursor) + 1
             if cursor >= len(tokens) or tokens[cursor].text != "(":
+                if token.text == "wsUrl":
+                    from client_route_alias import websocket_alias
+
+                    alias = websocket_alias(self, index)
+                    calls.extend(alias.calls)
+                    consumed.update(alias.paths)
+                    continue
                 raise self.error(token, f"{token.text} is referenced without a direct call")
             end = group_end(tokens, cursor)
             args = split_tokens(tokens[cursor + 1 : end], ",")

@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -120,7 +121,7 @@ class ConnectionManager:
                 session_id=None,
             )
             return
-        if user_id:
+        if user_id not in (None, ""):
             logger.info(
                 "[WS] no socket for session {} agent={}; delivering to user {}",
                 session_id,
@@ -263,9 +264,10 @@ class WebSocketChatHandler:
                 enforce_password_change=True,
             )
         except HTTPException as exc:
-            detail = exc.detail
+            # FastAPI also carries the structured password-change detail raised by security.
+            detail = cast("str | dict[str, object] | None", exc.detail)
             if isinstance(detail, dict) and detail.get("must_change_password"):
-                content: str = detail.get("message") or "Password change required before continuing."
+                content = cast(str, detail.get("message") or "Password change required before continuing.")
             else:
                 content = "Authentication failed"
             await self.websocket.send_json({"type": "error", "content": content})
@@ -303,7 +305,7 @@ class WebSocketChatHandler:
 
             # Resolve or create chat session
             conv_id = await self._resolve_chat_session(self.user.id)
-            if not conv_id:
+            if conv_id in (None, ""):
                 return False
             self.conv_id = conv_id
 
@@ -332,7 +334,7 @@ class WebSocketChatHandler:
     async def _resolve_chat_session(self, user_id: uuid.UUID) -> str | None:
         """Resolves existing session or creates a new one."""
         conv_id = self.session_id_param
-        if conv_id:
+        if conv_id not in (None, ""):
             try:
                 _sid = uuid.UUID(conv_id)
             except ValueError, TypeError:
@@ -346,7 +348,7 @@ class WebSocketChatHandler:
                     await self.websocket.send_json({"type": "error", "content": "Not authorized for this session"})
                     await self.websocket.close(code=4003)
                     return None
-        if not conv_id:
+        if conv_id in (None, ""):
             _latest = await chat_session_dao.get_primary_platform(agent_id=self.agent_id, user_id=user_id)
             if _latest:
                 conv_id = str(_latest.id)

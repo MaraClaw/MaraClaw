@@ -136,7 +136,7 @@ class OrgSyncDepartmentMixin:
                     "SELECT * FROM identity_providers WHERE provider_type = %(ptype)s AND tenant_id IS NULL LIMIT 1",
                     {"ptype": self.provider_type},
                 )
-            if row:
+            if row is not None:
                 self.provider = IdentityProviderRecord.from_row(mapping_from_row(row))
                 return self.provider
 
@@ -164,7 +164,7 @@ class OrgSyncDepartmentMixin:
         now = _utcnow()
         path = dept.name
         parent_id = None
-        if dept.parent_external_id:
+        if dept.parent_external_id not in (None, ""):
             parent_dept = await org_department_dao.get_by_external(
                 external_id=dept.parent_external_id,
                 provider_id=provider.id,

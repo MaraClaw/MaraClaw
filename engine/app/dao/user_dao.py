@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import (
@@ -23,7 +23,7 @@ from app.core.session_cache import (
     peek_user_version,
     set_cached_user,
 )
-from app.dao.base import BaseDAO
+from app.dao.base import BaseDAO, as_uuid
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -114,7 +114,7 @@ class UserDAO(BaseDAO[UserRecord]):
                     + "WHERE identity_id = %(identity_id)s AND tenant_id IS NULL LIMIT 1",
                     {"identity_id": identity_id},
                 )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def get_by_identity_id(self, identity_id: UUID, include_identity: bool = False) -> Sequence[UserRecord]:
         async with self.session() as db:
@@ -140,7 +140,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE i.username = %(username)s LIMIT 1",
                 {"username": username},
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def get_by_email_and_tenant(
         self, email: str, tenant_id: UUID | None, exclude_user_id: UUID | None = None
@@ -158,7 +158,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + f"{exclude_sql} LIMIT 1",
                 params,
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def get_by_phone_and_tenant(
         self, phone: str, tenant_id: UUID | None, exclude_user_id: UUID | None = None
@@ -176,11 +176,11 @@ class UserDAO(BaseDAO[UserRecord]):
                 + f"{exclude_sql} LIMIT 1",
                 params,
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def get_with_identity(self, user_id: UUID, *, fresh: bool = False) -> UserRecord | None:
         try:
-            uid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+            uid = as_uuid(user_id)
         except TypeError, ValueError:
             uid = None
         observed_user_ver = "0"
@@ -196,7 +196,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE u.id = %(user_id)s LIMIT 1",
                 {"user_id": user_id},
             )
-            user = _user_from_joined_row(row) if row else None
+            user = _user_from_joined_row(row) if row is not None else None
             if user is not None and not fresh:
                 observed_ident_ver = await peek_identity_version(user.identity_id)
                 await set_cached_user(
@@ -206,6 +206,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 )
             return user
 
+    @override
     async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:
         if not {"tenant_id", "role", "is_active"}.intersection(obj_in):
             updated = await super().update(db_obj=db_obj, obj_in=obj_in)
@@ -233,6 +234,7 @@ class UserDAO(BaseDAO[UserRecord]):
                     await invalidate_tenant_agents(db, tenant_id)
             return updated
 
+    @override
     async def delete(self, *, id: UUID) -> UserRecord | None:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants, lock_user
         from app.db.session import optional_connection_ctx
@@ -258,7 +260,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "ORDER BY created_at DESC NULLS LAST LIMIT 1",
                 {"identity_id": identity_id},
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def list_active_ids_for_tenant(self, tenant_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
@@ -359,7 +361,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                 {"role": role},
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def first_org_admin_for_tenant(self, tenant_id: UUID) -> UserRecord | None:
         async with self.session() as db:
@@ -369,7 +371,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                 {"tenant_id": tenant_id},
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def count_by_role(self, role: str) -> int:
         async with self.session() as db:
@@ -454,7 +456,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + f") > 1 RETURNING {self._select_list()}",
                 params,
             )
-            user = UserRecord.from_row(row) if row else None
+            user = UserRecord.from_row(row) if row is not None else None
             if user is not None:
                 await bump_user_session(user.id)
                 await invalidate_tenant_agents(db, user.tenant_id)
@@ -475,7 +477,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 f"SELECT {self._select_list()} FROM users "
                 + "WHERE role = 'platform_admin' AND is_genesis IS TRUE LIMIT 1",
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def genesis_org_admin_for_tenant(self, tenant_id: UUID) -> UserRecord | None:
         async with self.session() as db:
@@ -484,7 +486,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' AND is_genesis IS TRUE LIMIT 1",
                 {"tenant_id": tenant_id},
             )
-            return UserRecord.from_row(row) if row else None
+            return UserRecord.from_row(row) if row is not None else None
 
     async def display_names_for_ids(self, user_ids: Sequence[UUID]) -> dict[UUID, str]:
         if not user_ids:
@@ -550,7 +552,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "LIMIT 1",
                 params,
             )
-            if not row:
+            if row is None:
                 return None
             return _user_from_joined_row(row) if include_identity else UserRecord.from_row(row)
 

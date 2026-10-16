@@ -51,7 +51,7 @@ def _allowed_root_for_tool_path(
     if normalized.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = normalized[len("enterprise_info") :].lstrip("/")
@@ -109,7 +109,7 @@ def _tool_storage_key(
 ) -> tuple[str, str, bool]:
     normalized = normalize_workspace_path_fn(normalize_tool_rel_path(rel_path))
     if is_enterprise_info_path(normalized):
-        if not tenant_id:
+        if tenant_id in (None, ""):
             key = "enterprise_info/" + normalized.removeprefix("enterprise_info").lstrip("/")
             return normalize_storage_key_fn(key), normalized, True
         sub = normalized[len("enterprise_info") :].lstrip("/")

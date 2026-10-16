@@ -92,6 +92,7 @@ async def test_publish_uses_normalized_agent_key_title_record_commit_and_public_
         "Title: Publish me\n\nAnyone can access this page without logging in."
     )
     create.assert_awaited_once()
+    assert create.await_args is not None
     obj_in = create.await_args.kwargs["obj_in"]
     assert (obj_in["agent_id"], obj_in["user_id"], obj_in["tenant_id"], obj_in["source_path"], obj_in["title"]) == (
         agent_id,
@@ -158,6 +159,7 @@ async def test_publish_missing_storage_and_tenant_failure_are_nonfatal_with_file
 
     assert "Public URL: /p/short-id" in result
     assert "PUBLIC_BASE_URL is not configured" in result
+    assert create2.await_args is not None
     obj_in = create2.await_args.kwargs["obj_in"]
     assert obj_in["tenant_id"] is None
     assert obj_in["title"] == "fallback"

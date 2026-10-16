@@ -4,9 +4,10 @@ import ast
 import importlib
 import inspect
 import uuid
+from collections.abc import Awaitable, Callable
 from itertools import pairwise
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from unittest.mock import AsyncMock
 
 from app.core.json_types import JsonObject
@@ -742,7 +743,7 @@ async def test_execute_tool_activity_logging_skips_noisy_reads_and_logs_success(
 
 
 async def test_execute_tool_persists_messaging_error_to_current_session(monkeypatch):
-    inserted: list[dict] = []
+    inserted: list[dict[str, Any]] = []
 
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
         return "tenant-message"
@@ -894,7 +895,7 @@ async def test_normal_image_dispatch_routes_registered_tools_through_workspace(m
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
         return "tenant-images"
 
-    async def run_with_temp_workspace(_agent_id, _tenant_id, runner, **kwargs) -> str:
+    async def run_with_temp_workspace(_agent_id, _tenant_id, runner: Callable[[Path], Awaitable[str]], **kwargs) -> str:
         calls.append(("workspace", kwargs))
         return await runner(tmp_path)
 
@@ -976,7 +977,7 @@ async def test_direct_code_dispatch_uses_facade_without_output_callback(monkeypa
         calls.append(("execute", args, kwargs))
         return "code result"
 
-    async def run_with_temp_workspace(_agent_id, _tenant_id, runner, **kwargs) -> str:
+    async def run_with_temp_workspace(_agent_id, _tenant_id, runner: Callable[[Path], Awaitable[str]], **kwargs) -> str:
         calls.append(("workspace", kwargs))
         return await runner(tmp_path)
 
@@ -1007,7 +1008,7 @@ async def test_normal_code_dispatch_propagates_output_callback(monkeypatch, tmp_
         calls.append(("execute", args, kwargs))
         return "code result"
 
-    async def run_with_temp_workspace(_agent_id, _tenant_id, runner, **kwargs) -> str:
+    async def run_with_temp_workspace(_agent_id, _tenant_id, runner: Callable[[Path], Awaitable[str]], **kwargs) -> str:
         calls.append(("workspace", kwargs))
         return await runner(tmp_path)
 

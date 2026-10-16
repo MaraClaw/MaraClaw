@@ -3,7 +3,7 @@
 import asyncio
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Protocol
 
@@ -130,7 +130,7 @@ class Runtime:
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     roles = parse_process_roles(get_settings().PROCESS_ROLE)
     runtime = Runtime()
     try:

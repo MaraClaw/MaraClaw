@@ -1,5 +1,6 @@
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import WebSocket
@@ -61,7 +62,7 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_to_session_falls_back_to_user(monkeypatch) -> None:
-    sent: list[dict] = []
+    sent: list[dict[str, Any]] = []
 
     async def route_message(**kwargs):
         sent.append(kwargs)

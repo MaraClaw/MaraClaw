@@ -30,7 +30,7 @@ def tenant_tool_config_key(tool_name: str) -> str:
 
 def get_sensitive_keys(config_schema: Mapping[str, Any] | ToolConfigSchema | None = None) -> set[str]:
     keys = set(SENSITIVE_FIELD_KEYS)
-    if config_schema:
+    if config_schema is not None and config_schema:
         for field in config_schema.get("fields", []):
             if field.get("type") == "password":
                 keys.add(field.get("key", ""))
@@ -77,7 +77,7 @@ def decrypt_sensitive_fields(
 
 def meaningful_config(config: Mapping[str, JsonValue] | None) -> JsonObject:
     """Drop empty form values while preserving booleans/numbers."""
-    if not config:
+    if config is None or not config:
         return {}
     cleaned: JsonObject = {}
     for key, value in config.items():
@@ -101,7 +101,7 @@ async def get_tenant_tool_config(
             "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
             {"tenant_id": tenant_id, "key": tenant_tool_config_key(tool_name)},
         )
-    value_raw = row.get("value") if row else None
+    value_raw = row.get("value") if row is not None else None
     value_map: dict[str, Any] = dict[str, Any](value_raw) if isinstance(value_raw, dict) else {}
     raw = value_map.get("config")
     if not isinstance(raw, dict):
@@ -155,7 +155,7 @@ async def set_tenant_tool_config(
             "SELECT tenant_id FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
             {"tenant_id": tenant_id, "key": key},
         )
-        if existing:
+        if existing is not None:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
                 + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
@@ -189,7 +189,7 @@ def mask_sensitive_fields(
     masked: JsonObject = dict(config)
     for key in get_sensitive_keys(config_schema):
         value = masked.get(key)
-        if value and isinstance(value, str):
+        if value is not None and value and isinstance(value, str):
             suffix = value[-4:] if len(value) > 4 else value
             masked[key] = f"****{suffix}"
     return masked

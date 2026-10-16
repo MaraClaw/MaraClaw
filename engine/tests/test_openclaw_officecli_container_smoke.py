@@ -265,5 +265,5 @@ def test_real_linux_arm64_officecli_restart_smoke() -> None:
         assert (workspace.empty_state_dir / CHILD_MARKER).is_file()
 
     finally:
-        if message := cleanup_error_message(workspace.cleanup(), sys.exception()):
+        if (message := cleanup_error_message(workspace.cleanup(), sys.exception())) not in (None, ""):
             pytest.fail(message)

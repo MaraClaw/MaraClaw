@@ -1,3 +1,4 @@
+from app.core.tool_types import ToolDefinition
 from app.services.agent_tools_definitions.agentbay import AGENTBAY_AGENT_TOOLS
 from app.services.agent_tools_definitions.code_media import CODE_MEDIA_AGENT_TOOLS
 from app.services.agent_tools_definitions.core import CORE_AGENT_TOOLS
@@ -15,7 +16,7 @@ from app.services.llm.finish import FINISH_TOOL_DEFINITION, FINISH_TOOL_NAME
 # allow: SIZE_OK - static OpenAI tool catalog extracted verbatim; composed data table.
 # ─── Tool Definitions (OpenAI function-calling format) ──────────
 
-AGENT_TOOLS: list[object] = [
+AGENT_TOOLS: list[ToolDefinition] = [
     FINISH_TOOL_DEFINITION,
     *CORE_AGENT_TOOLS,
     *TRIGGER_AGENT_TOOLS,
@@ -89,6 +90,6 @@ def _catalog_tool_name(tool: object) -> str:
     return name if isinstance(name, str) else ""
 
 
-_always_core_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _ALWAYS_INCLUDE_CORE]
-_feishu_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _FEISHU_TOOL_NAMES]
-_channel_tools: list[object] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _CHANNEL_MESSAGE_TOOL_NAMES]
+_always_core_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _ALWAYS_INCLUDE_CORE]
+_feishu_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _FEISHU_TOOL_NAMES]
+_channel_tools: list[ToolDefinition] = [t for t in AGENT_TOOLS if _catalog_tool_name(t) in _CHANNEL_MESSAGE_TOOL_NAMES]

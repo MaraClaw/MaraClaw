@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable
+from typing import cast
 
 from app.config import get_settings
 from app.core.events import get_redis
@@ -41,7 +43,7 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
         if str(data.get("ver") or "0") != current_ver:
             return None
         return json_as_str(data.get("v"))
-    return raw if isinstance(raw, str) else None
+    return raw
 
 
 async def read_cached_text(agent_id: uuid.UUID, kind: str) -> tuple[str | None, str]:
@@ -93,7 +95,7 @@ async def set_cached_text(
 
 
 async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None) -> None:
-    kinds = (kind,) if kind else ("soul", "memory", "skills")
+    kinds = (kind,) if kind not in (None, "") else ("soul", "memory", "skills")
     if _ttl() <= 0:
         return
     try:
@@ -103,7 +105,7 @@ async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None)
             timeout=_wait(),
         )
         for item in kinds:
-            _ = await asyncio.wait_for(client.incr(_ver_key(agent_id, item)), timeout=_wait())
+            _ = await asyncio.wait_for(cast(Awaitable[int], client.incr(_ver_key(agent_id, item))), timeout=_wait())
     except Exception as exc:
         logger.debug("agent_context_cache invalidate skipped: {}", type(exc).__name__)
 

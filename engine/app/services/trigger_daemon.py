@@ -195,7 +195,7 @@ async def _tick():
                     }
                     if trigger.type == "once":
                         updates["is_enabled"] = False
-                    if trigger.max_fires and fire_count >= trigger.max_fires:
+                    if trigger.max_fires not in (None, 0) and fire_count >= trigger.max_fires:
                         updates["is_enabled"] = False
                     _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
         except Exception as e:

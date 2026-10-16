@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -56,7 +54,7 @@ async def init_pool(
 
     # Do not subscript the constructor: tests replace AsyncConnectionPool with a
     # non-generic FakePool that raises TypeError on __class_getitem__.
-    pool = AsyncConnectionPool(
+    pool: EnginePool = AsyncConnectionPool(
         conninfo=info,
         min_size=pool_min,
         max_size=pool_max,
@@ -70,7 +68,7 @@ async def init_pool(
         max_lifetime=max_lifetime,
     )
     await pool.open()
-    typed_pool = cast(EnginePool, pool)
+    typed_pool = pool
     _pool = typed_pool
     logger.info(
         f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s "

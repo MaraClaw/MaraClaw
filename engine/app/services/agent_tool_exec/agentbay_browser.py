@@ -39,7 +39,7 @@ async def _agentbay_browser_navigate(agent_id: uuid.UUID | None, ws: Path, argum
         screenshot_raw: object = result.get("screenshot")
         if screenshot_raw:
             raw_bytes = _agentbay_normalize_image_bytes(screenshot_raw)
-            if raw_bytes:
+            if raw_bytes not in (None, b""):
                 from app.services.vision_inject import store_temp_screenshot
 
                 img_id = store_temp_screenshot(raw_bytes)

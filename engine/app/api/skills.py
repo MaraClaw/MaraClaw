@@ -60,16 +60,16 @@ class SavedSkillResult(TypedDict):
 
 async def _get_tenant_setting(tenant_id: str | None, key: str) -> str:
     """Resolve a tenant setting value: tenant_settings DB > empty."""
-    if tenant_id:
+    if tenant_id not in (None, ""):
         try:
             async with connection_ctx() as conn:
                 row = await conn.fetchone(
                     "SELECT value FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                     {"tenant_id": _uuid.UUID(tenant_id), "key": key},
                 )
-                if row:
+                if row is not None:
                     token = json_as_str(mapping_from_row(row.get("value")).get("token"))
-                    if token:
+                    if token not in (None, ""):
                         return token
         except Exception as error:
             logger.warning(f"[Skills] Failed to retrieve tenant setting: {error}")
@@ -140,9 +140,9 @@ async def _fetch_clawhub_skill_archive(
 ) -> tuple[list[SkillFilePayload], str]:
     """Download a ClawHub skill archive from official API or mirror."""
     params = {"slug": slug}
-    if version:
+    if version not in (None, ""):
         params["version"] = version
-    if tag:
+    if tag not in (None, ""):
         params["tag"] = tag
 
     last_error = ""
@@ -257,7 +257,7 @@ async def _save_skill_to_db(
     tenant_id: str | None = None,
 ) -> SavedSkillResult:
     """Create a Skill + SkillFile records in the database."""
-    tid = _uuid.UUID(tenant_id) if tenant_id else None
+    tid = _uuid.UUID(tenant_id) if tenant_id not in (None, "") else None
     existing = await skill_dao.get_by_folder_name(folder_name, tenant_id=tid, tenant_scoped=True)
     if existing:
         raise HTTPException(
@@ -637,7 +637,7 @@ async def _upsert_tenant_setting(tenant_id: _uuid.UUID, key: str, value: str) ->
             "SELECT tenant_id FROM tenant_settings WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
             {"tenant_id": tenant_id, "key": key},
         )
-        if existing:
+        if existing is not None:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
                 + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
@@ -666,7 +666,7 @@ async def get_skill_token_status(
     ch_key = await _get_clawhub_key(tenant_id)
     return {
         "configured": bool(gh_token),
-        "source": "tenant" if tenant_id else "env",
+        "source": "tenant" if tenant_id not in (None, "") else "env",
         "masked": _mask_token(gh_token),
         "clawhub_configured": bool(ch_key),
         "clawhub_masked": _mask_token(ch_key),

@@ -58,7 +58,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 f"SELECT {self._select_list()} FROM skills WHERE folder_name = %(folder_name)s{tenant_sql} LIMIT 1",
                 params,
             )
-            return SkillRecord.from_row(row) if row else None
+            return SkillRecord.from_row(row) if row is not None else None
 
     async def list_for_tenant_scope(self, tenant_id: UUID | None) -> Sequence[SkillRecord]:
         async with self.session() as db:
@@ -90,7 +90,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 f"SELECT {self._select_list()} FROM skills WHERE id = %(skill_id)s{scope_sql} LIMIT 1",
                 params,
             )
-            if not row:
+            if row is None:
                 return None
             files = list(await skill_file_dao.list_for_skill(uuid_from_row(row["id"]))) if with_files else []
             return SkillRecord.from_row(row, files=files)
@@ -113,7 +113,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 f"SELECT {self._select_list()} FROM skills WHERE folder_name = %(folder_name)s{scope_sql} LIMIT 1",
                 params,
             )
-            if not row:
+            if row is None:
                 return None
             files = list(await skill_file_dao.list_for_skill(uuid_from_row(row["id"]))) if with_files else []
             return SkillRecord.from_row(row, files=files)
@@ -141,7 +141,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 f"SELECT {self._select_list()} FROM skills WHERE {where_sql} ORDER BY folder_name"
             )
             if not skill_rows:
-                return []
+                return list[SkillRecord]()
             skill_ids = [row["id"] for row in skill_rows]
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
@@ -173,14 +173,14 @@ class SkillDAO(BaseDAO[SkillRecord]):
 
     async def list_with_files_by_ids(self, skill_ids: Sequence[UUID]) -> Sequence[SkillRecord]:
         if not skill_ids:
-            return []
+            return list[SkillRecord]()
         async with self.session() as db:
             skill_rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM skills WHERE id = ANY(%(ids)s)",
                 {"ids": list(skill_ids)},
             )
             if not skill_rows:
-                return []
+                return list[SkillRecord]()
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
                 + "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
@@ -281,7 +281,7 @@ class SkillFileDAO(BaseDAO[SkillFileRecord]):
                 f"SELECT {self._select_list()} FROM skill_files WHERE skill_id = %(skill_id)s AND path = %(path)s",
                 {"skill_id": skill_id, "path": path},
             )
-            return SkillFileRecord.from_row(row) if row else None
+            return SkillFileRecord.from_row(row) if row is not None else None
 
     async def delete_by_skill_and_path(self, skill_id: UUID, path: str) -> None:
         async with self.session() as db:

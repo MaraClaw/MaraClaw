@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -77,7 +78,7 @@ async def test_agent_relationship_status_requires_original_creator_to_still_mana
         status="ready",
         tenant_id=tenant_id,
     )
-    rel = SimpleNamespace(
+    rel: Any = SimpleNamespace(
         agent_id=source.id,
         target_agent_id=target.id,
         created_by_user_id=creator_id,
@@ -124,7 +125,7 @@ async def test_agent_relationship_status_active_when_original_creator_still_mana
         status="ready",
         tenant_id=tenant_id,
     )
-    rel = SimpleNamespace(
+    rel: Any = SimpleNamespace(
         agent_id=source.id,
         target_agent_id=target.id,
         created_by_user_id=creator_id,

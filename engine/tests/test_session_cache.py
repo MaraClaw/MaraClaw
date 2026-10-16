@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -122,7 +123,7 @@ async def test_session_cache_redis_down_returns_none(fake_cache: FakeRedis) -> N
 
 def test_snapshot_never_includes_hash() -> None:
     user = _user()
-    payload = session_cache._snapshot(user, "0", "0")
+    payload: dict[str, Any] = session_cache._snapshot(user, "0", "0")
     assert "password_hash" not in payload["identity"]
     assert payload["identity"]["must_change_password"] is False
     assert payload["user"]["role"] == "member"

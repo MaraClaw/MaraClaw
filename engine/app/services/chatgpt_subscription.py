@@ -187,7 +187,7 @@ def _encrypt(value: str) -> str:
 
 
 def _decrypt(value: str | None) -> str:
-    if not value:
+    if value in (None, ""):
         return ""
     try:
         return decrypt_data(value, get_settings().SECRET_KEY)
@@ -255,7 +255,7 @@ async def chatgpt_subscription_status(user: UserRecord, session_id: str) -> Chat
         return public_status_payload(session)
 
     poll = await poll_device_authorization(session.device_auth_id, session.user_code, interval=session.interval)
-    if poll.interval:
+    if poll.interval not in (None, 0):
         session.interval = poll.interval
     if poll.status == "pending":
         return public_status_payload(session)

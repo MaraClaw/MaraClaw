@@ -70,15 +70,15 @@ def _validated_date(value: str, field: str) -> tuple[str, str | None]:
 def _extract_output_text(data: JsonObject) -> str:
     texts: list[str] = []
     top_level = json_as_str(data.get("output_text"))
-    if top_level:
+    if top_level not in (None, ""):
         texts.append(top_level)
     for item in object_list_from_row(data.get("output")):
         item_text = json_as_str(item.get("text"))
-        if item_text:
+        if item_text not in (None, ""):
             texts.append(item_text)
         for part in object_list_from_row(item.get("content")):
             part_text = json_as_str(part.get("text"))
-            if part_text:
+            if part_text not in (None, ""):
                 texts.append(part_text)
     return "\n\n".join(texts).strip()
 
@@ -109,17 +109,17 @@ async def _search_x(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     api_key = resolve_xai_api_key(json_as_str_or(config.get("api_key")))
     model = json_as_str_or(config.get("model")) or DEFAULT_X_SEARCH_MODEL
     base_url, base_error = resolve_xai_base_url(json_as_str_or(config.get("base_url")))
-    if base_error:
+    if base_error not in (None, ""):
         return f"❌ {base_error}"
     if not api_key:
         return missing_xai_key_message("X search")
 
     x_search_tool: JsonObject = {"type": "x_search"}
     allowed, allowed_error = _validated_handles(arguments.get("allowed_x_handles"))
-    if allowed_error:
+    if allowed_error not in (None, ""):
         return f"❌ {allowed_error}"
     excluded, excluded_error = _validated_handles(arguments.get("excluded_x_handles"))
-    if excluded_error:
+    if excluded_error not in (None, ""):
         return f"❌ {excluded_error}"
     if allowed and excluded:
         return "❌ Use either allowed_x_handles or excluded_x_handles, not both"
@@ -128,10 +128,10 @@ async def _search_x(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
     if excluded:
         x_search_tool["excluded_x_handles"] = excluded
     from_date, from_error = _validated_date(_string_value(arguments.get("from_date")).strip(), "from_date")
-    if from_error:
+    if from_error not in (None, ""):
         return f"❌ {from_error}"
     to_date, to_error = _validated_date(_string_value(arguments.get("to_date")).strip(), "to_date")
-    if to_error:
+    if to_error not in (None, ""):
         return f"❌ {to_error}"
     if from_date:
         x_search_tool["from_date"] = from_date

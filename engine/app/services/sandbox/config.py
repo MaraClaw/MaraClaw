@@ -86,13 +86,13 @@ class SandboxConfig(BaseModel):
         if not self.allow_network:
             return {}
         env: dict[str, str] = {}
-        if self.http_proxy:
+        if self.http_proxy not in (None, ""):
             env["http_proxy"] = self.http_proxy
             env["HTTP_PROXY"] = self.http_proxy
-        if self.https_proxy:
+        if self.https_proxy not in (None, ""):
             env["https_proxy"] = self.https_proxy
             env["HTTPS_PROXY"] = self.https_proxy
-        if self.no_proxy:
+        if self.no_proxy not in (None, ""):
             env["no_proxy"] = self.no_proxy
             env["NO_PROXY"] = self.no_proxy
         return env

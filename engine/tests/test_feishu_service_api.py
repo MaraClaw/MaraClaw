@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -119,9 +120,9 @@ async def test_login_or_register_links_existing_user_to_feishu_member_without_le
         name="Alice Feishu",
         user_id=None,
     )
-    member_updates: list[dict] = []
-    user_updates: list[dict] = []
-    identity_updates: list[dict] = []
+    member_updates: list[dict[str, Any]] = []
+    user_updates: list[dict[str, Any]] = []
+    identity_updates: list[dict[str, Any]] = []
 
     async def get_provider(_ptype, _tenant):
         return provider
