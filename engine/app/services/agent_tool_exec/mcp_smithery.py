@@ -1,8 +1,9 @@
 """Smithery Connect execution and recovery helpers."""
 
 import uuid
+from typing import cast
 
-from app.core.json_types import JsonObject, is_json_object, json_as_str, json_loads_value
+from app.core.json_types import JsonObject, json_as_str, json_loads_value
 
 from .registry import ToolArguments, ToolArgumentValue
 
@@ -111,7 +112,7 @@ async def _execute_via_smithery_connect(
                 if line.startswith("data: "):
                     try:
                         parsed = json_loads_value(line[6:])
-                        data = parsed if is_json_object(parsed) else None
+                        data = cast(JsonObject, parsed) if isinstance(parsed, dict) else None
                         break
                     except json_mod.JSONDecodeError:
                         pass
@@ -120,9 +121,9 @@ async def _execute_via_smithery_connect(
             if data is None:
                 try:
                     parsed = json_loads_value(raw)
-                    if not is_json_object(parsed):
+                    if not isinstance(parsed, dict):
                         return f"❌ Unexpected response from Smithery: {raw[:300]}"
-                    data = parsed
+                    data = cast(JsonObject, parsed)
                 except json_mod.JSONDecodeError:
                     return f"❌ Unexpected response from Smithery: {raw[:300]}"
 
