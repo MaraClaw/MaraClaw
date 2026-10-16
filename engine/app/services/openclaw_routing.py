@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.logging import logger
@@ -21,7 +22,7 @@ from app.records.llm import LLMModelRecord
 from app.services.agent_manager import agent_manager, guest_model_ref
 from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
-from app.services.llm.turn import ModelBundle, ModelSlot
+from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_hot_cache import (
     get_cached_bundle,
@@ -80,21 +81,25 @@ def applied_guest_model(
     return choice_model
 
 
-async def enqueue_openclaw_message(
+@dataclass(frozen=True, slots=True)
+class PreparedOpenClawMessage:
+    """Ensured destination and routing metadata, ready for a queue-only transaction."""
+
+    agent: AgentRecord
+    content: str
+    selected_slot: ModelSlot
+    guest_model_ref: str | None
+    complexity: Complexity | None
+    routing_reason: str
+
+
+async def prepare_openclaw_message(
     *,
     agent: AgentRecord,
     content: str,
-    sender_user_id: UUID | None = None,
-    sender_agent_id: UUID | None = None,
-    conversation_id: str | None = None,
     history: list[OpenAIMessage] | None = None,
-    await_wake: bool = True,
-) -> GatewayMessageRecord:
-    """Classify ``content``, rewrite guest config, and queue the gateway row.
-
-    Chat WS passes ``await_wake=False`` so the socket can ack immediately.
-    Background wake still runs the guest turn.
-    """
+) -> PreparedOpenClawMessage:
+    """Ensure models and rewrite guest config before the destination transaction."""
     if not recently_ensured(agent):
         agent = await ensure_agent_company_models(agent)
     bundle = get_cached_bundle(agent)
@@ -115,6 +120,31 @@ async def enqueue_openclaw_message(
         skip_classifier=True,
     )
     pending = await gateway_message_dao.list_pending(agent.id)
+    apply_model = applied_guest_model(choice.slot, choice.model, bundle, pending)
+    try:
+        _ = agent_manager.write_guest_config(
+            agent,
+            primary=bundle.primary,
+            secondary=bundle.secondary,
+            fallback=bundle.fallback,
+            selected=apply_model,
+        )
+    except Exception as exc:
+        logger.warning("[OpenClaw] guest config write failed for {}: {}", agent.id, exc)
+    return PreparedOpenClawMessage(
+        agent, content, choice.slot, guest_model_ref(choice.model), choice.complexity, choice.reason
+    )
+
+
+async def _insert_prepared_message(
+    prepared: PreparedOpenClawMessage,
+    *,
+    sender_user_id: UUID | None,
+    sender_agent_id: UUID | None,
+    conversation_id: str | None,
+) -> GatewayMessageRecord:
+    agent, content = prepared.agent, prepared.content
+    pending = await gateway_message_dao.list_pending(agent.id) if sender_user_id is not None else ()
     duplicate = next(
         (
             row
@@ -130,23 +160,7 @@ async def enqueue_openclaw_message(
     )
     if duplicate is not None:
         logger.info("[OpenClaw] skip duplicate pending inbox item agent={} id={}", agent.id, duplicate.id)
-        if await_wake:
-            await _run_inbox_wake(agent, content, duplicate.id)
-        else:
-            _schedule_inbox_wake(agent, content, duplicate.id)
         return duplicate
-    apply_model = applied_guest_model(choice.slot, choice.model, bundle, pending)
-    try:
-        _ = agent_manager.write_guest_config(
-            agent,
-            primary=bundle.primary,
-            secondary=bundle.secondary,
-            fallback=bundle.fallback,
-            selected=apply_model,
-        )
-    except Exception as exc:
-        logger.warning("[OpenClaw] guest config write failed for {}: {}", agent.id, exc)
-
     created = await gateway_message_dao.create(
         obj_in={
             "agent_id": agent.id,
@@ -155,23 +169,60 @@ async def enqueue_openclaw_message(
             "conversation_id": conversation_id,
             "content": content,
             "status": "pending",
-            "selected_slot": choice.slot,
-            "guest_model_ref": guest_model_ref(choice.model),
-            "complexity": choice.complexity,
-            "routing_reason": choice.reason,
+            "selected_slot": prepared.selected_slot,
+            "guest_model_ref": prepared.guest_model_ref,
+            "complexity": prepared.complexity,
+            "routing_reason": prepared.routing_reason,
         }
     )
     logger.info(
         "[OpenClaw] queued agent={} slot={} reason={} guest_model={}",
         agent.id,
-        choice.slot,
-        choice.reason,
-        guest_model_ref(choice.model),
+        prepared.selected_slot,
+        prepared.routing_reason,
+        prepared.guest_model_ref,
+    )
+    return created
+
+
+async def enqueue_prepared_openclaw_message(
+    prepared: PreparedOpenClawMessage,
+    *,
+    sender_user_id: UUID | None = None,
+    sender_agent_id: UUID | None = None,
+    conversation_id: str | None = None,
+) -> GatewayMessageRecord:
+    """Queue only; wake in a fresh context after the owning transaction commits.
+
+    Prepare before entering ``connection_ctx``. The row and caller's other writes
+    share that transaction; rollback drops the deferred wake.
+    """
+    created = await _insert_prepared_message(
+        prepared, sender_user_id=sender_user_id, sender_agent_id=sender_agent_id, conversation_id=conversation_id
+    )
+    _schedule_inbox_wake(prepared.agent, prepared.content, created.id)
+    return created
+
+
+async def enqueue_openclaw_message(
+    *,
+    agent: AgentRecord,
+    content: str,
+    sender_user_id: UUID | None = None,
+    sender_agent_id: UUID | None = None,
+    conversation_id: str | None = None,
+    history: list[OpenAIMessage] | None = None,
+    await_wake: bool = True,
+) -> GatewayMessageRecord:
+    """Prepare and queue a normal turn; optionally wait for its guest wake."""
+    prepared = await prepare_openclaw_message(agent=agent, content=content, history=history)
+    created = await _insert_prepared_message(
+        prepared, sender_user_id=sender_user_id, sender_agent_id=sender_agent_id, conversation_id=conversation_id
     )
     if await_wake:
-        await _run_inbox_wake(agent, content, created.id)
+        await _run_inbox_wake(prepared.agent, content, created.id)
     else:
-        _schedule_inbox_wake(agent, content, created.id)
+        _schedule_inbox_wake(prepared.agent, content, created.id)
     return created
 
 
