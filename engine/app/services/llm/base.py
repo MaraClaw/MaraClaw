@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, Literal, TypedDict
 
+import httpx
+
 from app.core.tool_types import ToolDefinition
 from app.services.llm.types import LLMMessage, LLMResponse, ToolPayload
 
@@ -45,6 +47,8 @@ class LLMError(Exception):
 
 class LLMClient(ABC):
     """Abstract base class for LLM clients."""
+
+    _client: httpx.AsyncClient | None
 
     def __init__(
         self,

@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from enum import Enum
 
-from .base import LLMError
-
 
 class FailoverErrorType(Enum):
     """Classification of LLM errors for failover decisions."""
@@ -63,17 +61,15 @@ def classify_error(error: Exception) -> FailoverErrorType:
     if any(kw in error_msg for kw in ["temporary", "transient", "unavailable", "overloaded", "busy"]):
         return FailoverErrorType.RETRYABLE
 
-    # LLMError with specific patterns
-    if isinstance(error, (LLMError, Exception)):
-        # Check the error message for HTTP status codes
-        if any(code in error_msg for code in ["401", "403", "400", "422"]):
-            return FailoverErrorType.NON_RETRYABLE
-        if any(code in error_msg for code in ["429", "500", "502", "503", "504", "408"]):
-            return FailoverErrorType.RETRYABLE
+    # Check the error message for HTTP status codes
+    if any(code in error_msg for code in ["401", "403", "400", "422"]):
+        return FailoverErrorType.NON_RETRYABLE
+    if any(code in error_msg for code in ["429", "500", "502", "503", "504", "408"]):
+        return FailoverErrorType.RETRYABLE
 
-        # If it's an error result string, it's likely retryable by default
-        if error_msg.startswith(("[llm error]", "[llm call error]", "[error]")):
-            return FailoverErrorType.RETRYABLE
+    # If it's an error result string, it's likely retryable by default
+    if error_msg.startswith(("[llm error]", "[llm call error]", "[error]")):
+        return FailoverErrorType.RETRYABLE
 
     return FailoverErrorType.UNKNOWN
 

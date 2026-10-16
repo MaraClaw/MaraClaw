@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, ClassVar, override
+from collections.abc import Mapping
+from typing import Any, ClassVar, cast, override
 
 import httpx
 
@@ -96,7 +97,9 @@ class GeminiClient(LLMClient):
         m = re.match(r"^data:([^;]+);base64,([A-Za-z0-9+/=]+)$", data_url or "")
         if not m:
             return None
-        return m.group(1), m.group(2)
+        mime_type = cast(str, m.group(1))
+        base64_data = cast(str, m.group(2))
+        return mime_type, base64_data
 
     def _content_to_gemini_parts(self, content: object) -> list[JsonObject]:
         """Convert canonical content into Gemini `parts`."""
@@ -144,12 +147,12 @@ class GeminiClient(LLMClient):
         """Build tool_call_id -> function_name map from assistant messages."""
         out: dict[str, str] = {}
         for msg in messages:
-            if msg.role != "assistant" or not msg.tool_calls:
+            if msg.role != "assistant" or msg.tool_calls is None or not msg.tool_calls:
                 continue
             for tc in msg.tool_calls:
                 tc_id = tc.get("id")
                 tc_name = tc.get("function", {}).get("name")
-                if tc_id and tc_name:
+                if tc_id not in (None, "") and tc_name not in (None, ""):
                     out[tc_id] = tc_name
         return out
 
@@ -157,15 +160,16 @@ class GeminiClient(LLMClient):
         self, tools: list[ToolDefinition] | None
     ) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
         """Convert OpenAI-style tools to Gemini function declarations."""
-        if not tools:
+        if tools is None or not tools:
             return None, None
 
         declarations: list[dict[str, Any]] = []
         for tool in tools:
-            if tool.get("type") != "function":
+            tool_data = cast(Mapping[str, object], tool)
+            if tool_data.get("type") != "function":
                 continue
             function = tool.get("function")
-            if function is None:
+            if tool_data.get("function") is None:
                 continue
             decl: dict[str, Any] = {
                 "name": function.get("name", ""),
@@ -201,7 +205,9 @@ class GeminiClient(LLMClient):
         for msg in messages:
             if msg.role == "system":
                 parts = self._content_to_gemini_parts(msg.content)
-                text_chunks = [json_as_str_or(p.get("text")) for p in parts if p.get("text")]
+                text_chunks = [
+                    json_as_str_or(p.get("text")) for p in parts if (text := p.get("text")) is not None and text
+                ]
                 if text_chunks:
                     system_blocks.append("\n".join(text_chunks))
                 continue
@@ -214,7 +220,7 @@ class GeminiClient(LLMClient):
 
             if msg.role == "assistant":
                 parts = self._content_to_gemini_parts(msg.content)
-                if msg.tool_calls:
+                if msg.tool_calls is not None and msg.tool_calls:
                     for tc in msg.tool_calls:
                         fn = tc.get("function", {})
                         args = fn.get("arguments", "{}")
@@ -233,7 +239,7 @@ class GeminiClient(LLMClient):
                             "args": parsed_args,
                         }
                         extra = tc.get("_gemini_extra")
-                        if extra:
+                        if extra is not None and extra:
                             func_call_dict.update(json_object_from(extra))
 
                         parts.append({"functionCall": func_call_dict})
@@ -241,7 +247,7 @@ class GeminiClient(LLMClient):
                     contents.append({"role": "model", "parts": parts})
                 continue
 
-            if msg.role == "tool":
+            if cast(str, msg.role) == "tool":
                 name = tool_name_map.get(msg.tool_call_id or "", msg.tool_call_id or "tool_result")
                 response_content = msg.content or ""
                 if isinstance(response_content, str):
@@ -281,16 +287,16 @@ class GeminiClient(LLMClient):
             },
         }
 
-        if max_tokens:
+        if max_tokens not in (None, 0):
             payload["generationConfig"]["maxOutputTokens"] = max_tokens
 
         if system_blocks:
             payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_blocks)}]}
 
         tools_payload, tool_config = self._convert_tools(tools)
-        if tools_payload:
+        if tools_payload is not None and tools_payload:
             payload["tools"] = tools_payload
-        if tool_config:
+        if tool_config is not None and tool_config:
             payload["toolConfig"] = tool_config
 
         from app.services.llm.reasoning import apply_reasoning_effort
@@ -322,7 +328,7 @@ class GeminiClient(LLMClient):
         """Normalize Gemini finish reason to OpenAI-style labels."""
         if tool_calls:
             return "tool_calls"
-        if not finish_reason:
+        if finish_reason in (None, ""):
             return None
         mapping = {
             "STOP": "stop",
@@ -347,9 +353,13 @@ class GeminiClient(LLMClient):
             for part_raw in object_list_from_row(content_obj.get("parts")):
                 part = json_object_from(part_raw)
                 text = json_as_str(part.get("text"))
-                if text:
+                if text not in (None, ""):
                     content_chunks.append(text)
-                function_call = json_object_from(part.get("functionCall")) if part.get("functionCall") else {}
+                function_call = (
+                    json_object_from(raw_call)
+                    if (raw_call := part.get("functionCall")) is not None and raw_call
+                    else {}
+                )
                 if function_call:
                     name = json_as_str_or(function_call.get("name"))
                     args_raw: object = function_call.get("args")
@@ -417,7 +427,7 @@ class GeminiClient(LLMClient):
             raise LLMError(f"HTTP {response.status_code}: {error_text}")
 
         data = json_object_from_response(response)
-        if data.get("error"):
+        if (error := data.get("error")) is not None and error:
             raise LLMError(f"API error: {data['error']}")
 
         return self._parse_response_data(data)
@@ -489,11 +499,11 @@ class GeminiClient(LLMClient):
                     if not is_str_dict(parsed):
                         continue
                     data = json_object_from(parsed)
-                    if data.get("error"):
+                    if (error := data.get("error")) is not None and error:
                         raise LLMError(f"API error: {data['error']}")
 
                     usage = self._normalize_usage(data.get("usageMetadata"))
-                    if usage:
+                    if usage is not None and usage:
                         final_usage = usage
 
                     candidates = object_list_from_row(data.get("candidates"))
@@ -505,12 +515,16 @@ class GeminiClient(LLMClient):
                     for part_raw in object_list_from_row(content_obj.get("parts")):
                         part = json_object_from(part_raw)
                         text = json_as_str(part.get("text"))
-                        if text:
+                        if text not in (None, ""):
                             full_text += text
                             if on_chunk:
                                 await on_chunk(text)
 
-                        function_call = json_object_from(part.get("functionCall")) if part.get("functionCall") else {}
+                        function_call = (
+                            json_object_from(raw_call)
+                            if (raw_call := part.get("functionCall")) is not None and raw_call
+                            else {}
+                        )
                         if function_call:
                             name = json_as_str_or(function_call.get("name"))
                             args_raw: object = function_call.get("args")

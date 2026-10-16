@@ -1,6 +1,8 @@
 """OpenAI function-calling catalog slice. Data only."""
 
-CORE_AGENT_TOOLS: list[object] = [
+from app.core.tool_types import ToolDefinition
+
+CORE_AGENT_TOOLS: list[ToolDefinition] = [
     {
         "type": "function",
         "function": {

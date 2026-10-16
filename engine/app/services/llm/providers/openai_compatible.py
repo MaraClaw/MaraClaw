@@ -119,10 +119,10 @@ class OpenAICompatibleClient(LLMClient):
         if stream:
             payload["stream_options"] = {"include_usage": True}
 
-        if max_tokens:
+        if max_tokens not in (None, 0):
             payload["max_tokens"] = max_tokens
 
-        if tools:
+        if tools is not None and tools:
             payload["tools"] = tools
             if self.supports_tool_choice:
                 payload["tool_choice"] = "auto"
@@ -164,7 +164,7 @@ class OpenAICompatibleClient(LLMClient):
                     content_blocks = [json_object_from(part) for part in msg.content if isinstance(part, dict)]
                     _ = self._mark_last_text_block_cacheable(content_blocks)
 
-                if msg.dynamic_content:
+                if msg.dynamic_content not in (None, ""):
                     content_blocks.append(
                         {
                             "type": "text",
@@ -174,7 +174,7 @@ class OpenAICompatibleClient(LLMClient):
 
                 if content_blocks:
                     formatted["content"] = content_blocks
-                if msg.tool_calls:
+                if msg.tool_calls is not None and msg.tool_calls:
                     formatted["tool_calls"] = msg.tool_calls
                 payload.append(formatted)
                 continue
@@ -210,7 +210,7 @@ class OpenAICompatibleClient(LLMClient):
 
     def _mark_last_text_block_cacheable(self, blocks: list[JsonObject]) -> bool:
         for part in reversed(blocks):
-            if part.get("type") == "text" and part.get("text"):
+            if part.get("type") == "text" and (text := part.get("text")) is not None and text:
                 part["cache_control"] = {"type": "ephemeral"}
                 return True
         return False
@@ -268,7 +268,7 @@ class OpenAICompatibleClient(LLMClient):
             raise LLMError(f"Stream error: {data['error']}")
 
         # Parse usage from stream (returned in the final chunk with include_usage)
-        if data.get("usage"):
+        if (usage := data.get("usage")) is not None and usage:
             chunk.usage = _usage_from_json(data.get("usage"))
 
         choices_raw: object = data.get("choices")
@@ -279,17 +279,17 @@ class OpenAICompatibleClient(LLMClient):
         delta = json_object_from(choice.get("delta"))
 
         finish_reason = json_as_str(choice.get("finish_reason"))
-        if finish_reason:
+        if finish_reason not in (None, ""):
             chunk.finish_reason = finish_reason
 
         # Reasoning content (DeepSeek R1)
         reasoning = json_as_str(delta.get("reasoning_content"))
-        if reasoning:
+        if reasoning not in (None, ""):
             chunk.reasoning_content = reasoning
 
         # Regular content with think tag filtering
         text = json_as_str(delta.get("content"))
-        if text:
+        if text not in (None, ""):
             chunk.content, in_think, tag_buffer = self._filter_think_tags(text, in_think, tag_buffer)
 
         # Tool calls
@@ -473,13 +473,13 @@ class OpenAICompatibleClient(LLMClient):
                             if on_thinking:
                                 await on_thinking(chunk.reasoning_content)
 
-                        if chunk.tool_call:
+                        if chunk.tool_call is not None and chunk.tool_call:
                             idx = chunk.tool_call.get("index", 0)
                             while len(tool_calls_data) <= idx:
                                 tool_calls_data.append({"id": "", "function": {"name": "", "arguments": ""}})
                             tc = tool_calls_data[idx]
                             delta_id = chunk.tool_call.get("id")
-                            if delta_id:
+                            if delta_id not in (None, ""):
                                 tc["id"] = delta_id
                             fn_delta = chunk.tool_call.get("function") or {}
                             function = tc.get("function") or {}
@@ -487,7 +487,7 @@ class OpenAICompatibleClient(LLMClient):
                             current_arguments = function.get("arguments")
                             arguments = current_arguments if isinstance(current_arguments, str) else ""
                             name_delta = fn_delta.get("name")
-                            if name_delta:
+                            if name_delta not in (None, ""):
                                 tool_name += name_delta
                             arg_chunk = fn_delta.get("arguments")
                             if arg_chunk is not None:
@@ -505,10 +505,10 @@ class OpenAICompatibleClient(LLMClient):
                                 }
                                 await on_tool_delta(callback_data)
 
-                        if chunk.usage:
+                        if chunk.usage is not None and chunk.usage:
                             final_usage = chunk.usage
 
-                        if chunk.finish_reason:
+                        if chunk.finish_reason not in (None, ""):
                             last_finish_reason = chunk.finish_reason
 
                 break  # Success

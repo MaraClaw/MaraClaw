@@ -6,15 +6,19 @@ Callers still construct lightweight ``LLMClient`` wrappers and still call
 
 from __future__ import annotations
 
+from typing import override
+
 import httpx
 
 
 class _NoStoreCookies(httpx.Cookies):
     """Do not persist Set-Cookie across tenants that share a pooled client."""
 
+    @override
     def extract_cookies(self, response: object) -> None:
         return None
 
+    @override
     def set_cookie_header(self, request: object) -> None:
         return None
 
