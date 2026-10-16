@@ -71,7 +71,7 @@ CHANNEL_TYPES: Final[dict[str, ChannelKind]] = {
 
 def normalize_channel_type(value: str | None) -> str | None:
     """Normalize a free-form channel name to the stored ``channel_type``."""
-    if not value:
+    if value in (None, ""):
         return None
     raw = value.strip().lower()
     if not raw:
@@ -79,7 +79,7 @@ def normalize_channel_type(value: str | None) -> str | None:
     if raw in CHANNEL_TYPES:
         return raw
     mapped = _ALIASES.get(raw)
-    if mapped:
+    if mapped not in (None, ""):
         return mapped
     return raw
 
@@ -87,7 +87,7 @@ def normalize_channel_type(value: str | None) -> str | None:
 def outbound_provider_key(value: str | None) -> str | None:
     """Normalize to the key used by proactive ``send_channel_message`` routing."""
     stored = normalize_channel_type(value)
-    if not stored:
+    if stored in (None, ""):
         return None
     kind = CHANNEL_TYPES.get(stored)
     if kind:

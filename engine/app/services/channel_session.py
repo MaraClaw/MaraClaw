@@ -40,7 +40,9 @@ async def find_or_create_channel_session(
                 obj_in={
                     "agent_id": agent_id,
                     "user_id": user_id,
-                    "title": group_name[:40] if (is_group and group_name) else first_message_title[:40],
+                    "title": group_name[:40]
+                    if (is_group and group_name not in (None, ""))
+                    else first_message_title[:40],
                     "source_channel": source_channel,
                     "external_conv_id": external_conv_id,
                     "is_group": is_group,
@@ -63,7 +65,7 @@ async def find_or_create_channel_session(
         updates["user_id"] = user_id
 
     # For group sessions: update group_name if it changed
-    if session.is_group and group_name and session.group_name != group_name:
+    if session.is_group and group_name not in (None, "") and session.group_name != group_name:
         updates["group_name"] = group_name
         updates["title"] = group_name[:40]
 

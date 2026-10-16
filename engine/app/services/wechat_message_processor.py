@@ -84,13 +84,13 @@ def _parse_wechat_delivery_config(
 ) -> WeChatDeliveryConfig | None:
     extra_raw = getattr(config, "extra_config", None) or {}
     extra: dict[str, Any] = dict[str, Any](extra_raw) if isinstance(extra_raw, dict) else {}
-    token = _nonempty_string(extra.get("bot_token") if isinstance(extra, dict) else None)
+    token = _nonempty_string(extra.get("bot_token"))
     if token is None:
         return None
     return {
         "token": token,
-        "base_url": _nonempty_string(extra.get("baseurl") if isinstance(extra, dict) else None) or fallback_base_url,
-        "route_tag": _nonempty_string(extra.get("route_tag") if isinstance(extra, dict) else None),
+        "base_url": _nonempty_string(extra.get("baseurl")) or fallback_base_url,
+        "route_tag": _nonempty_string(extra.get("route_tag")),
     }
 
 

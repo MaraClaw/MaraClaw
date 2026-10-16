@@ -15,7 +15,7 @@ async def get_wecom_access_token(corp_id: str, secret: str) -> JsonObject:
 
     if corp_id:
         cached = await get_cached_im_token("wecom", corp_id, secret=secret)
-        if cached:
+        if cached not in (None, ""):
             return {"access_token": cached, "expires_in": 7200}
 
     url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
@@ -80,7 +80,7 @@ async def send_wecom_message(
 
     # If agent_id is not provided, we'll try to get it from the config
     # For now, require agent_id or fail
-    if not agent_id:
+    if agent_id in (None, ""):
         return {"errcode": -1, "errmsg": "agent_id is required for WeCom messages"}
 
     payload: JsonObject = {

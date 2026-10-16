@@ -18,7 +18,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import make_msgid, parseaddr
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import NotRequired, TypedDict, cast
 
 import aiofiles
 
@@ -164,7 +164,7 @@ def resolve_config(config: EmailConfig) -> ResolvedEmailConfig:
 
 
 def _message_header(msg: Message, key: str, default: str = "") -> str:
-    value = msg.get(key, default)
+    value = cast(object, msg.get(key, default))
     return value if isinstance(value, str) else default
 
 
@@ -172,9 +172,8 @@ def _decode_header_value(value: str) -> str:
     """Decode an email header value (handles encoded words)."""
     if not value:
         return ""
-    decoded_parts: object = decode_header(value)
     result: list[str] = []
-    items = list[object](decoded_parts) if isinstance(decoded_parts, list) else []
+    items = list[object](decode_header(value))
     for item in items:
         if not isinstance(item, tuple) or len(item) < 2:
             continue
@@ -248,7 +247,7 @@ async def send_email(
     msg["From"] = addr
     msg["To"] = to
     msg["Subject"] = subject
-    if cc:
+    if cc not in (None, ""):
         msg["Cc"] = cc
     msg["Message-ID"] = make_msgid()
     msg["Date"] = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S %z")
@@ -256,7 +255,7 @@ async def send_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     # Attach files
-    if attachments and workspace_path:
+    if attachments is not None and attachments and workspace_path is not None:
         from app.services.storage import get_storage_backend, normalize_storage_key
 
         storage = get_storage_backend()
@@ -294,7 +293,7 @@ async def send_email(
 
     try:
         recipients = [r.strip() for r in to.split(",")]
-        if cc:
+        if cc not in (None, ""):
             recipients += [r.strip() for r in cc.split(",")]
 
         send_smtp_email(
@@ -309,7 +308,7 @@ async def send_email(
             timeout=15,
         )
 
-        return f"✅ Email sent to {to}" + (f" (CC: {cc})" if cc else "")
+        return f"✅ Email sent to {to}" + (f" (CC: {cc})" if cc not in (None, "") else "")
     except smtplib.SMTPAuthenticationError:
         return "❌ SMTP authentication failed. Please check your email address and authorization code."
     except Exception as e:
@@ -347,7 +346,7 @@ async def read_emails(
                 _ = mail.select(folder, readonly=True)
 
                 # Search
-                if search:
+                if search not in (None, ""):
                     _, msg_nums = mail.search(None, search)
                 else:
                     _, msg_nums = mail.search(None, "ALL")
@@ -367,7 +366,7 @@ async def read_emails(
                 for mid in latest_ids:
                     _, msg_data = mail.fetch(mid, "(RFC822)")
                     first = msg_data[0] if msg_data else None
-                    if not isinstance(first, tuple) or len(first) < 2:
+                    if not isinstance(first, tuple):
                         continue
                     raw = first[1]
                     if not isinstance(raw, bytes):

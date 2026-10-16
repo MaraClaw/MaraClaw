@@ -190,7 +190,7 @@ def _wake_body(content: str, message_id: UUID | None = None) -> dict[str, str]:
 
 
 def _container_ref(agent: AgentRecord) -> str | None:
-    container_id = getattr(agent, "container_id", None)
+    container_id: object = getattr(agent, "container_id", None)
     if isinstance(container_id, str) and container_id.strip():
         return container_id.strip()
     return openclaw_container_name(agent.id)
@@ -215,7 +215,7 @@ def _docker_execute(agent: AgentRecord, argv: list[str]) -> str | None:
 
     docker_client = agent_manager.docker_client
     container = _container_ref(agent)
-    if docker_client is None or not container:
+    if docker_client is None or container in (None, ""):
         return "docker client or container missing"
     # python-on-whales: execute lives on DockerClient.container, same as gogcli.
     api = docker_client.container if isinstance(docker_client, _DockerContainerClient) else docker_client
@@ -396,7 +396,7 @@ async def wake_openclaw_inbox(
         if not _hooks_unreachable(hook_error):
             logger.warning("[OpenClaw] inbox wake failed for {}: {}", agent.id, hook_error)
             return False
-    if last_error and _hooks_unreachable(last_error):
+    if last_error not in (None, "") and _hooks_unreachable(last_error):
         _mark_hooks_down(agent.id, last_error)
         if await run_sync(_wait_for_guest_gateway, agent):
             if await _inbox_already_handled(agent, message_id):

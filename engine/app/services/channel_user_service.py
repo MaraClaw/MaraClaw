@@ -111,50 +111,45 @@ class ChannelUserService:
         email = _extra_text(extra_info, "email")
         mobile = _extra_text(extra_info, "mobile")
 
-        if not user and email:
+        if not user and email not in (None, ""):
             user = await sso_service.match_user_by_email(email, tenant_id_text)
             if user:
                 logger.info(f"[{channel_type}] Matched user by email: {user.id}")
 
-        if not user and mobile:
+        if not user and mobile not in (None, ""):
             user = await sso_service.match_user_by_mobile(mobile, tenant_id_text or "")
             if user:
                 logger.info(f"[{channel_type}] Matched user by mobile: {user.id}")
 
-        should_persist_member = True
-
         if user:
-            if should_persist_member:
-                if org_member and not org_member.user_id:
-                    _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-                elif not org_member:
-                    existing_member = await self._find_existing_org_member_for_user(user.id, provider.id, tenant_id)
-                    if existing_member:
-                        unionid, open_id, external_id = self._get_channel_ids(
-                            channel_type, external_user_id, extra_info
-                        )
-                        updates: dict[str, Any] = {}
-                        if unionid and not existing_member.unionid:
-                            updates["unionid"] = unionid
-                        if open_id and not existing_member.open_id:
-                            updates["open_id"] = open_id
-                        if external_id and not existing_member.external_id:
-                            updates["external_id"] = external_id
-                        if updates:
-                            _ = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
-                        logger.info(
-                            f"[{channel_type}] Reusing org-synced OrgMember {existing_member.id} "
-                            + f"for user {user.id} instead of creating a duplicate shell"
-                        )
-                    else:
-                        _ = await self._create_org_member_shell(
-                            provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
-                        )
+            if org_member and not org_member.user_id:
+                _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+            elif not org_member:
+                existing_member = await self._find_existing_org_member_for_user(user.id, provider.id, tenant_id)
+                if existing_member:
+                    unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
+                    updates: dict[str, Any] = {}
+                    if unionid not in (None, "") and existing_member.unionid in (None, ""):
+                        updates["unionid"] = unionid
+                    if open_id not in (None, "") and existing_member.open_id in (None, ""):
+                        updates["open_id"] = open_id
+                    if external_id not in (None, "") and existing_member.external_id in (None, ""):
+                        updates["external_id"] = external_id
+                    if updates:
+                        _ = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
+                    logger.info(
+                        f"[{channel_type}] Reusing org-synced OrgMember {existing_member.id} "
+                        + f"for user {user.id} instead of creating a duplicate shell"
+                    )
+                else:
+                    _ = await self._create_org_member_shell(
+                        provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
+                    )
             return user
 
         unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
 
-        if channel_type == "feishu" and not org_member and not (unionid or external_id):
+        if channel_type == "feishu" and not org_member and unionid in (None, "") and external_id in (None, ""):
             raise ChannelUserResolutionError(
                 "Feishu sender could not be resolved to a stable user_id/union_id; "
                 + "refusing to lazily create a duplicate user from open_id only."
@@ -162,13 +157,12 @@ class ChannelUserService:
 
         user = await self._create_channel_user(channel_type, external_user_id, extra_info, tenant_id)
 
-        if should_persist_member:
-            if org_member:
-                _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-            else:
-                _ = await self._create_org_member_shell(
-                    provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
-                )
+        if org_member:
+            _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
+        else:
+            _ = await self._create_org_member_shell(
+                provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
+            )
         logger.info(f"[{channel_type}] Created new user: {user.id} for external_id: {external_user_id}")
 
         return user
@@ -225,13 +219,13 @@ class ChannelUserService:
                     external_id=external_id,
                 )
             if normalized_channel == "wecom":
-                if not external_id:
+                if external_id in (None, ""):
                     return None
                 return await org_member_dao.find_active_by_any_ids(
                     provider_id=provider_id,
                     external_id=external_id,
                 )
-            if not external_id:
+            if external_id in (None, ""):
                 return None
             return await org_member_dao.find_active_by_any_ids(
                 provider_id=provider_id,
@@ -298,7 +292,7 @@ class ChannelUserService:
         identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
         name = _extra_text(info, "name") or f"{channel_type.capitalize()} {identity_seed[:8]}"
 
-        username = email.split("@")[0] if email else f"{channel_type}_{identity_seed[:12]}"
+        username = email.split("@")[0] if email not in (None, "") else f"{channel_type}_{identity_seed[:12]}"
 
         existing = await user_dao.get_by_identity_username(username)
         if existing and (tenant_id is None or existing.tenant_id == tenant_id):
@@ -310,7 +304,7 @@ class ChannelUserService:
         found = await identity_dao.get_by_email(email)
         if found:
             identity = found
-        elif mobile:
+        elif mobile not in (None, ""):
             found = await identity_dao.get_by_phone(mobile)
             if found:
                 identity = found
@@ -356,9 +350,9 @@ async def get_platform_user_by_org_member(
             return user
 
     user = None
-    if org_member.email:
+    if org_member.email is not None and org_member.email:
         user = await sso_service.match_user_by_email(org_member.email, agent_tenant_id_text)
-    if not user and org_member.phone:
+    if not user and org_member.phone is not None and org_member.phone:
         user = await sso_service.match_user_by_mobile(org_member.phone, agent_tenant_id_text or "")
 
     if user:
@@ -374,21 +368,23 @@ async def get_platform_user_by_org_member(
     seed_for_name = external_seed or org_member.id.hex
     name = org_member.name or f"{channel_type.capitalize()} User {seed_for_name[:8]}"
 
-    if email:
+    if email is not None and email:
         username = email.split("@")[0]
-    elif external_seed:
+    elif external_seed is not None and external_seed:
         username = f"{channel_type}_{external_seed[:12]}"
     else:
         username = f"{channel_type}_{org_member.id.hex[:12]}"
 
     existing = await user_dao.get_by_identity_username(username)
     if existing and (agent_tenant_id is None or existing.tenant_id == agent_tenant_id):
-        username = f"{username}_{external_seed[:6] if external_seed else org_member.id.hex[:6]}"
+        username = (
+            f"{username}_{external_seed[:6] if external_seed is not None and external_seed else org_member.id.hex[:6]}"
+        )
 
     email = email or f"{username}@{channel_type}.local"
 
     identity = await identity_dao.get_by_email(email)
-    if not identity and org_member.phone:
+    if not identity and org_member.phone is not None and org_member.phone:
         identity = await identity_dao.get_by_phone(org_member.phone)
 
     if not identity:

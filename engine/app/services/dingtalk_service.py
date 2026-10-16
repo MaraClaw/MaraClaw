@@ -17,7 +17,7 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
 
     if app_id:
         cached = await get_cached_im_token("dingtalk_oapi", app_id, secret=app_secret)
-        if cached:
+        if cached not in (None, ""):
             return {"access_token": cached, "expires_in": 7200}
 
     url = "https://oapi.dingtalk.com/gettoken"
@@ -160,7 +160,7 @@ async def send_dingtalk_message(
         "msgtype": msg_type,
         msg_type: {"content": message} if msg_type == "text" else {"title": "Notification", "text": message},
     }
-    if not agent_id:
+    if agent_id in (None, ""):
         agent_id = app_id
     return await send_dingtalk_corp_conversation(app_id, app_secret, user_id, msg_body, agent_id)
 

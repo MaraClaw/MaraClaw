@@ -102,6 +102,10 @@ if not _HAS_DISCORD:
 DISCORD_MSG_LIMIT = 2000  # Discord message character limit
 
 
+def _get_discord_module() -> ModuleType | None:
+    return _discord_mod
+
+
 class DiscordGatewayManager:
     """Manages Discord Gateway bot clients for all agents."""
 
@@ -131,10 +135,9 @@ class DiscordGatewayManager:
         if stop_existing and agent_id in self._tasks:
             await self.stop_client(agent_id)
 
-        if _discord_mod is None:
+        if (sdk := _get_discord_module()) is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
             return
-        sdk = _discord_mod
         intents_cls = _mod_attr(sdk, "Intents")
         default_intents = _mod_attr(intents_cls, "default")
         if not callable(default_intents):
@@ -195,7 +198,7 @@ class DiscordGatewayManager:
                 reply = await self._handle_message(agent_id, message, user_text)
 
             # Send reply, chunked if needed
-            if reply:
+            if reply not in (None, ""):
                 chunks = [reply[i : i + DISCORD_MSG_LIMIT] for i in range(0, len(reply), DISCORD_MSG_LIMIT)]
                 for chunk in chunks:
                     _ = await message.reply(chunk, mention_author=False)
@@ -369,7 +372,7 @@ class DiscordGatewayManager:
             mode = json_as_str_or(extra.get("connection_mode"), "webhook")
             if mode == "gateway":
                 bot_token = config.app_secret
-                if bot_token:
+                if bot_token not in (None, ""):
                     await self.start_client(config.agent_id, bot_token, stop_existing=False)
                 else:
                     logger.warning(f"[Discord GW] Skipping agent {config.agent_id}: missing bot_token")

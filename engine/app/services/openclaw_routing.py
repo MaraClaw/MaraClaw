@@ -59,12 +59,12 @@ def poll_model_hint(messages: Sequence[GatewayMessageRecord]) -> tuple[str | Non
             (
                 message.guest_model_ref
                 for message in messages
-                if (message.selected_slot or "primary") == "primary" and message.guest_model_ref
+                if (message.selected_slot or "primary") == "primary" and message.guest_model_ref not in (None, "")
             ),
             None,
         )
         return ref, "primary"
-    ref = next((message.guest_model_ref for message in messages if message.guest_model_ref), None)
+    ref = next((message.guest_model_ref for message in messages if message.guest_model_ref not in (None, "")), None)
     return ref, "secondary"
 
 

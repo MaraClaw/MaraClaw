@@ -102,7 +102,7 @@ async def start_gogcli_auth(
     """Start gogcli OAuth handoff inside the running OpenClaw container."""
     if docker_client is None:
         return GogcliAuthStartResult(started=False, auth_url=None, detail="Agent container is not available")
-    if not agent.container_id:
+    if agent.container_id in (None, ""):
         return GogcliAuthStartResult(started=False, auth_url=None, detail="Agent container is not running")
 
     command = [
@@ -136,7 +136,7 @@ async def get_gogcli_auth_status(
     """Read sanitized gogcli auth status from the running OpenClaw container."""
     if docker_client is None:
         return GogcliAuthStatus(authenticated=False, account_hint=None, detail="Agent container is not available")
-    if not agent.container_id:
+    if agent.container_id in (None, ""):
         return GogcliAuthStatus(authenticated=False, account_hint=None, detail="Agent container is not running")
 
     command = ["gog", "auth", "list", "--check", "--json", "--no-input"]

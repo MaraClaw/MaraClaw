@@ -28,7 +28,6 @@ from app.core.json_types import (
     json_as_str_or,
     json_object_from_response,
     json_value_from_response,
-    mapping_from_row,
     object_list_from_row,
 )
 from app.core.security import create_access_token
@@ -41,7 +40,7 @@ def _is_json_object(value: object) -> TypeIs[JsonObject]:
 
 
 def _json_object(value: object) -> JsonObject:
-    return value if _is_json_object(value) else mapping_from_row(value)
+    return value if _is_json_object(value) else {}
 
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
@@ -59,7 +58,7 @@ def _json_int(value: object) -> int | None:
 def _first_user_id(data: JsonObject) -> str | None:
     for user in object_list_from_row(_json_object(data.get("data")).get("user_list")):
         uid = json_as_str(_json_object(user).get("user_id"))
-        if uid:
+        if uid not in (None, ""):
             return uid
     return None
 
@@ -168,9 +167,9 @@ class FeishuAPIError(RuntimeError):
         if self.code is not None:
             parts.append(f"code={self.code}")
         parts.append(f"msg={self.msg}")
-        if self.log_id:
+        if self.log_id not in (None, ""):
             parts.append(f"log_id={self.log_id}")
-        if self.troubleshooter:
+        if self.troubleshooter not in (None, ""):
             parts.append(f"troubleshooter={self.troubleshooter}")
         super().__init__(", ".join(parts))
 
@@ -179,7 +178,7 @@ class FeishuAPIError(RuntimeError):
         base = self.msg
         if self.code is not None:
             base = f"{base} (code {self.code})"
-        if self.troubleshooter:
+        if self.troubleshooter not in (None, ""):
             return f"{base}\n{self.troubleshooter}"
         return base
 
@@ -261,8 +260,8 @@ class FeishuService:
 
         if target_app_id:
             cached = await get_cached_im_token("feishu", target_app_id, secret=target_app_secret or "")
-            if cached:
-                if not app_id:
+            if cached not in (None, ""):
+                if app_id in (None, ""):
                     self._app_access_token = cached
                 return cached
 
@@ -278,7 +277,7 @@ class FeishuService:
             data = _response_json_object(resp)
 
             token = json_as_str_or(data.get("tenant_access_token") or data.get("app_access_token"), "")
-            if not app_id:  # only cache default app token
+            if app_id in (None, ""):  # only cache default app token
                 self._app_access_token = token
             if token and target_app_id:
                 await set_cached_im_token(
@@ -348,7 +347,7 @@ class FeishuService:
         fs_name = feishu_user.get("name", "")
         fs_avatar = feishu_user.get("avatar_url", "")
         tenant_uuid: UUID | None = None
-        if tenant_id:
+        if tenant_id not in (None, ""):
             try:
                 tenant_uuid = UUID(str(tenant_id))
             except ValueError, TypeError:
@@ -395,7 +394,11 @@ class FeishuService:
                 updates["display_name"] = fs_name
             if updates:
                 user = await user_dao.update(db_obj=user, obj_in=updates)
-            if user.identity_id and fs_email and (not user.email or str(user.email).endswith("@feishu.local")):
+            if (
+                user.identity_id
+                and fs_email
+                and (user.email in (None, "") or str(user.email).endswith("@feishu.local"))
+            ):
                 identity = await identity_dao.get(user.identity_id)
                 if identity:
                     _ = await identity_dao.update(db_obj=identity, obj_in={"email": fs_email})
@@ -518,7 +521,7 @@ class FeishuService:
         Each Feishu app gets a unique open_id per user. This method looks up the
         correct open_id for the given app's credentials.
         """
-        if not email and not mobile:
+        if email in (None, "") and mobile in (None, ""):
             return None
 
         async with httpx.AsyncClient() as client:
@@ -533,9 +536,9 @@ class FeishuService:
             app_token = _app_access_token(token_resp)
 
             body: JsonObject = {}
-            if email:
+            if email not in (None, ""):
                 body["emails"] = [email]
-            if mobile:
+            if mobile not in (None, ""):
                 body["mobiles"] = [mobile]
 
             resp: httpx.Response = await typed_client.post(
@@ -557,7 +560,7 @@ class FeishuService:
         Unlike open_id, user_id is stable across all apps within the same tenant.
         Requires contact:user.employee_id:readonly permission.
         """
-        if not email and not mobile:
+        if email in (None, "") and mobile in (None, ""):
             return None
 
         async with httpx.AsyncClient() as client:
@@ -572,9 +575,9 @@ class FeishuService:
             app_token = _app_access_token(token_resp)
 
             body: JsonObject = {}
-            if email:
+            if email not in (None, ""):
                 body["emails"] = [email]
-            if mobile:
+            if mobile not in (None, ""):
                 body["mobiles"] = [mobile]
 
             resp: httpx.Response = await typed_client.post(
@@ -742,7 +745,7 @@ class FeishuService:
         """Query records in a specific table."""
         tenant_token = await self.get_tenant_access_token(app_id, app_secret)
         body: JsonObject = {}
-        if filters:
+        if filters is not None and filters:
             body = filters
         async with httpx.AsyncClient(timeout=30) as client:
             resp: httpx.Response = await client.post(
@@ -831,7 +834,7 @@ class FeishuService:
         """Create a new Feishu Doc (docx)."""
         tenant_token = await self.get_tenant_access_token(app_id, app_secret)
         body: JsonObject = {"title": title}
-        if folder_token:
+        if folder_token not in (None, ""):
             body["folder_token"] = folder_token
         async with httpx.AsyncClient(timeout=15) as client:
             resp: httpx.Response = await client.post(
@@ -895,7 +898,7 @@ class FeishuService:
         """Query Feishu approval instances."""
         tenant_token = await self.get_tenant_access_token(app_id, app_secret)
         body: JsonObject = {"approval_code": approval_code}
-        if status:
+        if status not in (None, ""):
             body["status"] = status
         async with httpx.AsyncClient(timeout=15) as client:
             resp: httpx.Response = await client.post(

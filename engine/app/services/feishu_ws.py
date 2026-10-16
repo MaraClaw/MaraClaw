@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol, TypeIs
 from unittest.mock import patch
@@ -31,7 +31,7 @@ def _is_json_object(value: object) -> TypeIs[JsonObject]:
 
 
 def _json_object(value: object) -> JsonObject:
-    return value if _is_json_object(value) else mapping_from_row(value)
+    return value if _is_json_object(value) else {}
 
 
 class LarkWSClient(Protocol):
@@ -171,7 +171,7 @@ def _make_no_proxy_connect(orig_connect: Callable[..., object]) -> Callable[[], 
                     await closed
 
     @contextlib.asynccontextmanager
-    async def _scoped_no_proxy() -> AsyncIterator[None]:
+    async def _scoped_no_proxy() -> AsyncGenerator[None]:
         """Context manager that temporarily replaces websockets.connect for
         the duration of the lark-oapi connection handshake only."""
         if not _PROXY_PATCH_AVAILABLE:
@@ -453,7 +453,7 @@ class FeishuWSManager:
             extra = json_object_from(config.extra_config)
             mode = json_as_str_or(extra.get("connection_mode"), "webhook")
             if mode == "websocket":
-                if config.app_id and config.app_secret:
+                if config.app_id not in (None, "") and config.app_secret not in (None, ""):
                     await self.start_client(config.agent_id, config.app_id, config.app_secret, stop_existing=False)
                 else:
                     logger.warning(f"[Feishu WS] Skipping agent {config.agent_id}: missing credentials")

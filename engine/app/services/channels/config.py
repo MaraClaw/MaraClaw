@@ -87,7 +87,7 @@ async def _drop_im_tokens_for_config(
     app_id: str | None,
     app_secret: str | None,
 ) -> None:
-    if not app_id:
+    if app_id in (None, ""):
         return
     from app.services.im_token_cache import drop_cached_im_token
 

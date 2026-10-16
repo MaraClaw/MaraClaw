@@ -84,12 +84,12 @@ async def restore_gogcli_state(agent_id: UUID, agent_dir: Path) -> bool:
 
     restored = False
     try:
-        if state.encrypted_keyring_password:
+        if state.encrypted_keyring_password not in (None, ""):
             password = decrypt_data(state.encrypted_keyring_password, settings.SECRET_KEY)
             _ = await run_sync(write_gogcli_keyring_secret, agent_id, password)
             restored = True
 
-        if state.encrypted_gog_data_archive:
+        if state.encrypted_gog_data_archive not in (None, ""):
             archive_b64 = decrypt_data(state.encrypted_gog_data_archive, settings.SECRET_KEY)
             await run_sync(restore_gogcli_data_archive, agent_dir, archive_b64)
             restored = True
@@ -143,7 +143,7 @@ async def capture_authenticated_gogcli_state(
 async def mark_gogcli_needs_reauth_if_snapshot_exists(agent_id: UUID) -> bool:
     """Mark a previously snapshotted gogcli state as requiring re-authentication."""
     state = await gogcli_credential_state_dao.get_by_agent(agent_id)
-    if state is None or not state.encrypted_gog_data_archive:
+    if state is None or state.encrypted_gog_data_archive in (None, ""):
         return False
     _ = await gogcli_credential_state_dao.update(
         db_obj=state,

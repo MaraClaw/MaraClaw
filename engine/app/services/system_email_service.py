@@ -80,7 +80,12 @@ async def resolve_email_config_async(*, include_disabled: bool = False) -> Syste
         if v:
             if v.get("SYSTEM_EMAIL_ENABLED") is False and not include_disabled:
                 return None
-            if v.get("SYSTEM_EMAIL_FROM_ADDRESS") and v.get("SYSTEM_SMTP_HOST"):
+            if (
+                (from_address := v.get("SYSTEM_EMAIL_FROM_ADDRESS")) is not None
+                and from_address
+                and (smtp_host := v.get("SYSTEM_SMTP_HOST")) is not None
+                and smtp_host
+            ):
                 port_raw: object = v.get("SYSTEM_SMTP_PORT", 465)
                 timeout_raw: object = v.get("SYSTEM_SMTP_TIMEOUT_SECONDS", 15)
                 return SystemEmailConfig(
@@ -264,10 +269,10 @@ async def _load_templates_from_db(templates: EmailTemplates) -> EmailTemplates:
                 if not entry:
                     continue
                 subject = json_as_str(entry.get("subject"))
-                if subject:
+                if subject not in (None, ""):
                     templates[key]["subject"] = subject
                 body = json_as_str(entry.get("body"))
-                if body:
+                if body not in (None, ""):
                     templates[key]["body"] = body
     except Exception as e:
         logger.warning(f"Error loading email templates from DB: {e}")
