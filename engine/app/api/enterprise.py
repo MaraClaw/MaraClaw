@@ -5,10 +5,12 @@ from __future__ import annotations
 import secrets
 import string
 import uuid
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from app.config import get_settings
 from app.core.json_types import (
@@ -36,6 +38,7 @@ from app.dao.org_member_dao import org_member_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db.session import optional_connection_ctx, run_after_commit
 from app.records.identity import IdentityProviderRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import (
@@ -79,14 +82,15 @@ from app.services.grok_subscription import (
 )
 from app.services.llm import (
     LLMMessage,
-    create_fresh_llm_client_from_model,
     create_llm_client,
+    create_llm_client_from_model,
     get_model_api_key,
     get_provider_manifest,
 )
 from app.services.org_sync import derive_member_department_paths
 from app.services.platform_service import platform_service
 from app.services.sso_service import sso_service
+from app.services.subscription_boundaries import fresh_subscription_actor, unchanged_subscription_model
 
 router = APIRouter(prefix="/enterprise", tags=["enterprise"])
 settings = get_settings()
@@ -151,7 +155,10 @@ async def probe_llm_model(
     existing = None
     if data.model_id not in (None, ""):
         try:
-            existing = await llm_model_dao.get(uuid.UUID(data.model_id))
+            async with optional_connection_ctx():
+                existing = await llm_model_dao.get(uuid.UUID(data.model_id))
+                if existing:
+                    assert_can_manage_model(current_user, existing)
         except ValueError:
             existing = None
         if existing:
@@ -162,21 +169,19 @@ async def probe_llm_model(
             from app.services.grok_subscription import ensure_fresh_access_token
 
             if getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
-                existing = await ensure_chatgpt_token(existing)
+                existing = await ensure_chatgpt_token(existing, actor=current_user)
             else:
-                existing = await ensure_fresh_access_token(existing)
+                existing = await ensure_fresh_access_token(existing, actor=current_user)
     api_key = data.api_key if data.api_key not in (None, "") and not data.api_key.startswith("****") else None
     if api_key in (None, "") and existing is not None:
         api_key = get_model_api_key(existing)
-    elif api_key in (None, "") and data.model_id not in (None, ""):
-        api_key = await _load_llm_test_api_key(data.model_id)
     if api_key in (None, ""):
         return {"success": False, "latency_ms": 0, "error": "API Key is required"}
 
     start = time.time()
     try:
         if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
-            existing, client = await create_fresh_llm_client_from_model(existing)
+            client = create_llm_client_from_model(existing)
         else:
             client = create_llm_client(
                 provider=data.provider,
@@ -190,10 +195,16 @@ async def probe_llm_model(
         )
         latency_ms = int((time.time() - start) * 1000)
         reply = (response.content or "")[:100] if response else ""
-        return {"success": True, "latency_ms": latency_ms, "reply": reply}
+        result = {"success": True, "latency_ms": latency_ms, "reply": reply}
     except Exception as e:
         latency_ms = int((time.time() - start) * 1000)
-        return {"success": False, "latency_ms": latency_ms, "error": str(e)[:500]}
+        result = {"success": False, "latency_ms": latency_ms, "error": str(e)[:500]}
+    async with optional_connection_ctx():
+        if existing is not None:
+            await unchanged_subscription_model(existing, current_user)
+        else:
+            await fresh_subscription_actor(current_user)
+    return result
 
 
 @router.post("/llm-models/grok-subscription/start", response_model=GrokSubscriptionStartOut)
@@ -251,6 +262,11 @@ async def refresh_grok_subscription(
 async def list_llm_models(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> list[LLMModelOut]:
+    async with optional_connection_ctx():
+        return await _list_llm_models(tenant_id, current_user)
+
+
+async def _list_llm_models(tenant_id: str | None, current_user: UserRecord) -> list[LLMModelOut]:
     """List LLM models scoped to the selected tenant.
 
     Members receive the company catalog (enabled models only, no keys or
@@ -292,6 +308,11 @@ async def list_llm_models(
 async def add_llm_model(
     data: LLMModelCreate, tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _add_llm_model(data, tenant_id, current_user)
+
+
+async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_user: UserRecord):
     """Add a new LLM model to the tenant's pool (org/platform admin)."""
     tid = require_llm_pool_tenant_id(current_user, tenant_id)
     model = await llm_model_dao.create(
@@ -334,6 +355,11 @@ async def add_llm_model(
 
 @router.post("/llm-models/{model_id}/set-default", status_code=status.HTTP_204_NO_CONTENT)
 async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _set_default_llm_model(model_id, current_user)
+
+
+async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord):
     """Mark this model as the tenant's default for new agents."""
     model = await llm_model_dao.get(model_id)
     if not model:
@@ -370,6 +396,11 @@ async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = 
 
 @router.post("/llm-models/{model_id}/set-fallback", status_code=status.HTTP_204_NO_CONTENT)
 async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _set_fallback_llm_model(model_id, current_user)
+
+
+async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord):
     """Mark this model as the tenant's fallback for agents."""
     model = await llm_model_dao.get(model_id)
     if not model:
@@ -407,6 +438,11 @@ async def set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord =
 
 @router.post("/llm-models/{model_id}/set-secondary", status_code=status.HTTP_204_NO_CONTENT)
 async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _set_secondary_llm_model(model_id, current_user)
+
+
+async def _set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord):
     """Mark this model as the tenant's secondary (manageable-task) model."""
     model = await llm_model_dao.get(model_id)
     if not model:
@@ -446,6 +482,11 @@ async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord 
 async def remove_llm_model(
     model_id: uuid.UUID, force: bool = False, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _remove_llm_model(model_id, force, current_user)
+
+
+async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: UserRecord):
     """Remove an LLM model from the pool."""
     model = await llm_model_dao.get(model_id)
     if not model:
@@ -471,6 +512,11 @@ async def remove_llm_model(
 async def update_llm_model(
     model_id: uuid.UUID, data: LLMModelUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _update_llm_model(model_id, data, current_user)
+
+
+async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_user: UserRecord):
     """Update an existing LLM model in the pool (org/platform admin)."""
     model = await llm_model_dao.get(model_id)
     if not model:
@@ -513,7 +559,7 @@ async def update_llm_model(
         model = await llm_model_dao.update(db_obj=model, obj_in=updates)
         from app.services.openclaw_hot_cache import drop_model_caches
 
-        drop_model_caches()
+        run_after_commit(drop_model_caches)
         default_model_id = None
         fallback_model_id = None
         secondary_model_id = None
@@ -576,6 +622,13 @@ async def update_enterprise_info(
 async def list_approvals(
     tenant_id: str | None = None, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> list[ApprovalRequestOut]:
+    async with optional_connection_ctx():
+        return await _list_approvals(tenant_id, status_filter, current_user)
+
+
+async def _list_approvals(
+    tenant_id: str | None, status_filter: str | None, current_user: UserRecord
+) -> list[ApprovalRequestOut]:
     """List approval requests scoped to a tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     tenant_uuid = uuid.UUID(tid) if tid not in (None, "") else None
@@ -634,6 +687,11 @@ async def list_audit_logs(
 
 @router.get("/stats")
 async def get_enterprise_stats(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _get_enterprise_stats(tenant_id, current_user)
+
+
+async def _get_enterprise_stats(tenant_id: str | None, current_user: UserRecord):
     """Get enterprise dashboard statistics, optionally scoped to a tenant."""
     if (
         tenant_id not in (None, "")
@@ -718,6 +776,11 @@ async def get_tenant_quotas(current_user: UserRecord = Depends(get_current_user)
 async def update_tenant_quotas(
     data: TenantQuotaUpdate, current_user: UserRecord = Depends(get_current_admin)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _update_tenant_quotas(data, current_user)
+
+
+async def _update_tenant_quotas(data: TenantQuotaUpdate, current_user: UserRecord) -> dict[str, Any]:
     """Update tenant quota defaults (admin only). Enforces heartbeat floor on existing agents."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="No tenant assigned")
@@ -811,6 +874,11 @@ class EmailTemplatesUpdate(BaseModel):
 async def update_email_templates_endpoint(
     data: EmailTemplatesUpdate, current_user: UserRecord = Depends(get_current_admin)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _update_email_templates_endpoint(data, current_user)
+
+
+async def _update_email_templates_endpoint(data: EmailTemplatesUpdate, current_user: UserRecord) -> dict[str, Any]:
     """Save email templates (admin only)."""
     from app.services.system_email_service import EMAIL_TEMPLATE_VARIABLES
 
@@ -865,6 +933,11 @@ async def get_system_setting(key: str, current_user: UserRecord = Depends(get_cu
 async def update_system_setting(
     key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_admin)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _update_system_setting(key, data, current_user)
+
+
+async def _update_system_setting(key: str, data: SettingUpdate, current_user: UserRecord) -> dict[str, Any]:
     """Create or update a system setting."""
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
@@ -1096,6 +1169,11 @@ def _identity_provider_response(
 
 @router.post("/identity-providers", response_model=IdentityProviderOut)
 async def create_identity_provider(data: IdentityProviderCreate, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _create_identity_provider(data, current_user)
+
+
+async def _create_identity_provider(data: IdentityProviderCreate, current_user: UserRecord):
     """Create a new identity provider (Admin only)."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -1128,7 +1206,7 @@ async def create_identity_provider(data: IdentityProviderCreate, current_user: U
             "tenant_id": tid,
         }
     )
-    auth_provider_registry._clear_cache(provider.provider_type)
+    run_after_commit(partial(auth_provider_registry._clear_cache, provider.provider_type))
     return _identity_provider_response(provider)
 
 
@@ -1136,6 +1214,11 @@ async def create_identity_provider(data: IdentityProviderCreate, current_user: U
 async def create_oauth2_provider(
     data: IdentityProviderOAuth2Create, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _create_oauth2_provider(data, current_user)
+
+
+async def _create_oauth2_provider(data: IdentityProviderOAuth2Create, current_user: UserRecord):
     """Create a new OAuth2 identity provider with simplified fields."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -1169,7 +1252,7 @@ async def create_oauth2_provider(
             "tenant_id": tid,
         }
     )
-    auth_provider_registry._clear_cache(provider.provider_type)
+    run_after_commit(partial(auth_provider_registry._clear_cache, provider.provider_type))
     return _identity_provider_response(provider)
 
 
@@ -1190,6 +1273,11 @@ class OAuth2ConfigUpdate(BaseModel):
 async def update_oauth2_provider(
     provider_id: uuid.UUID, data: OAuth2ConfigUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _update_oauth2_provider(provider_id, data, current_user)
+
+
+async def _update_oauth2_provider(provider_id: uuid.UUID, data: OAuth2ConfigUpdate, current_user: UserRecord):
     """Update an OAuth2 identity provider with simplified fields."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -1237,7 +1325,7 @@ async def update_oauth2_provider(
         updates["config"] = current_config
 
     provider = await identity_provider_dao.update(db_obj=provider, obj_in=updates)
-    auth_provider_registry._clear_cache(provider.provider_type)
+    run_after_commit(partial(auth_provider_registry._clear_cache, provider.provider_type))
     return _identity_provider_response(provider)
 
 
@@ -1252,6 +1340,11 @@ class IdentityProviderUpdate(BaseModel):
 async def update_identity_provider(
     provider_id: uuid.UUID, data: IdentityProviderUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
+    async with optional_connection_ctx():
+        return await _update_identity_provider(provider_id, data, current_user)
+
+
+async def _update_identity_provider(provider_id: uuid.UUID, data: IdentityProviderUpdate, current_user: UserRecord):
     """Update an existing identity provider."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -1284,7 +1377,7 @@ async def update_identity_provider(
         updates["config"] = new_config
 
     provider = await identity_provider_dao.update(db_obj=provider, obj_in=updates)
-    auth_provider_registry._clear_cache(provider.provider_type)
+    run_after_commit(partial(auth_provider_registry._clear_cache, provider.provider_type))
 
     sso_domain = None
     if data.sso_login_enabled is not None and provider.tenant_id:
@@ -1298,6 +1391,11 @@ async def update_identity_provider(
 
 @router.delete("/identity-providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_identity_provider(provider_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+    async with optional_connection_ctx():
+        return await _delete_identity_provider(provider_id, current_user)
+
+
+async def _delete_identity_provider(provider_id: uuid.UUID, current_user: UserRecord):
     """Delete an identity provider."""
     provider = await identity_provider_dao.get(provider_id)
     if not provider:
@@ -1322,6 +1420,11 @@ async def delete_identity_provider(provider_id: uuid.UUID, current_user: UserRec
 async def list_org_departments(
     tenant_id: str | None = None, provider_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _list_org_departments(tenant_id, provider_id, current_user)
+
+
+async def _list_org_departments(tenant_id: str | None, provider_id: str | None, current_user: UserRecord):
     """List all departments, optionally filtered by tenant or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     is_global_admin = current_user.role == "platform_admin" and effective_tenant_id in (None, "")
@@ -1372,6 +1475,17 @@ async def list_org_members(
     tenant_id: str | None = None,
     provider_id: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    async with optional_connection_ctx():
+        return await _list_org_members(department_id, search, tenant_id, provider_id, current_user)
+
+
+async def _list_org_members(
+    department_id: str | None,
+    search: str | None,
+    tenant_id: str | None,
+    provider_id: str | None,
+    current_user: UserRecord,
 ) -> list[dict[str, Any]]:
     """List org members, optionally filtered by department, search, tenant, or provider."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
@@ -1436,7 +1550,7 @@ async def trigger_org_sync(provider_id: str | None = None, current_user: UserRec
     if not _is_platform_admin_user(current_user) and provider.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot sync other tenant's provider")
 
-    return await org_sync_service.sync_provider(provider_id)
+    return await org_sync_service.sync_provider(provider_id, actor=current_user)
 
 
 @router.get("/org/wecom-verify/{provider_id}")
@@ -1557,6 +1671,11 @@ def _new_invitation_code() -> str:
 async def create_invitation_codes(
     data: InvitationCodeCreate, current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _create_invitation_codes(data, current_user)
+
+
+async def _create_invitation_codes(data: InvitationCodeCreate, current_user: UserRecord) -> dict[str, Any]:
     """Batch-create invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
     codes_created = []
@@ -1581,6 +1700,13 @@ async def invite_users(
     data: UserInviteRequest,
     background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _invite_users(request, data, background_tasks, current_user)
+
+
+async def _invite_users(
+    request: Request, data: UserInviteRequest, background_tasks: BackgroundTasks, current_user: UserRecord
 ) -> dict[str, Any]:
     """Batch-invite users via email to the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
@@ -1616,13 +1742,14 @@ async def invite_users(
         invite_url = f"{base_url}/login?code={code_str}&email={email}"
         inviter_name = current_user.display_name or current_user.username or "Admin"
 
-        background_tasks.add_task(
+        email_task = BackgroundTask(
             send_company_invitation_email,
             to=email,
             inviter_name=inviter_name,
             company_name=tenant.name,
             invite_url=invite_url,
         )
+        run_after_commit(partial(background_tasks.tasks.append, email_task))
         invited_count += 1
 
     return {"invited": invited_count, "message": "Invitations sent successfully"}
@@ -1632,6 +1759,11 @@ async def invite_users(
 async def list_invitation_codes(
     page: int = 1, page_size: int = 20, search: str = "", current_user: UserRecord = Depends(get_current_user)
 ) -> dict[str, Any]:
+    async with optional_connection_ctx():
+        return await _list_invitation_codes(page, page_size, search, current_user)
+
+
+async def _list_invitation_codes(page: int, page_size: int, search: str, current_user: UserRecord) -> dict[str, Any]:
     """List invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
 
@@ -1697,6 +1829,11 @@ async def export_invitation_codes_csv(current_user: UserRecord = Depends(get_cur
 
 @router.delete("/invitation-codes/{code_id}")
 async def deactivate_invitation_code(code_id: str, current_user: UserRecord = Depends(get_current_user)):
+    async with optional_connection_ctx():
+        return await _deactivate_invitation_code(code_id, current_user)
+
+
+async def _deactivate_invitation_code(code_id: str, current_user: UserRecord):
     """Deactivate an invitation code (must belong to current user's company)."""
     tenant_id = _require_tenant_admin(current_user)
 

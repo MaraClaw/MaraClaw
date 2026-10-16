@@ -96,7 +96,7 @@ app.include_router(files_router, prefix=settings.API_PREFIX, dependencies=_CRUD_
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(enterprise_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(enterprise_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(relationships_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
