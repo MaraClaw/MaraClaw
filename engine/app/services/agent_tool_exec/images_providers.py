@@ -65,13 +65,13 @@ async def _generate_image_siliconflow(api_key: str, model: str, base_url: str, p
 
         image_data = _first_image(data)
         image_url = json_as_str(image_data.get("url"))
-        if image_url:
+        if image_url not in (None, ""):
             img_resp: httpx.Response = await client.get(image_url, timeout=60)
             _ = img_resp.raise_for_status()
             return img_resp.content
 
         b64 = json_as_str(image_data.get("b64_json"))
-        if b64:
+        if b64 not in (None, ""):
             return base64.b64decode(b64)
 
         raise ValueError(f"No image URL or b64_json in SiliconFlow response: {data}")
@@ -108,11 +108,11 @@ async def _generate_image_openai(api_key: str, model: str, base_url: str, prompt
 
         image_data = _first_image(data)
         b64 = json_as_str(image_data.get("b64_json"))
-        if b64:
+        if b64 not in (None, ""):
             return base64.b64decode(b64)
 
         image_url = json_as_str(image_data.get("url"))
-        if image_url:
+        if image_url not in (None, ""):
             img_resp: httpx.Response = await client.get(image_url, timeout=60)
             _ = img_resp.raise_for_status()
             return img_resp.content
@@ -184,7 +184,7 @@ async def _generate_image_google(api_key: str, model: str, base_url: str, prompt
                 part_summaries.append("(inline)")
             if "inlineData" in part_obj:
                 b64 = json_as_str(json_object_from(part_obj.get("inlineData")).get("data"))
-                if b64:
+                if b64 not in (None, ""):
                     return base64.b64decode(b64)
 
         raise ValueError("No image (inlineData) found in Gemini response parts. " + f"Parts: {part_summaries}")
@@ -291,7 +291,7 @@ async def _generate_image_grok(api_key: str, model: str, base_url: str, prompt: 
         "aspect_ratio": _size_to_aspect_ratio(size),
     }
     resolution = _size_to_resolution(size)
-    if resolution:
+    if resolution not in (None, ""):
         payload["resolution"] = resolution
 
     async with httpx.AsyncClient(timeout=120) as client:
@@ -306,11 +306,11 @@ async def _generate_image_grok(api_key: str, model: str, base_url: str, prompt: 
 
         image_data = _first_image(data)
         b64 = json_as_str(image_data.get("b64_json"))
-        if b64:
+        if b64 not in (None, ""):
             return base64.b64decode(b64)
 
         image_url = json_as_str(image_data.get("url"))
-        if image_url:
+        if image_url not in (None, ""):
             img_resp: httpx.Response = await client.get(image_url, timeout=60)
             _ = img_resp.raise_for_status()
             return img_resp.content

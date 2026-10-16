@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
+from typing import cast
 
 from httpx import Response
 
@@ -24,8 +26,8 @@ def _response_mapping(response: Response) -> JsonObject:
     return json_object_from_response(response)
 
 
-def _nested_mapping(value: object) -> JsonObject:
-    return value if isinstance(value, dict) else {}
+def _nested_mapping(value: object) -> Mapping[object, object]:
+    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -37,7 +39,7 @@ def _object_items(value: object) -> list[JsonObject]:
 async def _get_vercel_token(agent_id: uuid.UUID, tool_name: str) -> str | None:
     config = await agent_tools._get_tool_config(agent_id, tool_name)
     token = json_as_str((config or {}).get("vercel_token"))
-    if not token and tool_name != "vercel_deploy":
+    if token in (None, "") and tool_name != "vercel_deploy":
         config_deploy = await agent_tools._get_tool_config(agent_id, "vercel_deploy")
         token = json_as_str((config_deploy or {}).get("vercel_token"))
     return token
@@ -102,7 +104,7 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
         return "❌ Missing required arguments: 'project_name', 'key', and 'value' are required."
 
     token = await agent_tools._get_vercel_token(agent_id, "vercel_set_env")
-    if not token:
+    if token in (None, ""):
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -133,7 +135,7 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
                         if env.get("key") == key:
                             env_id = json_as_str(env.get("id"))
                             break
-                    if env_id:
+                    if env_id not in (None, ""):
                         patch_payload: dict[str, ToolArgumentValue] = {"value": value, "target": target}
                         patch_res = await client.patch(
                             f"https://api.vercel.com/v9/projects/{project_name}/env/{env_id}",
@@ -158,7 +160,7 @@ async def _vercel_manage_domain(agent_id: uuid.UUID, arguments: ToolArguments) -
         return "❌ Missing required arguments: 'action' and 'domain' are required."
 
     token = await agent_tools._get_vercel_token(agent_id, "vercel_manage_domain")
-    if not token:
+    if token in (None, ""):
         return "❌ Vercel Access Token is not configured."
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -212,7 +214,7 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
 
     config = await agent_tools._get_tool_config(agent_id, "neon_create_database")
     api_key = json_as_str((config or {}).get("neon_api_key"))
-    if not api_key:
+    if api_key in (None, ""):
         return "❌ Neon API Key is not configured. Please paste your key in the tool settings."
     is_blocked, quota_msg = await agent_tools._check_neon_quota_limit(api_key)
     if is_blocked:
@@ -248,13 +250,13 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
             project = _nested_mapping(data.get("project"))
             proj_id = json_as_str(project.get("id"))
             connection_uri = json_as_str(data.get("connection_uri"))
-            if not connection_uri:
+            if connection_uri in (None, ""):
                 conn_res = await client.get(
                     f"https://console.neon.tech/api/v2/projects/{proj_id}/connection_string", headers=headers
                 )
                 if conn_res.status_code == 200:
                     connection_uri = json_as_str(_response_mapping(conn_res).get("connection_uri"))
-            if not connection_uri:
+            if connection_uri in (None, ""):
                 connection_uri = f"postgresql://alex:password@ep-cool-breeze-12345.us-east-1.neon.tech/{database_name}?sslmode=require"
             return (
                 "✅ **Neon database created successfully!**\n\n"

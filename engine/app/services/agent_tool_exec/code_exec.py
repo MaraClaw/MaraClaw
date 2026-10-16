@@ -99,7 +99,7 @@ async def _execute_code(
         fallback_config = get_sandbox_config()
         tool_config = await agent_tools._get_tool_config(agent_id, tool_name)
 
-        if tool_config:
+        if tool_config is not None and tool_config:
             sandbox_config = SandboxConfig.from_dict(_sandbox_overrides(tool_config), fallback_config)
         else:
             sandbox_config = fallback_config

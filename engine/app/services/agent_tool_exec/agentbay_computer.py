@@ -47,7 +47,11 @@ async def _agentbay_computer_click(agent_id: uuid.UUID | None, ws: Path, argumen
         except TypeError, ValueError:
             return f"Click failed: x and y must be numeric desktop pixel coordinates, got x={x!r}, y={y!r}."
         screen_width, screen_height, screen_note = await _agentbay_get_screen_metadata(client)
-        if screen_width and screen_height and not (0 <= x < screen_width and 0 <= y < screen_height):
+        if (
+            screen_width not in (None, 0)
+            and screen_height not in (None, 0)
+            and not (0 <= x < screen_width and 0 <= y < screen_height)
+        ):
             return f"Click refused: ({x}, {y}) is outside the Cloud Desktop coordinate system ({screen_note}). Use coordinates from the latest full desktop screenshot."
         result = await client.computer_click(x, y, button=button)
         if result.get("success"):

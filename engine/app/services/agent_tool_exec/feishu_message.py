@@ -75,7 +75,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             return "❌ This agent has no Feishu channel configured"
         app_id = config.app_id
         app_secret = config.app_secret
-        if not app_id or not app_secret:
+        if app_id in (None, "") or app_secret in (None, ""):
             return "❌ This agent has no Feishu channel configured"
 
         if direct_user_id and not member_name:
@@ -136,7 +136,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             f"target_member={target_member.external_id}, {target_member.open_id}, "
             + f"{target_member.email}, {target_member.phone}"
         )
-        if not target_member.external_id:
+        if target_member.external_id in (None, ""):
             logger.error(f"❌ {member_name} has no linked Feishu user_id")
             return f"❌ {member_name} 没有关联可用的飞书 user_id"
 

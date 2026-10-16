@@ -66,7 +66,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
         owner_type = _string_argument(arguments, "owner_type")
         period_start = _string_argument(arguments, "period_start")
         period_end = _string_argument(arguments, "period_end")
-        if not title or not owner_type or not period_start or not period_end:
+        if title in (None, "") or owner_type in (None, "") or period_start in (None, "") or period_end in (None, ""):
             return "Missing required fields: title, owner_type, period_start, period_end"
         p_start = date.fromisoformat(period_start)
         p_end = date.fromisoformat(period_end)
@@ -75,7 +75,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
         owner_name_hint = _string_argument(arguments, "owner_name")
         owner_id: uuid.UUID | None = None
 
-        if owner_id_str:
+        if owner_id_str not in (None, ""):
             try:
                 owner_id = uuid.UUID(owner_id_str)
             except ValueError:
@@ -100,13 +100,13 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
 
                 if not owner_exists:
                     owner_id = None
-                    if not owner_name_hint:
+                    if owner_name_hint in (None, ""):
                         return (
                             f"owner_id '{owner_id_str}' was not found. Provide a valid UUID, "
                             + "or pass owner_name instead."
                         )
 
-        if owner_type != "company" and not owner_id and owner_name_hint:
+        if owner_type != "company" and not owner_id and owner_name_hint not in (None, ""):
             if owner_type == "agent":
                 if ag.tenant_id:
                     matches = await agent_dao.list_by_names_for_tenant(
@@ -136,7 +136,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
             owner_id = agent_id
 
         permission_error = _okr_access_module()._can_create_okr_target(ctx, owner_type, owner_id)
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         description = arguments.get("description")
@@ -170,7 +170,7 @@ async def _create_key_result(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
             return "Agent has no tenant."
 
         obj_id_str = _string_argument(arguments, "objective_id")
-        if not obj_id_str:
+        if obj_id_str in (None, ""):
             return "Missing objective_id"
         try:
             obj_id = uuid.UUID(obj_id_str)
@@ -186,7 +186,7 @@ async def _create_key_result(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
             obj.owner_type,
             obj.owner_id,
         )
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         kr = await okr_key_result_dao.create(
@@ -216,7 +216,7 @@ async def _update_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
             return "Agent has no tenant."
 
         obj_id_str = _string_argument(arguments, "objective_id")
-        if not obj_id_str:
+        if obj_id_str in (None, ""):
             return "Missing objective_id"
         try:
             obj_id = uuid.UUID(obj_id_str)
@@ -232,7 +232,7 @@ async def _update_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
             obj.owner_type,
             obj.owner_id,
         )
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         updates: dict[str, object] = {}

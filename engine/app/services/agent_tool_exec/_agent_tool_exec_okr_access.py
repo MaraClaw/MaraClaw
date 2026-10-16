@@ -34,7 +34,7 @@ def _compute_okr_period_bounds(frequency: str, length_days: int | None) -> tuple
             end = today.replace(month=12, day=31)
         else:
             end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
-    elif frequency == "custom" and length_days:
+    elif frequency == "custom" and length_days not in (None, 0):
         epoch = date(1970, 1, 1)
         days_since_epoch = (today - epoch).days
         period_index = days_since_epoch // length_days

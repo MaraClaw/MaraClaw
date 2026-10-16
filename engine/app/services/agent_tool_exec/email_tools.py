@@ -56,7 +56,7 @@ def _decrypt_sensitive_fields(
     result = dict(config)
 
     sensitive_keys = set(SENSITIVE_FIELD_KEYS)
-    if config_schema:
+    if config_schema is not None and config_schema:
         fields = config_schema.get("fields", [])
         if isinstance(fields, list):
             for field in fields:
@@ -68,7 +68,7 @@ def _decrypt_sensitive_fields(
                         sensitive_keys.add(key)
 
     for key in sensitive_keys:
-        if result.get(key):
+        if (candidate := result.get(key)) is not None and candidate:
             value = result[key]
             if isinstance(value, str) and value:
                 result[key] = decrypt_data(value, settings.SECRET_KEY)
@@ -111,7 +111,12 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
     from app.services.email_service import read_emails, reply_email, send_email
 
     config = await _get_email_config(agent_id)
-    if not config.get("email_address") or not config.get("auth_code"):
+    if (
+        (address := config.get("email_address")) is None
+        or not address
+        or (auth_code := config.get("auth_code")) is None
+        or not auth_code
+    ):
         return (
             "❌ Email not configured for this agent.\n\n"
             + "Please go to Agent → Tools → Send Email → Config to set up your email:\n"

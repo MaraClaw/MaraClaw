@@ -4,6 +4,7 @@ import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from anyio import to_thread
 from httpx import Response
@@ -68,7 +69,7 @@ async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArgum
 
     if member_name:
         result = await _send_file_to_recipient(agent_id, file_path, member_name, accompany_msg)
-        if result:
+        if result not in (None, ""):
             return result
         return (
             f"Failed to send file to '{member_name}': recipient not reachable via configured channels. "
@@ -110,13 +111,13 @@ async def _send_file_to_recipient(
     feishu_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
     if feishu_config:
         feishu_result = await _send_file_via_feishu(agent_id, feishu_config, file_path, member_name, message)
-        if feishu_result:
+        if feishu_result not in (None, ""):
             return feishu_result
 
     slack_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
     if slack_config:
         slack_result = await _send_file_via_slack(agent_id, slack_config, file_path, member_name, message)
-        if slack_result:
+        if slack_result not in (None, ""):
             return slack_result
 
     return None
@@ -133,17 +134,17 @@ async def _resolve_feishu_recipient(
     oid_match = re.search(r"open_id: `(ou_[A-Za-z0-9]+)`", search_result)
 
     if uid_match:
-        return (uid_match.group(1), "user_id")
+        return (cast(str, uid_match.group(1)), "user_id")
     if oid_match:
-        return (oid_match.group(1), "open_id")
+        return (cast(str, oid_match.group(1)), "open_id")
 
     from app.dao.agent_relationship_dao import agent_relationship_dao
 
     for relationship in await agent_relationship_dao.list_for_agent_with_members(agent_id):
         if relationship.member and relationship.member.name == member_name:
-            if relationship.member.external_id:
+            if relationship.member.external_id not in (None, ""):
                 return (relationship.member.external_id, "user_id")
-            if relationship.member.open_id:
+            if relationship.member.open_id not in (None, ""):
                 return (relationship.member.open_id, "open_id")
             break
     return None
@@ -220,7 +221,7 @@ async def _send_file_via_slack(
                 params={"limit": 200},
             )
             data = _response_mapping(resp)
-            if not data.get("ok"):
+            if (ok := data.get("ok")) is None or not ok:
                 return None
             slack_user_id = None
             for user in object_list_from_row(data.get("members")):
@@ -234,7 +235,7 @@ async def _send_file_via_slack(
                 if display == member_name or json_as_str(member.get("name")) == member_name:
                     slack_user_id = json_as_str(member.get("id"))
                     break
-            if not slack_user_id:
+            if slack_user_id in (None, ""):
                 return None
 
             dm_resp = await client.post(
@@ -243,10 +244,10 @@ async def _send_file_via_slack(
                 json={"users": slack_user_id},
             )
             dm_data = _response_mapping(dm_resp)
-            if not dm_data.get("ok"):
+            if (ok := dm_data.get("ok")) is None or not ok:
                 return None
             channel_id = json_as_str(json_object_from(dm_data.get("channel")).get("id"))
-            if not channel_id:
+            if channel_id in (None, ""):
                 return None
 
             upload_url_resp = await client.post(
@@ -255,11 +256,11 @@ async def _send_file_via_slack(
                 data={"filename": file_path.name, "length": str((await _run_path_call(file_path.stat)).st_size)},
             )
             upload_data = _response_mapping(upload_url_resp)
-            if not upload_data.get("ok"):
+            if (ok := upload_data.get("ok")) is None or not ok:
                 return f"Slack file upload failed: {upload_data.get('error')}"
             upload_url = json_as_str(upload_data.get("upload_url"))
             file_id = json_as_str(upload_data.get("file_id"))
-            if not upload_url or not file_id:
+            if upload_url in (None, "") or file_id in (None, ""):
                 return f"Slack file upload failed: {upload_data.get('error')}"
             await client.post(
                 upload_url,
@@ -276,7 +277,7 @@ async def _send_file_via_slack(
                 },
             )
             complete_data = _response_mapping(complete)
-            if not complete_data.get("ok"):
+            if (ok := complete_data.get("ok")) is None or not ok:
                 return f"Slack file upload complete failed: {complete_data.get('error')}"
             return f"File '{file_path.name}' sent to {member_name} via Slack."
     except Exception as error:

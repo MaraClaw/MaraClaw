@@ -42,7 +42,7 @@ async def _send_slack_message(
                 json={"users": user_id},
             )
             data = json_object_from_response(open_resp)
-            if open_resp.status_code >= 400 or not data.get("ok"):
+            if open_resp.status_code >= 400 or (ok := data.get("ok")) is None or not ok:
                 err = json_as_str(data.get("error")) or open_resp.text[:200]
                 return f"❌ Slack conversations.open failed: {err}"
             channel_id = json_as_str(json_object_from(data.get("channel")).get("id")) or ""

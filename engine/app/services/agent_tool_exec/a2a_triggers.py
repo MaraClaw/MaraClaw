@@ -32,13 +32,13 @@ async def _create_on_message_trigger(
     focus_ref = await ensure_focus_item(agent_id, focus_ref=focus_ref, description=reason or trigger_name)
 
     config: dict[str, str] = {"from_agent_name": from_agent_name}
-    if notification_summary:
+    if notification_summary not in (None, ""):
         config["_notification_summary"] = notification_summary
-    if origin_session_id:
+    if origin_session_id not in (None, ""):
         config["_origin_session_id"] = origin_session_id
-    if origin_user_id:
+    if origin_user_id not in (None, ""):
         config["_origin_user_id"] = origin_user_id
-    if origin_source_channel:
+    if origin_source_channel not in (None, ""):
         config["_origin_source_channel"] = origin_source_channel
 
     from contextlib import suppress

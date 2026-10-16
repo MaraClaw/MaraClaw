@@ -41,7 +41,7 @@ async def _storage_list_dir(
     items: list[str] = []
     dir_count = 0
     file_count = 0
-    if not normalized and tenant_id:
+    if not normalized and tenant_id not in (None, ""):
         items.append("  📁 enterprise_info/ (shared company info)")
         dir_count += 1
 

@@ -25,15 +25,15 @@ async def _send_dingtalk_message(
             return "❌ This agent has no DingTalk channel configured"
 
         user_id = target_member.external_id
-        if not user_id:
+        if user_id in (None, ""):
             user_id = target_member.unionid or target_member.open_id
-            if not user_id:
+            if user_id in (None, ""):
                 return f"❌ {member_name} has no DingTalk user_id"
 
         logger.info(f"[DingTalk] Sending to user_id: {user_id}")
         app_id = config.app_id
         app_secret = config.app_secret
-        if not app_id or not app_secret:
+        if app_id in (None, "") or app_secret in (None, ""):
             return "❌ This agent has no DingTalk channel configured"
         dingtalk_agent_id = (config.extra_config or {}).get("agent_id")
         result = await send_dingtalk_message(
@@ -81,15 +81,15 @@ async def _send_wecom_message(
             return "❌ This agent has no WeCom channel configured"
 
         user_id = target_member.external_id
-        if not user_id:
+        if user_id in (None, ""):
             user_id = target_member.open_id
-            if not user_id:
+            if user_id in (None, ""):
                 return f"❌ {member_name} has no WeCom user_id"
 
         logger.info(f"[WeCom] Sending to user_id: {user_id}")
         app_id = config.app_id
         app_secret = config.app_secret
-        if not app_id or not app_secret:
+        if app_id in (None, "") or app_secret in (None, ""):
             return "❌ This agent has no WeCom channel configured"
         result = await send_wecom_message(app_id, app_secret, user_id, message_text)
 

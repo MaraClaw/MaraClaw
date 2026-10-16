@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -80,7 +80,7 @@ def resolve(name: str) -> ToolHandler | None:
 
 
 @contextmanager
-def use_execution_context(context: ToolExecutionContext) -> Iterator[None]:
+def use_execution_context(context: ToolExecutionContext) -> Generator[None]:
     token = _CURRENT_EXECUTION_CONTEXT.set(context)
     try:
         yield

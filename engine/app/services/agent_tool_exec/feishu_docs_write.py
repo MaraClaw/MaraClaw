@@ -79,16 +79,18 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
     try:
         if folder_token and not wiki_space_id and not parent_node_token:
             probe = await agent_tools._feishu_wiki_get_node(folder_token, tenant_token)
-            probe_space_id = tool_arg_str(probe.get("space_id")) if probe else None
-            if probe_space_id:
+            probe_space_id = tool_arg_str(probe.get("space_id")) if probe is not None and probe else None
+            if probe_space_id not in (None, ""):
                 wiki_space_id = probe_space_id
-                parent_node_token = tool_arg_str_or(probe.get("node_token") if probe else None, folder_token)
+                parent_node_token = tool_arg_str_or(
+                    probe.get("node_token") if probe is not None and probe else None, folder_token
+                )
                 folder_token = ""
 
         if parent_node_token and not wiki_space_id:
             node_info = await agent_tools._feishu_wiki_get_node(parent_node_token, tenant_token)
-            node_space_id = tool_arg_str(node_info.get("space_id")) if node_info else None
-            if node_space_id:
+            node_space_id = tool_arg_str(node_info.get("space_id")) if node_info is not None and node_info else None
+            if node_space_id not in (None, ""):
                 wiki_space_id = node_space_id
 
         if wiki_space_id:
@@ -96,7 +98,7 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
 
         response = await service.create_feishu_doc(app_id, app_secret, folder_token, title)
         error = agent_tools._check_feishu_err(response)
-        if error:
+        if error not in (None, ""):
             return error
         doc_token = json_as_str_or(
             json_object_from(json_object_from(response.get("data")).get("document")).get("document_id")
@@ -133,7 +135,7 @@ async def _create_wiki_doc(
         )
     result = _response_mapping(response)
     error = agent_tools._check_feishu_err(result)
-    if error:
+    if error not in (None, ""):
         return error
 
     node = json_object_from(json_object_from(result.get("data")).get("node"))
@@ -153,7 +155,7 @@ async def _create_wiki_doc(
 async def _share_with_sender(facade: object, tenant_token: str, doc_token: str) -> str:
     try:
         sender_open_id = channel_feishu_sender_open_id.get(None)
-        if not sender_open_id or not doc_token:
+        if sender_open_id in (None, "") or not doc_token:
             return ""
         async with _httpx_client(timeout=10) as client:
             response = await client.post(
@@ -192,7 +194,7 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
 
     tenant_token = await _feishu_service().get_tenant_access_token(app_id, app_secret)
     node_info = await agent_tools._feishu_wiki_get_node(document_token, tenant_token)
-    obj_token = tool_arg_str(node_info.get("obj_token")) if node_info else None
+    obj_token = tool_arg_str(node_info.get("obj_token")) if node_info is not None and node_info else None
     docx_token = obj_token or document_token
 
     try:
@@ -203,7 +205,7 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
             )
             metadata = _response_mapping(metadata_response)
             error = agent_tools._check_feishu_err(metadata)
-            if error:
+            if error not in (None, ""):
                 return error
 
             body = json_object_from(
@@ -218,7 +220,7 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
             )
             result = _response_mapping(result_response)
             error = agent_tools._check_feishu_err(result)
-            if error:
+            if error not in (None, ""):
                 return error
 
         doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, docx_token)

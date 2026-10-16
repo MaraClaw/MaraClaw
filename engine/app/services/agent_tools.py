@@ -330,7 +330,7 @@ def _agent_workspace_root(agent_id: uuid.UUID) -> Path:
 
 
 def _non_empty_paths(*paths: str | None) -> list[str] | None:
-    selected = [path for path in paths if path]
+    selected = [path for path in paths if path not in (None, "")]
     return selected or None
 
 

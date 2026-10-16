@@ -17,7 +17,7 @@ def _search_files(
     if path and path.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = path[len("enterprise_info") :].lstrip("/")
@@ -105,7 +105,7 @@ def _find_files(
     if path and path.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = path[len("enterprise_info") :].lstrip("/")

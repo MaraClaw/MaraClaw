@@ -82,7 +82,7 @@ async def _build_a2a_context(
         return "❌ Please provide target agent name and message content"
     try:
         origin_source_channel = "web"
-        if origin_session_id:
+        if origin_session_id not in (None, ""):
             with suppress(Exception):
                 origin_sess = await chat_session_dao.get(uuid.UUID(origin_session_id))
                 if origin_sess:

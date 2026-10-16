@@ -35,7 +35,7 @@ async def _get_feishu_credentials(agent_id: uuid.UUID) -> tuple[str, str]:
 
     try:
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
-        if config and config.app_id and config.app_secret:
+        if config and config.app_id not in (None, "") and config.app_secret not in (None, ""):
             app_id = config.app_id
             app_secret = config.app_secret
     except Exception:

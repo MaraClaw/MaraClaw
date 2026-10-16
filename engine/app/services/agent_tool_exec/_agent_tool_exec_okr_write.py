@@ -107,7 +107,7 @@ async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | N
             obj.owner_type,
             obj.owner_id,
         )
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         prev_value = kr.current_value
@@ -189,7 +189,7 @@ async def _update_kr_content(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
             obj.owner_type,
             obj.owner_id,
         )
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         changed_fields: list[str] = []
@@ -249,7 +249,7 @@ async def _update_any_kr_progress(
             obj.owner_type,
             obj.owner_id,
         )
-        if permission_error:
+        if permission_error not in (None, ""):
             return permission_error
 
         old_val = kr.current_value

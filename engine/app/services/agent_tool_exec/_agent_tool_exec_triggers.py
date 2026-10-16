@@ -56,7 +56,7 @@ async def _handle_set_trigger(
         focus_ref = focus_ref or name
 
     validation_error = trigger_helpers._validate_trigger_config(ttype, config)
-    if validation_error:
+    if validation_error not in (None, ""):
         return validation_error
     if ttype == "on_message":
         await trigger_helpers._snapshot_latest_message(agent_tools, agent_id, config)
@@ -91,7 +91,7 @@ async def _handle_set_trigger(
                 "focus_ref": focus_ref,
                 "is_enabled": True,
             }
-            if existing.max_fires and existing.fire_count >= existing.max_fires:
+            if existing.max_fires not in (None, 0) and existing.fire_count >= existing.max_fires:
                 updates["fire_count"] = 0
             existing = await agent_trigger_dao.update(db_obj=existing, obj_in=updates) or existing
             return (

@@ -68,7 +68,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
 
         target_member: OrgMemberRecord | None = None
         provider_type: str | None = None
-        if target_channel:
+        if target_channel not in (None, ""):
             for _relationship, member, row_provider_type in rows:
                 if row_provider_type == target_channel:
                     target_member = member
@@ -82,21 +82,18 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                 )
         else:
             if len(rows) > 1:
-                available = [channel for _, _, channel in rows if channel]
+                available = [channel for _, _, channel in rows if channel not in (None, "")]
                 logger.warning(
                     f"[ChannelMessage] Ambiguous member '{member_name}' found in multiple channels: {available}"
                 )
             _relationship, target_member, provider_type = rows[0]
 
-        if target_member is None:
-            return f"❌ {member_name} is not in your relationship network"
-
-        if not provider_type:
+        if provider_type in (None, ""):
             if target_member.user_id:
                 platform_user = await user_dao.get(target_member.user_id)
                 if platform_user:
                     platform_identifier = platform_user.display_name or getattr(platform_user, "username", None)
-                    if not platform_identifier and platform_user.identity is not None:
+                    if (platform_identifier is None or not platform_identifier) and platform_user.identity is not None:
                         platform_identifier = getattr(platform_user.identity, "username", None)
                     platform_identifier = platform_identifier or member_name
                     logger.info(
@@ -108,7 +105,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                         {"username": platform_identifier, "message": message_text},
                     )
 
-            if target_member.external_id or target_member.open_id:
+            if target_member.external_id not in (None, "") or target_member.open_id not in (None, ""):
                 provider_type = "feishu"
             else:
                 return (

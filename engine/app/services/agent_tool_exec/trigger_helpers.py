@@ -34,15 +34,19 @@ def _validate_trigger_config(ttype: str, config: dict[str, ToolArgumentValue]) -
         except Exception:
             return f"❌ Invalid cron expression: '{expr}'"
     elif ttype == "once":
-        if not config.get("at"):
+        if (at := config.get("at")) is None or not at:
             return '❌ once trigger requires config.at, e.g. {"at": "2026-03-10T09:00:00+08:00"}'
     elif ttype == "interval":
-        if not config.get("minutes"):
+        if (minutes := config.get("minutes")) is None or not minutes:
             return '❌ interval trigger requires config.minutes, e.g. {"minutes": 30}'
     elif ttype == "poll":
-        if not config.get("url"):
+        if (url := config.get("url")) is None or not url:
             return "❌ poll trigger requires config.url"
-    elif ttype == "on_message" and not config.get("from_agent_name") and not config.get("from_user_name"):
+    elif (
+        ttype == "on_message"
+        and ((from_agent := config.get("from_agent_name")) is None or not from_agent)
+        and ((from_user := config.get("from_user_name")) is None or not from_user)
+    ):
         return "❌ on_message trigger requires config.from_agent_name (for agents) or config.from_user_name (for human users on Feishu/Slack/Discord)"
     return None
 

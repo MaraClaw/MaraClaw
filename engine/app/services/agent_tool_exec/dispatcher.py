@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import uuid
-from typing import Final, Protocol, TypeIs
+from typing import Final, Protocol, TypeIs, cast
 
 from app.core.json_types import json_as_bool, json_as_str, json_as_str_or
 from app.core.logging import logger
@@ -102,8 +102,9 @@ async def execute_tool(
     on_output: ToolOutputCallback | None = None,
 ) -> str:
     """Execute a tool call and return the result as a string."""
-    if not isinstance(tool_name, str):
-        tool_name = str(tool_name or "")
+    # Provider JSON can carry a non-string name despite the declared type; coerce before sanitizing.
+    tool_name_arg = cast(object, tool_name)
+    tool_name = tool_name_arg if isinstance(tool_name_arg, str) else str(tool_name_arg or "")
     tool_name = (
         tool_name.replace("`", "")
         .replace("\u200b", "")
@@ -120,7 +121,7 @@ async def execute_tool(
     workspace_root = agent_tools._agent_workspace_root(agent_id)
 
     action_type = _TOOL_AUTONOMY_MAP.get(tool_name)
-    if action_type:
+    if action_type is not None:
         try:
             from app.dao.agent_dao import agent_dao
             from app.services.autonomy_service import autonomy_service
@@ -189,25 +190,23 @@ async def execute_tool(
             session_id
             and tool_name
             in ("send_channel_message", "send_feishu_message", "send_platform_message", "send_message_to_agent")
-            and isinstance(result, str)
             and result.startswith("❌")
         ):
             try:
                 from app.dao.chat_dao import chat_message_dao
 
-                if user_id is not None:
-                    _ = await chat_message_dao.insert_message(
-                        agent_id=agent_id,
-                        user_id=user_id,
-                        role="assistant",
-                        content=(
-                            "⚠️ [System notice] Digital employee tool call failed.\n"
-                            + f"Tool: `{tool_name}`\n"
-                            + f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
-                            + f"Error: {result}"
-                        ),
-                        conversation_id=session_id,
-                    )
+                _ = await chat_message_dao.insert_message(
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content=(
+                        "⚠️ [System notice] Digital employee tool call failed.\n"
+                        + f"Tool: `{tool_name}`\n"
+                        + f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
+                        + f"Error: {result}"
+                    ),
+                    conversation_id=session_id,
+                )
             except Exception as error:
                 logger.warning(f"Failed to save tool error message to session: {error}")
 

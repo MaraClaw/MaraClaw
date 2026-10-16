@@ -10,7 +10,7 @@ def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, worksp
     if rel_path and rel_path.startswith("enterprise_info"):
         enterprise_root = (
             (workspace_root / f"enterprise_info_{tenant_id}").resolve()
-            if tenant_id
+            if tenant_id is not None and tenant_id
             else (workspace_root / "enterprise_info").resolve()
         )
         sub = rel_path[len("enterprise_info") :].lstrip("/")
@@ -29,7 +29,9 @@ def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, worksp
     items = []
     if not rel_path:
         enterprise_dir = (
-            workspace_root / f"enterprise_info_{tenant_id}" if tenant_id else workspace_root / "enterprise_info"
+            workspace_root / f"enterprise_info_{tenant_id}"
+            if tenant_id is not None and tenant_id
+            else workspace_root / "enterprise_info"
         )
         if enterprise_dir.exists():
             items.append("  📁 enterprise_info/ (shared company info)")

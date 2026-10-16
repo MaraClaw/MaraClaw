@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Buffer
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, SupportsIndex, SupportsInt, cast
 
 from app.core.logging import logger
 
@@ -29,12 +30,12 @@ def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None
     height_raw: object = screen_data.get("height")
     dpi: object = screen_data.get("dpiScalingFactor")
     try:
-        width = int(width_raw) if width_raw is not None else None
-        height = int(height_raw) if height_raw is not None else None
+        width = int(cast(str | Buffer | SupportsInt | SupportsIndex, width_raw)) if width_raw is not None else None
+        height = int(cast(str | Buffer | SupportsInt | SupportsIndex, height_raw)) if height_raw is not None else None
     except TypeError, ValueError:
         width, height = None, None
     parts = []
-    if width and height:
+    if width not in (None, 0) and height not in (None, 0):
         parts.append(f"width={width}, height={height}")
     if dpi is not None:
         parts.append(f"dpiScalingFactor={dpi}")
@@ -120,7 +121,7 @@ def _agentbay_desktop_coordinate_note(
     parts = []
     if screen_note:
         parts.append(f"Cloud Desktop coordinate system for mouse tools: {screen_note}.")
-    if image_width and image_height:
+    if image_width not in (None, 0) and image_height not in (None, 0):
         parts.append(f"Latest screenshot pixel size: width={image_width}, height={image_height}.")
     if crop:
         x, y, width, height = crop

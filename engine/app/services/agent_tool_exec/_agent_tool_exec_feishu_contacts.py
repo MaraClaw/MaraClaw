@@ -48,11 +48,11 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolArguments) -> 
                 lines = [f"🔍 从通讯录找到 {len(org_members)} 位匹配「{name}」的用户：\n"]
                 for member in org_members:
                     lines.append(f"• **{member.name}**")
-                    if member.external_id:
+                    if member.external_id not in (None, ""):
                         lines.append(f"  user_id: `{member.external_id}`")
-                    if member.open_id:
+                    if member.open_id not in (None, ""):
                         lines.append(f"  open_id: `{member.open_id}`")
-                    if member.email:
+                    if member.email not in (None, ""):
                         lines.append(f"  邮箱: {member.email}")
                     if member.department_path:
                         lines.append(f"  部门: {member.department_path}")

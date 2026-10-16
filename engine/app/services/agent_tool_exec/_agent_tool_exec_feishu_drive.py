@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Final, cast
 
 from httpx import AsyncClient, Response
@@ -46,8 +47,8 @@ def _response_mapping(response: Response) -> JsonObject:
     return json_object_from_response(response)
 
 
-def _nested_mapping(value: object) -> JsonObject:
-    return value if isinstance(value, dict) else {}
+def _nested_mapping(value: object) -> Mapping[object, object]:
+    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -82,8 +83,8 @@ async def _feishu_drive_share(agent_id: uuid.UUID, arguments: ToolArguments) -> 
 
     node_info = await agent_tools._feishu_wiki_get_node(document_token, token)
     is_wiki = node_info is not None
-    space_id = tool_arg_str_or(node_info.get("space_id")) if node_info else ""
-    obj_token = tool_arg_str_or(node_info.get("obj_token")) if node_info else ""
+    space_id = tool_arg_str_or(node_info.get("space_id")) if node_info is not None and node_info else ""
+    obj_token = tool_arg_str_or(node_info.get("obj_token")) if node_info is not None and node_info else ""
 
     api_perm = {"view": "view", "edit": "edit", "full_access": "full_access"}.get(permission, "edit")
     wiki_role = "admin" if api_perm in ("edit", "full_access") else "member"
@@ -281,7 +282,7 @@ async def _feishu_drive_delete(agent_id: uuid.UUID, arguments: ToolArguments) ->
         code = data.get("code", -1)
         if code == 0:
             task_id = _nested_mapping(data.get("data")).get("task_id")
-            if task_id:
+            if task_id is not None and task_id:
                 return f"✅ 已提交{type_label}删除任务（异步执行中）。\n📋 任务 ID: `{task_id}`\n文件夹删除为异步操作，文件会被移至回收站。"
             return f"✅ {type_label} `{file_token}` 已删除（移至回收站）。"
 

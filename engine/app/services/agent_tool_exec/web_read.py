@@ -10,7 +10,7 @@ from typing import Protocol, TypeIs, cast
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from httpx import Response, TimeoutException
+from httpx import AsyncClient, Response, TimeoutException
 
 from app.services.agent_tool_exec.registry import ToolArguments
 
@@ -31,8 +31,8 @@ def _httpx_module():
     return httpx
 
 
-def _httpx_client(*args: object, **kwargs: object):
-    return _httpx_module().AsyncClient(*args, **kwargs)
+def _httpx_client(*, follow_redirects: bool, timeout: float) -> AsyncClient:
+    return cast(AsyncClient, _httpx_module().AsyncClient(follow_redirects=follow_redirects, timeout=timeout))
 
 
 def _beautiful_soup() -> type[BeautifulSoup]:
@@ -56,7 +56,7 @@ async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return None, "❌ Only HTTP and HTTPS URLs are supported"
-    if not parsed.hostname:
+    if parsed.hostname in (None, ""):
         return None, "❌ URL must include a hostname"
 
     hostname = parsed.hostname
@@ -148,7 +148,7 @@ async def _read_webpage(arguments: ToolArguments) -> str:
     extract_readable = _trafilatura_extract()
     beautiful_soup = _beautiful_soup()
     url, validation_error = await _validate_public_http_url(_string_argument(arguments, "url"))
-    if validation_error or url is None:
+    if validation_error not in (None, "") or url is None:
         return validation_error or "❌ Please provide a URL"
 
     max_chars = min(max(_integer_argument(arguments, "max_chars", 12000), 500), 50000)
@@ -175,7 +175,7 @@ async def _read_webpage(arguments: ToolArguments) -> str:
                         if urlparse(redirect_url).scheme not in {"http", "https"}:
                             return "❌ Only HTTP and HTTPS URLs are supported"
                         next_url, validation_error = await _validate_public_http_url(redirect_url)
-                        if validation_error or next_url is None:
+                        if validation_error not in (None, "") or next_url is None:
                             return validation_error or "❌ Please provide a URL"
                         url = next_url
                         redirects += 1
@@ -219,10 +219,10 @@ async def _read_webpage(arguments: ToolArguments) -> str:
 
         if content_type in {"", "text/html", "application/xhtml+xml"} or "<html" in text[:500].lower():
             soup = beautiful_soup(text, "html.parser")
-            if soup.title and soup.title.string:
+            if soup.title is not None and soup.title.string not in (None, ""):
                 title = str(soup.title.string).strip()
             meta_description = soup.find("meta", attrs={"name": "description"})
-            meta_content = meta_description.get("content") if meta_description else None
+            meta_content = meta_description.get("content") if meta_description is not None else None
             if isinstance(meta_content, str) and meta_content:
                 description = meta_content.strip()
 

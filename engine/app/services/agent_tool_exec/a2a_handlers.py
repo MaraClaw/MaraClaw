@@ -28,10 +28,8 @@ async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
             detail={"partner": ctx.target_agent.name, "message": ctx.message_text[:200]},
         )
 
-        online = (
-            ctx.target_agent.openclaw_last_seen
-            and (datetime.now(UTC) - ctx.target_agent.openclaw_last_seen).total_seconds() < 300
-        )
+        last_seen = ctx.target_agent.openclaw_last_seen
+        online = last_seen is not None and (datetime.now(UTC) - last_seen).total_seconds() < 300
         status_hint = "online" if online else "offline (message will be delivered on next heartbeat)"
         return (
             f"✅ Message sent to {ctx.target_agent.name} (OpenClaw agent, currently {status_hint}). "
