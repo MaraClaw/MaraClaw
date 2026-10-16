@@ -202,7 +202,9 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
         return None
 
 
-async def _send_teams_message(config: ChannelConfigRecord, conversation_id: str, activity: JsonObject) -> None:
+async def _send_teams_message(
+    config: ChannelConfigRecord, conversation_id: str, activity: JsonObject, *, strict: bool = False
+) -> None:
     """Send an activity (message) to Microsoft Teams."""
     access_token = await _get_teams_access_token(config)
     if access_token in (None, ""):
@@ -230,13 +232,15 @@ async def _send_teams_message(config: ChannelConfigRecord, conversation_id: str,
             chunk_activity = {**activity, "text": chunk}
             if i > 0:
                 chunk_activity.pop("replyToId", None)
-            await _send_teams_message_single_chunk(access_token, service_url, conversation_id, chunk_activity)
+            await _send_teams_message_single_chunk(
+                access_token, service_url, conversation_id, chunk_activity, strict=strict
+            )
     else:
-        await _send_teams_message_single_chunk(access_token, service_url, conversation_id, activity)
+        await _send_teams_message_single_chunk(access_token, service_url, conversation_id, activity, strict=strict)
 
 
 async def _send_teams_message_single_chunk(
-    access_token: str, service_url: str, conversation_id: str, activity: JsonObject
+    access_token: str, service_url: str, conversation_id: str, activity: JsonObject, *, strict: bool = False
 ) -> None:
     """Send a single chunked message to Microsoft Teams."""
     service_url_clean = service_url.rstrip("/")
@@ -263,6 +267,8 @@ async def _send_teams_message_single_chunk(
                     f"Teams: POST URL={post_url}, conversation_id={conversation_id}, service_url={service_url}"
                 )
             _ = resp.raise_for_status()
+            if strict and not bool(json_as_str(json_object_from_response(resp).get("id"))):
+                raise RuntimeError("Teams did not acknowledge the message")
             logger.info(f"Teams: Sent message to conversation {conversation_id}")
     except httpx.HTTPStatusError as e:
         error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"

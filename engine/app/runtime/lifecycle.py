@@ -89,6 +89,7 @@ class Runtime:
         except Exception as exc:
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
+            from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.linkup.export import start_web_search_export_daemon
             from app.services.scheduler import start_scheduler
             from app.services.trigger_daemon import start_trigger_daemon
@@ -96,6 +97,7 @@ class Runtime:
             self.tasks.start("trigger_daemon", start_trigger_daemon())
             self.tasks.start("web_search_export", start_web_search_export_daemon())
             self.tasks.start("agent_scheduler", start_scheduler())
+            self.tasks.start("gateway_report_relay", start_gateway_report_relay())
         if role_enabled(roles, "connector"):
             self.managers = connector_managers()
             self.tasks.start("ss-local-proxy", self.proxy.start())

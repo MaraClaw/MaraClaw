@@ -1009,6 +1009,24 @@ CREATE TABLE IF NOT EXISTS gateway_messages (
 	FOREIGN KEY(sender_user_id) REFERENCES users (id)
 );
 
+CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
+    id UUID PRIMARY KEY,
+    message_id UUID NOT NULL REFERENCES gateway_messages(id) ON DELETE CASCADE,
+    destination_kind VARCHAR(16) NOT NULL CHECK (destination_kind IN ('im', 'agent')),
+    destination_id UUID NOT NULL,
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claim_token UUID,
+    lease_expires_at TIMESTAMP WITH TIME ZONE,
+    delivered_at TIMESTAMP WITH TIME ZONE,
+    UNIQUE (message_id, destination_kind, destination_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
+    ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
+    ON gateway_report_deliveries (tenant_id);
+
 CREATE TABLE IF NOT EXISTS gogcli_credential_states (
 	id UUID DEFAULT gen_random_uuid() NOT NULL, 
 	agent_id UUID NOT NULL, 

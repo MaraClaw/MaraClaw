@@ -8,7 +8,7 @@ from app.core.json_types import JsonObject, JsonValue, json_as_int, json_object_
 from app.core.logging import logger
 
 
-async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
+async def get_dingtalk_access_token(app_id: str, app_secret: str, *, strict: bool = False) -> JsonObject:
     """Get DingTalk access_token using app_id and app_secret.
 
     API: https://open.dingtalk.com/document/orgapp/obtain-access_token
@@ -29,6 +29,8 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(url, params=params)
+            if strict:
+                _ = resp.raise_for_status()
             data = json_object_from_response(resp)
 
             if data.get("errcode") == 0:
@@ -45,6 +47,8 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> JsonObject:
             logger.error(f"[DingTalk] Failed to get access_token: {data}")
             return {"errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"[DingTalk] Network error getting access_token: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
@@ -56,13 +60,15 @@ async def send_dingtalk_v1_robot_oto_message(
     message: str,
     msg_type: str = "text",
     robot_code: str | None = None,
+    *,
+    strict: bool = False,
 ) -> JsonObject:
     """Send single chat messages via Robot using modern v1.0 API (RECOMMENDED).
 
     API: /v1.0/robot/oToMessages/batchSend
     Docs: https://open.dingtalk.com/document/orgapp/batch-send-single-chat-messages
     """
-    token_result = await get_dingtalk_access_token(app_id, app_secret)
+    token_result = await get_dingtalk_access_token(app_id, app_secret, strict=strict)
     access_token = token_result.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         return token_result
@@ -88,13 +94,26 @@ async def send_dingtalk_v1_robot_oto_message(
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             resp = await client.post(url, headers=headers, json=payload)
+            if strict:
+                _ = resp.raise_for_status()
             data = json_object_from_response(resp)
+            if strict and (
+                not isinstance(data.get("processQueryKey"), str)
+                or not bool(data.get("processQueryKey"))
+                or bool(data.get("code"))
+                or bool(data.get("errcode"))
+                or bool(data.get("invalidStaffIdList"))
+                or bool(data.get("flowControlledStaffIdList"))
+            ):
+                raise RuntimeError("DingTalk did not acknowledge the message")
             if resp.status_code == 200:
                 logger.info(f"[DingTalk] Robot v1.0 OTO batch message sent to {user_ids}")
                 return {"errcode": 0, "processQueryKey": data.get("processQueryKey")}
             logger.error(f"[DingTalk] Failed to send v1.0 OTO message: {data}")
             return {"errcode": resp.status_code, "errmsg": str(data)}
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"[DingTalk] Network error sending v1.0 OTO message: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
@@ -145,6 +164,8 @@ async def send_dingtalk_message(
     agent_id: str | None = None,
     use_robot: bool = True,
     msg_type: str = "text",
+    *,
+    strict: bool = False,
 ) -> JsonObject:
     """Unified message sending method.
 
@@ -153,7 +174,7 @@ async def send_dingtalk_message(
     if use_robot:
         # Use v1.0 API for private chat
         return await send_dingtalk_v1_robot_oto_message(
-            app_id=app_id, app_secret=app_secret, user_ids=[user_id], message=message, msg_type=msg_type
+            app_id=app_id, app_secret=app_secret, user_ids=[user_id], message=message, msg_type=msg_type, strict=strict
         )
     # Use Work Notification
     msg_body: JsonObject = {

@@ -450,6 +450,8 @@ class FeishuService:
         content: str,
         receive_id_type: str = "open_id",
         stage: str = "send_message",
+        *,
+        strict: bool = False,
     ) -> JsonObject:
         """Send a message via a specific Feishu bot (per-agent credentials).
 
@@ -472,6 +474,11 @@ class FeishuService:
                 },
             )
             app_token = _app_access_token(token_resp)
+            if strict:
+                _ = token_resp.raise_for_status()
+                token_data = self._parse_api_response(token_resp, stage="app_access_token")
+                if token_data.get("code") != 0 or not app_token:
+                    raise RuntimeError("Feishu returned no app access token")
 
             resp: httpx.Response = await typed_client.post(
                 f"{FEISHU_SEND_MSG_URL}?receive_id_type={receive_id_type}",
@@ -482,6 +489,8 @@ class FeishuService:
                 },
                 headers={"Authorization": f"Bearer {app_token}"},
             )
+            if strict:
+                _ = resp.raise_for_status()
             return self._parse_api_response(resp, stage=stage)
 
     async def patch_message(

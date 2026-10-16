@@ -122,18 +122,23 @@ def _verify_slack_signature(signing_secret: str, body: bytes, headers: Mapping[s
     return hmac.compare_digest(expected, sig)
 
 
-async def _send_slack_messages(bot_token: str, channel: str, text: str) -> None:
+async def _send_slack_messages(bot_token: str, channel: str, text: str, *, strict: bool = False) -> None:
     """Send text to Slack, splitting into SLACK_MSG_LIMIT chunks if needed."""
     import httpx
 
     chunks = [text[i : i + SLACK_MSG_LIMIT] for i in range(0, len(text), SLACK_MSG_LIMIT)]
     async with httpx.AsyncClient(timeout=10) as client:
         for chunk in chunks:
-            _ = await client.post(
+            resp = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
                 json={"channel": channel, "text": chunk},
             )
+            if strict:
+                _ = resp.raise_for_status()
+                data = json_object_from_response(resp)
+                if data.get("ok") is not True:
+                    raise RuntimeError("Slack rejected the message")
 
 
 @router.post("/channel/slack/{agent_id}/webhook")

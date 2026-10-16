@@ -286,20 +286,45 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
 class _DeliveryStore:
     def __init__(self) -> None:
         self.rows: dict[uuid.UUID, GatewayMessageRecord] = {}
+        self.intents: dict[tuple[uuid.UUID, str, uuid.UUID], SimpleNamespace] = {}
+        self.chat: list[dict[str, Any]] = []
         self.events: list[str] = []
 
     @asynccontextmanager
     async def connection_ctx(self) -> AsyncGenerator[None]:
         snapshot = {key: replace(row) for key, row in self.rows.items()}
+        intents_snapshot, chat_snapshot = dict(self.intents), list(self.chat)
         self.events.append("enter")
         try:
             yield
         except Exception:
-            self.rows = snapshot
+            self.rows, self.intents, self.chat = snapshot, intents_snapshot, chat_snapshot
             self.events.append("rollback")
             raise
         else:
             self.events.append("commit")
+
+    async def create_intent(
+        self,
+        *,
+        message_id: uuid.UUID,
+        destination_kind: str,
+        destination_id: uuid.UUID,
+        tenant_id: uuid.UUID | None,
+    ) -> SimpleNamespace | None:
+        assert self.events[-1] == "enter", "intents must be written inside the report transaction"
+        key = (message_id, destination_kind, destination_id)
+        if key in self.intents:
+            return None
+        record = SimpleNamespace(
+            id=uuid.uuid4(),
+            message_id=message_id,
+            destination_kind=destination_kind,
+            destination_id=destination_id,
+            tenant_id=tenant_id,
+        )
+        self.intents[key] = record
+        return record
 
     async def requeue_stale_deliveries(self, agent_id: uuid.UUID, *, stale_before: datetime) -> list[uuid.UUID]:
         requeued = []
@@ -349,8 +374,9 @@ def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
 
 @pytest.fixture
 def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) -> SimpleNamespace:
-    agent = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Receiver")
-    sender = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Sender")
+    tenant_id = uuid.uuid4()
+    agent = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Receiver", tenant_id=tenant_id)
+    sender = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Sender", tenant_id=tenant_id)
     session = ChatSessionRecord(id=uuid.uuid4(), agent_id=agent.id, user_id=uuid.uuid4(), source_channel="feishu")
     at = datetime(2026, 10, 14, 10, tzinfo=UTC)
     row = GatewayMessageRecord(
@@ -363,7 +389,11 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
         created_at=at,
     )
     delivery_store.rows[row.id] = row
-    calls: dict[str, list[Any]] = {name: [] for name in ("insert", "ws", "im", "enqueue", "touch", "participant")}
+    calls: dict[str, list[Any]] = {name: [] for name in ("insert", "ws", "touch", "participant")}
+    direct_calls = []
+
+    async def direct_delivery(*args, **kwargs):
+        direct_calls.append((args, kwargs))
 
     async def authenticate(_key):
         return agent
@@ -384,6 +414,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
 
     async def insert(**kwargs):
         assert delivery_store.events[-1] == "enter"
+        delivery_store.chat.append(kwargs)
         calls["insert"].append(kwargs)
 
     async def touch(**kwargs):
@@ -400,14 +431,6 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     async def get_sender(_id):
         return sender
 
-    async def enqueue(**kwargs):
-        assert delivery_store.events[-1] == "commit"
-        calls["enqueue"].append(kwargs)
-
-    async def im(**kwargs):
-        assert delivery_store.events[-1] == "commit"
-        calls["im"].append(kwargs)
-
     async def ws(*args, **kwargs):
         assert delivery_store.events[-1] == "commit"
         calls["ws"].append((args, kwargs))
@@ -419,10 +442,54 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     monkeypatch.setattr(delivery.agent_dao, "get", get_sender)
     monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", participant)
     monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
-    monkeypatch.setattr(delivery, "enqueue_openclaw_message", enqueue)
+    monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", delivery_store.create_intent)
     monkeypatch.setattr("app.api.websocket.manager", SimpleNamespace(send_to_session=ws))
-    monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", im)
-    return SimpleNamespace(agent=agent, sender=sender, session=session, row=row, at=at, calls=calls)
+    monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", direct_delivery)
+    monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", direct_delivery)
+    return SimpleNamespace(
+        agent=agent,
+        sender=sender,
+        session=session,
+        row=row,
+        at=at,
+        tenant_id=tenant_id,
+        calls=calls,
+        direct_calls=direct_calls,
+    )
+
+
+def _assert_report_intents(store: _DeliveryStore, env: SimpleNamespace) -> None:
+    assert set(store.intents) == {
+        (env.row.id, "im", env.session.id),
+        (env.row.id, "agent", env.sender.id),
+    }
+    assert all(intent.tenant_id == env.tenant_id for intent in store.intents.values())
+    assert not env.direct_calls
+
+
+async def test_delivery_store_enforces_per_message_destination_uniqueness(delivery_store: _DeliveryStore) -> None:
+    message_id, destination_id, tenant_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    kwargs = {
+        "message_id": message_id,
+        "destination_kind": "im",
+        "destination_id": destination_id,
+        "tenant_id": tenant_id,
+    }
+
+    async with delivery_store.connection_ctx():
+        first = await delivery_store.create_intent(**kwargs)
+        assert await delivery_store.create_intent(**kwargs) is None
+        agent_intent = await delivery_store.create_intent(
+            message_id=message_id,
+            destination_kind="agent",
+            destination_id=destination_id,
+            tenant_id=tenant_id,
+        )
+
+    assert delivery_store.intents == {
+        (message_id, "im", destination_id): first,
+        (message_id, "agent", destination_id): agent_intent,
+    }
 
 
 async def test_overlapping_polls_claim_disjoint_batches_and_keep_response_fields(
@@ -527,7 +594,15 @@ async def test_report_first_result_wins_and_all_side_effects_run_once(
     assert env.calls["insert"][0]["content"] == "first"
     assert env.calls["insert"][0]["user_id"] == env.session.user_id
     assert env.calls["touch"][0]["obj_in"] == {"openclaw_last_seen": env.at}
-    assert env.calls["enqueue"][0]["await_wake"] is False
+    assert len(delivery_store.chat) == 1
+    assert delivery_store.chat[0]["content"] == "first"
+    _assert_report_intents(delivery_store, env)
+    assert env.calls["ws"] == [
+        (
+            (str(env.agent.id), str(env.session.id), {"type": "done", "role": "assistant", "content": "first"}),
+            {"user_id": str(env.session.user_id)},
+        )
+    ]
 
 
 async def test_late_report_after_reclaim_wins_over_new_delivery(
@@ -545,6 +620,9 @@ async def test_late_report_after_reclaim_wins_over_new_delivery(
     assert delivery_store.rows[env.row.id].result == "A"
     assert delivery_store.rows[env.row.id].status == "completed"
     assert all(len(calls) == 1 for calls in env.calls.values())
+    assert len(delivery_store.chat) == 1
+    assert delivery_store.chat[0]["content"] == "A"
+    _assert_report_intents(delivery_store, env)
 
 
 async def test_report_wins_while_requeued_row_is_still_pending(
@@ -560,6 +638,9 @@ async def test_report_wins_while_requeued_row_is_still_pending(
     assert delivery_store.rows[env.row.id].status == "completed"
     assert delivery_store.rows[env.row.id].result == "late"
     assert all(len(calls) == 1 for calls in env.calls.values())
+    assert len(delivery_store.chat) == 1
+    assert delivery_store.chat[0]["content"] == "late"
+    _assert_report_intents(delivery_store, env)
 
 
 async def test_assistant_insert_failure_rolls_back_completion_and_never_publishes(
@@ -578,13 +659,18 @@ async def test_assistant_insert_failure_rolls_back_completion_and_never_publishe
     assert row.result is None
     assert row.completed_at is None
     assert delivery_store.events == ["enter", "rollback"]
-    assert all(not report_env.calls[name] for name in ("ws", "im", "enqueue", "touch"))
+    assert all(not report_env.calls[name] for name in ("ws", "touch"))
+    assert not delivery_store.chat
+    assert not delivery_store.intents
+    assert not report_env.direct_calls
 
 
-async def test_failed_ws_publisher_does_not_suppress_im_or_sender_reply(
+async def test_failed_ws_publisher_preserves_durable_im_and_sender_intents(
     monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore, report_env: SimpleNamespace
 ) -> None:
     async def broken_ws(*_args, **_kwargs):
+        assert delivery_store.events[-1] == "commit"
+        report_env.calls["ws"].append((_args, _kwargs))
         raise RuntimeError("disconnected")
 
     monkeypatch.setattr("app.api.websocket.manager", SimpleNamespace(send_to_session=broken_ws))
@@ -592,7 +678,10 @@ async def test_failed_ws_publisher_does_not_suppress_im_or_sender_reply(
     response = await gateway.report_result(GatewayReportRequest(message_id=report_env.row.id, result="answer"), "key")
 
     assert response == {"status": "ok"}
-    assert len(report_env.calls["im"]) == len(report_env.calls["enqueue"]) == 1
+    assert len(report_env.calls["ws"]) == 1
+    assert len(delivery_store.chat) == 1
+    assert delivery_store.chat[0]["content"] == "answer"
+    _assert_report_intents(delivery_store, report_env)
     assert delivery_store.rows[report_env.row.id].status == "completed"
 
 
@@ -624,3 +713,115 @@ async def test_report_http_missing_key_unknown_id_and_duplicate(
     assert duplicate.json() == {"status": "ok"}
     assert delivery_store.rows[env.row.id].result == "original"
     assert all(not calls for calls in env.calls.values())
+    assert not delivery_store.chat
+    assert not delivery_store.intents
+    assert not env.direct_calls
+
+
+async def test_second_intent_failure_rolls_back_chat_completion_and_first_intent(
+    monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    attempted = []
+
+    async def fail_second_intent(**kwargs):
+        attempted.append(kwargs["destination_kind"])
+        if len(attempted) == 2:
+            assert len(delivery_store.intents) == len(delivery_store.chat) == 1
+            assert delivery_store.rows[env.row.id].status == "completed"
+            raise RuntimeError("second intent failed")
+        return await delivery_store.create_intent(**kwargs)
+
+    monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", fail_second_intent)
+
+    with pytest.raises(RuntimeError, match="second intent failed"):
+        await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="answer"), "key")
+
+    assert attempted == ["im", "agent"]
+    row = delivery_store.rows[env.row.id]
+    assert (row.status, row.result, row.completed_at) == ("pending", None, None)
+    assert not delivery_store.chat
+    assert not delivery_store.intents
+    assert delivery_store.events == ["enter", "rollback"]
+    assert not env.calls["ws"]
+    assert not env.direct_calls
+
+
+@pytest.mark.parametrize("destination", ["sender", "session", "both"])
+async def test_report_excludes_foreign_tenant_sender_and_foreign_owned_session(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace, destination: str
+) -> None:
+    env = report_env
+    if destination in ("sender", "both"):
+        env.sender.tenant_id = uuid.uuid4()
+    if destination in ("session", "both"):
+        env.session.agent_id = uuid.uuid4()
+
+    await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="answer"), "key")
+
+    expected = set()
+    if destination == "sender":
+        expected.add((env.row.id, "im", env.session.id))
+    if destination == "session":
+        expected.add((env.row.id, "agent", env.sender.id))
+    assert set(delivery_store.intents) == expected
+    assert all(intent.tenant_id == env.tenant_id for intent in delivery_store.intents.values())
+    assert not env.direct_calls
+
+
+async def test_report_for_another_agents_message_is_not_found_and_writes_nothing(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    env.row.agent_id = uuid.uuid4()
+
+    with pytest.raises(HTTPException) as caught:
+        await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="answer"), "key")
+
+    assert caught.value.status_code == 404
+    assert (env.row.status, env.row.result, env.row.completed_at) == ("pending", None, None)
+    assert not delivery_store.chat
+    assert not delivery_store.intents
+    assert all(not calls for calls in env.calls.values())
+    assert not env.direct_calls
+
+
+async def test_empty_report_keeps_delivery_intents_without_empty_assistant_chat(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+
+    with pytest.raises(ValidationError):
+        GatewayReportRequest(message_id=env.row.id, result="")
+    won = await delivery.record_report(env.agent, env.row.id, "")
+    assert won is not None
+    await delivery.publish_report(env.agent, won, "")
+    assert await delivery.record_report(env.agent, env.row.id, "late") is None
+
+    assert delivery_store.rows[env.row.id].result == ""
+    assert delivery_store.rows[env.row.id].status == "completed"
+    assert not delivery_store.chat
+    assert not env.calls["insert"]
+    assert len(env.calls["ws"]) == 1
+    assert env.calls["ws"][0][0][2]["content"] == ""
+    _assert_report_intents(delivery_store, env)
+
+
+async def test_publish_report_only_sends_authoritative_ws_without_creating_or_delivering_intents(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    delivery_store.events.append("commit")
+    message = replace(env.row, status="completed", result="authoritative")
+
+    await delivery.publish_report(env.agent, message, "stale argument")
+
+    assert env.calls["ws"] == [
+        (
+            (str(env.agent.id), str(env.session.id), {"type": "done", "role": "assistant", "content": "authoritative"}),
+            {"user_id": str(env.session.user_id)},
+        )
+    ]
+    assert not delivery_store.intents
+    assert not delivery_store.chat
+    assert not env.direct_calls

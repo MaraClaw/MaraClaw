@@ -32,7 +32,7 @@ def test_routing_history_limit_caps_long_windows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyPatch) -> None:
     from contextlib import asynccontextmanager
 
     from app.api import gateway
@@ -57,6 +57,7 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     )
     sent: list[tuple[str, str, object, str | None]] = []
     delivered: list[tuple[object, object, str]] = []
+    intents: list[dict[str, object]] = []
 
     async def get_agent(_key: str) -> AgentRecord:
         return agent
@@ -95,6 +96,9 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     async def deliver_session_reply(*, agent, session, content: str) -> None:
         delivered.append((agent, session, content))
 
+    async def create_intent(**kwargs: object) -> None:
+        intents.append(kwargs)
+
     monkeypatch.setattr(gateway, "_get_agent_by_key", get_agent)
     monkeypatch.setattr(gateway, "connection_ctx", connection_ctx)
     monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", lock_openclaw)
@@ -104,6 +108,7 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
     monkeypatch.setattr(gateway.chat_message_dao, "insert_message", insert_message)
     monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
     monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", get_participant)
+    monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", create_intent)
     monkeypatch.setattr("app.api.websocket.manager", _Manager())
     monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", deliver_session_reply)
 
@@ -121,7 +126,15 @@ async def test_report_result_scopes_ws_and_delivers_im(monkeypatch: pytest.Monke
             str(session.user_id),
         )
     ]
-    assert delivered == [(agent, session, "Guest answer")]
+    assert delivered == []
+    assert intents == [
+        {
+            "message_id": msg.id,
+            "destination_kind": "im",
+            "destination_id": session.id,
+            "tenant_id": agent.tenant_id,
+        }
+    ]
 
 
 @pytest.mark.asyncio

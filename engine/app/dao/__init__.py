@@ -11,6 +11,7 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.enterprise_info_dao import enterprise_info_dao
 from app.dao.focus_dao import agent_focus_item_dao
 from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.dao.gogcli_credential_dao import gogcli_credential_state_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.identity_provider_dao import identity_provider_dao
@@ -68,6 +69,7 @@ __all__ = [
     "company_report_dao",
     "enterprise_info_dao",
     "gateway_message_dao",
+    "gateway_report_delivery_dao",
     "gogcli_credential_state_dao",
     "identity_dao",
     "identity_provider_dao",
