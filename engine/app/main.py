@@ -88,7 +88,7 @@ from app.api.whatsapp import router as whatsapp_router
 
 # Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound.
 _CRUD_DB = [Depends(bind_crud_connection)]
-app.include_router(auth_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

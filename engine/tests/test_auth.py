@@ -266,6 +266,9 @@ async def test_oauth_callback_passes_redirect_uri():
     identity = _make_identity()
     user = _make_user(identity.id)
     provider = AsyncMock()
+    provider.provider = None
+    user.identity = identity
+    user.tenant_id = None
     provider.exchange_code_for_token = AsyncMock(return_value={"access_token": "provider-token"})
     provider.get_user_info = AsyncMock(return_value=SimpleNamespace())
     provider.find_or_create_user = AsyncMock(return_value=(user, False))
@@ -287,6 +290,8 @@ async def test_oauth_callback_passes_redirect_uri():
         patch("app.api.auth.UserOut") as mock_user_out,
         patch.object(auth_api, "create_access_token", return_value="jwt-token"),
         patch.object(auth_api.user_dao, "get_by_identity_id", new=AsyncMock(return_value=[user])),
+        patch.object(auth_api.user_dao, "get_with_identity", new=AsyncMock(return_value=user)),
+        patch.object(auth_api.identity_provider_dao, "get_preferred", new=AsyncMock(return_value=None)),
     ):
         mock_user_out.model_validate.return_value = {"id": str(user.id)}
         result = await auth_api.oauth_callback("google", data)

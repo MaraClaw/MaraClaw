@@ -361,6 +361,13 @@ async def test_forgot_password_queues_background_email(monkeypatch):
 
     monkeypatch.setattr(identity_dao, "get_by_email", fake_get_by_email)
 
+    from unittest.mock import AsyncMock
+
+    from app.api.background_tasks import drain_background_tasks, start_background_tasks
+
+    start_background_tasks()
+    send = AsyncMock()
+    monkeypatch.setattr(system_email_service, "send_password_reset_email", send)
     response = await auth_api.forgot_password(
         ForgotPasswordRequest(email=user.email),
         background_tasks,
@@ -368,7 +375,12 @@ async def test_forgot_password_queues_background_email(monkeypatch):
     )
 
     assert response["ok"] is True
-    assert len(background_tasks.tasks) == 1
+    await drain_background_tasks()
+    start_background_tasks()
+    assert background_tasks.tasks == []
+    send.assert_awaited_once_with(
+        user.email, user.username, "https://app.example.com/reset-password?token=raw-token", 29
+    )
 
 
 def test_send_system_email_uses_configured_timeout(monkeypatch):
