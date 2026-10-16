@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 
 import pytest
 
 from app.records.agent import AgentRecord
-from app.records.chat import ChatSessionRecord
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.channels.inbound import (
     CHANNEL_REPLY_QUEUED,
@@ -55,6 +54,14 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
         sender_user_id=session.user_id,
         status="pending",
     )
+    inserted_message = ChatMessageRecord(
+        id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        agent_id=agent.id,
+        user_id=session.user_id,
+        role="assistant",
+        content="Guest answer",
+        conversation_id=str(session.id),
+    )
     sent: list[tuple[str, str, object, str | None]] = []
     delivered: list[tuple[object, object, str]] = []
     intents: list[dict[str, object]] = []
@@ -78,8 +85,8 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     async def update(*, db_obj, obj_in):
         return db_obj
 
-    async def insert_message(**_kwargs):
-        return SimpleNamespace(id=uuid.uuid4())
+    async def insert_message(**_kwargs) -> ChatMessageRecord:
+        return inserted_message
 
     async def get_session(_sid):
         return session
@@ -122,7 +129,13 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
         (
             str(agent.id),
             str(session.id),
-            {"type": "done", "role": "assistant", "content": "Guest answer"},
+            {
+                "type": "done",
+                "role": "assistant",
+                "content": "Guest answer",
+                "message_id": str(inserted_message.id),
+                "entry_id": str(inserted_message.id),
+            },
             str(session.user_id),
         )
     ]

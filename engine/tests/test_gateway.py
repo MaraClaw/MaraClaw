@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +21,7 @@ from app.config import Settings
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db import session as session_module
 from app.records.agent import AgentRecord
-from app.records.chat import ChatSessionRecord
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.org import OrgMemberRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
@@ -391,6 +391,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     delivery_store.rows[row.id] = row
     calls: dict[str, list[Any]] = {name: [] for name in ("insert", "ws", "touch", "participant")}
     direct_calls = []
+    inserted_id = uuid.uuid4()
 
     async def direct_delivery(*args, **kwargs):
         direct_calls.append((args, kwargs))
@@ -416,6 +417,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
         assert delivery_store.events[-1] == "enter"
         delivery_store.chat.append(kwargs)
         calls["insert"].append(kwargs)
+        return ChatMessageRecord(id=inserted_id, **kwargs)
 
     async def touch(**kwargs):
         calls["touch"].append(kwargs)
@@ -455,6 +457,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
         tenant_id=tenant_id,
         calls=calls,
         direct_calls=direct_calls,
+        inserted_id=inserted_id,
     )
 
 
@@ -599,7 +602,17 @@ async def test_report_first_result_wins_and_all_side_effects_run_once(
     _assert_report_intents(delivery_store, env)
     assert env.calls["ws"] == [
         (
-            (str(env.agent.id), str(env.session.id), {"type": "done", "role": "assistant", "content": "first"}),
+            (
+                str(env.agent.id),
+                str(env.session.id),
+                {
+                    "type": "done",
+                    "role": "assistant",
+                    "content": "first",
+                    "message_id": str(env.inserted_id),
+                    "entry_id": str(env.inserted_id),
+                },
+            ),
             {"user_id": str(env.session.user_id)},
         )
     ]
@@ -795,7 +808,8 @@ async def test_empty_report_keeps_delivery_intents_without_empty_assistant_chat(
         GatewayReportRequest(message_id=env.row.id, result="")
     won = await delivery.record_report(env.agent, env.row.id, "")
     assert won is not None
-    await delivery.publish_report(env.agent, won, "")
+    assert won.assistant_message_id is None
+    await delivery.publish_report(env.agent, won)
     assert await delivery.record_report(env.agent, env.row.id, "late") is None
 
     assert delivery_store.rows[env.row.id].result == ""
@@ -803,7 +817,7 @@ async def test_empty_report_keeps_delivery_intents_without_empty_assistant_chat(
     assert not delivery_store.chat
     assert not env.calls["insert"]
     assert len(env.calls["ws"]) == 1
-    assert env.calls["ws"][0][0][2]["content"] == ""
+    assert env.calls["ws"][0][0][2] == {"type": "done", "role": "assistant", "content": ""}
     _assert_report_intents(delivery_store, env)
 
 
@@ -814,7 +828,7 @@ async def test_publish_report_only_sends_authoritative_ws_without_creating_or_de
     delivery_store.events.append("commit")
     message = replace(env.row, status="completed", result="authoritative")
 
-    await delivery.publish_report(env.agent, message, "stale argument")
+    await delivery.publish_report(env.agent, delivery.RecordedReport(message, None))
 
     assert env.calls["ws"] == [
         (
@@ -825,3 +839,90 @@ async def test_publish_report_only_sends_authoritative_ws_without_creating_or_de
     assert not delivery_store.intents
     assert not delivery_store.chat
     assert not env.direct_calls
+
+
+async def test_record_report_retains_inserted_uuid_in_frozen_winning_result(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+
+    won = await delivery.record_report(env.agent, env.row.id, "answer")
+
+    assert won is not None
+    assert won.message.id == env.row.id
+    assert won.message.result == "answer"
+    assert won.assistant_message_id == env.inserted_id != env.row.id
+    identity_field = "assistant_message_id"
+    with pytest.raises(FrozenInstanceError):
+        setattr(won, identity_field, uuid.uuid4())
+    assert await delivery.record_report(env.agent, env.row.id, "late") is None
+    assert len(delivery_store.chat) == 1
+    assert not env.calls["ws"]
+
+
+@pytest.mark.parametrize("conversation_id", [None, ""])
+async def test_nonconversation_report_has_no_assistant_identity_or_notification(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace, conversation_id: str | None
+) -> None:
+    env = report_env
+    env.row.conversation_id = conversation_id
+
+    won = await delivery.record_report(env.agent, env.row.id, "answer")
+    assert won is not None
+    await delivery.publish_report(env.agent, won)
+
+    assert won.assistant_message_id is None
+    assert not delivery_store.chat
+    assert not env.calls["ws"]
+
+
+@pytest.mark.parametrize("commit_fails", [False, True])
+async def test_report_publishes_only_after_real_outer_transaction_commit(
+    monkeypatch: pytest.MonkeyPatch, raw: _FakeRawConnection, report_env: SimpleNamespace, commit_fails: bool
+) -> None:
+    env = report_env
+    monkeypatch.setattr(gateway, "connection_ctx", session_module.connection_ctx)
+
+    async def commit():
+        assert not env.calls["ws"]
+        if commit_fails:
+            raise RuntimeError("commit failed")
+        raw.commits += 1
+
+    async def ws(*args, **kwargs):
+        assert raw.commits == 1
+        assert session_module._conn_ctx.get() is None
+        env.calls["ws"].append((args, kwargs))
+
+    monkeypatch.setattr(raw, "commit", commit)
+    monkeypatch.setattr("app.api.websocket.manager", SimpleNamespace(send_to_session=ws))
+    request = GatewayReportRequest(message_id=env.row.id, result="answer")
+
+    if commit_fails:
+        with pytest.raises(RuntimeError, match="commit failed"):
+            await gateway.report_result(request, "key")
+        assert not env.calls["ws"]
+    else:
+        assert await gateway.report_result(request, "key") == {"status": "ok"}
+        assert len(env.calls["ws"]) == 1
+
+
+async def test_report_http_done_identity_matches_persisted_assistant(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    from app.main import app
+
+    env = report_env
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/gateway/report",
+            headers={"X-Api-Key": "key"},
+            json={"message_id": str(env.row.id), "result": "answer"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert len(delivery_store.chat) == len(env.calls["ws"]) == 1
+    event = env.calls["ws"][0][0][2]
+    assert event["content"] == delivery_store.chat[0]["content"] == "answer"
+    assert event["message_id"] == event["entry_id"] == str(env.inserted_id)

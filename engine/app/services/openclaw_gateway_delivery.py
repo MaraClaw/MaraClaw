@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -16,6 +17,12 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.channels.types import normalize_channel_type
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedReport:
+    message: GatewayMessageRecord
+    assistant_message_id: UUID | None
 
 
 def _utcnow() -> datetime:
@@ -39,7 +46,7 @@ async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> li
 
 async def record_report(
     agent: AgentRecord, message_id: UUID, result: str, *, now: datetime | None = None
-) -> GatewayMessageRecord | None:
+) -> RecordedReport | None:
     """Commit the winning completion, chat, last-seen touch, and delivery intents."""
     at = now or _utcnow()
     async with connection_ctx():
@@ -47,9 +54,10 @@ async def record_report(
         if won is None:
             return None
         answer = won.result or ""
+        assistant_message_id = None
         if won.conversation_id not in (None, "") and answer:
             participant = await participant_dao.get_by_type_ref("agent", agent.id)
-            _ = await chat_message_dao.insert_message(
+            inserted = await chat_message_dao.insert_message(
                 agent_id=agent.id,
                 user_id=won.sender_user_id or agent.creator_id,
                 role="assistant",
@@ -57,6 +65,7 @@ async def record_report(
                 conversation_id=won.conversation_id,
                 participant_id=participant.id if participant else None,
             )
+            assistant_message_id = inserted.id
         _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": at})
         if won.conversation_id not in (None, ""):
             try:
@@ -85,19 +94,24 @@ async def record_report(
                     destination_id=sender.id,
                     tenant_id=agent.tenant_id,
                 )
-    return won
+    return RecordedReport(message=won, assistant_message_id=assistant_message_id)
 
 
-async def publish_report(agent: AgentRecord, message: GatewayMessageRecord, result: str) -> None:
+async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
     """Best-effort WebSocket notification; durable destinations belong to the relay."""
+    message = report.message
     if message.conversation_id not in (None, ""):
         try:
             from app.api.websocket import manager
 
+            event: dict[str, object] = {"type": "done", "role": "assistant", "content": message.result or ""}
+            if report.assistant_message_id is not None:
+                event["message_id"] = str(report.assistant_message_id)
+                event["entry_id"] = str(report.assistant_message_id)
             await manager.send_to_session(
                 str(agent.id),
                 message.conversation_id,
-                {"type": "done", "role": "assistant", "content": message.result or ""},
+                event,
                 user_id=str(message.sender_user_id) if message.sender_user_id else None,
             )
             logger.info("[Gateway] pushed reply to session {} agent={}", message.conversation_id, agent.id)
