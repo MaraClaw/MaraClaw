@@ -3,6 +3,7 @@
 import uuid
 
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError
 from app.services.agent_tool_exec.registry import ToolArguments
 
 
@@ -69,6 +70,9 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
         client = MCPClient(mcp_url, api_key=direct_api_key)
         return await client.call_tool(mcp_name, arguments)
 
+    except OutboundPolicyError:
+        logger.warning("[MCP] Tool execution blocked by outbound destination policy")
+        return "MCP tool execution blocked: server destination is not allowed."
     except Exception as e:
         logger.exception(f"[MCP] Tool execution error: {tool_name}")
         return f"❌ MCP tool execution error: {str(e)[:200]}"

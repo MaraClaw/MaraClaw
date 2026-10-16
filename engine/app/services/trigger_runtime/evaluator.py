@@ -19,6 +19,8 @@ from app.core.json_types import (
     uuid_from_row,
 )
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError, validate_public_url
+from app.core.outbound_transport import public_http_client
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
@@ -321,23 +323,19 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
 
 
 async def poll_check(trigger: AgentTriggerRecord) -> bool:
-    import httpx
-
     cfg = _json_config(trigger.config)
     url = cfg.get("url")
     if not isinstance(url, str) or not url:
         return False
-    if is_private_url(url):
-        logger.warning(f"Poll blocked for trigger {trigger.name}: private/internal URL '{url}'")
-        return False
     try:
+        url = await validate_public_url(url)
         method = cfg.get("method", "GET")
         if not isinstance(method, str):
             return False
         headers = _config_headers(cfg.get("headers", {}))
         if headers is None:
             return False
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with public_http_client(timeout=10, follow_redirects=False) as client:
             resp = await client.request(method, url, headers=headers)
             _ = resp.raise_for_status()
 
@@ -364,6 +362,9 @@ async def poll_check(trigger: AgentTriggerRecord) -> bool:
             logger.warning(f"Failed to persist poll _last_value for {trigger.name}: {e}")
 
         return should_fire
+    except OutboundPolicyError as exc:
+        logger.warning("Poll blocked by outbound policy for trigger {}: {}", trigger.id, exc)
+        return False
     except Exception as e:
         logger.warning(f"Poll failed for trigger {trigger.name}: {e}")
         return False
