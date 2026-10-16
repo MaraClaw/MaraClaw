@@ -77,7 +77,7 @@ class JsonFormatter:
             "line": record.lineno,
             "msg": record.message,
         }
-        if record.extra:
+        if record.extra is not None and record.extra:
             payload["extra"] = dict(record.extra)
         if record.exc is not None:
             payload["exception"] = _exception_text(record.exc)

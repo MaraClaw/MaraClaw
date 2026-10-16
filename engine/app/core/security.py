@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import bcrypt
 from Crypto.Cipher import AES
@@ -135,7 +135,7 @@ def create_access_token(user_id: str, role: str, expires_delta: timedelta | None
         "role": role,
         "exp": expire,
     }
-    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return cast(str, jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM))
 
 
 def decode_access_token(token: str) -> AccessTokenPayload:

@@ -4,7 +4,7 @@ Use inside connection_ctx; these are transaction-scoped PostgreSQL row locks.
 The tenant mutex prevents membership/grant races from missing affected agents.
 """
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -52,7 +52,7 @@ async def invalidate_tenant_agents(db: DbConnection, tenant_id: UUID | None) -> 
 
 
 @asynccontextmanager
-async def agent_acl_mutation(agent_id: UUID) -> AsyncIterator[None]:
+async def agent_acl_mutation(agent_id: UUID) -> AsyncGenerator[None]:
     async with optional_connection_ctx() as db:
         if db is not None:
             row = await db.fetchone("SELECT tenant_id FROM agents WHERE id = %(id)s", {"id": agent_id})

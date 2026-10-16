@@ -43,12 +43,21 @@ def _pool_kwargs(*, cache: bool) -> dict[str, object]:
     }
 
 
+def _current_redis() -> redis.Redis | None:
+    return _redis_client
+
+
+def _current_cache_redis() -> redis.Redis | None:
+    return _cache_redis_client
+
+
 async def get_redis() -> redis.Redis:
     """Process-global client for tokens, locks, pubsub, and rate limits."""
     global _redis_client
     if _redis_client is not None:
         return _redis_client
     async with _lock():
+        _redis_client = _current_redis()
         if _redis_client is None:
             settings = get_settings()
             _redis_client = redis.from_url(settings.REDIS_URL, **_pool_kwargs(cache=False))
@@ -61,6 +70,7 @@ async def get_cache_redis() -> redis.Redis:
     if _cache_redis_client is not None:
         return _cache_redis_client
     async with _lock():
+        _cache_redis_client = _current_cache_redis()
         if _cache_redis_client is None:
             settings = get_settings()
             _cache_redis_client = redis.from_url(settings.REDIS_URL, **_pool_kwargs(cache=True))

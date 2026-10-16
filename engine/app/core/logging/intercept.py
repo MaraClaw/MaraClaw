@@ -29,7 +29,9 @@ class InterceptHandler(logging.Handler):
         try:
             message = record.getMessage()
         except TypeError, ValueError:
-            message = f"{record.msg} [args={record.args}]" if record.args else str(record.msg)
+            message = (
+                f"{record.msg} [args={record.args}]" if record.args is not None and record.args else str(record.msg)
+            )
 
         exc: BaseException | None = None
         if record.exc_info:

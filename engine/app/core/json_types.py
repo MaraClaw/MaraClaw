@@ -156,9 +156,8 @@ def date_from_row_opt(value: object) -> date | None:
 
 def object_attr(value: object, name: str, default: object = None) -> object:
     """Read an attribute without leaking ``Any`` from ``getattr``."""
-    from typing import cast
-
-    return cast(object, getattr(value, name, default))
+    result: object = getattr(value, name, default)
+    return result
 
 
 def object_call(fn: object, *args: object) -> object:

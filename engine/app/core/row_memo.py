@@ -25,7 +25,7 @@ def memo_get(kind: str, item_id: UUID | str | None) -> object | None:
     if key is None:
         return None
     store = _memo.get()
-    if not store:
+    if store is None or not store:
         return None
     return store.get((kind, key))
 
@@ -44,7 +44,7 @@ def memo_set(kind: str, item_id: UUID | str | None, value: object) -> None:
 def memo_drop(kind: str, item_id: UUID | str | None) -> None:
     key = _token(item_id)
     store = _memo.get()
-    if not store or key is None:
+    if store is None or not store or key is None:
         return
     store.pop((kind, key), None)
 
@@ -52,7 +52,7 @@ def memo_drop(kind: str, item_id: UUID | str | None) -> None:
 def memo_drop_kind(kind: str, *, identity_id: UUID | str | None = None) -> None:
     """Drop memo entries of ``kind``, optionally matching ``identity_id`` on the value."""
     store = _memo.get()
-    if not store:
+    if store is None or not store:
         return
     want = _token(identity_id)
     stale: list[tuple[str, str]] = []

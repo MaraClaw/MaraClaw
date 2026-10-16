@@ -24,7 +24,7 @@ class ShadowsocksProxy:
         self._published: bool = False
 
     async def start(self) -> None:
-        if not shutil.which("ss-local"):
+        if shutil.which("ss-local") in (None, ""):
             logger.info("[Proxy] ss-local not found - Discord proxy disabled")
             return
         nodes = await self._nodes()
@@ -113,7 +113,7 @@ class ShadowsocksProxy:
             except (OSError, ValueError) as exc:
                 logger.warning("[Proxy] Failed to parse node config {}: {}", path, exc)
                 return []
-        if os.environ.get("SS_SERVER") and os.environ.get("SS_PASSWORD"):
+        if os.environ.get("SS_SERVER") not in (None, "") and os.environ.get("SS_PASSWORD") not in (None, ""):
             return [
                 {
                     "server": os.environ["SS_SERVER"],

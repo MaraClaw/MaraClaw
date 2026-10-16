@@ -108,7 +108,7 @@ def get_connection() -> DbConnection | None:
 
 
 @asynccontextmanager
-async def connection_ctx() -> AsyncIterator[DbConnection]:
+async def connection_ctx() -> AsyncGenerator[DbConnection]:
     """Yield a connection, reusing the context connection when present."""
     existing = _conn_ctx.get()
     if existing is not None:
@@ -160,7 +160,7 @@ async def bind_crud_connection() -> AsyncIterator[None]:
 
 
 @asynccontextmanager
-async def optional_connection_ctx() -> AsyncIterator[DbConnection | None]:
+async def optional_connection_ctx() -> AsyncGenerator[DbConnection | None]:
     """Join/open a connection when the pool exists; otherwise yield ``None``.
 
     Use around batched DAO work that unit tests invoke without ``init_pool``.
@@ -179,7 +179,7 @@ async def optional_connection_ctx() -> AsyncIterator[DbConnection | None]:
 
 
 @asynccontextmanager
-async def transaction(db: DbConnection | None = None) -> AsyncIterator[DbConnection]:
+async def transaction(db: DbConnection | None = None) -> AsyncGenerator[DbConnection]:
     """Transactional boundary compatible with nested call sites.
 
     - If ``db`` is provided, bind it as the context connection and commit/rollback
