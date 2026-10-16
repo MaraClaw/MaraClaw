@@ -1,4 +1,6 @@
 import { apiFormRequest, apiRequest } from '@/lib/http'
+import type { ChatMessage } from './chat/message.ts'
+export type { ChatMessage } from './chat/message.ts'
 
 export type AgentTemplate = {
   id: string
@@ -47,17 +49,6 @@ export type ChatSession = {
   message_count: number
   unread_count: number
   is_primary?: boolean
-}
-
-export type ChatMessage = {
-  role: string
-  content: string
-  created_at?: string | null
-  file_name?: string
-  toolName?: string
-  toolStatus?: string
-  toolResult?: string
-  thinking?: string
 }
 
 export type FileInfo = {
