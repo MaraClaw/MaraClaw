@@ -216,3 +216,44 @@ test('malformed frames become error events when the socket is current', () => {
   assert.equal(f.events[0]?.type, 'error')
   conn.close()
 })
+
+test('persisted identities survive decoding while legacy events remain valid', () => {
+  // Given
+  const f = fixture()
+  const conn = f.connect()
+  const done = { type: 'done', role: 'assistant', content: 'same', message_id: 'parent', entry_id: 'parent' }
+  // When
+  f.socket().frame(JSON.stringify(done))
+  f.socket().frame('{"type":"done","content":"legacy"}')
+  f.socket().frame('{"type":"done","message_id":42}')
+  // Then
+  assert.deepEqual(f.events, [done, { type: 'done', content: 'legacy' }, { type: 'error', content: 'Malformed chat event' }])
+  conn.close()
+})
+
+test('only current reconnect opens notify and only unsent payloads flush', (t) => {
+  // Given
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  let refreshes = 0
+  const conn = connectAgentChat('agent-a', 'token-a', 'thread-a', {
+    ...f.handlers, onReconnect: () => { refreshes++ },
+  })
+  const first = f.socket()
+  first.open()
+  conn.send({ content: 'already sent' })
+  first.end(1006)
+  conn.send({ content: 'unsent' })
+  // When
+  t.mock.timers.tick(600)
+  const current = f.socket()
+  current.open()
+  first.open()
+  f.store.beginReplacement(f.store.capture(), 'token-b')
+  current.open()
+  // Then
+  assert.equal(refreshes, 1)
+  assert.deepEqual(current.sent.map((data) => JSON.parse(data)), [{ content: 'unsent' }])
+  assert.deepEqual(first.sent.map((data) => JSON.parse(data)), [{ content: 'already sent' }])
+  conn.close()
+})

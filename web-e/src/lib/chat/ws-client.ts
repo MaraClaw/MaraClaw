@@ -44,6 +44,7 @@ function connectBrowserSocket(url: string): ChatSocket {
 type Handlers = {
   readonly onEvent: (event: ChatInbound) => void
   readonly onClose?: (code: number) => void
+  readonly onReconnect?: () => void
   readonly owner?: SessionOwner
   readonly sessionStore?: AuthSessionStore
   readonly transport?: ChatTransport
@@ -51,6 +52,7 @@ type Handlers = {
 
 const inboundSchema = z.object({
   type: z.string(), content: z.string().optional(), session_id: z.string().optional(),
+  message_id: z.string().optional(), entry_id: z.string().optional(),
   name: z.string().optional(), status: z.string().optional(), result: z.string().optional(),
   role: z.string().optional(), arguments: z.string().optional(), agent_id: z.string().optional(),
   env: z.string().optional(), output: z.string().optional(),
@@ -74,6 +76,7 @@ export function connectAgentChat(
   let socket: ChatSocket | null = null
   let stopped = false
   let attempt = 0
+  let opened = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const pending: ChatOutbound[] = []
 
@@ -110,6 +113,8 @@ export function connectAgentChat(
     source.onopen = () => {
       if (!active()) return
       attempt = 0
+      if (opened) handlers.onReconnect?.()
+      opened = true
       while (active() && pending.length && source.readyState === 1) {
         source.send(JSON.stringify(pending.shift()))
       }
