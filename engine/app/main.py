@@ -112,7 +112,7 @@ app.include_router(users_router, prefix=settings.API_PREFIX, dependencies=_CRUD_
 app.include_router(slack_router, prefix=settings.API_PREFIX)
 app.include_router(discord_router, prefix=settings.API_PREFIX)
 app.include_router(dingtalk_router, prefix=settings.API_PREFIX)
-app.include_router(google_workspace_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(google_workspace_router, prefix=settings.API_PREFIX)
 app.include_router(google_chat_router, prefix=settings.API_PREFIX)
 app.include_router(wecom_router, prefix=settings.API_PREFIX)
 app.include_router(wechat_router, prefix=settings.API_PREFIX)

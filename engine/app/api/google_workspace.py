@@ -1,6 +1,7 @@
 """Google Workspace OAuth callback routes."""
 
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,6 +12,8 @@ from app.core.logging import logger
 from app.core.security import create_access_token, encrypt_data, get_current_admin
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
+from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx, optional_connection_ctx
 from app.records.user import UserRecord
 from app.services.auth_provider import GoogleWorkspaceAuthProvider
 from app.services.auth_registry import auth_provider_registry
@@ -20,9 +23,11 @@ from app.services.google_workspace_oauth import (
     GOOGLE_SYNC_STATE_KIND,
     get_google_provider,
     get_google_redirect_uri,
+    load_google_sync_actor,
     parse_google_oauth_state,
     probe_google_directory,
-    sign_google_oauth_state,
+    reload_google_provider,
+    sign_google_sync_state,
 )
 from app.services.identity_provider_lookup import get_preferred_identity_provider
 
@@ -34,17 +39,18 @@ settings = get_settings()
 async def get_google_workspace_sync_authorize_url(
     provider_id: uuid.UUID, request: Request, current_user: UserRecord = Depends(get_current_admin)
 ):
-    provider = await get_google_provider(provider_id)
-    if current_user.role != "platform_admin" and provider.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Not authorized to manage this provider")
-
-    config = provider.config or {}
-    auth_provider = GoogleWorkspaceAuthProvider(provider=provider, config=config)
-    if not auth_provider.client_id or not auth_provider.client_secret:
-        raise HTTPException(status_code=400, detail="Please save Client ID and Client Secret first")
-
-    redirect_uri = await get_google_redirect_uri(provider, request)
-    state = sign_google_oauth_state(GOOGLE_SYNC_STATE_KIND, provider_id)
+    async with connection_ctx():
+        provider = await get_google_provider(provider_id)
+        current_user = await load_google_sync_actor(current_user.id, current_user.tenant_id or uuid.UUID(int=0))
+        if not provider.is_active or (
+            current_user.role != "platform_admin" and provider.tenant_id != current_user.tenant_id
+        ):
+            raise HTTPException(status_code=403, detail="Not authorized to manage this provider")
+        auth_provider = GoogleWorkspaceAuthProvider(provider=provider, config=provider.config or {})
+        if not auth_provider.client_id or not auth_provider.client_secret:
+            raise HTTPException(status_code=400, detail="Please save Client ID and Client Secret first")
+        redirect_uri = await get_google_redirect_uri(provider, request)
+        state = sign_google_sync_state(provider_id, current_user.id, current_user.tenant_id)
     url = await auth_provider.get_admin_authorization_url(redirect_uri, state)
     return {"authorization_url": url}
 
@@ -55,36 +61,32 @@ async def _handle_google_sso_callback(
     provider_id: uuid.UUID | None,
     request: Request | None,
 ):
-    tenant_id = None
-    if sid:
-        session = await sso_scan_session_dao.get(sid)
-        if session:
+    async with optional_connection_ctx():
+        tenant_id = None
+        if sid:
+            session = await sso_scan_session_dao.get(sid)
+            if not session or session.status != "pending" or session.expires_at <= datetime.now(UTC):
+                return HTMLResponse("Auth failed: invalid SSO session")
             tenant_id = session.tenant_id
-
-    provider = None
-    if provider_id:
-        provider = await get_google_provider(provider_id)
-        if tenant_id and provider.tenant_id != tenant_id:
+        provider = await get_google_provider(provider_id) if provider_id else None
+        if provider and tenant_id and provider.tenant_id != tenant_id:
             return HTMLResponse("Auth failed: provider does not belong to this tenant")
-
-    auth_provider = None
-    if provider:
-        auth_provider = GoogleWorkspaceAuthProvider(provider=provider, config=provider.config or {})
-    else:
-        auth_provider = await auth_provider_registry.get_provider(
-            "google_workspace", str(tenant_id) if tenant_id else None
-        )
-    if not auth_provider:
-        return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
-
-    if not provider:
-        provider = await get_preferred_identity_provider(
-            "google_workspace",
-            str(tenant_id) if tenant_id else None,
-        )
-    if provider is not None and provider:
-        redirect_uri = await get_google_redirect_uri(provider, request)
-        auth_provider.config["redirect_uri"] = redirect_uri
+        if provider:
+            auth_provider = GoogleWorkspaceAuthProvider(provider=deepcopy(provider), config=provider.config or {})
+        else:
+            auth_provider = await auth_provider_registry.get_provider(
+                "google_workspace", str(tenant_id) if tenant_id else None
+            )
+        if not auth_provider:
+            return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
+        if not provider:
+            provider = await get_preferred_identity_provider("google_workspace", str(tenant_id) if tenant_id else None)
+        provider = deepcopy(provider)
+        if provider is not None:
+            if not provider.is_active:
+                return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
+            auth_provider.config = deepcopy(auth_provider.config)
+            auth_provider.config["redirect_uri"] = await get_google_redirect_uri(provider, request)
 
     try:
         token_data = await auth_provider.exchange_code_for_token(code)
@@ -94,20 +96,39 @@ async def _handle_google_sso_callback(
             return HTMLResponse("Auth failed: Token exchange error")
 
         user_info = await auth_provider.get_user_info(access_token)
-        user, _is_new = await auth_provider.find_or_create_user(
-            user_info, tenant_id=str(tenant_id) if tenant_id else None
-        )
-        if not user:
-            return HTMLResponse("Auth failed: User resolution failed")
-    except Exception as e:
-        logger.error(f"Google Workspace login error: {e}")
-        return HTMLResponse(f"Auth failed: {e!s}")
-
-    token = create_access_token(str(user.id), user.role)
-
-    if sid:
-        try:
-            session = await sso_scan_session_dao.get(sid)
+        async with connection_ctx():
+            if provider is not None:
+                auth_provider.provider = await reload_google_provider(provider)
+                if (
+                    await get_google_redirect_uri(auth_provider.provider, request)
+                    != auth_provider.config["redirect_uri"]
+                ):
+                    raise RuntimeError("Google redirect configuration changed")
+            session = await sso_scan_session_dao.get(sid) if sid else None
+            if sid and (
+                not session
+                or session.tenant_id != tenant_id
+                or session.status != "pending"
+                or session.expires_at <= datetime.now(UTC)
+            ):
+                raise RuntimeError("Invalid SSO session")
+            user, _is_new = await auth_provider.find_or_create_user(
+                user_info, tenant_id=str(tenant_id) if tenant_id else None
+            )
+            if not user:
+                raise RuntimeError("User resolution failed")
+            resolved_tenant_id = user.tenant_id
+            user = await user_dao.get_with_identity(user.id, fresh=True)
+            if (
+                user is None
+                or not user.is_active
+                or user.identity is None
+                or not user.identity.is_active
+                or user.tenant_id != resolved_tenant_id
+                or (tenant_id is not None and user.tenant_id != tenant_id)
+            ):
+                raise RuntimeError("SSO account authorization is no longer valid")
+            token = create_access_token(str(user.id), user.role)
             if session:
                 _ = await sso_scan_session_dao.update(
                     db_obj=session,
@@ -119,15 +140,17 @@ async def _handle_google_sso_callback(
                         "error_msg": None,
                     },
                 )
-                return HTMLResponse(
-                    f"""<html><head><meta charset="utf-8" /></head>
+        if sid:
+            return HTMLResponse(
+                f"""<html><head><meta charset="utf-8" /></head>
                     <body style="font-family: sans-serif; padding: 24px;">
                         <div>SSO login successful. Redirecting...</div>
                         <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
                     </body></html>"""
-                )
-        except Exception as e:
-            logger.exception("Failed to update SSO session (google_workspace) %s", e)
+            )
+    except Exception:
+        logger.error("Google Workspace login error")
+        return HTMLResponse("Auth failed: Authentication error")
 
     return HTMLResponse(f"Logged in. Token: {token}")
 
@@ -136,17 +159,26 @@ async def _handle_google_admin_sync_callback(
     code: str,
     provider_id: uuid.UUID,
     request: Request,
+    actor_binding: tuple[uuid.UUID, uuid.UUID] | None = None,
 ):
-    provider = await get_google_provider(provider_id)
-    redirect_uri = await get_google_redirect_uri(provider, request)
-    config = provider.config or {}
-    configured_customer_id = config.get("customer_id")
-    customer_id = (
-        configured_customer_id if isinstance(configured_customer_id, str) and configured_customer_id else "my_customer"
-    )
-    auth_provider = GoogleWorkspaceAuthProvider(provider=provider, config=config)
-
     try:
+        if actor_binding is None:
+            return HTMLResponse("Authorization failed: restart Google Workspace admin authorization")
+        async with connection_ctx():
+            actor = await load_google_sync_actor(*actor_binding)
+            actor_authority = (actor.role, actor.identity_id, actor.is_platform_admin)
+            provider = deepcopy(await get_google_provider(provider_id))
+            if not provider.is_active or (actor.role != "platform_admin" and provider.tenant_id != actor.tenant_id):
+                raise HTTPException(status_code=403, detail="Not authorized to manage this provider")
+            redirect_uri = await get_google_redirect_uri(provider, request)
+            config = deepcopy(provider.config or {})
+        configured_customer_id = config.get("customer_id")
+        customer_id = (
+            configured_customer_id
+            if isinstance(configured_customer_id, str) and configured_customer_id
+            else "my_customer"
+        )
+        auth_provider = GoogleWorkspaceAuthProvider(provider=provider, config=config)
         token_data = await auth_provider.exchange_code_for_token(code, redirect_uri=redirect_uri)
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")
@@ -168,13 +200,20 @@ async def _handle_google_admin_sync_callback(
         new_config["google_admin_refresh_token_encrypted"] = encrypt_data(refresh_token, settings.SECRET_KEY)
         new_config["google_admin_authorized_email"] = profile_email
         new_config["google_admin_authorized_at"] = datetime.now(UTC).isoformat()
-        _ = await identity_provider_dao.update(db_obj=provider, obj_in={"config": new_config})
-    except Exception as e:
-        logger.error(f"Google Workspace admin sync authorization failed: {e}")
+        async with connection_ctx():
+            actor = await load_google_sync_actor(*actor_binding)
+            if (actor.role, actor.identity_id, actor.is_platform_admin) != actor_authority:
+                raise HTTPException(status_code=403, detail="Admin authority changed; restart authorization")
+            provider = await reload_google_provider(provider)
+            if await get_google_redirect_uri(provider, request) != redirect_uri:
+                raise HTTPException(status_code=403, detail="Google redirect configuration changed")
+            _ = await identity_provider_dao.update(db_obj=provider, obj_in={"config": new_config})
+    except Exception:
+        logger.error("Google Workspace admin sync authorization failed")
         return HTMLResponse(
-            f"""<html><head><meta charset="utf-8" /></head>
+            """<html><head><meta charset="utf-8" /></head>
             <body style="font-family: sans-serif; padding: 24px;">
-                <div>Google Workspace admin authorization failed: {e}</div>
+                <div>Google Workspace admin authorization failed: Please restart authorization.</div>
             </body></html>"""
         )
     return HTMLResponse(
@@ -198,7 +237,8 @@ async def google_workspace_callback(code: str, request: Request, state: str | No
     if parsed_state:
         state_kind, state_value = parsed_state
         if state_kind == GOOGLE_SYNC_STATE_KIND:
-            return await _handle_google_admin_sync_callback(code, state_value[0], request)
+            binding = (state_value[1], state_value[2]) if len(state_value) == 3 else None
+            return await _handle_google_admin_sync_callback(code, state_value[0], request, binding)
         if state_kind == GOOGLE_SSO_STATE_KIND:
             sid = state_value[0]
             provider_id = state_value[1] if len(state_value) > 1 else None
