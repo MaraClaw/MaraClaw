@@ -1,26 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
+import { AuthContext, type AuthContextValue } from '@/hooks/use-auth'
 import { fetchCurrentUser, loginRequest } from '@/lib/auth-api'
-import { authSession, type AuthSnapshot, type SessionOwner } from '@/lib/auth-session'
+import { authSession, type SessionOwner } from '@/lib/auth-session'
 import { createAuthSessionController } from '@/lib/auth-session-controller'
 import { getStoredToken } from '@/lib/auth-storage'
 import { ApiError, StaleSessionError } from '@/lib/http'
 import { isMultiTenantResponse, isPlatformAdminUser, isTokenResponse, userMustChangePassword } from '@/lib/types/auth'
-import type { LoginRequest, MultiTenantResponse, TokenResponse } from '@/lib/types/auth'
-
-type AuthContextValue = AuthSnapshot & {
-  readonly needsOrgConfirm: boolean
-  readonly mustChangePassword: boolean
-  readonly capture: typeof authSession.capture
-  readonly isCurrent: typeof authSession.isCurrent
-  readonly login: (owner: SessionOwner, input: LoginRequest) => Promise<TokenResponse | MultiTenantResponse>
-  readonly applySession: typeof authSession.applySession
-  readonly logout: () => void
-  readonly refreshUser: (owner: SessionOwner, replacementToken?: string | null) => Promise<boolean>
-  readonly refreshReplacement: (owner: SessionOwner, token: string | null) => Promise<SessionOwner | null>
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null)
+import type { LoginRequest } from '@/lib/types/auth'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const snapshot = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot, authSession.getSnapshot)
@@ -63,10 +50,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }), [snapshot, login, logout, controller])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
-  return ctx
 }

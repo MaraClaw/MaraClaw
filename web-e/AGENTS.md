@@ -37,7 +37,7 @@ web-e/
 | Task | Location | Notes |
 |------|----------|-------|
 | Route table | `src/routes/index.tsx` | Public auth + nested `/app` |
-| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/use-auth.tsx` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` allows only `/app/account` and `/app/settings` |
+| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/auth-provider.tsx`, `hooks/use-auth.ts` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` allows only `/app/account` and `/app/settings` |
 | Landing + public auth | `pages/` | Nested `pages/AGENTS.md`. Landing composer: `landing.tsx` |
 | Login / register / SSO | `pages/login.tsx`, `register.tsx`, `sso-callback.tsx` | Chrome: `components/auth/auth-shell.tsx` |
 | Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |
@@ -50,7 +50,7 @@ web-e/
 | Marketing copy | `components/sections/*` | Nested `sections/AGENTS.md` |
 | UI primitives | `components/ui/*` | Nested `ui/AGENTS.md` |
 | Theme tokens | `src/index.css` | OKLCH; `container-page` max 72rem |
-| Theme FOUC | `index.html` + `hooks/use-theme.tsx` | Key `maraclaw-theme`; meta `#faf8f5` / `#1c1612` |
+| Theme FOUC | `index.html` + `hooks/theme-provider.tsx` | Key `maraclaw-theme`; meta `#faf8f5` / `#1c1612` |
 | Brand mark | `brand/maraclaw-logo.tsx`, `public/maraclaw-mark.svg` | Monorepo source — do not fork |
 | Production serve | `Dockerfile`, `docker/nginx.conf` | :8080, non-root, `/healthz` |
 
@@ -62,7 +62,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 |--------|------|----------|------|------|
 | `AppRouter` | fn | `routes/index.tsx` | App | Route table |
 | `ProtectedRoute` | fn | `routes/protected.tsx` | router | `/app` auth + org + password |
-| `AuthProvider` / `useAuth` | ctx | `hooks/use-auth.tsx` | ~17 | Member session |
+| `AuthProvider` / `useAuth` | ctx | `hooks/auth-provider.tsx`, `hooks/use-auth.ts` | ~17 | Member session |
 | `AppShell` | fn | `layout/app-shell.tsx` | router | Workspace chrome + Query |
 | `OnboardingGate` | fn | `layout/onboarding-gate.tsx` | router | First-run |
 | `AgentLayout` | fn | `layout/agent-layout.tsx` | router | Per-agent tabs + `agent` context |
@@ -71,7 +71,7 @@ LSP/codegraph unavailable here — centrality from import graph.
 | `auth-api` | module | `lib/auth-api.ts` | auth+settings | Auth/tenant HTTP |
 | `connectAgentChat` | fn | `lib/chat/ws-client.ts` | chat page | `WS /ws/chat/{id}` |
 | `cn` | fn | `lib/utils.ts` | ~21 | Class merge |
-| `ThemeProvider` | ctx | `hooks/use-theme.tsx` | main | Theme root |
+| `ThemeProvider` | ctx | `hooks/theme-provider.tsx` | main | Theme root |
 | `MaraClawLogo` | fn | `brand/maraclaw-logo.tsx` | 4 chrome | Brand source |
 
 ## CONVENTIONS
