@@ -168,7 +168,7 @@ class ComposeContracts(unittest.TestCase):
         for store in ("postgres", "redis"):
             self.assertEqual(set(self.services[store]["networks"]), {"private"})
 
-    def test_frontend_builds_are_unchanged_and_secret_free(self) -> None:
+    def test_frontend_builds_use_shared_default_and_remain_secret_free(self) -> None:
         for name in ("engine", "web-a", "web-e"):
             self.assertEqual(Path(self.services[name]["build"]["context"]), ROOT / name)
         for name in ("web-a", "web-e"):
@@ -177,8 +177,18 @@ class ComposeContracts(unittest.TestCase):
             self.assertTrue(service["read_only"])
             self.assertFalse(service.get("env_file"))
             self.assertFalse(service.get("environment"))
-            self.assertFalse(service["build"].get("args"))
+            self.assertEqual(service["build"]["args"], {"NODE_VERSION": "26.11.1"})
         self.assertEqual(self.services["web-e"]["depends_on"]["ingress"]["condition"], "service_started")
+
+    def test_frontend_builds_when_shared_node_version_is_overridden(self) -> None:
+        version = "26.10.0"
+        result = render(self.values | {"WEB_NODE_VERSION": version})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        services = json.loads(result.stdout)["services"]
+        for name in ("web-a", "web-e"):
+            self.assertEqual(services[name]["build"]["args"], {"NODE_VERSION": version})
+            self.assertFalse(services[name].get("environment"))
+        self.assertEqual(services["engine"]["build"], self.services["engine"]["build"])
 
     def test_tmpfs_options_remain_one_mount_when_compose_is_rendered(self) -> None:
         for name, size in (("web-a", "64m"), ("web-e", "64m"), ("redis", "16m")):
@@ -197,13 +207,15 @@ class ComposeContracts(unittest.TestCase):
     def test_example_image_tags_match_defaults_when_rendered(self) -> None:
         # Given shipped image settings; when rendered; then they match Compose defaults.
         tags = dict(line.split("=", 1) for line in (ROOT / "deploy" / ".env.example").read_text().splitlines()
-                    if line.startswith(("POSTGRES_TAG=", "REDIS_TAG=", "HAPROXY_TAG=")))
+                    if line.startswith(("POSTGRES_TAG=", "REDIS_TAG=", "HAPROXY_TAG=", "WEB_NODE_VERSION=")))
         result = render(self.values | tags)
         self.assertEqual(result.returncode, 0, result.stderr)
         services = json.loads(result.stdout)["services"]
         for name in ("postgres", "redis", "ingress"):
             with self.subTest(service=name):
                 self.assertEqual(services[name]["image"], self.services[name]["image"])
+        for name in ("web-a", "web-e"):
+            self.assertEqual(services[name]["build"]["args"], self.services[name]["build"]["args"])
 
     def test_origins_and_callback_urls_are_derived_from_deployment(self) -> None:
         environment = self.services["engine"]["environment"]
