@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -39,11 +39,6 @@ export function OkrPage() {
   const current = periods.data?.find((period) => period.is_current) ?? periods.data?.[0]
   const [periodStart, setPeriodStart] = useState('')
   const selected = periods.data?.find((period) => period.start === periodStart) ?? current
-
-  useEffect(() => {
-    if (!scope.isCurrent()) return
-    if (!periodStart && current) setPeriodStart(current.start)
-  }, [current, periodStart, scope])
 
   const objectives = useQuery({
     queryKey: ['okr', 'objectives', selected?.start, selected?.end],
@@ -107,7 +102,7 @@ export function OkrPage() {
         <Select
           fit
           className="mt-1"
-          value={periodStart}
+          value={selected?.start ?? ''}
           onChange={scope.effect((event) => setPeriodStart(event.target.value))}
         >
           {(periods.data ?? []).map((period) => (
