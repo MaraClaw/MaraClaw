@@ -173,7 +173,7 @@ export function AgentChatPage() {
   useEffect(() => {
     if (!isCurrent() || !token || !activeId || historyQuery.isLoading) return
     let greeted = false
-    const conn = connectAgentChat(agent.id, token, activeId, {
+    const conn = connectAgentChat(agent.id, activeId, {
       owner,
       onReconnect() {
         if (!isCurrent() || activeSessionRef.current !== activeId) return
