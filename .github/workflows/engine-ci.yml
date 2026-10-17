@@ -21,6 +21,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [web-a, web-e]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "26.11.1"
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Build final nginx image
+        run: docker build --tag maraclaw-${{ matrix.package }}:ci .
+      - name: Smoke final nginx image
+        working-directory: .
+        run: bash deploy/smoke_frontend_image.sh maraclaw-${{ matrix.package }}:ci
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
