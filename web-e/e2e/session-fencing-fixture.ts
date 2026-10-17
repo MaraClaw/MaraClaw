@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { z } from 'zod'
 
 import type { TenantChoice, UserOut } from '../src/lib/types/auth'
 import type { AgentOut } from '../src/lib/workspace-api'
@@ -37,6 +38,7 @@ export const delayedAgent: AgentOut = {
 export async function prepareWorkspace(page: Page, nextUser = replacementUser, switchToken = replacementToken) {
   // The fake changes its server-side identity on switch, including same-token reissuance.
   let switched = false
+  let tickets = 0
   await page.addInitScript(({ tokenKey, originalToken }) => {
     localStorage.setItem(tokenKey, originalToken)
   }, { tokenKey, originalToken })
@@ -46,6 +48,13 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
     const replacing = request.headers().authorization === `Bearer ${replacementToken}` || (switched && switchToken === originalToken)
     const company = replacing ? replacementCompany : originalCompany
     switch (path) {
+      case '/api/auth/chat-ticket': {
+        expect(request.method()).toBe('POST')
+        expect(request.headers().authorization).toBe(`Bearer ${replacing ? replacementToken : originalToken}`)
+        const body = z.object({ agent_id: z.string(), session_id: z.string().optional() }).parse(request.postDataJSON())
+        await route.fulfill({ json: { ticket: `opaque-workspace-${++tickets}`, session_id: body.session_id ?? 'resolved-session' } })
+        return
+      }
       case '/api/auth/me':
         await route.fulfill({ json: replacing ? nextUser : originalUser })
         return

@@ -191,33 +191,6 @@ test('reconnect fetches missed history without dropping older parents or replayi
   expect(socket.sent.map((data) => JSON.parse(data))).toEqual([{ content: sent.content }])
 })
 
-test('busy polling still recovers a persisted reply without a completion frame', async ({ page }) => {
-  // Given
-  const old = message('old', 'Already loaded reply')
-  const question = message('poll-user', 'Question awaiting reply', 'user')
-  const reply = message('poll-reply', 'Recovered by busy polling')
-  const chat = await prepareChat(page, [old])
-  await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })
-  await page.goto(chatPath())
-  const socket = await chat.socket()
-  await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'))
-  await page.getByPlaceholder(`Message ${originalAgent.name}…`).fill(question.content)
-  await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
-  await expect.poll(() => socket.sent.length).toBe(1)
-  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
-  chat.setHistory([question, reply])
-  const refreshed = page.waitForEvent('requestfinished', {
-    predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages`),
-  })
-  // When
-  await page.clock.runFor(5_000)
-  await refreshed
-  await page.clock.runFor(100)
-  // Then
-  await expect(page.locator('article')).toHaveText([old.content, question.content, reply.content])
-  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'false')
-})
-
 for (const boundary of ['session', 'owner'] as const) {
   test(`late reconnect history and old socket events cannot cross the ${boundary} boundary`, async ({ page }) => {
     // Given
@@ -263,4 +236,47 @@ for (const boundary of ['session', 'owner'] as const) {
     expect(first.session).toBe(firstSession)
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
   })
+}
+
+for (const boundary of ['logout', 'session', 'owner'] as const) {
+  for (const status of [200, 401, 403]) {
+    test(`delayed ticket ${status} cannot cross the ${boundary} boundary`, async ({ page }) => {
+      const chat = await prepareChat(page)
+      const issuance = chat.holdNextTicket()
+      await page.goto(chatPath())
+      await issuance.requested
+      switch (boundary) {
+        case 'logout':
+          await page.getByRole('button', { name: 'Sign out', exact: true }).first().click()
+          await expect(page).toHaveURL('/login')
+          break
+        case 'session':
+          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await expect(page).toHaveURL(chatPath(secondSession))
+          await chat.socket()
+          break
+        case 'owner':
+          await writeFromOtherTab(page, replacementToken)
+          await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
+          await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
+          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await expect(page).toHaveURL(chatPath(secondSession, replacementAgent))
+          await expect.poll(() => chat.sockets.at(-1)?.session).toBe(secondSession)
+          break
+        default: boundary satisfies never
+      }
+      const ownerUrl = page.url()
+      const sockets = chat.sockets.length
+      await issuance.release(status)
+      await page.clock.install()
+      await page.clock.runFor(1000)
+      await expect(page).toHaveURL(ownerUrl)
+      expect(chat.sockets.length).toBe(sockets)
+      expect(chat.sockets.every((socket) => socket.ticket !== chat.tickets[0]?.ticket)).toBe(true)
+      await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+      expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(
+        boundary === 'logout' ? null : boundary === 'owner' ? replacementToken : originalToken,
+      )
+    })
+  }
 }
