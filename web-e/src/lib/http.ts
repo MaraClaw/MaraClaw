@@ -97,6 +97,7 @@ export function createHttpClient(
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
       assertCurrent(owner)
+      options.signal?.throwIfAborted()
       if (response.status === 204) return undefined
       text = await response.text()
     } catch (error) {
@@ -104,6 +105,7 @@ export function createHttpClient(
       throw error
     }
     assertCurrent(owner)
+    options.signal?.throwIfAborted()
     let data: unknown = null
     if (text) {
       try {
