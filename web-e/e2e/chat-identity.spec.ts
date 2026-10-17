@@ -11,7 +11,7 @@ test('busy polling still recovers a persisted reply without a completion frame',
   await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })
   await page.goto(chatPath())
   const socket = await chat.socket()
-  await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'))
+  await page.clock.pauseAt(new Date('2030-01-01T01:00:00Z'))
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).fill(question.content)
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
   await expect.poll(() => socket.sent.length).toBe(1)
