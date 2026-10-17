@@ -27,7 +27,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Persistence: DAOs. Short CRUD routers bind `bind_crud_connection` in `app.main` (one checkout). Do not attach that dependency to websocket / connector inbound / gateway / `linkup_proxy`. Extra `async with connection_ctx():` still joins.
 - `admin_search_analytics.py`: platform_admin only. Live SQL over `web_search_events`. Never return raw queries.
 - Handlers use canonical arguments without legacy DB placeholders; preserve real `DbConnection` parameters in transaction/locking helpers.
-- `websocket.py` and `files.py` download authenticate via `load_user_from_access_token` (identity + force-change). `gateway.py` uses agent API keys.
+- `websocket.py` redeems single-use `chat_tickets` and freshly loads the bound principal; `files.py` download uses `load_user_from_access_token` (identity + force-change). `gateway.py` uses agent API keys.
 - `gogcli.py` is mounted (`/api/agents/{id}/gogcli`); users are `UserRecord`.
 
 ## Auth / admin genesis
