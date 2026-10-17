@@ -5,7 +5,8 @@ from copy import copy, deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from app.api.background_tasks import schedule_background_task
@@ -14,10 +15,13 @@ from app.core.json_types import JsonObject, json_as_str, object_mapping_from
 from app.core.logging import logger
 from app.core.security import (
     create_access_token,
+    decode_access_token,
     get_authenticated_user,
     get_current_user,
     hash_password_async,
     load_identity_for_password,
+    load_user_from_access_token,
+    security,
     verify_password_async,
 )
 from app.dao import identity_dao, identity_provider_dao, system_setting_dao, tenant_dao, user_dao
@@ -46,9 +50,23 @@ from app.schemas.schemas import (
     UserUpdate,
     VerifyEmailRequest,
 )
+from app.services import chat_tickets
 from app.services.auth_provider import BaseAuthProvider
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/chat-ticket", response_model=chat_tickets.ChatTicketResponse)
+async def create_chat_ticket(
+    body: chat_tickets.ChatTicketRequest,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> chat_tickets.ChatTicketResponse:
+    payload = decode_access_token(credentials.credentials)
+    user = await load_user_from_access_token(credentials.credentials, fresh=True)
+    result = await chat_tickets.create(body, user, payload["exp"])
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 class ChangePasswordRequest(BaseModel):

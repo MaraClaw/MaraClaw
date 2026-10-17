@@ -8,13 +8,46 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.api import auth as auth_api
-from app.core.security import hash_password
+from app.core.security import create_access_token, hash_password
+from app.services import chat_tickets
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
+
+
+def test_chat_ticket_bearer_contract(monkeypatch):
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    agent_id, session_id = uuid.uuid4(), uuid.uuid4()
+    token = create_access_token(str(user.id), "member")
+    monkeypatch.setattr(auth_api, "load_user_from_access_token", AsyncMock(return_value=user))
+    monkeypatch.setattr(chat_tickets, "authorize", AsyncMock())
+    monkeypatch.setattr(
+        chat_tickets, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(is_expired=False), "use"))
+    )
+    monkeypatch.setattr(chat_tickets, "resolve_session", AsyncMock(return_value=session_id))
+    issue = AsyncMock(return_value=chat_tickets.ChatTicketResponse(ticket="opaque", session_id=session_id))
+    monkeypatch.setattr(chat_tickets, "issue", issue)
+    app = FastAPI()
+    app.include_router(auth_api.router, prefix="/api")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/chat-ticket", json={"agent_id": str(agent_id)}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ticket": "opaque", "session_id": str(session_id)}
+        assert response.headers["cache-control"] == "no-store"
+        assert client.post("/api/auth/chat-ticket", json={"agent_id": str(agent_id)}).status_code in (401, 403)
+    assert issue.await_args is not None
+    binding = issue.await_args.args[0]
+    assert binding.user_id == user.id
+    assert binding.tenant_id == user.tenant_id
+    assert binding.agent_id == agent_id
+    assert binding.session_id == session_id
+    assert binding.auth_deadline == auth_api.decode_access_token(token)["exp"]
 
 
 def _dummy_request() -> Request:

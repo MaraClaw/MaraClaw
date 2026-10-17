@@ -8,6 +8,7 @@ from starlette.datastructures import State
 from starlette.types import Message, Scope
 
 from app.api import websocket
+from app.services import chat_tickets
 
 
 async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
@@ -17,8 +18,12 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
         calls["get_primary"] = {"agent_id": agent_id, "user_id": user_id}
         return
 
-    async def ensure_primary_session(agent_id, user_id):
+    async def find_web_session(*, agent_id, user_id):
         calls["ensure"] = {"agent_id": agent_id, "user_id": user_id}
+        return
+
+    async def create_session(*, obj_in):
+        calls["created"] = obj_in
         return SimpleNamespace(id=uuid.uuid4())
 
     monkeypatch.setattr(
@@ -26,38 +31,21 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
         "get_primary_platform",
         get_primary_platform,
     )
-    monkeypatch.setattr(websocket, "ensure_primary_platform_session", ensure_primary_session)
+    monkeypatch.setattr(websocket.chat_session_dao, "find_best_web_session", find_web_session)
+    monkeypatch.setattr(websocket.chat_session_dao, "create", create_session)
 
-    async def receive() -> Message:
-        return {"type": "websocket.disconnect"}
-
-    async def send(_message: Message) -> None:
-        return None
-
-    scope: Scope = {
-        "type": "websocket",
-        "asgi": {"version": "3.0", "spec_version": "2.4"},
-        "scheme": "ws",
-        "path": "/",
-        "raw_path": b"/",
-        "query_string": b"",
-        "root_path": "",
-        "headers": [],
-        "client": ("test", 80),
-        "server": ("test", 80),
-        "subprotocols": [],
-    }
     agent_id = uuid.uuid4()
     user_id = uuid.uuid4()
-    handler = websocket.WebSocketChatHandler(WebSocket[State](scope, receive, send), agent_id, "token")
 
-    conv_id = await handler._resolve_chat_session(user_id)
+    conv_id = await chat_tickets.resolve_session(chat_tickets.ChatTicketRequest(agent_id=agent_id), user_id)
 
     assert conv_id is not None
     assert calls["get_primary"]["agent_id"] == agent_id
     assert calls["get_primary"]["user_id"] == user_id
     assert calls["ensure"]["agent_id"] == agent_id
     assert calls["ensure"]["user_id"] == user_id
+    assert calls["created"]["source_channel"] == "web"
+    assert calls["created"]["is_primary"] is True
 
 
 @pytest.mark.asyncio
