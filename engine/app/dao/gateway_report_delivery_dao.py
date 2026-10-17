@@ -5,7 +5,11 @@ from typing import ClassVar, final
 from uuid import UUID, uuid4
 
 from app.dao.base import BaseDAO
-from app.records.gateway_report_delivery import DestinationKind, GatewayReportDeliveryRecord
+from app.records.gateway_report_delivery import (
+    DestinationKind,
+    GatewayReportDeliveryRecord,
+    TerminalReason,
+)
 
 _COLUMNS = (
     "id",
@@ -18,10 +22,12 @@ _COLUMNS = (
     "claim_token",
     "lease_expires_at",
     "delivered_at",
+    "terminal_reason",
+    "terminal_at",
 )
 _FENCE = """
     id = %(id)s AND claim_token = %(claim_token)s
-    AND delivered_at IS NULL AND lease_expires_at > %(now)s
+    AND delivered_at IS NULL AND terminal_at IS NULL AND lease_expires_at > %(now)s
 """
 
 
@@ -68,7 +74,7 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
             rows = await db.fetchall(
                 f"""WITH due AS (
                     SELECT id FROM {self.table}
-                    WHERE delivered_at IS NULL AND available_at <= %(now)s
+                    WHERE delivered_at IS NULL AND terminal_at IS NULL AND available_at <= %(now)s
                       AND (lease_expires_at IS NULL OR lease_expires_at <= %(now)s)
                     ORDER BY available_at, id
                     LIMIT %(limit)s FOR UPDATE SKIP LOCKED
@@ -99,6 +105,23 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
                     claim_token = NULL, lease_expires_at = NULL
                     WHERE {_FENCE} RETURNING id""",
                 {"id": claim.id, "claim_token": claim.claim_token, "now": now},
+            )
+        return row is not None
+
+    async def finish_terminal(
+        self,
+        id: UUID,
+        claim_token: UUID,
+        reason: TerminalReason,
+        *,
+        now: datetime,
+    ) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""UPDATE {self.table} SET terminal_reason = %(reason)s, terminal_at = %(now)s,
+                    claim_token = NULL, lease_expires_at = NULL
+                    WHERE {_FENCE} RETURNING id""",
+                {"id": id, "claim_token": claim_token, "reason": reason, "now": now},
             )
         return row is not None
 

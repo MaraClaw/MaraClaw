@@ -1,7 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
 
-import { AuthProvider } from '@/hooks/use-auth'
+import { AuthProvider } from '@/hooks/auth-provider'
 import { AppRouter } from '@/routes'
 
 class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {

@@ -13,12 +13,9 @@
 ARG NODE_VERSION=26.11.1
 
 # ─── Dependencies ───────────────────────────────────────────────────────────
-FROM node:trixie-slim AS deps
+FROM node:${NODE_VERSION}-trixie-slim AS deps
 
 WORKDIR /app
-
-# glibc compatibility for some optional native optionalDeps
-RUN apk add --no-cache libc6-compat
 
 # Install by lockfile only - reproducible builds, maximizes layer cache.
 COPY package.json package-lock.json ./
@@ -26,7 +23,7 @@ RUN npm ci --no-audit --no-fund \
   && npm cache clean --force
 
 # ─── Build ──────────────────────────────────────────────────────────────────
-FROM node:trixie-slim AS build
+FROM node:${NODE_VERSION}-trixie-slim AS build
 
 WORKDIR /app
 

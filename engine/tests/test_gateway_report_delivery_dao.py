@@ -123,12 +123,57 @@ def test_record_parses_destination_variants_with_defaults(row: Row, kind: str) -
     # Then
     assert record.destination_kind == kind
     assert record.tenant_id is record.claim_token is record.lease_expires_at is record.delivered_at is None
+    assert record.terminal_reason is record.terminal_at is None
     assert record.attempts == 0
+    defaults = GatewayReportDeliveryRecord(
+        id=record.id,
+        message_id=record.message_id,
+        destination_kind=record.destination_kind,
+        destination_id=record.destination_id,
+    )
+    assert defaults.terminal_reason is defaults.terminal_at is None
 
 
 def test_record_rejects_unknown_destination(row: Row) -> None:
     # Given
     row["destination_kind"] = "email"
+    # When / Then
+    with pytest.raises(ValidationError):
+        GatewayReportDeliveryRecord.from_row(row)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "source_agent_unavailable",
+        "source_tenant_changed",
+        "destination_agent_unavailable",
+        "destination_tenant_changed",
+        "destination_relationship_changed",
+        "destination_session_unavailable",
+        None,
+    ],
+)
+async def test_get_preserves_terminal_outcome(raw: _FakeRawConnection, row: Row, reason: str | None) -> None:
+    # Given
+    row.update(terminal_reason=reason, terminal_at=NOW if reason is not None else None)
+    raw.rows = [row]
+    # When
+    record = await dao.get(UUID(str(row["id"])))
+    # Then
+    assert record is not None
+    assert record.terminal_reason == reason
+    assert record.terminal_at == (NOW if reason is not None else None)
+    sql, _ = raw.executed[0]
+    assert "terminal_reason, terminal_at" in sql
+    assert "WHERE id = %(id)s" in sql
+    assert "IS NULL" not in sql
+
+
+@pytest.mark.parametrize("reason", ["provider error with secret", "", "unknown"])
+def test_record_rejects_unbounded_terminal_reason(row: Row, reason: str) -> None:
+    # Given
+    row.update(terminal_reason=reason, terminal_at=NOW)
     # When / Then
     with pytest.raises(ValidationError):
         GatewayReportDeliveryRecord.from_row(row)
@@ -168,7 +213,7 @@ async def test_claim_sql_bounds_due_rows_excludes_active_leases_and_rotates_toke
     assert len(raw.executed) == 1
     sql, params = raw.executed[0]
     assert "WITH due AS ( SELECT id" in sql
-    assert "delivered_at IS NULL AND available_at <= %(now)s" in sql
+    assert "delivered_at IS NULL AND terminal_at IS NULL AND available_at <= %(now)s" in sql
     assert "lease_expires_at IS NULL OR lease_expires_at <= %(now)s" in sql
     assert "ORDER BY available_at, id LIMIT %(limit)s FOR UPDATE SKIP LOCKED" in sql
     assert "claim_token = gen_random_uuid()" in sql
@@ -177,7 +222,7 @@ async def test_claim_sql_bounds_due_rows_excludes_active_leases_and_rotates_toke
     assert params == {"limit": 7, "now": NOW, "lease_expires_at": NOW + timedelta(seconds=12.5)}
 
 
-@pytest.mark.parametrize("operation", ["lock", "acknowledge", "retry"])
+@pytest.mark.parametrize("operation", ["lock", "acknowledge", "retry", "terminal"])
 @pytest.mark.parametrize("matched", [False, True])
 async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
     raw: _FakeRawConnection,
@@ -187,6 +232,7 @@ async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
 ) -> None:
     # Given
     claim = replace(GatewayReportDeliveryRecord.from_row(row), claim_token=uuid4())
+    assert claim.claim_token is not None
     raw.rows = [{"id": claim.id}] if matched else []
     available_at = NOW + timedelta(minutes=5)
     # When
@@ -199,13 +245,15 @@ async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
             result = await dao.acknowledge(claim, now=NOW)
         case "retry":
             result = await dao.retry(claim, available_at=available_at, now=NOW)
+        case "terminal":
+            result = await dao.finish_terminal(claim.id, claim.claim_token, "source_tenant_changed", now=NOW)
         case _:
             pytest.fail("Unknown test operation")
     # Then
     assert result is matched
     sql, params = raw.executed[0]
     assert "id = %(id)s AND claim_token = %(claim_token)s" in sql
-    assert "delivered_at IS NULL AND lease_expires_at > %(now)s" in sql
+    assert "delivered_at IS NULL AND terminal_at IS NULL AND lease_expires_at > %(now)s" in sql
     assert params["id"] == claim.id
     assert params["claim_token"] == claim.claim_token
     assert params["now"] == NOW
@@ -217,6 +265,11 @@ async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
         case "retry":
             assert "SET available_at = %(available_at)s, claim_token = NULL, lease_expires_at = NULL" in sql
             assert params["available_at"] == available_at
+        case "terminal":
+            assert "SET terminal_reason = %(reason)s, terminal_at = %(now)s," in sql
+            assert "claim_token = NULL, lease_expires_at = NULL" in sql
+            assert "delivered_at =" not in sql
+            assert params["reason"] == "source_tenant_changed"
 
 
 def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
@@ -235,4 +288,14 @@ def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
     assert "UNIQUE (message_id, destination_kind, destination_id)" in table
     assert "available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()" in table
     assert "attempts INTEGER NOT NULL DEFAULT 0" in table
-    assert "ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL" in source
+    assert (
+        "ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;" in source
+    )
+    assert (
+        "terminal_reason TEXT CHECK (terminal_reason IN ( 'source_agent_unavailable', 'source_tenant_changed'," in table
+    )
+    assert "'destination_agent_unavailable', 'destination_tenant_changed'," in table
+    assert "'destination_relationship_changed', 'destination_session_unavailable' ))" in table
+    assert "terminal_at TIMESTAMP WITH TIME ZONE," in table
+    assert "CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL))" in table
+    assert "CHECK (terminal_at IS NULL OR delivered_at IS NULL)" in table

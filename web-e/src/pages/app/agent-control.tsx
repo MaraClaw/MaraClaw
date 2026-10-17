@@ -24,7 +24,8 @@ export function AgentControlPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const [params, setParams] = useSearchParams()
   const sessions = useQuery({ queryKey: ['sessions', agent.id], queryFn: () => listSessions(agent.id, 'mine') })
-  const [sessionId, setSessionId] = useState(params.get('session') ?? '')
+  const [selectedSessionId, setSessionId] = useState(params.get('session') ?? '')
+  const sessionId = selectedSessionId || sessions.data?.[0]?.id || ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')
   const [locked, setLocked] = useState(false)
   const [screenshot, setScreenshot] = useState<string | null>(null)
@@ -33,11 +34,6 @@ export function AgentControlPage() {
   const [busy, setBusy] = useState(false)
   const dragFrom = useRef<{ x: number; y: number } | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
-
-  useEffect(() => {
-    if (!scope.isCurrent()) return
-    if (!sessionId && sessions.data?.[0]) setSessionId(sessions.data[0].id)
-  }, [sessionId, sessions.data, scope])
 
   useEffect(() => {
     if (!scope.isCurrent() || !locked || !sessionId) return
@@ -79,6 +75,7 @@ export function AgentControlPage() {
         toast.error('Someone else is controlling this session')
         return
       }
+      setSessionId(sessionId)
       setLocked(true)
       setParams({ session: sessionId, env: envType })
       const url = await controlCurrentUrl(agent.id, sessionId)

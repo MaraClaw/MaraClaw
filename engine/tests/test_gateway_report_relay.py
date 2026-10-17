@@ -79,6 +79,7 @@ async def test_im_missing_external_conversation_remains_unacknowledged(
     # Then
     assert store.sends == []
     assert store.rows[row.id].delivered_at is None
+    assert store.rows[row.id].terminal_at is None
 
 
 @pytest.mark.parametrize("channel", ["slack", " teams ", "google-chat", "whatsapp", "discord"])
@@ -107,36 +108,33 @@ async def test_agent_lost_claim_rolls_back_inbox_and_wake(store: RelayStore, fai
 
 
 @pytest.mark.parametrize("kind", ["agent", "im"])
-@pytest.mark.parametrize("moved", ["source", "destination", "relationship", "deleted"])
-async def test_changed_destination_never_receives_report(store: RelayStore, kind: str, moved: str) -> None:
+@pytest.mark.parametrize("unready", ["missing", "pending", "null", "blank"])
+async def test_unavailable_report_remains_retryable(store: RelayStore, kind: str, unready: str) -> None:
     # Given
     row = store.intent(kind)
-    if moved == "source":
-        store.source.tenant_id = uuid4()
-    elif moved == "destination":
-        if kind == "agent":
-            store.destination.tenant_id = uuid4()
-        else:
-            store.session.agent_id = uuid4()
-    elif moved == "relationship":
-        store.message.sender_agent_id = uuid4()
-        store.message.conversation_id = str(uuid4())
-    else:
+    if unready == "missing":
         store.message.id = uuid4()
+    elif unready == "pending":
+        store.message.status = "pending"
+    else:
+        store.message.result = None if unready == "null" else "   "
     # When
     await relay.relay_batch(store.clock)
     # Then
     assert store.inbox == store.sends == []
     assert store.rows[row.id].delivered_at is None
+    assert store.rows[row.id].terminal_at is None
     assert store.rows[row.id].available_at == store.now + timedelta(seconds=1)
 
 
-async def test_provider_failure_retries_only_when_due(store: RelayStore) -> None:
+@pytest.mark.parametrize("error", [ValueError("config"), RuntimeError("nonack"), OSError("provider"), TimeoutError()])
+async def test_provider_failure_retries_only_when_due(store: RelayStore, error: Exception) -> None:
     # Given
     row = store.intent("im")
-    store.fail_send = True
+    store.send_error = error
     await relay.relay_batch(store.clock)
-    store.fail_send = False
+    assert store.rows[row.id].terminal_at is None
+    store.send_error = None
     # When
     early = await relay.relay_batch(store.clock)
     store.now += timedelta(seconds=1)

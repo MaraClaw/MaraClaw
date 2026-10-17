@@ -1,56 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { connectAgentChat } from '../src/lib/chat/ws-client.ts'
-import type { ChatInbound, ChatSocket, ChatTransport } from '../src/lib/chat/ws-client.ts'
+import { ControlledSocket, fixture } from './socket-fixture.ts'
 
-class ControlledSocket implements ChatSocket {
-  readyState = 0
-  onopen: ChatSocket['onopen'] = null
-  onmessage: ChatSocket['onmessage'] = null
-  onclose: ChatSocket['onclose'] = null
-  readonly sent: string[] = []
-  closes = 0
-  send(data: string) { this.sent.push(data) }
-  close() { this.closes++; this.readyState = 3 }
-  open() { this.readyState = 1; this.onopen?.() }
-  frame(data: string) { this.onmessage?.({ data }) }
-  end(code: number) { this.readyState = 3; this.onclose?.({ code }) }
-}
-
-function fixture() {
-  let token: string | null = 'token-a'
-  const store = createAuthSessionStore({
-    read: () => token, write: (value) => { token = value }, clear: () => { token = null },
-  })
-  const sockets: ControlledSocket[] = []
-  const events: ChatInbound[] = []
-  const codes: number[] = []
-  const transport: ChatTransport = {
-    language: 'en', url: (path) => `ws://example.test${path}`,
-    connect: () => {
-      const socket = new ControlledSocket()
-      sockets.push(socket)
-      return socket
-    },
-  }
-  const handlers = { sessionStore: store, transport, onEvent: (event: ChatInbound) => events.push(event),
-    onClose: (code: number) => codes.push(code) }
-  const connect = () => connectAgentChat('agent-a', 'token-a', 'thread-a', handlers)
-  const socket = () => {
-    const latest = sockets.at(-1)
-    assert.ok(latest)
-    return latest
-  }
-  return { store, sockets, events, codes, handlers, connect, socket, token: () => token }
-}
-
-test('queued sends flush in order when the current socket opens', () => {
+test('queued sends flush in order when the current socket opens', async () => {
   // Given
   const f = fixture()
   const conn = f.connect()
   conn.send({ content: 'first' })
   conn.send({ content: 'second' })
+  await Promise.resolve()
   // When
   f.socket().open()
   // Then
@@ -59,10 +18,11 @@ test('queued sends flush in order when the current socket opens', () => {
 })
 
 for (const replacement of ['token-b', 'token-a', null]) {
-  test(`pending sends and late frames are suppressed when owner changes to ${replacement}`, () => {
+  test(`pending sends and late frames are suppressed when owner changes to ${replacement}`, async () => {
     // Given
     const f = fixture()
     const conn = f.connect()
+    await Promise.resolve()
     const old = f.socket()
     const open = old.onopen
     const message = old.onmessage
@@ -88,7 +48,7 @@ for (const replacement of ['token-b', 'token-a', null]) {
   })
 }
 
-test('reconnect timer is cleared and already queued callback is fenced when ownership changes', (t) => {
+test('reconnect timer is cleared and already queued callback is fenced when ownership changes', async (t) => {
   // Given
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const original = globalThis.setTimeout
@@ -100,6 +60,7 @@ test('reconnect timer is cleared and already queued callback is fenced when owne
   const clear = t.mock.method(globalThis, 'clearTimeout')
   const f = fixture()
   const conn = f.connect()
+  await Promise.resolve()
   f.socket().end(1006)
   conn.send({ content: 'reconnect-pending' })
   assert.ok(queued)
@@ -113,16 +74,18 @@ test('reconnect timer is cleared and already queued callback is fenced when owne
   assert.deepEqual(f.socket().sent, [])
 })
 
-test('transient disconnect reconnects with pending sends when the owner remains current', (t) => {
+test('transient disconnect reconnects with pending sends when the owner remains current', async (t) => {
   // Given
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
   const conn = f.connect()
+  await Promise.resolve()
   const old = f.socket()
   old.end(1006)
   conn.send({ content: 'retry' })
   // When
   t.mock.timers.tick(600)
+  await Promise.resolve()
   f.socket().open()
   // Then
   assert.equal(f.sockets.length, 2)
@@ -135,15 +98,16 @@ test('transient disconnect reconnects with pending sends when the owner remains 
 })
 
 for (const code of [4001, 4003]) {
-  test(`terminal ${code} closes once and ${code === 4001 ? 'expires' : 'retains'} matching auth`, (t) => {
+  test(`terminal ${code} closes once and ${code === 4001 ? 'expires' : 'retains'} matching auth`, async (t) => {
     // Given
     t.mock.timers.enable({ apis: ['setTimeout'] })
     const f = fixture()
     let tokenInCallback: string | null = null
-    const conn = connectAgentChat('agent-a', 'token-a', undefined, {
+    const conn = connectAgentChat('agent-a', undefined, {
       ...f.handlers,
       onClose: (value) => { tokenInCallback = f.token(); f.codes.push(value) },
     })
+    await Promise.resolve()
     const old = f.socket()
     conn.send({ content: 'pending' })
     // When
@@ -165,12 +129,13 @@ for (const code of [4001, 4003]) {
   })
 }
 
-test('4001 callback replacement cannot be expired by the retiring socket', () => {
+test('4001 callback replacement cannot be expired by the retiring socket', async () => {
   // Given
   const f = fixture()
-  connectAgentChat('agent-a', 'token-a', undefined, {
+  connectAgentChat('agent-a', undefined, {
     ...f.handlers, onClose: () => { f.store.beginReplacement(f.store.capture(), 'token-b') },
   })
+  await Promise.resolve()
   // When
   f.socket().end(4001)
   // Then
@@ -183,36 +148,82 @@ test('explicit obsolete owner never creates a socket', () => {
   const owner = f.store.capture()
   f.store.beginReplacement(owner, 'token-a')
   // When
-  const conn = connectAgentChat('agent-a', 'token-a', undefined, { ...f.handlers, owner })
+  const conn = connectAgentChat('agent-a', undefined, { ...f.handlers, owner })
   conn.send({ content: 'stale' })
   // Then
   assert.equal(f.sockets.length, 0)
 })
 
-test('ownership is captured before transport creation even when creation replaces the owner', () => {
+test('ownership is captured before transport creation even when creation replaces the owner', async () => {
   // Given
   const f = fixture()
   const old = new ControlledSocket()
   // When
-  const conn = connectAgentChat('agent-a', 'token-a', undefined, {
+  const conn = connectAgentChat('agent-a', undefined, {
     ...f.handlers, transport: { ...f.handlers.transport, connect: () => {
       f.store.beginReplacement(f.store.capture(), 'token-b')
       return old
     } },
   })
+  await Promise.resolve()
   // Then
   assert.equal(old.closes, 1)
   conn.send({ content: 'stale' })
   assert.deepEqual(old.sent, [])
 })
 
-test('malformed frames become error events when the socket is current', () => {
+test('malformed frames become error events when the socket is current', async () => {
   // Given
   const f = fixture()
   const conn = f.connect()
+  await Promise.resolve()
   // When
   f.socket().frame('not json')
   // Then
   assert.equal(f.events[0]?.type, 'error')
+  conn.close()
+})
+
+test('persisted identities survive decoding while legacy events remain valid', async () => {
+  // Given
+  const f = fixture()
+  const conn = f.connect()
+  await Promise.resolve()
+  const done = { type: 'done', role: 'assistant', content: 'same', message_id: 'parent', entry_id: 'parent' }
+  // When
+  f.socket().frame(JSON.stringify(done))
+  f.socket().frame('{"type":"done","content":"legacy"}')
+  f.socket().frame('{"type":"done","message_id":42}')
+  // Then
+  assert.deepEqual(f.events, [done, { type: 'done', content: 'legacy' }, { type: 'error', content: 'Malformed chat event' }])
+  conn.close()
+})
+
+test('only current reconnect opens notify and only unsent payloads flush', async (t) => {
+  // Given
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  let refreshes = 0
+  const conn = connectAgentChat('agent-a', 'thread-a', {
+    ...f.handlers, onReconnect: () => { refreshes++ },
+  })
+  await Promise.resolve()
+  const first = f.socket()
+  first.open()
+  conn.send({ content: 'already sent' })
+  first.end(1006)
+  conn.send({ content: 'unsent' })
+  // When
+  t.mock.timers.tick(600)
+  await Promise.resolve()
+  const current = f.socket()
+  current.open()
+  first.open()
+  f.store.beginReplacement(f.store.capture(), 'token-b')
+  current.open()
+  // Then
+  assert.equal(refreshes, 1)
+  assert.deepEqual(current.sent.map((data) => JSON.parse(data)), [{ content: 'unsent' }])
+  assert.deepEqual(first.sent.map((data) => JSON.parse(data)), [{ content: 'already sent' }])
   conn.close()
 })

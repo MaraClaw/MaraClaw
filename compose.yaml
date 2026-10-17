@@ -22,8 +22,8 @@ x-runtime-env: &runtime-env
   DOCKER_NETWORK: ${DOCKER_NETWORK:-maraclaw_network}
   OPENCLAW_ENGINE_BASE_URL: http://maraclaw-engine:8000
   LINKUP_PROXY_BASE_URL: http://maraclaw-engine:8000/api/linkup
-  PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?Set PLATFORM_ADMIN_EMAIL}
-  PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
+  PLATFORM_ADMIN_EMAIL: ""
+  PLATFORM_ADMIN_PASSWORD: ""
   INSTANCE_ID: ""
   START_COMMAND: exec uvicorn app.main:app --host 0.0.0.0 --port 8000
 
@@ -194,6 +194,8 @@ services:
     <<: *web
     build:
       context: ./web-a
+      args:
+        NODE_VERSION: ${WEB_NODE_VERSION:-26.11.1}
     image: maraclaw-web-a:${RELEASE_TAG:-local}
     deploy:
       replicas: ${ADMIN_REPLICAS:-2}
@@ -202,6 +204,8 @@ services:
     <<: *web
     build:
       context: ./web-e
+      args:
+        NODE_VERSION: ${WEB_NODE_VERSION:-26.11.1}
     image: maraclaw-web-e:${RELEASE_TAG:-local}
     depends_on:
       ingress:

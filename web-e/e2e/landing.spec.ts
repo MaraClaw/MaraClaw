@@ -7,6 +7,7 @@ test('landing shows the product and auth entry points', async ({ page }) => {
 })
 
 test('login page is reachable from marketing', async ({ page }) => {
+  await page.route('**/api/auth/providers', (route) => route.fulfill({ json: [] }))
   await page.goto('/login')
   await expect(page.locator('input').first()).toBeVisible()
 })

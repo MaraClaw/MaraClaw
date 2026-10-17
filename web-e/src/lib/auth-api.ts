@@ -23,6 +23,16 @@ function requestContext(owner?: SessionOwner, signal?: AbortSignal) {
   }
 }
 
+const chatTicketSchema = z.object({ ticket: z.string().min(1), session_id: z.string().min(1) })
+export type ChatTicket = z.infer<typeof chatTicketSchema>
+export type ChatTicketRequest = { readonly agent_id: string; readonly session_id?: string }
+
+export async function issueChatTicket(body: ChatTicketRequest, owner: SessionOwner, signal: AbortSignal): Promise<ChatTicket> {
+  return chatTicketSchema.parse(await apiRequest<unknown>('/api/auth/chat-ticket', {
+    method: 'POST', body, ...requestContext(owner, signal),
+  }))
+}
+
 export async function loginRequest(
   body: LoginRequest,
   signal?: AbortSignal,

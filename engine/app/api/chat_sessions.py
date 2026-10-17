@@ -28,7 +28,7 @@ from app.records.user import UserRecord
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
 
 
-class ChatMessageEntry(TypedDict):
+class _ChatMessageContent(TypedDict):
     role: str
     content: str
     created_at: NotRequired[str | None]
@@ -40,6 +40,11 @@ class ChatMessageEntry(TypedDict):
     thinking: NotRequired[str]
     sender_name: NotRequired[str]
     participant_id: NotRequired[str]
+
+
+class ChatMessageEntry(_ChatMessageContent):
+    message_id: str
+    entry_id: str
 
 
 def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
@@ -344,6 +349,8 @@ async def get_session_messages(
 
         if m.role == "tool_call":
             entry: ChatMessageEntry = {
+                "message_id": str(m.id),
+                "entry_id": str(m.id),
                 "role": m.role,
                 "content": m.content,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -365,14 +372,16 @@ async def get_session_messages(
 
         if session.source_channel == "agent" and m.role == "assistant" and "```tool_code" in (m.content or ""):
             parts = _split_inline_tools(m.content)
-            for part in parts:
+            for index, part in enumerate(parts):
                 if sender_name not in (None, ""):
                     part["sender_name"] = sender_name
                 if m.participant_id:
                     part["participant_id"] = str(m.participant_id)
-                out.append(part)
+                out.append({**part, "message_id": str(m.id), "entry_id": f"{m.id}:{index}"})
         else:
             message_entry: ChatMessageEntry = {
+                "message_id": str(m.id),
+                "entry_id": str(m.id),
                 "role": m.role,
                 "content": m.content,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -388,7 +397,7 @@ async def get_session_messages(
     return out
 
 
-def _split_inline_tools(content: str) -> list[ChatMessageEntry]:
+def _split_inline_tools(content: str) -> list[_ChatMessageContent]:
     """Parse assistant content containing inline ```tool_code blocks.
 
     Splits into alternating text segments and tool_call entries.
@@ -401,7 +410,7 @@ def _split_inline_tools(content: str) -> list[ChatMessageEntry]:
         re.DOTALL,
     )
 
-    parts: list[ChatMessageEntry] = []
+    parts: list[_ChatMessageContent] = []
     last_end = 0
 
     for match in pattern.finditer(content):

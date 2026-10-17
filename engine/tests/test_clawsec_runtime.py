@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import re
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from app.services import clawsec_runtime
 from app.services.clawsec_runtime import (
@@ -56,6 +60,55 @@ def test_manifest_lists_openclaw_protection_packages() -> None:
     assert (clawsec_skill_root() / "LICENSE.AGPL-3.0").is_file()
     assert (clawsec_skill_root() / "NOTICE").is_file()
     assert (clawsec_skill_root() / ".upstream-commit").is_file()
+
+
+def test_advisory_feed_has_valid_ed25519_signature() -> None:
+    # Given
+    advisories = clawsec_skill_root() / "clawsec-suite" / "advisories"
+    public_key = serialization.load_pem_public_key((advisories / "feed-signing-public.pem").read_bytes())
+    assert isinstance(public_key, Ed25519PublicKey)
+    signature = base64.b64decode((advisories / "feed.json.sig").read_bytes(), validate=True)
+
+    # When
+    feed = (advisories / "feed.json").read_bytes()
+
+    # Then
+    public_key.verify(signature, feed)
+
+
+def test_manifest_commit_matches_upstream_pin() -> None:
+    # Given
+    manifest = load_clawsec_manifest()
+
+    # When
+    pin = (clawsec_skill_root() / ".upstream-commit").read_text(encoding="ascii").strip()
+
+    # Then
+    assert re.fullmatch(r"[0-9a-f]{40}", pin)
+    assert manifest["commit"] == pin
+
+
+def test_vendored_folder_shape_excludes_upstream_test_payloads() -> None:
+    # Given
+    root = clawsec_skill_root()
+    expected = {
+        "clawsec-suite",
+        "soul-guardian",
+        "openclaw-audit-watchdog",
+        "clawsec-scanner",
+        "clawsec-clawhub-checker",
+        "clawtributor",
+    }
+
+    # When
+    folders = {path.name for path in root.iterdir() if path.is_dir()}
+    paths = [path.relative_to(root) for folder in folders for path in (root / folder).rglob("*")]
+
+    # Then
+    assert folders == expected
+    assert all((root / folder / "SKILL.md").is_file() for folder in expected)
+    assert all("test" not in path.parts and path.name != ".clawhubignore" for path in paths)
+    assert not list((root / "soul-guardian" / "scripts").glob("test_*.py"))
 
 
 def test_folder_names_include_multi_file_suite_payload(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { chatPath, complete, firstSession, message, prepareChat, secondSession } from './chat-identity-fixture'
 
 import {
   deferCreation, delayedAgent, originalAgent, originalToken, prepareWorkspace, replacementAgent,
@@ -125,3 +126,157 @@ test('settings switch preserves the replacement identity must-change-password ga
   await page.getByRole('link', { name: 'Settings', exact: true }).first().click()
   await expect(page).toHaveURL('/app/settings')
 })
+
+test('equal-text persisted completions remain distinct and repeated UUIDs converge with history first', async ({ page }) => {
+  // Given
+  const first = message('d289545f-3042-4e6d-94b1-249d6d8a9185', 'Equal persisted reply')
+  const second = message('471af989-910d-44c5-a78b-0fc74ede71ca', first.content)
+  const chat = await prepareChat(page, [first])
+  await page.goto(chatPath())
+  const socket = await chat.socket()
+  await expect(page.locator('article')).toHaveCount(1)
+  // When
+  complete(socket.route, second)
+  complete(socket.route, second)
+  complete(socket.route, first)
+  // Then
+  await expect(page.locator('article')).toHaveCount(2)
+  await expect(page.locator('article')).toHaveText([first.content, second.content])
+  chat.setHistory([first, second])
+  socket.route.close({ code: 1011 })
+  await chat.socket(1)
+  await expect.poll(chat.requests).toBeGreaterThan(1)
+  await expect(page.locator('article')).toHaveText([first.content, second.content])
+})
+
+test('authoritative inline entries replace a whole live parent and reject its late completion', async ({ page }) => {
+  // Given
+  const whole = message('4214d39b-acf6-41fd-898f-47fa2681e78e', 'Whole live envelope')
+  const split = [0, 1].map((index) => ({ ...whole, entry_id: `${whole.message_id}:${index}`, content: 'Equal inline part' }))
+  const chat = await prepareChat(page)
+  await page.goto(chatPath())
+  const socket = await chat.socket()
+  complete(socket.route, whole)
+  await expect(page.locator('article')).toHaveText([whole.content])
+  chat.setHistory(split)
+  // When
+  socket.route.close({ code: 1011 })
+  const current = await chat.socket(1)
+  await expect(page.locator('article')).toHaveText(split.map((row) => row.content))
+  complete(current.route, whole)
+  // Then
+  await expect(page.locator('article')).toHaveText(split.map((row) => row.content))
+  await expect(page.getByText(whole.content, { exact: true })).toHaveCount(0)
+})
+
+test('reconnect fetches missed history without dropping older parents or replaying sent user payloads', async ({ page }) => {
+  // Given
+  const older = message('older-user', 'Older loaded question', 'user')
+  const overlap = message('overlap', 'Loaded reply')
+  const sent = message('sent-user', 'Send exactly once', 'user')
+  const missed = message('missed-reply', 'Recovered after reconnect')
+  const chat = await prepareChat(page, [older, overlap])
+  await page.goto(chatPath())
+  const socket = await chat.socket()
+  await page.getByPlaceholder(`Message ${originalAgent.name}…`).fill(sent.content)
+  await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
+  await expect.poll(() => socket.sent.length).toBe(1)
+  chat.setHistory([overlap, sent, missed])
+  // When
+  socket.route.close({ code: 1011 })
+  const current = await chat.socket(1)
+  // Then
+  await expect(page.locator('article')).toHaveText([older.content, overlap.content, sent.content, missed.content])
+  expect(current.sent).toEqual([])
+  expect(socket.sent.map((data) => JSON.parse(data))).toEqual([{ content: sent.content }])
+})
+
+for (const boundary of ['session', 'owner'] as const) {
+  test(`late reconnect history and old socket events cannot cross the ${boundary} boundary`, async ({ page }) => {
+    // Given
+    const chat = await prepareChat(page, [message('initial', 'Original loaded reply')])
+    await page.goto(chatPath())
+    const first = await chat.socket()
+    const release = chat.holdNextHistory()
+    chat.setHistory([message('obsolete', 'Obsolete reconnect reply')])
+    const before = chat.requests()
+    first.route.close({ code: 1011 })
+    const reconnect = await chat.socket(1)
+    await expect.poll(chat.requests).toBeGreaterThan(before)
+    switch (boundary) {
+      case 'session':
+        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await expect(page).toHaveURL(chatPath(secondSession))
+        break
+      case 'owner':
+        await writeFromOtherTab(page, replacementToken)
+        await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
+        await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
+        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await expect(page).toHaveURL(chatPath(secondSession, replacementAgent))
+        break
+      default:
+        boundary satisfies never
+    }
+    await expect.poll(() => chat.sockets.at(-1)?.session).toBe(secondSession)
+    const current = await chat.socket(chat.sockets.length - 1)
+    expect(current.session).toBe(secondSession)
+    await expect(page.getByText('Current second session', { exact: true })).toBeVisible()
+    const completed = page.waitForEvent('requestfinished', {
+      predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages`),
+    })
+    // When
+    release()
+    await completed
+    complete(reconnect.route, message('obsolete-frame', 'Obsolete live reply'))
+    complete(current.route, message('current-frame', 'Current live reply'))
+    // Then
+    await expect(page.getByText('Current live reply', { exact: true })).toBeVisible()
+    await expect(page.locator('article')).toHaveText(['Current second session', 'Current live reply'])
+    expect(first.session).toBe(firstSession)
+    await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+  })
+}
+
+for (const boundary of ['logout', 'session', 'owner'] as const) {
+  for (const status of [200, 401, 403]) {
+    test(`delayed ticket ${status} cannot cross the ${boundary} boundary`, async ({ page }) => {
+      const chat = await prepareChat(page)
+      const issuance = chat.holdNextTicket()
+      await page.goto(chatPath())
+      await issuance.requested
+      switch (boundary) {
+        case 'logout':
+          await page.getByRole('button', { name: 'Sign out', exact: true }).first().click()
+          await expect(page).toHaveURL('/login')
+          break
+        case 'session':
+          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await expect(page).toHaveURL(chatPath(secondSession))
+          await chat.socket()
+          break
+        case 'owner':
+          await writeFromOtherTab(page, replacementToken)
+          await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
+          await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
+          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await expect(page).toHaveURL(chatPath(secondSession, replacementAgent))
+          await expect.poll(() => chat.sockets.at(-1)?.session).toBe(secondSession)
+          break
+        default: boundary satisfies never
+      }
+      const ownerUrl = page.url()
+      const sockets = chat.sockets.length
+      await issuance.release(status)
+      await page.clock.install()
+      await page.clock.runFor(1000)
+      await expect(page).toHaveURL(ownerUrl)
+      expect(chat.sockets.length).toBe(sockets)
+      expect(chat.sockets.every((socket) => socket.ticket !== chat.tickets[0]?.ticket)).toBe(true)
+      await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+      expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(
+        boundary === 'logout' ? null : boundary === 'owner' ? replacementToken : originalToken,
+      )
+    })
+  }
+}

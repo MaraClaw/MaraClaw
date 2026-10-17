@@ -177,7 +177,7 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
             raise HTTPException(status_code=404, detail="Message not found")
         logger.info("[Gateway] Ignored duplicate report message={} agent={}", body.message_id, agent.id)
         return {"status": "ok"}
-    await publish_report(agent, won, body.result)
+    await publish_report(agent, won)
     return {"status": "ok"}
 
 

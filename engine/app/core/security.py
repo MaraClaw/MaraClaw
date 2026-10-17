@@ -198,6 +198,19 @@ async def load_user_from_access_token(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
+    return await load_user_principal(
+        uid, require_active=require_active, enforce_password_change=enforce_password_change, fresh=fresh
+    )
+
+
+async def load_user_principal(
+    uid: uuid.UUID,
+    *,
+    require_active: bool = True,
+    enforce_password_change: bool = True,
+    fresh: bool = False,
+) -> UserRecord:
+    """Load current membership and identity independently of credential transport."""
     user = await user_dao.get_with_identity(uid, fresh=True) if fresh else await user_dao.get_with_identity(uid)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")

@@ -1,3 +1,4 @@
+import time
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -7,7 +8,9 @@ from starlette.websockets import WebSocket
 from app.api import websocket as ws_api
 from app.core import access_cache, permissions, security
 from app.records.agent import AgentRecord
+from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+from app.services import chat_tickets
 
 
 @pytest.mark.asyncio
@@ -16,6 +19,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     # Given an accepted socket whose first turn has a dynamic department grant.
     tenant = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant)
+    user.identity = IdentityRecord(id=uuid4())
     agent = AgentRecord(id=uuid4(), name="Sales", creator_id=uuid4(), tenant_id=tenant, access_mode="custom")
     state = {"granted": True, "turn": 0, "connected": False}
     sent = []
@@ -50,7 +54,10 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     socket = WebSocket({"type": "websocket", "path": "/ws/chat", "headers": []}, receive, send)
     await socket.accept()
     handler = ws_api.WebSocketChatHandler(socket, agent.id, "token")
-    monkeypatch.setattr(security, "decode_access_token", lambda _token: {"sub": str(user.id)})
+    handler.binding = chat_tickets.ChatTicketBinding(
+        user_id=user.id, tenant_id=tenant, agent_id=agent.id, session_id=uuid4(), auth_deadline=int(time.time()) + 3600
+    )
+    monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     monkeypatch.setattr(security.user_dao, "get_with_identity", identity)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))

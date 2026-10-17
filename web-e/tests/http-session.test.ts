@@ -190,6 +190,25 @@ for (const kind of ['JSON', 'multipart'] as const) {
     assert.equal(signal, controller.signal)
     assert.equal(stored(), 'token-a')
   })
+
+  for (const stage of ['fetch', 'body'] as const) {
+    test(`${kind} ignores an aborted late 401 during ${stage} without expiring the current owner`, async () => {
+      const pending = Promise.withResolvers<Response>()
+      const response = new DeferredBodyResponse(null, { status: 401 })
+      const controller = new AbortController()
+      const { client, stored } = fixture(() => pending.promise)
+      const rejected = assert.rejects(request(client, { signal: controller.signal }), { name: 'AbortError' })
+      if (stage === 'body') {
+        pending.resolve(response)
+        await response.started.promise
+      }
+      controller.abort()
+      pending.resolve(response)
+      response.bodyResult.resolve('{"detail":"expired"}')
+      await rejected
+      assert.equal(stored(), 'token-a')
+    })
+  }
 }
 
 test('helpers preserve JSON and multipart body/header contracts when requests succeed', async () => {

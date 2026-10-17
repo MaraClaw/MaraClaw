@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -11,7 +11,7 @@ import pytest
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.gateway_report_delivery import GatewayReportDeliveryRecord
+from app.records.gateway_report_delivery import GatewayReportDeliveryRecord, TerminalReason
 from app.services import gateway_report_relay as relay
 from app.services.openclaw_routing import PreparedOpenClawMessage
 
@@ -45,6 +45,11 @@ class RelayStore:
         self.preparation_elapsed = 0
         self.send_entered = anyio.Event()
         self.block_send = False
+        self.on_prepare: Callable[[], None] = lambda: None
+        self.on_lock: Callable[[], None] = lambda: None
+        self.send_error: Exception | None = None
+        self.block_enqueue = False
+        self.enqueue_entered = anyio.Event()
 
     def clock(self) -> datetime:
         return self.now
@@ -69,6 +74,7 @@ class RelayStore:
             r
             for r in self.rows.values()
             if r.delivered_at is None
+            and r.terminal_at is None
             and r.available_at is not None
             and r.available_at <= now
             and (r.lease_expires_at is None or r.lease_expires_at <= now)
@@ -83,8 +89,10 @@ class RelayStore:
         row = self.rows.get(claim.id)
         return bool(
             row
+            and claim.claim_token is not None
             and row.claim_token == claim.claim_token
             and row.delivered_at is None
+            and row.terminal_at is None
             and row.lease_expires_at
             and row.lease_expires_at > now
         )
@@ -103,6 +111,19 @@ class RelayStore:
         row = self.rows[claim.id]
         row.available_at, row.claim_token, row.lease_expires_at = available_at, None, None
         return True
+
+    async def finish_terminal(self, id: UUID, claim_token: UUID, reason: TerminalReason, *, now: datetime) -> bool:
+        row = self.rows[id]
+        claim = replace(row, claim_token=claim_token)
+        if not await self.lock_claim(claim, now=now):
+            return False
+        row.terminal_reason, row.terminal_at = reason, now
+        row.claim_token, row.lease_expires_at = None, None
+        return True
+
+    async def lock_identity(self, claim: GatewayReportDeliveryRecord) -> None:
+        assert self.transaction.get()
+        self.on_lock()
 
     @asynccontextmanager
     async def connection(self) -> AsyncGenerator[None]:
@@ -125,12 +146,16 @@ class RelayStore:
     async def get_agent(self, agent_id: UUID) -> AgentRecord | None:
         return next((a for a in (self.source, self.destination) if a.id == agent_id), None)
 
+    async def get_agents(self, ids: Sequence[UUID]) -> list[AgentRecord]:
+        return [agent for agent in (self.source, self.destination) if agent.id in ids]
+
     async def get_session(self, session_id: UUID) -> ChatSessionRecord | None:
         return self.session if session_id == self.session.id else None
 
     async def prepare(self, *, agent: AgentRecord, content: str) -> PreparedOpenClawMessage:
         assert not self.transaction.get()
         self.now += timedelta(seconds=self.preparation_elapsed)
+        self.on_prepare()
         return PreparedOpenClawMessage(agent, content, "primary", None, None, "test")
 
     async def enqueue(
@@ -146,6 +171,9 @@ class RelayStore:
             conversation_id=conversation_id,
         )
         self.inbox.append(row)
+        self.enqueue_entered.set()
+        if self.block_enqueue:
+            await anyio.sleep_forever()
         return row
 
     async def send(self, *, agent: AgentRecord, session: ChatSessionRecord, content: str, strict: bool = False) -> None:
@@ -157,6 +185,8 @@ class RelayStore:
             await anyio.sleep_forever()
         if self.fail_send:
             raise OSError("provider failure")
+        if self.send_error is not None:
+            raise self.send_error
         self.sends.append(content)
         if self.crash_after_send:
             self.now += timedelta(seconds=61)
@@ -165,8 +195,10 @@ class RelayStore:
         monkeypatch.setattr(relay, "gateway_report_delivery_dao", self)
         monkeypatch.setattr(relay.gateway_message_dao, "get", self.get_message)
         monkeypatch.setattr(relay.agent_dao, "get", self.get_agent)
+        monkeypatch.setattr(relay.agent_dao, "get_many", self.get_agents)
         monkeypatch.setattr(relay.chat_session_dao, "get", self.get_session)
         monkeypatch.setattr(relay, "connection_ctx", self.connection)
+        monkeypatch.setattr(relay, "_lock_identity", self.lock_identity)
         monkeypatch.setattr(relay, "prepare_openclaw_message", self.prepare)
         monkeypatch.setattr(relay, "enqueue_prepared_openclaw_message", self.enqueue)
         monkeypatch.setattr(relay, "deliver_session_reply", self.send)

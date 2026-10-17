@@ -103,6 +103,10 @@ def aggregate(services: Mapping[str, Limits], names: Iterable[str]) -> tuple[flo
 
 
 class ResourceContracts(unittest.TestCase):
+    def test_effective_limits_when_node_version_is_overridden(self) -> None:
+        services = render({"WEB_NODE_VERSION": "26.10.0"})
+        self.assertEqual(services, DEFAULTS)
+
     def test_effective_limits_when_resource_controls_are_omitted(self) -> None:
         # Given synthetic required inputs without optional resource controls.
         # When Compose resolves defaults and YAML inheritance.

@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { authSession } from '@/lib/auth-session'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
+import { appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
@@ -19,40 +20,11 @@ import {
   renameSession,
   uploadChatFile,
   type AgentOut,
-  type ChatMessage,
 } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
-type Line = ChatMessage & { pending?: boolean }
-
 const FORWARDED_INFO = /forwarded to openclaw|waiting for response/i
 const THINKING_TIMEOUT_MS = 90_000
-
-function sameUserLine(saved: Line, pending: Line): boolean {
-  if (saved.role !== 'user') return false
-  if (saved.content === pending.content) return true
-  return Boolean(pending.file_name && saved.content.startsWith(`[file:${pending.file_name}]`))
-}
-
-function mergeServerHistory(server: Line[], local: Line[]): Line[] {
-  const serverUsers = server.filter((row) => row.role === 'user')
-  const used = new Set<number>()
-  const leftoverPending: Line[] = []
-  for (const row of local) {
-    if (!row.pending || row.role !== 'user') continue
-    const match = serverUsers.findIndex((saved, index) => !used.has(index) && sameUserLine(saved, row))
-    if (match >= 0) used.add(match)
-    else leftoverPending.push(row)
-  }
-  const leftoverLocal = local.filter(
-    (row) =>
-      !row.pending &&
-      (row.role === 'assistant' || row.role === 'tool') &&
-      !server.some((saved) => saved.role === row.role && saved.content === row.content),
-  )
-  if (!leftoverPending.length && !leftoverLocal.length) return server
-  return [...server, ...leftoverPending, ...leftoverLocal]
-}
 
 function ThinkingStatus() {
   return (
@@ -123,6 +95,8 @@ export function AgentChatPage() {
   })
 
   const activeId = sessionId ?? sessionsQuery.data?.[0]?.id
+  const activeSessionRef = useRef(activeId)
+  useLayoutEffect(() => { activeSessionRef.current = activeId }, [activeId])
 
   const historyQuery = useQuery({
     queryKey: ['messages', agent.id, activeId],
@@ -199,10 +173,14 @@ export function AgentChatPage() {
   useEffect(() => {
     if (!isCurrent() || !token || !activeId || historyQuery.isLoading) return
     let greeted = false
-    const conn = connectAgentChat(agent.id, token, activeId, {
+    const conn = connectAgentChat(agent.id, activeId, {
       owner,
+      onReconnect() {
+        if (!isCurrent() || activeSessionRef.current !== activeId) return
+        void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
+      },
       onEvent(event: ChatInbound) {
-        if (!isCurrent()) return
+        if (!isCurrent() || activeSessionRef.current !== activeId) return
         if (event.type === 'connected') {
           const sentKey = `maraclaw-onboarding-sent:${agent.id}`
           const alreadySent =
@@ -274,9 +252,11 @@ export function AgentChatPage() {
           if (content) {
             setLines((prev) => {
               if (!isCurrent()) return prev
-              const last = prev.at(-1)
-              if (last?.role === role && last.content === content) return prev
-              return [...prev, { role, content }]
+              return appendCompletion(prev, {
+                role, content,
+                ...(event.message_id === undefined ? {} : { message_id: event.message_id }),
+                ...(event.entry_id === undefined ? {} : { entry_id: event.entry_id }),
+              })
             })
           }
           liveRef.current = ''
@@ -509,7 +489,7 @@ export function AgentChatPage() {
         >
           {visible.map((line, index) => (
             <article
-              key={`${line.created_at ?? 'row'}-${index}`}
+              key={line.entry_id ?? `${line.created_at ?? 'row'}-${index}`}
               className={cn(
                 'max-w-2xl rounded-2xl px-3.5 py-2.5 text-sm whitespace-pre-wrap',
                 line.role === 'user' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',

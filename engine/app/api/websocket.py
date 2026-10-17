@@ -1,22 +1,21 @@
 """WebSocket chat endpoint for real-time agent conversations."""
 
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
 
+import anyio
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
-from app.core.permissions import check_agent_access, is_agent_expired
-from app.core.security import load_user_from_access_token
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
+from app.services import chat_tickets
 from app.services.chat_persist import persist_chat_message
-from app.services.chat_session_service import ensure_primary_platform_session
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
@@ -191,12 +190,12 @@ async def maybe_mark_session_read_for_active_viewer(
 async def websocket_chat(
     websocket: WebSocket,
     agent_id: uuid.UUID,
-    token: str = Query(...),
+    ticket: str = Query(""),
     session_id: str = Query(None),
     lang: str = Query("en"),
 ):
     """WebSocket endpoint for real-time chat with an agent."""
-    handler = WebSocketChatHandler(websocket, agent_id, token, session_id, lang)
+    handler = WebSocketChatHandler(websocket, agent_id, ticket, session_id, lang)
     await handler.run()
 
 
@@ -212,13 +211,14 @@ class WebSocketChatHandler:
         self,
         websocket: WebSocket,
         agent_id: uuid.UUID,
-        token: str,
+        ticket: str,
         session_id: str | None = None,
         lang: str = "en",
     ):
         self.websocket: WebSocket = websocket
         self.agent_id: uuid.UUID = agent_id
-        self.token: str = token
+        self.ticket: str = ticket
+        self.binding: chat_tickets.ChatTicketBinding
         self.session_id_param: str | None = session_id
         self.lang: str = lang
 
@@ -236,127 +236,53 @@ class WebSocketChatHandler:
     async def run(self):
         """Main entry point for handling the lifecycle of the WebSocket connection."""
         try:
-            # 1. Setup session (Authentication, permissions, loading models, history, etc.)
-            success = await self.setup()
-            if not success:
-                return
-
-            # 2. Start the message receiving and processing loop
-            await self.message_loop()
-
+            await self.websocket.accept()
+            if not self.ticket:
+                raise HTTPException(400, "Chat ticket required")
+            self.binding = await chat_tickets.redeem(self.ticket)
+            self.ticket = ""
+            if (
+                str(self.binding.agent_id) != str(self.agent_id)
+                or str(self.binding.session_id) != self.session_id_param
+            ):
+                raise HTTPException(400, "Chat ticket binding mismatch")
+            remaining = self.binding.auth_deadline - time.time()
+            if remaining <= 0:
+                raise HTTPException(401, "Authentication expired")
+            with anyio.fail_after(remaining):
+                if not await self.setup():
+                    return
+                await self.message_loop()
+        except TimeoutError:
+            await self.websocket.close(code=4001)
+        except HTTPException as exc:
+            code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
+            await self.websocket.send_json({"type": "error", "content": exc.detail})
+            await self.websocket.close(code=code)
         except WebSocketDisconnect:
-            logger.info(f"[WS] Client disconnected: {getattr(self.user, 'id', 'unknown')}")
-            await manager.disconnect(str(self.agent_id), self.websocket)
-        except Exception as e:
-            logger.exception(f"[WS] Unexpected error: {e}")
-            await manager.disconnect(str(self.agent_id), self.websocket)
+            pass
+        except Exception:
+            logger.exception("[WS] Unexpected chat error")
+            await self.websocket.close(code=1011)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await manager.disconnect(str(self.agent_id), self.websocket)
 
     async def setup(self) -> bool:
-        """Accepts connection, authenticates user, verifies agent access, loads models, resolves session & history."""
-        # Accept immediately so browser sees onopen without waiting for DB setup
-        await self.websocket.accept()
-
-        # Authenticate (identity loaded; must_change_password enforced like REST)
-        try:
-            user = await load_user_from_access_token(
-                self.token,
-                require_active=True,
-                enforce_password_change=True,
-            )
-        except HTTPException as exc:
-            # FastAPI also carries the structured password-change detail raised by security.
-            detail = cast("str | dict[str, object] | None", exc.detail)
-            if isinstance(detail, dict) and detail.get("must_change_password"):
-                content = cast(str, detail.get("message") or "Password change required before continuing.")
-            else:
-                content = "Authentication failed"
-            await self.websocket.send_json({"type": "error", "content": content})
-            await self.websocket.close(code=4001)
-            return False
-        except Exception:
-            await self.websocket.send_json({"type": "error", "content": "Authentication failed"})
-            await self.websocket.close(code=4001)
-            return False
-
-        try:
-            self.user = user
-
-            logger.info(f"[WS] Checking agent access for {self.agent_id}")
-            self.agent, _ = await check_agent_access(self.user, self.agent_id)
-            if is_agent_expired(self.agent):
-                await self.websocket.send_json(
-                    {
-                        "type": "error",
-                        "content": "This Agent has expired and is off duty. Please contact your admin to extend its service.",
-                    }
-                )
-                await self.websocket.close(code=4003)
-                return False
-
-            self.agent_name = self.agent.name
-            self.agent_type = self.agent.agent_type or ""
-            self.role_description = self.agent.role_description or ""
-            self.welcome_message = self.agent.welcome_message or ""
-            self.ctx_size = self.agent.context_window_size or 100
-            self.user_display_name = (self.user.display_name or "").strip() or "there"
-            logger.info(
-                f"[WS] Agent: {self.agent_name}, type: {self.agent_type}, model_id: {self.agent.primary_model_id}, ctx: {self.ctx_size}"
-            )
-
-            # Resolve or create chat session
-            conv_id = await self._resolve_chat_session(self.user.id)
-            if conv_id in (None, ""):
-                return False
-            self.conv_id = conv_id
-
-            # Load history messages
-            await self._load_history()
-
-        except Exception as e:
-            logger.exception(f"[WS] Setup error: {e}")
-            await self.websocket.send_json({"type": "error", "content": "Setup failed"})
-            await self.websocket.close(code=4002)
-            return False
-
-        # Connect connection manager
-        agent_id_str = str(self.agent_id)
-        await manager.connect(agent_id_str, self.websocket, self.conv_id, str(self.user.id))
-        logger.info(f"[WS] Ready! Agent={self.agent_name}")
-
-        # Send session_id to frontend
+        self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
+        await chat_tickets.authorized_session(self.binding)
+        self.conv_id = str(self.binding.session_id)
+        self.agent_name = self.agent.name
+        self.agent_type = self.agent.agent_type or ""
+        self.role_description = self.agent.role_description or ""
+        self.welcome_message = self.agent.welcome_message or ""
+        self.ctx_size = self.agent.context_window_size or 100
+        self.user_display_name = (self.user.display_name or "").strip() or "there"
+        await self._load_history()
+        await manager.connect(str(self.agent_id), self.websocket, self.conv_id, str(self.user.id))
         await self.websocket.send_json({"type": "connected", "session_id": self.conv_id})
-
-        # Build conversation context
         self.conversation = self._build_conversation_context()
-
         return True
-
-    async def _resolve_chat_session(self, user_id: uuid.UUID) -> str | None:
-        """Resolves existing session or creates a new one."""
-        conv_id = self.session_id_param
-        if conv_id not in (None, ""):
-            try:
-                _sid = uuid.UUID(conv_id)
-            except ValueError, TypeError:
-                conv_id = None
-                _existing = None
-            else:
-                _existing = await chat_session_dao.get_for_agent(_sid, self.agent_id)
-                if not _existing:
-                    conv_id = None
-                elif _existing.source_channel != "agent" and str(_existing.user_id) != str(user_id):
-                    await self.websocket.send_json({"type": "error", "content": "Not authorized for this session"})
-                    await self.websocket.close(code=4003)
-                    return None
-        if conv_id in (None, ""):
-            _latest = await chat_session_dao.get_primary_platform(agent_id=self.agent_id, user_id=user_id)
-            if _latest:
-                conv_id = str(_latest.id)
-            else:
-                _new_session = await ensure_primary_platform_session(self.agent_id, user_id)
-                conv_id = str(_new_session.id)
-                logger.info(f"[WS] Selected primary session {conv_id}")
-        return conv_id
 
     async def _load_history(self):
         """Loads and prepares history messages for the conversation."""
@@ -395,23 +321,16 @@ class WebSocketChatHandler:
             is_onboarding_trigger = data.get("kind") == "onboarding_trigger"
             logger.info(f"[WS] Received: {content[:50]}" + (" [onboarding]" if is_onboarding_trigger else ""))
 
+            try:
+                self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
+                await chat_tickets.authorized_session(self.binding)
+            except HTTPException as exc:
+                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
+                return
+
             if not content and not is_onboarding_trigger:
                 continue
-
-            try:
-                self.user = await load_user_from_access_token(
-                    self.token, require_active=True, enforce_password_change=True, fresh=True
-                )
-            except HTTPException as exc:
-                await self.websocket.send_json({"type": "error", "content": exc.detail})
-                await self.websocket.close(code=4001)
-                return
-            try:
-                self.agent, self.access_level = await check_agent_access(self.user, self.agent_id, fresh=True)
-            except HTTPException as exc:
-                await self.websocket.send_json({"type": "error", "content": exc.detail})
-                await self.websocket.close(code=4003)
-                return
 
             if is_onboarding_trigger:
                 if await self._handle_onboarding_trigger_guard():

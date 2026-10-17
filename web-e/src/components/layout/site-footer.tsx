@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { Separator } from '@/components/ui/separator'
 
@@ -32,6 +34,7 @@ const footerLinks = [
 ]
 
 export function SiteFooter() {
+  const [year] = useState(() => new Date().getFullYear())
   return (
     <footer id="contact" className="section-band border-t border-border">
       <div className="container-page py-14">
@@ -72,7 +75,7 @@ export function SiteFooter() {
         <Separator className="my-10" />
 
         <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} MaraClaw. All rights reserved.</p>
+          <p>© {year} MaraClaw. All rights reserved.</p>
           <p className="tabular-nums">Powered by OpenClaw · Built for teams</p>
         </div>
       </div>

@@ -8,14 +8,19 @@ processes do not. Runtime cancels and drains the relay before closing PostgreSQL
 PostgreSQL is the queue. Each batch claims at most 20 due intents using row locks
 and skip-locked selection. Claims increment attempts and issue a new token with a
 60-second lease. The bounded batch runs concurrently; each attempt times out after
-45 seconds. Token and unexpired-lease predicates fence locks, acknowledgements and
-retries. Retry delays are deterministic exponential seconds, capped at 300 seconds.
+45 seconds. Token, strictly unexpired-lease and nonterminal predicates fence locks,
+acknowledgements, retries and terminal writes. Retry delays are deterministic
+exponential seconds, capped at 300 seconds, with no attempt ceiling.
 No Redis notification or process-local task is required for recovery.
 
 ## Agent destination
 
 Model preparation and guest configuration happen outside the delivery transaction.
 The relay then locks the valid claim and reloads the completed source and destination.
+Short `FOR SHARE NOWAIT` locks stabilize the source message, relevant agents (in
+UUID order) and IM session during validation; lock contention remains retryable.
+No tenant locks or external I/O occur under these identity locks. Uncached reads
+revalidate identity even when an advisory check before preparation failed.
 Both agents must still match the intent's persisted tenant snapshot and original
 sender relationship. Destination inbox insertion and intent acknowledgement share
 one transaction. A failed acknowledgement raises and rolls back insertion and its
@@ -45,7 +50,24 @@ remote provider. Destinations that have already moved or disappeared are not sen
 
 Cancellation propagates without acknowledging or rescheduling the active claim;
 lease expiry permits restart recovery. Source deletion cascades its delivery rows;
-tenant deletion cascades tenant-scoped intents. Missing or moved destinations are
-retryable rather than silently acknowledged or rerouted across tenants. Operators
-can inspect attempts, available_at, lease_expires_at and delivered_at in the delivery
-table to distinguish scheduled retries, active leases and completed destinations.
+tenant deletion cascades tenant-scoped intents.
+
+## Terminal identity outcomes
+
+Only persisted identity absence or mismatch ends delivery without acknowledgement.
+Under a valid claim and stabilized identity reads, the relay commits `terminal_at`
+and one bounded `terminal_reason`: `source_agent_unavailable`,
+`source_tenant_changed`, `destination_agent_unavailable`,
+`destination_tenant_changed`, `destination_relationship_changed` (agent sender or
+IM session ownership/conversation mismatch), or `destination_session_unavailable`.
+Terminal intents are not reclaimed, retried, revived or rerouted; their lease and
+token are cleared. Raw errors are never stored. These fields belong to the
+fresh-install schema baseline; no migration or upgrade path is provided.
+
+Missing source messages, incomplete/blank results and content changed during
+preparation remain retryable, as do unusable channels, blank external conversation
+IDs, missing configuration and all provider failures. IM terminal decisions occur
+only before a provider attempt; an ambiguous send/ack result retains at-least-once
+recovery. Operators can inspect `attempts`, `available_at`, `lease_expires_at`,
+`delivered_at`, `terminal_reason` and `terminal_at` to distinguish retries, active
+leases, acknowledged deliveries and terminal identity outcomes.

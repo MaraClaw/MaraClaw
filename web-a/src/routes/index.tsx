@@ -1,57 +1,61 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AdminShell } from '@/components/layout/admin-shell'
-import { AccountPage } from '@/pages/account'
-import { ForgotPasswordPage } from '@/pages/forgot-password'
-import { LoginPage } from '@/pages/login'
-import { CompaniesPage } from '@/pages/companies'
-import { CompanyDetailPage } from '@/pages/company-detail'
-import { OverviewPage } from '@/pages/overview'
-import { PlaceholderPage } from '@/pages/placeholder'
-import { ResetPasswordPage } from '@/pages/reset-password'
-import { SearchEnginePage } from '@/pages/search-engine'
-import { SettingsPage } from '@/pages/settings'
-import { LlmModelsPage } from '@/pages/llm-models'
-import { UserDetailPage } from '@/pages/user-detail'
-import { UsersPage } from '@/pages/users'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
+
+const AccountPage = lazy(() => import('@/pages/account').then((module) => ({ default: module.AccountPage })))
+const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((module) => ({ default: module.ForgotPasswordPage })))
+const LoginPage = lazy(() => import('@/pages/login').then((module) => ({ default: module.LoginPage })))
+const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({ default: module.CompaniesPage })))
+const CompanyDetailPage = lazy(() => import('@/pages/company-detail').then((module) => ({ default: module.CompanyDetailPage })))
+const OverviewPage = lazy(() => import('@/pages/overview').then((module) => ({ default: module.OverviewPage })))
+const PlaceholderPage = lazy(() => import('@/pages/placeholder').then((module) => ({ default: module.PlaceholderPage })))
+const ResetPasswordPage = lazy(() => import('@/pages/reset-password').then((module) => ({ default: module.ResetPasswordPage })))
+const SearchEnginePage = lazy(() => import('@/pages/search-engine').then((module) => ({ default: module.SearchEnginePage })))
+const SettingsPage = lazy(() => import('@/pages/settings').then((module) => ({ default: module.SettingsPage })))
+const LlmModelsPage = lazy(() => import('@/pages/llm-models').then((module) => ({ default: module.LlmModelsPage })))
+const UserDetailPage = lazy(() => import('@/pages/user-detail').then((module) => ({ default: module.UserDetailPage })))
+const UsersPage = lazy(() => import('@/pages/users').then((module) => ({ default: module.UsersPage })))
 
 export function AppRouter() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Suspense fallback={<div role="status" className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground">Loading…</div>}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-        <Route element={<ProtectedRoute />}>
-          <Route element={<AdminShell />}>
-            <Route index element={<OverviewPage />} />
-            <Route path="account" element={<AccountPage />} />
-            <Route element={<PlatformAdminRoute />}>
-              <Route path="companies" element={<CompaniesPage />} />
-              <Route path="companies/:companyId" element={<CompanyDetailPage />} />
-              <Route path="search-engine" element={<SearchEnginePage />} />
+          <Route element={<ProtectedRoute />}>
+            <Route element={<AdminShell />}>
+              <Route index element={<OverviewPage />} />
+              <Route path="account" element={<AccountPage />} />
+              <Route element={<PlatformAdminRoute />}>
+                <Route path="companies" element={<CompaniesPage />} />
+                <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+                <Route path="search-engine" element={<SearchEnginePage />} />
+              </Route>
+              <Route path="users" element={<UsersPage />} />
+              <Route path="users/:userId" element={<UserDetailPage />} />
+              <Route path="models" element={<LlmModelsPage />} />
+              <Route
+                path="tools"
+                element={
+                  <PlaceholderPage
+                    title="Tools"
+                    description="Platform and tenant tool catalog management."
+                    apiHint="/api/tools"
+                  />
+                }
+              />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
-            <Route path="users" element={<UsersPage />} />
-            <Route path="users/:userId" element={<UserDetailPage />} />
-            <Route path="models" element={<LlmModelsPage />} />
-            <Route
-              path="tools"
-              element={
-                <PlaceholderPage
-                  title="Tools"
-                  description="Platform and tenant tool catalog management."
-                  apiHint="/api/tools"
-                />
-              }
-            />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
-        </Route>
-      </Routes>
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

@@ -4,10 +4,10 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
-import { fetchCurrentUser, joinDefaultOrg, loginRequest, switchTenant } from '../src/lib/auth-api.ts'
+import { fetchCurrentUser, issueChatTicket, joinDefaultOrg, loginRequest, switchTenant } from '../src/lib/auth-api.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { createAuthSessionController } from '../src/lib/auth-session-controller.ts'
-import { StaleSessionError } from '../src/lib/http.ts'
+import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import type { TokenResponse, UserOut } from '../src/lib/types/auth.ts'
 
 const user: UserOut = {
@@ -51,6 +51,39 @@ async function wire(t: TestContext, handle: (request: IncomingMessage, response:
 function send(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json' })
   response.end(JSON.stringify(body))
+}
+
+for (const sessionId of [undefined, 'requested-session']) {
+  test(`ticket issuer sends bearer HTTP and parses the canonical session (${sessionId ?? 'omitted'})`, async (t) => {
+    const arrived = Promise.withResolvers<{ readonly path: string | undefined; readonly method: string | undefined; readonly authorization: string | undefined; readonly body: string }>()
+    await wire(t, (request, response) => {
+      let body = ''
+      request.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      request.on('end', () => {
+        arrived.resolve({ path: request.url, method: request.method, authorization: request.headers.authorization, body })
+        send(response, 200, { ticket: 'opaque-wire-ticket', session_id: 'canonical-session' })
+      })
+    })
+    const controller = new AbortController()
+    const ticket = await issueChatTicket({ agent_id: 'agent-a', ...(sessionId === undefined ? {} : { session_id: sessionId }) }, authSession.capture(), controller.signal)
+    const request = await arrived.promise
+    assert.equal(request.path, '/api/auth/chat-ticket')
+    assert.equal(request.method, 'POST')
+    assert.equal(request.authorization, 'Bearer token-a')
+    assert.deepEqual(JSON.parse(request.body), sessionId === undefined ? { agent_id: 'agent-a' } : { agent_id: 'agent-a', session_id: sessionId })
+    assert.deepEqual(ticket, { ticket: 'opaque-wire-ticket', session_id: 'canonical-session' })
+  })
+}
+
+for (const status of [401, 403]) {
+  test(`real ticket HTTP ${status} ${status === 401 ? 'expires' : 'preserves'} the captured owner`, async (t) => {
+    await wire(t, (_request, response) => send(response, status, { detail: 'denied' }))
+    const owner = authSession.capture()
+    await assert.rejects(issueChatTicket({ agent_id: 'agent-a' }, owner, new AbortController().signal),
+      (error: unknown) => error instanceof ApiError && error.status === status)
+    assert.equal(authSession.isCurrent(owner), status === 403)
+    assert.equal(authSession.getSnapshot().token, status === 401 ? null : 'token-a')
+  })
 }
 
 test('deferred login cannot apply or trigger effects after a same-token replacement', async (t) => {

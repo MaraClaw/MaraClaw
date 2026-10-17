@@ -31,32 +31,24 @@ export function SsoCallbackPage() {
     intent: sessionStorage.getItem(SSO_INTENT_KEY),
   }))
   const request = useRef<Promise<TokenResponse | MultiTenantResponse | void> | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [requestError, setError] = useState<string | null>(null)
   const [tenants, setTenants] = useState<TenantChoice[] | null>(null)
   const [pendingToken, setPendingToken] = useState<string | null>(null)
-  const [provider, setProvider] = useState<string | null>(null)
   const [selecting, setSelecting] = useState<string | null>(null)
+  const state = searchParams.get('state')
+  const code = searchParams.get('code')
+  const provider = searchParams.get('provider') || transaction.provider
+  const validationError = !provider || !code
+    ? 'This sign-in link is missing a provider or authorization code.'
+    : transaction.state && state && transaction.state !== state
+      ? 'This sign-in attempt expired. Start again from the login page.'
+      : null
+  const error = validationError ?? requestError
 
   useEffect(() => {
     const expectedOwner = transaction.owner
-    if (!isCurrent(expectedOwner)) return
+    if (!isCurrent(expectedOwner) || validationError || !provider || !code) return
     const storedState = transaction.state
-    const storedProvider = transaction.provider
-    const state = searchParams.get('state')
-    const code = searchParams.get('code')
-    const queryProvider = searchParams.get('provider')
-    const nextProvider = queryProvider || storedProvider
-
-    if (!nextProvider || !code) {
-      setError('This sign-in link is missing a provider or authorization code.')
-      return
-    }
-    if (storedState && state && storedState !== state) {
-      setError('This sign-in attempt expired. Start again from the login page.')
-      return
-    }
-
-    setProvider(nextProvider)
     const intent = transaction.intent
     let cancelled = false
     const consumeTransaction = (): void => {
@@ -66,8 +58,8 @@ export function SsoCallbackPage() {
       sessionStorage.removeItem(SSO_INTENT_KEY)
     }
     request.current ??= intent === 'bind'
-      ? bindProvider(nextProvider, code, expectedOwner).then(() => undefined)
-      : oauthCallback(nextProvider, { code }, expectedOwner)
+      ? bindProvider(provider, code, expectedOwner).then(() => undefined)
+      : oauthCallback(provider, { code }, expectedOwner)
     void request.current
       .then((result) => {
         if (cancelled || !isCurrent(expectedOwner)) return
@@ -98,7 +90,7 @@ export function SsoCallbackPage() {
         setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'SSO sign-in failed.')
       })
     return () => { cancelled = true }
-  }, [applySession, navigate, searchParams, transaction, capture, isCurrent])
+  }, [applySession, navigate, provider, code, validationError, transaction, capture, isCurrent])
 
   async function chooseTenant(tenant: TenantChoice) {
     const expectedOwner = transaction.owner

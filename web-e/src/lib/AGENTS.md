@@ -23,7 +23,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `okr-api.ts` | `/api/okr/*` |
 | `directory-api.ts` | Provider directory: `/api/org/users`, `/api/enterprise/org/{members,departments}`. Not local departments. |
 | `agent-departments-api.ts` | `GET /api/agents/:id/permissions/departments` for the permissions tab. |
-| `chat/ws-client.ts` | `connectAgentChat` → `WS /ws/chat/{agentId}?token=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. Token in query string (engine contract). |
+| `chat/ws-client.ts` | `connectAgentChat` issues a fresh bearer-authenticated `/api/auth/chat-ticket` per attempt, then `WS /ws/chat/{agentId}?ticket=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. No JWT in the socket URL. |
 | `utils.ts` | `cn()` |
 | `motion.ts` | Landing tokens only (`easeOut`, `fadeUp`, …). `springSnappy` unused. `/app` does not import this. |
 
@@ -49,7 +49,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 - Engine I/O only through this dir. `apiRequest` / `apiFormRequest` — never page-level `fetch()`.
 - New tenant/domain → new `*-api.ts`. Do **not** grow `workspace-api.ts`. Control/vault/pages already split even though agent-scoped.
 - Public auth endpoints pass `token: null`.
-- Chat WS is not React Query. Token in query string (engine contract).
+- Chat WS is not React Query. Single-use tickets only in the query string; bearer JWT stays in HTTP headers.
 - `fileDownloadUrl` stays same-origin; do not route through `apiUrl`.
 - `motion.ts` is landing-only.
 

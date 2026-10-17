@@ -73,7 +73,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 | `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:231` | 61+ | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
 | `ensure_platform_admin` | function | `app/services/platform_admin_seeder.py` | bootstrap | Genesis platform admin from env |
 | `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:91` | tenants/admin | Tenant + genesis `org_admin` |
-| `load_user_from_access_token` | function | `app/core/security.py:183` | WS/files | JWT → user + identity; force-change gate |
+| `load_user_from_access_token` / `load_user_principal` | function | `app/core/security.py` | auth/files/chat tickets | Verified credential → user + identity; force-change gate |
 | `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
 | `connection_ctx` | cm | `app/db/session.py:26` | 130+ | Commit on success; join if nested |
 | `BaseDAO` | class | `app/dao/base.py` | 43 | CRUD + record dataclass defaults |
@@ -94,7 +94,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 - Pydantic v2: `model_config`, `Field(default_factory=...)`.
 - Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** - every process still mounts all routers.
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
-- Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends paths (WS, file download) must call `load_user_from_access_token`.
+- Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends JWT paths (file download) must call `load_user_from_access_token`. Chat WebSockets accept only single-use tickets issued by `POST /api/auth/chat-ticket`; ticket authorization uses `load_user_principal(fresh=True)`.
 - New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone; platform settings expose only invitation and SSO-domain toggles.
 - Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis is persisted on `users.is_genesis` (not recomputed from `created_at`). Genesis rows cannot be demoted, reassigned, or converted by join.
 - Login ignores inactive memberships. Deactivating an org admin does not flip `identity.is_active` (multi-tenant identities). Deactivating a platform admin does. Deactivating an end user also stops their agents/triggers/schedules.

@@ -10,8 +10,8 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 
 | File | Exports | Used for |
 |------|---------|----------|
-| `button.tsx` | `Button`, `buttonVariants` | Landing, auth, `/app` (highest fan-in) |
-| `badge.tsx` | `Badge`, `badgeVariants` | Landing + directory/tools/tasks |
+| `button.tsx`, `button-variants.ts` | `Button`, `buttonVariants` (separate modules) | Landing, auth, `/app` (highest fan-in) |
+| `badge.tsx`, `badge-variants.ts` | `Badge`, `badgeVariants` (separate modules) | Landing + directory/tools/tasks |
 | `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter` | Landing + account/settings/agents-list |
 | `accordion.tsx` | `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent` | Faq |
 | `separator.tsx` | `Separator` | SiteFooter |
