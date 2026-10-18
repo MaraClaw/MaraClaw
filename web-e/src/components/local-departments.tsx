@@ -1,0 +1,49 @@
+import { LocalDepartmentCard } from '@/components/local-department-card'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/use-auth'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { userFacingRequestError } from '@/lib/http'
+import { listLocalDepartments } from '@/lib/local-departments-api'
+
+export function LocalDepartments() {
+  const scope = useWorkspaceSession()
+  const { user } = useAuth()
+  const departments = useQuery({
+    queryKey: ['local-departments'],
+    queryFn: ({ signal }) => listLocalDepartments(signal),
+  })
+
+  return (
+    <section aria-labelledby="local-departments-heading" className="space-y-4">
+      <div className="space-y-1">
+        <h2 id="local-departments-heading" className="font-display text-lg font-semibold">Local departments</h2>
+        <p className="text-sm text-muted-foreground">Departments managed in this company, separate from provider sync.</p>
+      </div>
+      {departments.isError ? (
+        <div className="space-y-3">
+          <p role="status" className="text-sm text-destructive">
+            {userFacingRequestError(departments.error, 'Unable to load local departments. Try again.')}
+          </p>
+          <Button variant="outline" disabled={departments.isFetching} onClick={scope.effect(() => { void departments.refetch() })}>Retry</Button>
+        </div>
+      ) : null}
+      {departments.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">Loading local departments...</p>
+      ) : departments.data?.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No local departments yet. {user?.role === 'org_admin'
+            ? 'Add departments in the admin console on Users.'
+            : 'Ask an org admin to add departments.'}
+        </p>
+      ) : departments.data ? (
+        <ul className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {departments.data.map((department) => (
+            <li key={department.id} className="min-w-0" aria-label={department.name}>
+              <LocalDepartmentCard department={department} canEdit={user?.role === 'org_admin'} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  )
+}
