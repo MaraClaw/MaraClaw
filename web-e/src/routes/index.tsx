@@ -56,11 +56,11 @@ export function AppRouter() {
 
           <Route path="/app" element={<ProtectedRoute />}>
             <Route element={<AppShell />}>
+              <Route path="account" element={<AccountPage />} />
+              <Route path="settings" element={<SettingsPage />} />
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />
-                <Route path="account" element={<AccountPage />} />
-                <Route path="settings" element={<SettingsPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
                 <Route path="plaza" element={<PlazaPage />} />
                 <Route path="okr" element={<OkrPage />} />

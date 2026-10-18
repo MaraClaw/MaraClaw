@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages.
+Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages. Account and Settings are AppShell children outside OnboardingGate, so they stay accessible before onboarding or a required password change.
 
 ## WHERE TO LOOK
 
