@@ -63,7 +63,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Anthropic",
         protocol="anthropic",
         default_base_url="https://api.anthropic.com",
-        default_model="claude-opus-5",
+        default_model="claude-opus-5-5",
         supports_tool_choice=False,
         default_max_tokens=8192,
     ),
@@ -72,7 +72,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI",
         protocol="openai_compatible",
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-5.6",
+        default_model="gpt-6.1-sol",
         default_max_tokens=16384,
     ),
     "openai-response": ProviderSpec(
@@ -80,7 +80,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI Responses",
         protocol="openai_responses",
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-5.6",
+        default_model="gpt-6.1-sol",
         default_max_tokens=16384,
     ),
     "grok": ProviderSpec(
@@ -88,7 +88,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Grok (xAI)",
         protocol="openai_compatible",
         default_base_url="https://api.x.ai/v1",
-        default_model="grok-4.6",
+        default_model="grok-4.8",
         default_max_tokens=16384,
     ),
     "azure": ProviderSpec(
@@ -96,7 +96,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Azure OpenAI",
         protocol="openai_compatible",
         default_base_url=None,
-        default_model="gpt-5.6",
+        default_model="gpt-6.1-sol",
         default_max_tokens=16384,
     ),
     "deepseek": ProviderSpec(

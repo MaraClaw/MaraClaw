@@ -112,7 +112,7 @@ async def test_search_x_posts_responses_payload_and_formats_citations(monkeypatc
                     "output": [
                         {
                             "type": "message",
-                            "content": [{"type": "output_text", "text": "People are talking about grok-4.6."}],
+                            "content": [{"type": "output_text", "text": "People are talking about grok-4.8."}],
                         }
                     ],
                     "citations": ["https://x.com/xai/status/1", "https://x.com/elonmusk/status/2"],
@@ -123,7 +123,7 @@ async def test_search_x_posts_responses_payload_and_formats_citations(monkeypatc
     from app.services import agent_tools
 
     clear_xai_env(monkeypatch)
-    config = AsyncMock(return_value={"api_key": "xai-key", "model": "grok-4.6", "base_url": "https://api.x.ai/v1/"})
+    config = AsyncMock(return_value={"api_key": "xai-key", "model": "grok-4.8", "base_url": "https://api.x.ai/v1/"})
     monkeypatch.setattr(agent_tools, "_get_tool_config", config)
     agent_id = uuid.uuid4()
 
@@ -138,7 +138,7 @@ async def test_search_x_posts_responses_payload_and_formats_citations(monkeypatc
     )
 
     assert result == (
-        "People are talking about grok-4.6.\n\n"
+        "People are talking about grok-4.8.\n\n"
         "Citations:\n- https://x.com/xai/status/1\n- https://x.com/elonmusk/status/2"
     )
     config.assert_awaited_once_with(agent_id, "search_x")
@@ -149,7 +149,7 @@ async def test_search_x_posts_responses_payload_and_formats_citations(monkeypatc
     assert client_kwargs == {"timeout": 120}
     assert kwargs["headers"] == {"Authorization": "Bearer xai-key", "Content-Type": "application/json"}
     payload = kwargs["json"]
-    assert payload["model"] == "grok-4.6"
+    assert payload["model"] == "grok-4.8"
     assert payload["tools"] == [
         {
             "type": "x_search",
@@ -200,7 +200,7 @@ async def test_search_x_uses_env_key_and_default_model(monkeypatch):
 
     assert result == "ok"
     payload = fake_httpx.calls[0][3]["json"]
-    assert payload["model"] == "grok-4.6"
+    assert payload["model"] == "grok-4.8"
     assert payload["tools"] == [{"type": "x_search", "excluded_x_handles": ["openai"]}]
     assert fake_httpx.calls[0][3]["headers"]["Authorization"] == "Bearer env-key"
 

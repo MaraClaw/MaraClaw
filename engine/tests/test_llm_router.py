@@ -216,8 +216,8 @@ async def test_select_classifier_fail_closed(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_select_same_model_skips_classifier(monkeypatch: pytest.MonkeyPatch) -> None:
-    primary = _model(name="grok-4.6")
-    secondary = _model(name="grok-4.6")
+    primary = _model(name="grok-4.8")
+    secondary = _model(name="grok-4.8")
 
     async def boom(*_args: object, **_kwargs: object) -> tuple[None, int, int]:
         raise AssertionError("classifier should not run when slots share a model")

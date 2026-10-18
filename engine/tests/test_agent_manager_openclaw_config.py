@@ -131,7 +131,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="xai-sub-access-token",
         auth_kind="grok_subscription",
         label="Grok SuperGrok",
@@ -158,9 +158,9 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     )
 
     assert "agent" not in config
-    assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
+    assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.8"
     assert config["agents"]["defaults"]["model"]["fallbacks"] == ["xai/grok-4.5"]
-    assert config["agents"]["defaults"]["models"]["xai/grok-4.6"] == {"alias": "primary"}
+    assert config["agents"]["defaults"]["models"]["xai/grok-4.8"] == {"alias": "primary"}
     assert config["env"]["vars"]["XAI_API_KEY"] == "xai-fallback-token"
     assert "GROK_API_KEY" not in config["env"]["vars"]
     assert config["auth"]["profiles"][XAI_OAUTH_PROFILE_ID] == {"provider": "xai", "mode": "oauth"}
@@ -184,7 +184,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="hgklshglsjgh-not-a-key",
         auth_kind="api_key",
         label="Grok 4.6",
@@ -212,7 +212,7 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="xai-sub-access-token",
         refresh_token_encrypted="xai-sub-refresh-token",
         token_expires_at=expires,
@@ -257,7 +257,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
     fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
-        model="gpt-5.6",
+        model="gpt-6.1-sol",
         api_key_encrypted="sk-openai-key",
         auth_kind="api_key",
         label="GPT API",

@@ -577,7 +577,7 @@ class AgentManager:
         linkup_proxy: bool = False,
     ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
-        chosen_ref = guest_model_ref(selected or model) or "openai/gpt-5.6-lunna"
+        chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
         defaults: JsonObject = {
             "workspace": "/home/node/.openclaw/workspace",
             "model": self._defaults_model_block(chosen_ref, fallback),

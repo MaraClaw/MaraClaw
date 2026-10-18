@@ -28,7 +28,7 @@ SEARCH_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_x",
         "display_name": "Search X",
-        "description": "Search X (Twitter) posts, users, and threads via xAI X Search. Use for live public conversation, handles, hashtags, and recent posts. Billed as a grok-4.6 Responses call plus X Search. enable_image_understanding and enable_video_understanding add extra cost; leave them false unless needed.",
+        "description": "Search X (Twitter) posts, users, and threads via xAI X Search. Use for live public conversation, handles, hashtags, and recent posts. Billed as a grok-4.8 Responses call plus X Search. enable_image_understanding and enable_video_understanding add extra cost; leave them false unless needed.",
         "category": "search",
         "icon": "X",
         "is_default": True,
@@ -78,7 +78,7 @@ SEARCH_TOOLS: list[dict[str, Any]] = [
                     "label": "Model",
                     "type": "text",
                     "default": "",
-                    "placeholder": "e.g. grok-4.6",
+                    "placeholder": "e.g. grok-4.8",
                 },
                 {
                     "key": "api_key",

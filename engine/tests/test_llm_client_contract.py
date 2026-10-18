@@ -164,7 +164,7 @@ def test_provider_registry_keys_and_provider_spec_shape():
     assert openai.display_name == "OpenAI"
     assert openai.protocol == "openai_compatible"
     assert openai.default_base_url == "https://api.openai.com/v1"
-    assert openai.default_model == "gpt-5.6"
+    assert openai.default_model == "gpt-6.1-sol"
     assert openai.supports_tool_choice is True
     assert openai.default_max_tokens == 16384
     assert openai.model_max_tokens == {}
@@ -241,14 +241,14 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     assert manifest_by_provider["openai-response"]["aliases"] == ["openai_response", "openairesponses"]
     assert manifest_by_provider["grok"]["display_name"] == "Grok (xAI)"
     assert manifest_by_provider["grok"]["default_base_url"] == "https://api.x.ai/v1"
-    assert manifest_by_provider["grok"]["default_model"] == "grok-4.6"
+    assert manifest_by_provider["grok"]["default_model"] == "grok-4.8"
     assert manifest_by_provider["grok"]["aliases"] == ["xai", "x-ai", "x_ai"]
     assert manifest_by_provider["zhipu"]["display_name"] == "Z.ai"
     assert manifest_by_provider["zhipu"]["default_model"] == "glm-5.3"
     assert manifest_by_provider["zhipu"]["default_base_url"] == "https://api.z.ai/api/paas/v4"
     assert manifest_by_provider["zhipu"]["aliases"] == ["zai", "z.ai", "z_ai"]
-    assert manifest_by_provider["openai"]["default_model"] == "gpt-5.6"
-    assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5"
+    assert manifest_by_provider["openai"]["default_model"] == "gpt-6.1-sol"
+    assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5-5"
     assert manifest_by_provider["grok"]["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh"]
     assert manifest_by_provider["gemini"]["reasoning_efforts"] == ["none", "low", "medium", "high"]
     assert manifest_by_provider["ollama"]["reasoning_efforts"] == []

@@ -486,7 +486,7 @@ async def test_activate_chatgpt_leaves_grok_primary(monkeypatch):
     grok = _model(
         id=grok_id,
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         auth_kind="grok_subscription",
         label="Grok SuperGrok",
         base_url="https://api.x.ai/v1",

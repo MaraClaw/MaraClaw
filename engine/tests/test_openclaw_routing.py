@@ -46,7 +46,7 @@ def test_guest_model_ref_requires_both_parts() -> None:
     assert guest_model_ref(None) is None
     assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model=""))) is None
     assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model="gpt-5.4"))) == "openai/gpt-5.4"
-    assert guest_model_ref(cast(Any, SimpleNamespace(provider="grok", model="grok-4.6"))) == "xai/grok-4.6"
+    assert guest_model_ref(cast(Any, SimpleNamespace(provider="grok", model="grok-4.8"))) == "xai/grok-4.8"
     assert guest_model_ref(cast(Any, SimpleNamespace(provider="xai", model="auto"))) == "xai/auto"
 
 

@@ -32,7 +32,7 @@ CORE_AGENT_TOOLS_2: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "search_x",
-            "description": "Search X (Twitter) posts, users, and threads via xAI X Search. Use for live public conversation, handles, hashtags, and recent posts. Billed as a grok-4.6 Responses call plus X Search. enable_image_understanding and enable_video_understanding add extra cost; leave them false unless needed.",
+            "description": "Search X (Twitter) posts, users, and threads via xAI X Search. Use for live public conversation, handles, hashtags, and recent posts. Billed as a grok-4.8 Responses call plus X Search. enable_image_understanding and enable_video_understanding add extra cost; leave them false unless needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
