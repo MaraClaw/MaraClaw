@@ -1,15 +1,18 @@
+import asyncio
+import json
 from uuid import uuid4
 
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.api import tenants
+from app.api import background_tasks, tenants
 from app.core.redis_cache import cache_key
 from app.core.security import get_current_user
 from app.db.errors import ForeignKeyViolationError
 from app.db.session import bind_crud_connection, connection_ctx
 from app.services.admin_audit import write_admin_audit
+from deletion_content_pg import seed_deletion_content
 from tenant_deletion_pg_fixtures import DeletionPostgres
 
 pytest_plugins = ("tenant_deletion_pg_fixtures",)
@@ -20,6 +23,7 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     deletion_pg: DeletionPostgres,
 ) -> None:
     # Given
+    content = await seed_deletion_content(deletion_pg)
     app = FastAPI()
     app.include_router(tenants.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
     app.dependency_overrides[get_current_user] = lambda: deletion_pg.actor
@@ -32,7 +36,7 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     rows = await deletion_pg.snapshot()
     assert [row["id"] for row in rows["tenants"]] == [deletion_pg.other_tenant_id]
     assert [row["id"] for row in rows["users"]] == [deletion_pg.other_user_id]
-    assert rows["agents"] == []
+    assert [row["id"] for row in rows["agents"]] == [content.peer_id]
     assert {row["name"] for row in rows["skills"]} == {"Unrelated", "Global"}
     assert {row["content"] for row in rows["skill_files"]} == {"Unrelated", "Global"}
     assert len(rows["admin_audit_logs"]) == 1
@@ -45,6 +49,27 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     assert audit["action"] == "tenant_delete"
     assert audit["changes"] == {"deleted": {"before": False, "after": True}}
     assert audit["details"] == {"tenant_name": "Target"}
+    assert {row["id"] for row in rows["plaza_posts"]} == {content.surviving_post_id, content.untouched_post_id}
+    assert {row["ref_id"] for row in rows["participants"]} == {content.peer_id, deletion_pg.other_user_id}
+    for table in ("plaza_comments", "plaza_likes"):
+        assert len(rows[table]) == 1
+        assert rows[table][0]["author_id"] == deletion_pg.other_user_id
+    assert await deletion_pg.rows(
+        "SELECT likes_count, comments_count FROM plaza_posts WHERE id = %s",
+        (content.surviving_post_id,),
+    ) == [{"likes_count": 1, "comments_count": 1}]
+    assert await deletion_pg.rows(
+        "SELECT likes_count, comments_count FROM plaza_posts WHERE id = %s",
+        (content.untouched_post_id,),
+    ) == [{"likes_count": 0, "comments_count": 0}]
+    assert len(rows["sso_scan_sessions"]) == 1
+    assert rows["sso_scan_sessions"][0]["user_id"] == deletion_pg.other_user_id
+    assert len(rows["chat_messages"]) == len(rows["chat_sessions"]) == 1
+    assert len(rows["web_search_events"]) == 1
+    await asyncio.gather(*tuple(background_tasks._tasks))
+    assert deletion_pg.runtime_calls == [("remove", deletion_pg.agent_id), ("archive", deletion_pg.agent_id)]
+    history = deletion_pg.runtime_root / "archive" / str(deletion_pg.agent_id) / "task_history.json"
+    assert json.loads(history.read_text())["tasks"][0]["logs"][0]["content"] == "Completed"
 
 
 @pytest.mark.asyncio
@@ -112,6 +137,7 @@ async def test_delete_rolls_back_audit_rows_and_invalidation_when_later_fallback
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
+    await seed_deletion_content(deletion_pg)
     before = await deletion_pg.snapshot()
 
     async def failed_fallback(_identity_id: object, *, exclude_tenant_id: object) -> None:
@@ -124,6 +150,9 @@ async def test_delete_rolls_back_audit_rows_and_invalidation_when_later_fallback
     # Then
     assert await deletion_pg.snapshot() == before
     assert deletion_pg.events == []
+    assert deletion_pg.runtime_calls == []
+    assert (deletion_pg.runtime_root / str(deletion_pg.agent_id) / "SOUL.md").exists()
+    assert not (deletion_pg.runtime_root / "archive").exists()
 
 
 @pytest.mark.asyncio
@@ -171,11 +200,14 @@ async def test_delete_defers_snapshots_versions_and_acl_until_outer_request_comm
     deletion_pg: DeletionPostgres,
 ) -> None:
     # Given
+    await seed_deletion_content(deletion_pg)
     assert deletion_pg.events == []
     # When
     async with connection_ctx():
         await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
         assert deletion_pg.events == []
+        assert deletion_pg.runtime_calls == []
+        assert (deletion_pg.runtime_root / str(deletion_pg.agent_id) / "SOUL.md").exists()
         assert await deletion_pg.rows("SELECT id FROM tenants WHERE id = %s", (deletion_pg.tenant_id,)) == [
             {"id": deletion_pg.tenant_id}
         ]
@@ -189,3 +221,5 @@ async def test_delete_defers_snapshots_versions_and_acl_until_outer_request_comm
         "delete:" + cache_key("tenant", "v1", deletion_pg.tenant_id),
     }
     assert len(deletion_pg.events) == 6
+    await asyncio.gather(*tuple(background_tasks._tasks))
+    assert deletion_pg.runtime_calls == [("remove", deletion_pg.agent_id), ("archive", deletion_pg.agent_id)]
