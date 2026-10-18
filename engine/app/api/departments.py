@@ -12,10 +12,26 @@ from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut, DepartmentAssignment, DepartmentCreate, DepartmentOut, DepartmentsOut
-from app.services.local_departments import admin_tenant, assign_department
+from app.schemas.department import (
+    AssignmentOut,
+    DepartmentAssignment,
+    DepartmentCreate,
+    DepartmentOptionOut,
+    DepartmentOptionsOut,
+    DepartmentOut,
+    DepartmentsOut,
+)
+from app.services.local_departments import admin_tenant, assign_department, rename_department
 
 router = APIRouter(tags=["departments"])
+
+
+@router.get("/departments/options", response_model=DepartmentOptionsOut)
+async def list_department_options(current_user: UserRecord = Depends(get_current_user)) -> DepartmentOptionsOut:
+    if current_user.tenant_id is None:
+        return DepartmentOptionsOut(departments=[])
+    departments = await local_department_dao.list_for_tenant(current_user.tenant_id)
+    return DepartmentOptionsOut(departments=[DepartmentOptionOut(id=row.id, name=row.name) for row in departments])
 
 
 @router.get("/departments", response_model=DepartmentsOut)
@@ -52,6 +68,16 @@ async def create_department(
             return DepartmentOut.model_validate(row)
     except UniqueViolationError as exc:
         raise HTTPException(409, "Department name already exists") from exc
+
+
+@router.patch("/departments/{department_id}", response_model=DepartmentOut)
+async def update_department(
+    department_id: UUID,
+    data: DepartmentCreate,
+    tenant_id: UUID | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> DepartmentOut:
+    return await rename_department(current_user, department_id, data, tenant_id)
 
 
 @router.put("/users/{user_id}/department", response_model=AssignmentOut)

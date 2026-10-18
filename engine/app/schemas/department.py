@@ -24,6 +24,15 @@ class DepartmentOut(BaseModel):
     created_at: datetime
 
 
+class DepartmentOptionOut(BaseModel):
+    id: UUID
+    name: str
+
+
+class DepartmentOptionsOut(BaseModel):
+    departments: list[DepartmentOptionOut]
+
+
 class DepartmentAssignment(BaseModel):
     department_id: UUID | None
 

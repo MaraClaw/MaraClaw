@@ -55,10 +55,23 @@ def directory(monkeypatch):
     async def list_assignments(_tenant):
         return [AssignmentOut(user_id=uid, tenant_id=tenant.id, department_id=did) for uid, did in assignments.items()]
 
+    async def list_for_tenant(tenant_id):
+        return [row for row in department_rows.values() if row.tenant_id == tenant_id]
+
     async def create(*, obj_in):
         if any(row.name.lower() == obj_in["name"].lower() for row in department_rows.values()):
             raise UniqueViolationError()
         row = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name=obj_in["name"], created_at=datetime.now(UTC))
+        department_rows[row.id] = row
+        return row
+
+    async def update(*, db_obj, obj_in):
+        if any(
+            row.id != db_obj.id and row.tenant_id == db_obj.tenant_id and row.name.lower() == obj_in["name"].lower()
+            for row in department_rows.values()
+        ):
+            raise UniqueViolationError()
+        row = replace(db_obj, **obj_in)
         department_rows[row.id] = row
         return row
 
@@ -75,10 +88,9 @@ def directory(monkeypatch):
     monkeypatch.setattr(local_departments.local_department_dao, "assign", assign)
     monkeypatch.setattr(local_departments.local_department_dao, "grant_agents_for_user", assigned_agents)
     monkeypatch.setattr(departments.local_department_dao, "list_assignments", list_assignments)
-    monkeypatch.setattr(
-        departments.local_department_dao, "list_for_tenant", AsyncMock(return_value=list(department_rows.values()))
-    )
+    monkeypatch.setattr(departments.local_department_dao, "list_for_tenant", list_for_tenant)
     monkeypatch.setattr(departments.local_department_dao, "create", create)
+    monkeypatch.setattr(departments.local_department_dao, "update", update)
     bumped = AsyncMock()
     monkeypatch.setattr(local_departments, "bump_agent_acl_version", bumped)
     app = FastAPI()

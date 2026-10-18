@@ -8,10 +8,12 @@ from app.core.access_cache import bump_agent_acl_version
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.security import raise_if_password_change_required
 from app.dao.local_department_dao import local_department_dao
+from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut
+from app.schemas.department import AssignmentOut, DepartmentCreate, DepartmentOut
 from app.services.admin_provisioning import END_USER_ROLES
 
 
@@ -25,6 +27,30 @@ def admin_tenant(user: UserRecord, selected: UUID | None) -> UUID:
     if selected is not None and selected != user.tenant_id:
         raise HTTPException(403, "Organization access denied")
     return user.tenant_id
+
+
+async def rename_department(
+    actor: UserRecord, department_id: UUID, data: DepartmentCreate, tenant_id: UUID | None
+) -> DepartmentOut:
+    tenant = admin_tenant(actor, tenant_id)
+    try:
+        async with connection_ctx() as db:
+            await lock_tenants(db, (tenant, actor.tenant_id))
+            await lock_user(db, actor.id, actor.tenant_id)
+            fresh_actor = await user_dao.get_with_identity(actor.id, fresh=True)
+            if fresh_actor is None or not fresh_actor.is_active:
+                raise HTTPException(403, "Administrator is inactive")
+            raise_if_password_change_required(fresh_actor)
+            admin_tenant(fresh_actor, tenant)
+            if await tenant_dao.get(tenant) is None:
+                raise HTTPException(404, "Organization not found")
+            department = await local_department_dao.get(department_id)
+            if department is None or department.tenant_id != tenant:
+                raise HTTPException(404, "Department not found")
+            updated = await local_department_dao.update(db_obj=department, obj_in={"name": data.name})
+            return DepartmentOut.model_validate(updated)
+    except UniqueViolationError as exc:
+        raise HTTPException(409, "Department name already exists") from exc
 
 
 async def assign_department(actor: UserRecord, assignment: AssignmentOut) -> AssignmentOut:
