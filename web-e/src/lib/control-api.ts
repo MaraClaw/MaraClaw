@@ -1,4 +1,17 @@
+import { z } from 'zod'
+
 import { apiRequest } from '@/lib/http'
+
+export type ControlLease = {
+  readonly agentId: string
+  readonly sessionId: string
+  readonly ownerToken: string
+}
+
+const lockResult = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('locked'), owner_token: z.string().min(1) }),
+  z.object({ status: z.literal('already_locked') }),
+])
 
 export type ControlResult = {
   status: string
@@ -15,80 +28,56 @@ export async function controlLock(
   agentId: string,
   sessionId: string,
   envType = 'browser',
-): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/lock`, {
+): Promise<z.infer<typeof lockResult>> {
+  return lockResult.parse(await apiRequest<unknown>(`/api/agents/${agentId}/control/lock`, {
     method: 'POST',
     body: { session_id: sessionId, env_type: envType },
+  }))
+}
+
+function ownerRequest(lease: ControlLease, endpoint: string, body: object = {}): Promise<ControlResult> {
+  return apiRequest(`/api/agents/${lease.agentId}/control/${endpoint}`, {
+    method: 'POST',
+    body: { ...body, session_id: lease.sessionId, owner_token: lease.ownerToken },
   })
 }
 
-export async function controlUnlock(
-  agentId: string,
-  sessionId: string,
+export function controlUnlock(
+  lease: ControlLease,
   opts?: { export_cookies?: boolean; platform_hint?: string },
 ): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/unlock`, {
-    method: 'POST',
-    body: { session_id: sessionId, export_cookies: opts?.export_cookies ?? true, platform_hint: opts?.platform_hint },
+  return ownerRequest(lease, 'unlock', {
+    export_cookies: opts?.export_cookies ?? true, platform_hint: opts?.platform_hint,
   })
 }
 
-export async function controlScreenshot(agentId: string, sessionId: string): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/screenshot`, {
-    method: 'POST',
-    body: { session_id: sessionId },
-  })
+export function controlScreenshot(lease: ControlLease): Promise<ControlResult> {
+  return ownerRequest(lease, 'screenshot')
 }
 
-export async function controlCurrentUrl(agentId: string, sessionId: string): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/current-url`, {
-    method: 'POST',
-    body: { session_id: sessionId },
-  })
+export function controlCurrentUrl(lease: ControlLease): Promise<ControlResult> {
+  return ownerRequest(lease, 'current-url')
 }
 
-export async function controlClick(
-  agentId: string,
-  sessionId: string,
-  x: number,
-  y: number,
-  button = 'left',
-): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/click`, {
-    method: 'POST',
-    body: { session_id: sessionId, x, y, button },
-  })
+export function controlClick(lease: ControlLease, point: { x: number; y: number }, button = 'left'): Promise<ControlResult> {
+  return ownerRequest(lease, 'click', { ...point, button })
 }
 
-export async function controlType(agentId: string, sessionId: string, text: string): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/type`, {
-    method: 'POST',
-    body: { session_id: sessionId, text },
-  })
+export function controlType(lease: ControlLease, text: string): Promise<ControlResult> {
+  return ownerRequest(lease, 'type', { text })
 }
 
-export async function controlPressKeys(agentId: string, sessionId: string, keys: string[]): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/press_keys`, {
-    method: 'POST',
-    body: { session_id: sessionId, keys },
-  })
+export function controlPressKeys(lease: ControlLease, keys: readonly string[]): Promise<ControlResult> {
+  return ownerRequest(lease, 'press_keys', { keys })
 }
 
-export async function controlDrag(
-  agentId: string,
-  sessionId: string,
+export function controlDrag(
+  lease: ControlLease,
   from: { x: number; y: number },
   to: { x: number; y: number },
 ): Promise<ControlResult> {
-  return apiRequest(`/api/agents/${agentId}/control/drag`, {
-    method: 'POST',
-    body: {
-      session_id: sessionId,
-      from_x: from.x,
-      from_y: from.y,
-      to_x: to.x,
-      to_y: to.y,
-    },
+  return ownerRequest(lease, 'drag', {
+    from_x: from.x, from_y: from.y, to_x: to.x, to_y: to.y,
   })
 }
 

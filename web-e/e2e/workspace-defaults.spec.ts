@@ -48,7 +48,7 @@ for (const selection of ['default', 'query', 'explicit'] as const) {
     const bodies: unknown[] = []
     await page.route(`**/api/agents/${originalAgent.id}/control/*`, async (route) => {
       if (new URL(route.request().url()).pathname.endsWith('/lock')) bodies.push(route.request().postDataJSON())
-      await route.fulfill({ json: { status: 'ok' } })
+      await route.fulfill({ json: { status: 'locked', owner_token: 'fixture-control-owner' } })
     })
     await page.goto(`/app/agents/${originalAgent.id}/control${selection === 'query' ? '?session=second&env=computer' : ''}`)
     await expect(page.getByLabel('Chat session')).toHaveValue(selection === 'query' ? 'second' : 'first')

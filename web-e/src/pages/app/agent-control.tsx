@@ -1,5 +1,5 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useRef, useState, type MouseEvent } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -13,11 +13,11 @@ import {
   controlDrag,
   controlLock,
   controlPressKeys,
-  controlScreenshot,
   controlType,
   controlUnlock,
 } from '@/lib/control-api'
 import { listSessions, type AgentOut } from '@/lib/workspace-api'
+import { useControlLease } from './use-control-lease'
 
 export function AgentControlPage() {
   const scope = useWorkspaceSession()
@@ -27,33 +27,10 @@ export function AgentControlPage() {
   const [selectedSessionId, setSessionId] = useState(params.get('session') ?? '')
   const sessionId = selectedSessionId || sessions.data?.[0]?.id || ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')
-  const [locked, setLocked] = useState(false)
-  const [screenshot, setScreenshot] = useState<string | null>(null)
-  const [domain, setDomain] = useState('')
-  const [typed, setTyped] = useState('')
-  const [busy, setBusy] = useState(false)
-  const dragFrom = useRef<{ x: number; y: number } | null>(null)
+  const control = useControlLease(scope)
+  const { lease, screenshot, domain, setDomain, typed, setTyped, busy } = control
+  const locked = lease !== null
   const imgRef = useRef<HTMLImageElement | null>(null)
-
-  useEffect(() => {
-    if (!scope.isCurrent() || !locked || !sessionId) return
-    let cancelled = false
-    async function tick() {
-      if (cancelled || !scope.isCurrent()) return
-      try {
-        const result = await controlScreenshot(agent.id, sessionId)
-        if (!cancelled && scope.isCurrent() && result.screenshot) setScreenshot(result.screenshot)
-      } catch (error) {
-        if (!cancelled && scope.isCurrent()) throw error
-      }
-    }
-    void tick()
-    const timer = window.setInterval(() => void tick(), 2500)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [agent.id, locked, sessionId, scope])
 
   function mapPoint(event: MouseEvent<HTMLImageElement>) {
     const img = imgRef.current
@@ -67,20 +44,25 @@ export function AgentControlPage() {
   async function lock() {
     if (!scope.isCurrent()) return
     if (!sessionId) return
-    setBusy(true)
+    const finish = control.beginBusy()
     try {
       const result = await controlLock(agent.id, sessionId, envType)
-      if (!scope.isCurrent()) return
-      if (result.status === 'already_locked') {
-        toast.error('Someone else is controlling this session')
-        return
+      if (!control.isMounted()) return
+      switch (result.status) {
+        case 'already_locked':
+          toast.error('Someone else is controlling this session')
+          return
+        case 'locked':
+          break
+        default:
+          result satisfies never
       }
+      const captured = control.start({ agentId: agent.id, sessionId, ownerToken: result.owner_token })
       setSessionId(sessionId)
-      setLocked(true)
       setParams({ session: sessionId, env: envType })
-      const url = await controlCurrentUrl(agent.id, sessionId)
-      if (!scope.isCurrent()) return
-      if (url.url) {
+      const url = await control.request(controlCurrentUrl)
+      if (!control.isCurrent(captured)) return
+      if (url?.url) {
         try {
           setDomain(new URL(url.url).hostname)
         } catch {
@@ -89,32 +71,33 @@ export function AgentControlPage() {
       }
       toast.success('Take Control locked. Agent tools pause until you unlock.')
     } catch {
-      if (!scope.isCurrent()) return
+      if (!control.isMounted()) return
       toast.error('Unable to lock the session')
     } finally {
-      if (scope.isCurrent()) setBusy(false)
+      finish()
     }
   }
 
   async function unlock() {
     if (!scope.isCurrent()) return
     if (!sessionId) return
-    setBusy(true)
+    const finish = control.beginBusy()
     try {
-      const result = await controlUnlock(agent.id, sessionId, {
+      if (!lease) return
+      const result = await control.request((owner) => controlUnlock(owner, {
         export_cookies: Boolean(domain),
         platform_hint: domain || undefined,
-      })
-      if (!scope.isCurrent()) return
-      setLocked(false)
+      }))
+      if (!result || !control.isCurrent(lease)) return
+      control.end(lease)
       toast.success(
         result.cookies_exported ? `Unlocked. Exported ${result.cookie_count ?? 0} cookies.` : 'Unlocked',
       )
     } catch {
-      if (!scope.isCurrent()) return
+      if (!control.isMounted()) return
       toast.error('Unable to unlock')
     } finally {
-      if (scope.isCurrent()) setBusy(false)
+      finish()
     }
   }
 
@@ -176,7 +159,7 @@ export function AgentControlPage() {
             size="sm"
             variant="outline"
             disabled={!locked}
-            onClick={() => scope.isCurrent() && void controlPressKeys(agent.id, sessionId, [key.toLowerCase()]).catch(scope.rethrowCurrent)}
+            onClick={() => void control.request((owner) => controlPressKeys(owner, [key.toLowerCase()]))}
           >
             {key}
           </Button>
@@ -194,7 +177,9 @@ export function AgentControlPage() {
           disabled={!locked || !typed}
           onClick={() => {
             if (!scope.isCurrent()) return
-            void controlType(agent.id, sessionId, typed).then(scope.effect(() => setTyped(''))).catch(scope.rethrowCurrent)
+            void control.request((owner) => controlType(owner, typed)).then((result) => {
+              if (result && lease && control.isCurrent(lease)) setTyped('')
+            })
           }}
         >
           Send
@@ -211,20 +196,19 @@ export function AgentControlPage() {
               if (!scope.isCurrent()) return
               if (!locked) return
               const point = mapPoint(event)
-              if (point) void controlClick(agent.id, sessionId, point.x, point.y).catch(scope.rethrowCurrent)
+              if (point) void control.request((owner) => controlClick(owner, point))
             }}
             onMouseDown={(event) => {
               if (!scope.isCurrent()) return
-              dragFrom.current = mapPoint(event)
+              control.startDrag(mapPoint(event))
             }}
             onMouseUp={(event) => {
               if (!scope.isCurrent()) return
-              const from = dragFrom.current
+              const from = control.finishDrag()
               const to = mapPoint(event)
-              dragFrom.current = null
               if (!locked || !from || !to) return
               if (Math.hypot(to.x - from.x, to.y - from.y) < 8) return
-              void controlDrag(agent.id, sessionId, from, to).catch(scope.rethrowCurrent)
+              void control.request((owner) => controlDrag(owner, from, to))
             }}
           />
         ) : (
