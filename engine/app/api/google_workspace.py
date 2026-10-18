@@ -30,6 +30,7 @@ from app.services.google_workspace_oauth import (
     sign_google_sync_state,
 )
 from app.services.identity_provider_lookup import get_preferred_identity_provider
+from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 router = APIRouter(tags=["google_workspace"])
 settings = get_settings()
@@ -148,6 +149,8 @@ async def _handle_google_sso_callback(
                         <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
                     </body></html>"""
             )
+    except PublicBaseUrlNotConfiguredError:
+        raise
     except Exception:
         logger.error("Google Workspace login error")
         return HTMLResponse("Auth failed: Authentication error")
@@ -208,6 +211,8 @@ async def _handle_google_admin_sync_callback(
             if await get_google_redirect_uri(provider, request) != redirect_uri:
                 raise HTTPException(status_code=403, detail="Google redirect configuration changed")
             _ = await identity_provider_dao.update(db_obj=provider, obj_in={"config": new_config})
+    except PublicBaseUrlNotConfiguredError:
+        raise
     except Exception:
         logger.error("Google Workspace admin sync authorization failed")
         return HTMLResponse(
