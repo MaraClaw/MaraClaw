@@ -10,7 +10,9 @@ from uuid import UUID
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_list_from_rows
 from app.core.row_memo import memo_drop, memo_get, memo_set
+from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL as AGENT_DELETE_CLEANUP_SQL
 from app.dao.base import BaseDAO
+from app.dao.deletion_cleanup import execute_cleanup
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
 _AGENT_POLICY_COLUMNS = frozenset({"access_mode", "company_access_level", "creator_id", "tenant_id"})
@@ -811,11 +813,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
         """Delete an agent and all known FK-dependent rows in one connection."""
         params = {"aid": agent_id}
         async with self.session() as db:
-            for sql in AGENT_DELETE_CLEANUP_SQL:
-                await db.execute(sql, params)
+            await execute_cleanup(db, AGENT_DELETE_CLEANUP_SQL, params)
             await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)
-        memo_drop("agent", agent_id)
-        await drop_agent_acl_version(agent_id)
+            memo_drop("agent", agent_id)
+            await drop_agent_acl_version(agent_id)
 
     async def names_referencing_model(self, model_id: UUID) -> list[str]:
         async with self.session() as db:
@@ -979,33 +980,6 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"ids": list(agent_ids)},
             )
             return {uuid_from_row(row["id"]): str_from_row(row.get("name")) for row in rows}
-
-
-# Ordered cleanup before deleting the agents row (FK dependents).
-AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
-    "DELETE FROM agent_activity_logs WHERE agent_id = %(aid)s",
-    "DELETE FROM audit_logs WHERE agent_id = %(aid)s",
-    "DELETE FROM approval_requests WHERE agent_id = %(aid)s",
-    "DELETE FROM chat_messages WHERE agent_id = %(aid)s",
-    "DELETE FROM chat_sessions WHERE agent_id = %(aid)s",
-    "DELETE FROM agent_schedules WHERE agent_id = %(aid)s",
-    "DELETE FROM agent_triggers WHERE agent_id = %(aid)s",
-    "DELETE FROM channel_configs WHERE agent_id = %(aid)s",
-    "DELETE FROM agent_permissions WHERE agent_id = %(aid)s",
-    "DELETE FROM agent_tools WHERE agent_id = %(aid)s",
-    "DELETE FROM agent_relationships WHERE agent_id = %(aid)s",
-    "DELETE FROM gateway_messages WHERE agent_id = %(aid)s",
-    "DELETE FROM published_pages WHERE agent_id = %(aid)s",
-    "DELETE FROM notifications WHERE agent_id = %(aid)s",
-    "DELETE FROM daily_token_usage WHERE agent_id = %(aid)s",
-    "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE agent_id = %(aid)s)",
-    "DELETE FROM tasks WHERE agent_id = %(aid)s",
-    "DELETE FROM chat_sessions WHERE peer_agent_id = %(aid)s",
-    "DELETE FROM gateway_messages WHERE sender_agent_id = %(aid)s",
-    "DELETE FROM agent_agent_relationships WHERE agent_id = %(aid)s OR target_agent_id = %(aid)s",
-    "DELETE FROM plaza_posts WHERE author_id = %(aid)s",
-    "DELETE FROM participants WHERE type = 'agent' AND ref_id = %(aid)s",
-)
 
 
 @final
