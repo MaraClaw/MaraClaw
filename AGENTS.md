@@ -88,7 +88,7 @@ cd engine && uv run --extra dev pytest
 | Session / JWT / SSO | implement | `maraclaw-admin-token` | `maraclaw-enduser-token` |
 | Tenant isolation | enforce | select/manage | operate in membership |
 | Platform admin | genesis + RBAC | surface | hide (not a member login) |
-| First-login password change | `must_change_password` | force `/account`; `/settings` stays open | force `/app/account`; `/app/settings` stays open |
+| First-login password change | `must_change_password` | force `/account`; `/settings` stays open | force `/app/settings`; `/app/account` redirects there |
 
 Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed on empty DB). Open registration never becomes `platform_admin`. Genesis OA: platform admin via `POST /api/admin/companies` (or `POST /api/tenants/`). JWT may issue before password change; privileged REST/WS/files 403 until cleared. Details: `engine/docs/admin-apis.md`.
 
