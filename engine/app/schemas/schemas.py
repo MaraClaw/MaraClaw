@@ -223,6 +223,7 @@ class AgentCreate(BaseModel):
     permission_scope_type: str = "company"  # company | user | custom
     permission_scope_ids: list[uuid.UUID] = []
     permission_access_level: str = "use"  # use | manage
+    department_ids: list[uuid.UUID] = Field(default_factory=list)
     # Target tenant (admin-only override; otherwise ignored)
     tenant_id: uuid.UUID | None = None
     # Template

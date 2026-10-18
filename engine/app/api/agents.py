@@ -365,6 +365,16 @@ async def create_agent(
     if data.permission_scope_type not in ("company", "user", "custom"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported permission_scope_type")
 
+    department_ids = set(data.department_ids)
+    if department_ids and data.permission_scope_type != "custom":
+        raise HTTPException(status_code=422, detail="Department grants require custom sharing")
+    if department_ids:
+        departments = await local_department_dao.get_many(list(department_ids))
+        if len(departments) != len(department_ids) or any(
+            department.tenant_id != target_tenant_id for department in departments
+        ):
+            raise HTTPException(status_code=422, detail="Invalid department for this organization")
+
     if data.permission_scope_type == "company":
         access_mode = "company"
     elif data.permission_scope_type == "user":
@@ -448,6 +458,15 @@ async def create_agent(
                     "access_level": "manage",
                 }
             )
+            for department_id in sorted(department_ids):
+                _ = await agent_permission_dao.create(
+                    obj_in={
+                        "agent_id": agent.id,
+                        "scope_type": "department",
+                        "scope_id": department_id,
+                        "access_level": "use",
+                    }
+                )
 
     _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
 
