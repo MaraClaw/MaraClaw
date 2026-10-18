@@ -11,6 +11,7 @@ from app.dao.trigger_dao import agent_trigger_dao
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue, ToolOutputCallback, register
 from app.services.focus_service import ensure_focus_item
+from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 
 from . import trigger_helpers
 
@@ -48,6 +49,13 @@ async def _handle_set_trigger(
         return f"❌ Invalid trigger type '{ttype}'. Valid types: {', '.join(VALID_TRIGGER_TYPES)}"
     if not reason:
         return "❌ Missing required argument 'reason'"
+
+    public_base = ""
+    if ttype == "webhook":
+        try:
+            public_base = await platform_service.get_public_base_url()
+        except PublicBaseUrlNotConfiguredError as error:
+            return f"❌ Cannot create webhook trigger: {error}"
 
     try:
         focus_ref = await ensure_focus_item(agent_id, focus_ref=focus_ref, description=reason or name, system=False)
@@ -118,10 +126,7 @@ async def _handle_set_trigger(
             agent_id=agent_id,
         )
         if ttype == "webhook":
-            from app.services.platform_service import platform_service
-
-            base = await platform_service.get_public_base_url()
-            webhook_url = f"{base.rstrip('/')}/api/webhooks/t/{config['token']}"
+            webhook_url = f"{public_base}/api/webhooks/t/{config['token']}"
             return (
                 f"✅ Webhook trigger '{name}' created.\n\nWebhook URL: {webhook_url}\n\n"
                 + "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
