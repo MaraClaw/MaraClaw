@@ -367,7 +367,7 @@ export function LlmModelsPage() {
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
+                How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
               </p>
             </div>
             <div className="flex flex-col justify-end gap-2 pb-1">
@@ -819,7 +819,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                How much the model thinks before answering. None skips extra reasoning. Extra high is slower and more expensive.
+                How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
               </p>
             </div>
             {subscription ? null : (

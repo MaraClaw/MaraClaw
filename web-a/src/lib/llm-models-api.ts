@@ -30,7 +30,7 @@ const PROVIDER_REASONING_EFFORTS: Record<string, readonly string[]> = {
 
 export function reasoningEffortLabel(effort: string): string {
   if (effort === 'none') return 'None'
-  if (effort === 'xhigh') return 'Extra high'
+  if (effort === 'xhigh') return 'Extra High'
   if (effort === 'low') return 'Low'
   if (effort === 'medium') return 'Medium'
   if (effort === 'high') return 'High'
