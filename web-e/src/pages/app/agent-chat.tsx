@@ -38,7 +38,7 @@ function ThinkingStatus() {
         <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:160ms]" />
         <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:320ms]" />
       </span>
-      Thinking ...
+      Thinking
     </p>
   )
 }
