@@ -419,6 +419,8 @@ async def configure_channel(
         raise HTTPException(status_code=403, detail="Only creator can configure channel")
 
     extra_config = data.extra_config or {}
+    if extra_config.get("connection_mode", "webhook") != "websocket" and not (data.verification_token or "").strip():
+        raise HTTPException(status_code=422, detail="verification_token is required for webhook mode")
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
     if existing:
         config = await channel_config_dao.update(
@@ -512,10 +514,18 @@ async def feishu_event_webhook(
     request: Request,
 ) -> JsonObject:
     """Handle Feishu event callback for a specific agent's bot."""
-    body = json_loads_object(await request.body())
+    from app.services.channels.feishu_auth import FeishuAuthenticationError, authenticate_feishu_callback
+
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    if not config or (config.extra_config or {}).get("connection_mode") == "websocket":
+        raise HTTPException(status_code=404, detail="Feishu webhook not configured")
+    try:
+        body = authenticate_feishu_callback(config, await request.body(), request.headers)
+    except FeishuAuthenticationError as error:
+        raise HTTPException(status_code=401, detail="Invalid Feishu callback") from error
 
     # Handle verification challenge
-    if "challenge" in body:
+    if body.get("type") == "url_verification" and isinstance(body.get("challenge"), str):
         return {"challenge": body["challenge"]}
 
     return await process_feishu_event(agent_id, body)
