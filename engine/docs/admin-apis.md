@@ -43,6 +43,8 @@ Fresh-only installations use `POST /api/auth/register/init` for password registr
 
 Password-reset and verify links prefer the requesting frontend `Origin` (or Referer origin) when it is listed in `CORS_ORIGINS` — so `web-a` (`:5174`) and `web-e` (`:5173`) each receive their own links. Unknown origins are ignored; fallback is `PUBLIC_BASE_URL` (the end-user site, `web-e`).
 
+`PUBLIC_BASE_URL` is deployment-owned and loaded through `Settings` from the environment or `.env`. Request hosts are never a fallback. Without a configured base, webhook-URL endpoints, SSO redirects (including stored tenant domains), and invitation emails return **503** with a configuration error. SSO enablement still updates its flag but does not assign a domain. Published pages retain relative `/p/<id>` links with a configuration note, and webhook-trigger creation returns an error without creating a trigger. Without either a configured base or an allowlisted frontend origin, verification mail is skipped and logged while registration succeeds; forgot-password keeps its generic response. `PUT /api/enterprise/system-settings/platform` rejects any `public_base_url` key with **422**; configure `PUBLIC_BASE_URL` in the deployment instead.
+
 Base path for most routes: **`/api`**.
 
 Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few public/websocket routers (see `app/api/AGENTS.md`).
