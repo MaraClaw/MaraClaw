@@ -32,7 +32,7 @@ export function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button type="button" variant="outline" onClick={handleSignOut}>
+          <Button type="button" onClick={handleSignOut}>
             <LogOut className="size-4" aria-hidden />
             Sign out
           </Button>
