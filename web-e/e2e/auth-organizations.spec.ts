@@ -188,10 +188,10 @@ test('join preserves the refreshed identity force-password gate', async ({ page 
   // When
   await page.getByRole('button', { name: flows[1].button, exact: true }).click()
   // Then
-  await expect(page).toHaveURL('/app/account')
+  await expect(page).toHaveURL('/app/settings')
   await expect(page.getByLabel('Display name')).toHaveValue(refreshedUser.display_name)
   await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
-  await expect(page).toHaveURL('/app/account')
+  await expect(page).toHaveURL('/app/settings')
   await page.getByRole('link', { name: 'Settings', exact: true }).first().click()
   await expect(page).toHaveURL('/app/settings')
 })

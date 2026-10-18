@@ -6,7 +6,6 @@ import { OnboardingGate } from '@/components/layout/onboarding-gate'
 import { AgentLayout } from '@/components/layout/agent-layout'
 import { ProtectedRoute } from '@/routes/protected'
 
-const AccountPage = lazy(() => import('@/pages/app/account').then((module) => ({ default: module.AccountPage })))
 const AgentChannelsPage = lazy(() => import('@/pages/app/agent-channels').then((module) => ({ default: module.AgentChannelsPage })))
 const AgentPermissionsPage = lazy(() => import('@/pages/app/agent-permissions').then((module) => ({ default: module.AgentPermissionsPage })))
 const AgentRelationshipsPage = lazy(() => import('@/pages/app/agent-relationships').then((module) => ({ default: module.AgentRelationshipsPage })))
@@ -56,7 +55,7 @@ export function AppRouter() {
 
           <Route path="/app" element={<ProtectedRoute />}>
             <Route element={<AppShell />}>
-              <Route path="account" element={<AccountPage />} />
+              <Route path="account" element={<Navigate to="/app/settings" replace />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />

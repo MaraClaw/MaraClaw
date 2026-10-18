@@ -116,11 +116,11 @@ test('settings switch preserves the replacement identity must-change-password ga
   // When
   await switchFromSettings(page)
 
-  // Then: Settings stays accessible, while Agents still redirects to Account.
+  // Then: Settings stays accessible, while Agents still redirects to Settings.
   await expect(page).toHaveURL('/app/settings')
   await expect(page.getByText(`Signed in as ${replacementUser.display_name}.`, { exact: false })).toBeVisible()
   await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
-  await expect(page).toHaveURL('/app/account')
+  await expect(page).toHaveURL('/app/settings')
   await expect(page.getByLabel('Display name')).toHaveValue(replacementUser.display_name)
   await expect(page.getByRole('alert')).toBeVisible()
   await page.getByRole('link', { name: 'Settings', exact: true }).first().click()

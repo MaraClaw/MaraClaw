@@ -66,7 +66,7 @@ export function SsoCallbackPage() {
         if (intent === 'bind') {
           consumeTransaction()
           toast.success('Account linked')
-          navigate('/app/account', { replace: true })
+          navigate('/app/settings', { replace: true })
           return
         }
         if (isTokenResponse(result)) {
