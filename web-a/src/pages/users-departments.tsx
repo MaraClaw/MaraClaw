@@ -16,6 +16,7 @@ import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
 import { isEndUserRole, type AdminUser } from '@/lib/users-api'
 import { useDepartments } from '@/pages/users-department-queries'
+import { DepartmentCard } from '@/pages/users-department-card'
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Enter a department name').max(100, 'Use 100 characters or fewer'),
@@ -152,6 +153,15 @@ export function TenantUsers({
           ) : null}
           {departments.isSuccess && departments.data.departments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No departments yet. Create one to start grouping members.</p>
+          ) : null}
+          {departments.data?.departments.length ? (
+            <ul className="grid items-start gap-3 sm:grid-cols-2" aria-label="Departments">
+              {departments.data.departments.map((department) => (
+                <li key={department.id} className="min-w-0">
+                  <DepartmentCard department={department} tenantId={tenantId} />
+                </li>
+              ))}
+            </ul>
           ) : null}
         </CardContent>
       </Card>

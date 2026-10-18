@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { apiRequest } from '@/lib/http'
+import { apiRequest } from './http.ts'
 
 const departmentSchema = z.object({
   id: z.string(),
@@ -25,6 +25,7 @@ const userDepartmentSchema = assignmentSchema.extend({
 }).readonly()
 
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
+export type Department = z.infer<typeof departmentSchema>
 
 export async function listDepartments(tenantId: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ tenant_id: tenantId })
@@ -38,6 +39,16 @@ export async function createDepartment(tenantId: string, input: { readonly name:
   return departmentSchema.parse(
     await apiRequest<unknown>(`/api/departments?${query}`, {
       method: 'POST',
+      body: input,
+    }),
+  )
+}
+
+export async function renameDepartment(tenantId: string, departmentId: string, input: { readonly name: string }) {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  return departmentSchema.parse(
+    await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, {
+      method: 'PATCH',
       body: input,
     }),
   )
