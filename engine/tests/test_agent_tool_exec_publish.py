@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.config import Settings
+from app.services import platform_service as platform_module
 from app.services.agent_tool_exec import publish
 from app.services.agent_tool_exec.registry import ToolArguments
 
@@ -39,10 +41,8 @@ def patch_publish(
     create: AsyncMock | None = None,
     list_pages: AsyncMock | None = None,
 ) -> AsyncMock:
-    from app import config
-
     monkeypatch.setattr(publish, "get_storage_backend", lambda: storage)
-    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(PUBLIC_BASE_URL=public_base))
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=public_base))
     monkeypatch.setattr(secrets, "token_urlsafe", lambda _: "short-id-value")
     get_agent = AsyncMock(return_value=agent)
     create_mock = create or AsyncMock(return_value=SimpleNamespace(short_id="short-id"))
@@ -150,9 +150,7 @@ async def test_publish_missing_storage_and_tenant_failure_are_nonfatal_with_file
     monkeypatch.setattr(publish.agent_dao, "get", get_agent)
     monkeypatch.setattr(publish.published_page_dao, "create", create2)
     monkeypatch.setattr(publish, "get_storage_backend", lambda: storage)
-    from app import config
-
-    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(PUBLIC_BASE_URL=""))
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(secrets, "token_urlsafe", lambda _: "short-id-value")
 
     result = await publish._publish_page(agent_id, uuid.uuid4(), Path("unused"), {"path": "workspace/fallback.html"})
@@ -208,3 +206,16 @@ async def test_publish_facade_defers_and_preserves_workspace_and_arguments_ident
     assert await agent_tools._list_published_pages(agent_id) == "listed"
     publish_page.assert_awaited_once_with(agent_id, user_id, tmp_path, arguments)
     list_pages.assert_awaited_once_with(agent_id)
+
+
+@pytest.mark.asyncio
+async def test_list_published_pages_uses_relative_links_when_base_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    pages = [SimpleNamespace(short_id="page", title="Page", source_path="page.html", view_count=0)]
+    patch_publish(monkeypatch, FakeStorage({}), public_base="", list_pages=AsyncMock(return_value=pages))
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://unowned.example")
+
+    listed = await publish._list_published_pages(uuid.uuid4())
+
+    assert "URL: /p/page" in listed
+    assert "PUBLIC_BASE_URL" in listed
+    assert "https://" not in listed
