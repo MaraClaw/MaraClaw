@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import tenants as tenants_api
-from app.dao.tenant_dao import TenantDAO
+from app.dao.tenant_dao import TENANT_DELETE_CLEANUP_SQL, TenantDAO
 from app.records.user import UserRecord
 
 
@@ -111,6 +111,7 @@ async def test_delete_tenant_does_not_fallback_when_cleanup_fails(monkeypatch) -
 
 def test_delete_cascade_sql_is_static() -> None:
     source = inspect.getsource(TenantDAO.delete_cascade)
-    assert "DELETE FROM" in source
+    assert "execute_cleanup" in source
+    assert all("%(tid)s" in statement for statement in TENANT_DELETE_CLEANUP_SQL)
     assert 'f"DELETE' not in source
     assert "f'DELETE" not in source
