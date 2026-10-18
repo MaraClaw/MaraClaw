@@ -8,9 +8,15 @@ from fastapi import BackgroundTasks, HTTPException
 
 from app.api import auth as auth_api
 from app.api.notification import BroadcastRequest, broadcast_notification
+from app.config import Settings
 from app.core.security import hash_password, verify_password
 from app.schemas.schemas import ForgotPasswordRequest, ResetPasswordRequest
-from app.services import password_reset_service, system_email_service
+from app.services import (
+    frontend_origin,
+    password_reset_service,
+    platform_service as platform_module,
+    system_email_service,
+)
 
 
 class DummyScalars:
@@ -174,8 +180,8 @@ async def test_create_password_reset_token_invalidates_older_tokens(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_build_password_reset_url_uses_env_public_base_url(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com/")
+async def test_build_password_reset_url_uses_settings_public_base_url(monkeypatch):
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://app.example.com/"))
 
     url = await password_reset_service.build_password_reset_url("abc123")
 
@@ -209,7 +215,9 @@ def _http_request(*, origin: str | None = None, referer: str | None = None):
 
 @pytest.mark.asyncio
 async def test_build_password_reset_url_prefers_allowlisted_origin(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    settings = Settings(PUBLIC_BASE_URL="https://app.example.com", CORS_ORIGINS=["http://localhost:5173"])
+    monkeypatch.setattr(platform_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(frontend_origin, "get_settings", lambda: settings)
     request = _http_request(origin="http://localhost:5173")
 
     url = await password_reset_service.build_password_reset_url("abc123", request)
@@ -219,7 +227,9 @@ async def test_build_password_reset_url_prefers_allowlisted_origin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_password_reset_url_ignores_unknown_origin(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    settings = Settings(PUBLIC_BASE_URL="https://app.example.com", CORS_ORIGINS=[])
+    monkeypatch.setattr(platform_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(frontend_origin, "get_settings", lambda: settings)
     request = _http_request(origin="https://evil.example")
 
     url = await password_reset_service.build_password_reset_url("abc123", request)
@@ -229,7 +239,9 @@ async def test_build_password_reset_url_ignores_unknown_origin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_password_reset_url_uses_allowlisted_referer(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
+    settings = Settings(PUBLIC_BASE_URL="https://app.example.com", CORS_ORIGINS=["http://127.0.0.1:5174"])
+    monkeypatch.setattr(platform_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(frontend_origin, "get_settings", lambda: settings)
     request = _http_request(referer="http://127.0.0.1:5174/forgot-password")
 
     url = await password_reset_service.build_password_reset_url("abc123", request)
@@ -242,6 +254,9 @@ async def test_verification_url_uses_allowlisted_origin(monkeypatch):
     from app.services.email_verification_service import email_verification_service
     from app.services.frontend_origin import resolve_frontend_base_url
 
+    settings = Settings(PUBLIC_BASE_URL="", CORS_ORIGINS=["http://localhost:5173"])
+    monkeypatch.setattr(platform_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(frontend_origin, "get_settings", lambda: settings)
     request = _http_request(origin="http://localhost:5173")
     base = await resolve_frontend_base_url(request)
     url = await email_verification_service.build_email_verification_url(base, "123456")
