@@ -1,7 +1,10 @@
 # Single-host production deployment
 
+For explicit reduced-resource development and macOS Docker Desktop, see
+[Local Development Startup](./DEVELOPMENT.md). Production defaults below are unchanged.
+
 Run commands from the repository root. Docker Engine on **Linux** and Docker
-Compose v2.24+ are required (optional `env_file` syntax). This is not Swarm and is
+Compose v2.24+, Python 3.14+ and running systemd are required. This is not Swarm and is
 not high availability: replicas share one host, database, Redis, ingress and disk.
 The existing engine and frontend Dockerfiles are built unchanged and pin their
 build/runtime releases. The latest stable releases verified as of **October 13,
@@ -85,7 +88,7 @@ Compose. Frontends receive no secret env file or secret build arguments.
 
 ```sh
 docker compose --env-file deploy/.env config --quiet
-docker compose --env-file deploy/.env up -d --build
+sudo ./start-docker-compose.sh
 docker compose --env-file deploy/.env ps -a
 docker compose --env-file deploy/.env logs --tail=100 bootstrap engine background ingress
 ```
@@ -100,7 +103,10 @@ receives nonempty platform-admin credentials. API is role `api`; one background
 container is role `worker,connector`. Instance IDs are generated per process.
 No long-running process runs migrations/seeds; migration failures are fatal.
 
-Default replicas are **two each** for API, admin and member static servers.
+Cold-start replicas are **two each** for API, admin and member static servers.
+The starter preserves existing replica counts and installs/enables the persistent
+request-driven controller. See [autoscaling operations](AUTOSCALING.md) for policy,
+memory admission, safe retirement, maintenance and isolated Docker acceptance.
 Ingress waits only for healthy API. Member nginx starts after ingress exists
 because its unchanged proxy config resolves the `maraclaw-engine` name on startup.
 After replacing/recreating ingress, recreate `web-e` once ingress is running:
@@ -117,11 +123,10 @@ uploads and guest callbacks after rollout; config tests are not runtime proof.
 
 ## Scaling and resource controls
 
-```sh
-docker compose --env-file deploy/.env up -d --scale engine=4 --scale web-a=3 --scale web-e=3
-```
-
-Stay within **1–16 replicas per routed service**. Do not scale `background`,
+The controller adjusts each routed pool independently within **1–16 replicas**.
+Do not use plain Compose `up` to reduce replicas: its victim selection bypasses
+proxy-first retirement. Pause the controller before manual maintenance (see
+[operations](AUTOSCALING.md)). Do not scale `background`,
 `bootstrap`, ingress, PostgreSQL or Redis. Persistent defaults can be set using
 `API_REPLICAS`, `ADMIN_REPLICAS`, `MEMBER_REPLICAS` (all default 2).
 Optional controls: `HTTP_PORT=80`, `HTTPS_PORT=443`, `DOCKER_NETWORK=maraclaw_network`,
@@ -153,8 +158,9 @@ While bootstrap is the only engine role running (API/background have not started
 the conservative aggregate is **4.5 CPUs / 5.75 GiB**, counting PostgreSQL, Redis,
 all four web replicas and ingress even if some start later. After any override or
 scaling change, recalculate **sum(per-container limit × replicas)** for each phase,
-account for guests separately and preserve host headroom. The scaling example
-above exceeds this host's default CPU capacity; adjust limits or use a larger host.
+account for guests separately and preserve host headroom. Autoscaling admits hard
+memory limits against the actual Docker host, not a fixed 16-GiB ceiling; CPU
+contention and actual working sets still require monitoring.
 
 Redis's container budget is not an eviction policy; monitor AOF/memory and queue
 growth. Logs rotate at 10 MB × 3 per container. Services restart unless stopped,
@@ -177,11 +183,15 @@ Stop API/background before schema changes; build the new release, explicitly
 rerun bootstrap, and start consumers only after it succeeds:
 
 ```sh
+sudo systemctl stop maraclaw-autoscaler.service
 docker compose --env-file deploy/.env stop ingress web-e engine background
 docker compose --env-file deploy/.env build
 docker compose --env-file deploy/.env run --rm --no-deps bootstrap
-docker compose --env-file deploy/.env up -d
-docker compose --env-file deploy/.env up -d --no-deps --force-recreate web-e
+sudo ./start-docker-compose.sh
+sudo systemctl stop maraclaw-autoscaler.service
+member_count=$(docker compose --env-file deploy/.env ps -aq web-e | wc -l)
+docker compose --env-file deploy/.env up -d --no-deps --force-recreate --scale "web-e=$member_count" web-e
+sudo systemctl start maraclaw-autoscaler.service
 ```
 
 Postgres and Redis must already be healthy for `--no-deps`. On first install use
@@ -205,8 +215,11 @@ and chain, then **recreate** ingress (a bind-mounted file can retain the old ino
 after atomic host-file replacement):
 
 ```sh
+sudo systemctl stop maraclaw-autoscaler.service
 docker compose --env-file deploy/.env up -d --no-deps --force-recreate ingress
-docker compose --env-file deploy/.env up -d --no-deps --force-recreate web-e
+member_count=$(docker compose --env-file deploy/.env ps -aq web-e | wc -l)
+docker compose --env-file deploy/.env up -d --no-deps --force-recreate --scale "web-e=$member_count" web-e
+sudo systemctl start maraclaw-autoscaler.service
 ```
 
 Recreate `web-e` after ingress replacement to refresh its static upstream DNS
@@ -229,8 +242,7 @@ guest networks permit required egress. Protect `.env`, socket access and TLS key
 Run standard-library deployment checks without starting containers:
 
 ```sh
-python3 -m unittest discover -s deploy -p 'test_deployment.py' -v
-python3 -m unittest discover -s deploy -p 'test_resources.py' -v
+python3 -m unittest discover -s deploy -p 'test_*.py' -v
 ```
 
 They render actual Compose models, exercise missing-variable refusal and ensure
