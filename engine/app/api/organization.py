@@ -22,6 +22,13 @@ async def list_users(
     tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)
 ) -> list[UserOut]:
     """List users, optionally filtered by tenant."""
+    if (
+        current_user.role == "org_admin"
+        and not current_user.is_platform_admin
+        and tenant_id is not None
+        and tenant_id != current_user.tenant_id
+    ):
+        raise HTTPException(status_code=403, detail="Cannot access other tenant's users")
     target_tenant_id = current_user.tenant_id
     if current_user.role in ("platform_admin", "org_admin") and tenant_id:
         target_tenant_id = tenant_id
@@ -41,12 +48,18 @@ async def admin_update_user(
     user_id: uuid.UUID, data: UserUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
     """Admin update user profile."""
-    _ = current_user
     user = await user_dao.get_with_identity(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
+    if not current_user.is_platform_admin:
+        if current_user.tenant_id is None or user.tenant_id != current_user.tenant_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        if user.is_platform_admin:
+            raise HTTPException(status_code=403, detail="Cannot edit a platform admin")
+        if user.is_genesis and {"email", "username", "primary_mobile"}.intersection(update_data):
+            raise HTTPException(status_code=403, detail="Cannot edit a genesis user's identity")
     email = json_as_str(update_data.get("email"))
     primary_mobile = json_as_str(update_data.get("primary_mobile"))
 
