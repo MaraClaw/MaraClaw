@@ -12,6 +12,7 @@ from anyascii import anyascii
 from pypinyin import lazy_pinyin
 
 from app.core.security import hash_password_async
+from app.dao.agent_dao import agent_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
@@ -20,6 +21,7 @@ from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 
 
 class AdminEmailTakenError(Exception):
@@ -232,5 +234,8 @@ async def delete_tenant_and_release_identities(tenant_id: UUID) -> None:
     """Cascade-delete a company and tombstone identities that have no remaining membership."""
     async with connection_ctx():
         identity_ids = await user_dao.list_identity_ids_for_tenant(tenant_id)
+        agents = await agent_dao.list_for_tenant(tenant_id)
+        teardown = await snapshot_agent_teardown(agents)
         await tenant_dao.delete_cascade(tenant_id)
         _ = await identity_dao.tombstone_orphans(identity_ids)
+        schedule_agent_teardown(teardown)

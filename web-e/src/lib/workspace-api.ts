@@ -150,6 +150,7 @@ export async function createAgent(body: {
   role_description?: string
   permission_scope_type?: string
   permission_access_level?: string
+  department_ids?: string[]
   agent_type?: string
   gogcli_enabled?: boolean
 }): Promise<AgentOut> {

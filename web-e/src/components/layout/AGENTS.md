@@ -10,7 +10,7 @@ Workspace + marketing chrome.
 
 | File | Role |
 |------|------|
-| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Account / Settings. Desktop aside + mobile top strip. Inbox badge: `unreadNotificationCount` (30s poll). |
+| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Settings. Desktop aside + mobile top strip. Inbox badge: `unreadNotificationCount` (30s poll). |
 | `agent-layout.tsx` | Per-agent header + `SectionRail` tabs. `Outlet` context `{ agent }`. Start/stop only when `access_level === 'manage'`. |
 | `section-rail.tsx` | Shared icon rail. Route `to` (agent tabs) or `onSelect` (directory `?tab=`). Smaller than the workspace rail — do not merge. |
 | `onboarding-gate.tsx` | First-run: no agents + status not `completed` + not skipped → `/app/onboarding`. Skip key `maraclaw-onboarding-skipped` (`wasOnboardingSkipped` in workspace-api). |

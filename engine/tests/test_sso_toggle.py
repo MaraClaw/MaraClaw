@@ -6,6 +6,8 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app.api import admin as admin_api, sso as sso_api, tenants as tenants_api
+from app.config import Settings
+from app.services import platform_service as platform_module
 from app.services.platform_service import platform_service
 
 
@@ -110,18 +112,18 @@ async def test_resolve_tenant_by_domain_sso_toggle(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_sso_base_url_toggle():
+async def test_get_tenant_sso_base_url_toggle(monkeypatch):
     """Verify that get_tenant_sso_base_url respects the sso_redirect_enabled kwarg."""
     tenant = SsoTenant(slug="acme", sso_domain="https://acme.com")
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://public.example"))
 
     # 1. Enabled: returns the custom sso_domain
     url = await platform_service.get_tenant_sso_base_url(tenant=tenant, sso_redirect_enabled=True)
     assert url == "https://acme.com"
 
     # 2. Disabled: falls back to public base URL
-    with patch.object(platform_service, "get_public_base_url", return_value="https://try.maraclaw.ai"):
-        url = await platform_service.get_tenant_sso_base_url(tenant=tenant, sso_redirect_enabled=False)
-        assert url == "https://try.maraclaw.ai"
+    url = await platform_service.get_tenant_sso_base_url(tenant=tenant, sso_redirect_enabled=False)
+    assert url == "https://public.example"
 
 
 @pytest.mark.asyncio
@@ -199,6 +201,7 @@ async def test_switch_tenant_sso_toggle(monkeypatch):
     current_user = UserRecord(identity_id=identity_id, display_name="Current User", id=uuid.uuid4())
     data = TenantSwitchRequest(tenant_id=target_tenant_id)
     request = MagicMock()
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://public.example"))
 
     async def get_by_identity_and_tenant(id_, tenant_id):
         assert id_ == identity_id

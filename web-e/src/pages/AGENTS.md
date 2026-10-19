@@ -15,7 +15,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 | `landing.tsx` | `/` | Composer only: Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta. Hashes stay on `/`. Copy in `@/components/sections/*`. |
 | `login.tsx` | `/login` | RHF+Zod. `useAuth().login`. Multi-tenant picker; unverified → `/verify-email`. Authed → `/join` or `from`. |
 | `register.tsx` | `/register` | `fetchRegistrationConfig` (invite gate), `checkDuplicate`, `registerRequest`. Cannot mint `platform_admin`. |
-| `sso-callback.tsx` | `/sso/callback` | `oauthCallback` or `bindProvider` (`SSO_INTENT_KEY`). Multi-tenant picker. Bind → `/app/account`. |
+| `sso-callback.tsx` | `/sso/callback` | `oauthCallback` or `bindProvider` (`SSO_INTENT_KEY`). Multi-tenant picker. Bind → `/app/settings`. |
 | `forgot-password.tsx` | `/forgot-password` | `forgotPasswordRequest`. No session. |
 | `reset-password.tsx` | `/reset-password` | `?token=` (≥20 chars). `resetPasswordRequest`. |
 | `verify-email.tsx` | `/verify-email` | `?code=` or form. `verifyEmailRequest` then `/join` or `/app`. |

@@ -11,6 +11,8 @@ from app.core.json_types import int_from_row, str_findall, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO, as_uuid
+from app.dao.deletion_cleanup import execute_cleanup
+from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL as TENANT_DELETE_CLEANUP_SQL
 from app.records.tenant import TenantRecord
 
 _SEARCH_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -262,64 +264,6 @@ class TenantDAO(BaseDAO[TenantRecord]):
         params = {"tid": tenant_id}
         user_ids: list[UUID] = []
         agent_ids: list[UUID] = []
-        statements = [
-            "DELETE FROM approval_requests WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM notifications WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)",
-            (
-                "DELETE FROM agent_agent_relationships "
-                + "WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                + "OR target_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
-            ),
-            "DELETE FROM agent_relationships WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            (
-                "DELETE FROM task_logs WHERE task_id IN ("
-                + "SELECT id FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s))"
-            ),
-            "DELETE FROM tasks WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM chat_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM chat_sessions WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM agent_triggers WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM channel_configs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM agent_permissions WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM agent_credentials WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM agent_activity_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            (
-                "DELETE FROM gateway_messages WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                + "OR sender_agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
-            ),
-            (
-                "DELETE FROM published_pages WHERE tenant_id = %(tid)s "
-                + "OR agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)"
-            ),
-            (
-                "DELETE FROM audit_logs WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
-                + "OR user_id IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
-            ),
-            "DELETE FROM agent_tools WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s)",
-            "DELETE FROM agents WHERE tenant_id = %(tid)s",
-            "DELETE FROM skill_files WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = %(tid)s)",
-            "DELETE FROM skills WHERE tenant_id = %(tid)s",
-            "DELETE FROM llm_models WHERE tenant_id = %(tid)s",
-            "DELETE FROM identity_providers WHERE tenant_id = %(tid)s",
-            "DELETE FROM tools WHERE tenant_id = %(tid)s",
-            "DELETE FROM okr_settings WHERE tenant_id = %(tid)s",
-            "DELETE FROM work_reports WHERE tenant_id = %(tid)s",
-            "DELETE FROM okr_objectives WHERE tenant_id = %(tid)s",
-            "DELETE FROM org_members WHERE tenant_id = %(tid)s",
-            "DELETE FROM org_departments WHERE tenant_id = %(tid)s",
-            "DELETE FROM invitation_codes WHERE tenant_id = %(tid)s",
-            (
-                "UPDATE agent_templates SET created_by = NULL "
-                + "WHERE created_by IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
-            ),
-            (
-                "UPDATE enterprise_info SET updated_by = NULL "
-                + "WHERE updated_by IN (SELECT id FROM users WHERE tenant_id = %(tid)s)"
-            ),
-            "DELETE FROM users WHERE tenant_id = %(tid)s",
-            "DELETE FROM tenants WHERE id = %(tid)s",
-        ]
         async with self.session() as db:
             from app.core.access_cache import drop_agent_acl_version
             from app.core.acl_locks import lock_tenants
@@ -336,8 +280,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             )
             user_ids = [uuid_from_row(row["id"]) for row in user_rows]
             agent_ids = [uuid_from_row(row["id"]) for row in agent_rows]
-            for sql in statements:
-                await db.execute(sql, params)
+            await execute_cleanup(db, TENANT_DELETE_CLEANUP_SQL, params)
             await bump_user_sessions(user_ids)
             for agent_id in agent_ids:
                 memo_drop("agent", agent_id)

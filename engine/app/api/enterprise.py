@@ -88,7 +88,7 @@ from app.services.llm import (
     get_provider_manifest,
 )
 from app.services.org_sync import derive_member_department_paths
-from app.services.platform_service import platform_service
+from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 from app.services.sso_service import sso_service
 from app.services.subscription_boundaries import fresh_subscription_actor, unchanged_subscription_model
 
@@ -941,14 +941,15 @@ async def _update_system_setting(key: str, data: SettingUpdate, current_user: Us
     """Create or update a system setting."""
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
+    if key == "platform" and "public_base_url" in data.value:
+        raise HTTPException(
+            status_code=422, detail="Configure PUBLIC_BASE_URL in deployment settings, not system settings"
+        )
     setting = await system_setting_dao.get_by_key(key)
     if setting:
         setting = await system_setting_dao.update(db_obj=setting, obj_in={"value": data.value})
     else:
         setting = await system_setting_dao.create(obj_in={"key": key, "value": data.value})
-
-    if key == "platform" and (public_base_url := data.value.get("public_base_url")) is not None and public_base_url:
-        await _regenerate_all_sso_domains()
 
     return {
         "key": setting.key,
@@ -970,38 +971,25 @@ async def _sync_tenant_sso_state(tenant_id: uuid.UUID) -> None:
     updates: dict[str, Any] = {"sso_enabled": active_sso_count > 0}
 
     if active_sso_count > 0 and tenant.sso_domain in (None, ""):
-        sso_base = await platform_service.get_tenant_sso_base_url(tenant)
-        host = sso_base.split("://")[-1].split(":")[0].split("/")[0]
-        is_ip = platform_service.is_ip_address(host)
+        try:
+            sso_base = await platform_service.get_tenant_sso_base_url(tenant)
+        except PublicBaseUrlNotConfiguredError:
+            logger.warning(
+                f"[SSO] Skipping sso_domain assignment: PUBLIC_BASE_URL is not configured, tenant_id={tenant_id}"
+            )
+        else:
+            host = sso_base.split("://")[-1].split(":")[0].split("/")[0]
+            is_ip = platform_service.is_ip_address(host)
 
-        if is_ip:
-            await tenant_dao.clear_sso_domain_except(tenant_id)
-            logger.info(f"[SSO] IP mode: cleared sso_domain for all other tenants, setting for tenant_id={tenant_id}")
+            if is_ip:
+                await tenant_dao.clear_sso_domain_except(tenant_id)
+                logger.info(
+                    f"[SSO] IP mode: cleared sso_domain for all other tenants, setting for tenant_id={tenant_id}"
+                )
 
-        updates["sso_domain"] = sso_base
+            updates["sso_domain"] = sso_base
 
     _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
-
-
-async def _regenerate_all_sso_domains() -> None:
-    """Regenerate sso_domain for ALL tenants when public_base_url changes."""
-    base_url = await platform_service.get_public_base_url()
-    host = base_url.split("://")[-1].split(":")[0].split("/")[0]
-    is_ip = platform_service.is_ip_address(host)
-
-    tenants = await tenant_dao.list_for_sso_regen()
-
-    for i, tenant in enumerate(tenants):
-        if is_ip:
-            if i == 0:
-                sso_base = await platform_service.get_tenant_sso_base_url(tenant)
-                _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
-            else:
-                _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": None})
-        else:
-            sso_base = await platform_service.get_tenant_sso_base_url(tenant)
-            _ = await tenant_dao.update(db_obj=tenant, obj_in={"sso_domain": sso_base})
-        logger.info(f"[SSO regen] tenant={tenant.slug} sso_domain={tenant.sso_domain if i == 0 or not is_ip else None}")
 
 
 # ─── Identity Providers ─────────────────────────────────

@@ -23,10 +23,10 @@ def _reset_clients():
 
 
 def test_create_llm_client_reuses_same_wrapper_for_identical_config():
-    first = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=30)
-    second = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=30)
-    other_key = create_llm_client("openai", "sk-other", "gpt-5.6", timeout=30)
-    other_timeout = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=60)
+    first = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=30)
+    second = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=30)
+    other_key = create_llm_client("openai", "sk-other", "gpt-6.1-sol", timeout=30)
+    other_timeout = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=60)
     assert first is second
     assert first is not other_key
     assert first is not other_timeout
@@ -39,7 +39,7 @@ def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
         api_key_encrypted=encrypt_data("key", get_settings().SECRET_KEY),
         oauth_account_id=None,
         provider="openai",
-        model="gpt-5.6",
+        model="gpt-6.1-sol",
         base_url="https://api.openai.com/v1",
         request_timeout=45,
     )
@@ -76,13 +76,13 @@ def test_chatgpt_subscription_cache_includes_account_and_kind():
 
 @pytest.mark.asyncio
 async def test_close_does_not_destroy_pooled_http_or_cached_wrapper():
-    client = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=12)
+    client = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=12)
     assert type(client) is OpenAICompatibleClient
     http = await client._get_client()
     assert http is acquire_httpx(12)
     await client.close()
     assert client._client is None
-    again = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=12)
+    again = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=12)
     assert again is client
     reused = await again._get_client()
     assert reused is http
@@ -93,8 +93,8 @@ def test_cache_expires_and_wipes_api_key(monkeypatch):
     from app.services.llm import client_cache
 
     monkeypatch.setattr(client_cache, "_TTL_SECONDS", 0)
-    first = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=8)
+    first = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=8)
     assert first.api_key == "sk-live"
-    second = create_llm_client("openai", "sk-live", "gpt-5.6", timeout=8)
+    second = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=8)
     assert second is not first
     assert first.api_key == ""

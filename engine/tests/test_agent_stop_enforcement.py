@@ -3,7 +3,7 @@ import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -20,6 +20,7 @@ from app.records.user import UserRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
 from app.services import (
     admin_provisioning,
+    agent_orphans,
     agent_stops,
     heartbeat,
     openclaw_hot_cache,
@@ -32,6 +33,87 @@ from app.services.agent_manager import agent_manager
 
 def _agent():
     return AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4(), tenant_id=uuid4(), container_id="fake")
+
+
+async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_network(monkeypatch):
+    now = datetime.now(UTC)
+    existing = _agent()
+    orphan_id = uuid4()
+    calls = []
+    loop_thread = threading.get_ident()
+
+    def container(name, label, network: str | None = "owned", age=timedelta(minutes=5)):
+        return SimpleNamespace(
+            id=name,
+            config=SimpleNamespace(labels={"maraclaw.agent_id": label} if label else None),
+            network_settings=SimpleNamespace(networks={network: {}} if network is not None else None),
+            created=now - age,
+        )
+
+    listed = [
+        container("orphan", str(orphan_id)),
+        container("retained", str(existing.id)),
+        container("unlabeled", None),
+        container("foreign", str(uuid4()), network="other"),
+        container("young", str(uuid4()), age=timedelta(seconds=30)),
+        container("malformed", "not-a-uuid"),
+        container("detached", str(uuid4()), network=None),
+    ]
+
+    class Containers:
+        def list(self, *, all, filters):
+            assert all is True
+            assert filters == {"label": "maraclaw.agent_id", "network": "owned"}
+            assert threading.get_ident() != loop_thread
+            return listed
+
+        def stop(self, container_id, *, time):
+            assert threading.get_ident() != loop_thread
+            calls.append(("stop", container_id))
+
+        def remove(self, container_ids):
+            assert threading.get_ident() != loop_thread
+            calls.append(("remove", container_ids))
+
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=Containers()))
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK="owned"))
+    monkeypatch.setattr(agent_dao, "prepare_container_stops", AsyncMock(return_value=[]))
+    lookup = AsyncMock(return_value=[existing])
+    monkeypatch.setattr(agent_dao, "get_many", lookup)
+    await agent_stops.reconcile_stopped_containers(now)
+    assert calls == [("stop", "orphan"), ("remove", ["orphan"])]
+    assert lookup.await_args is not None
+    assert set(lookup.await_args.args[0]) == {existing.id, orphan_id}
+
+
+async def test_orphan_sweep_continues_after_one_docker_failure(monkeypatch):
+    now = datetime.now(UTC)
+    calls = []
+
+    class Containers:
+        def list(self, **kwargs):
+            return [
+                SimpleNamespace(
+                    id=name,
+                    config=SimpleNamespace(labels={"maraclaw.agent_id": str(uuid4())}),
+                    network_settings=SimpleNamespace(networks={"owned": {}}),
+                    created=now - timedelta(minutes=5),
+                )
+                for name in ("broken", "healthy")
+            ]
+
+        def stop(self, container_id, **kwargs):
+            if container_id == "broken":
+                raise OSError("Docker unavailable")
+
+        def remove(self, container_ids):
+            calls.extend(container_ids)
+
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=Containers()))
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK="owned"))
+    monkeypatch.setattr(agent_dao, "get_many", AsyncMock(return_value=[]))
+    await agent_orphans.sweep_orphan_containers(now)
+    assert calls == ["healthy"]
 
 
 @pytest.mark.parametrize("reason", ["stopped", "expired", "elapsed", "disabled_tenant"])
@@ -221,6 +303,7 @@ async def test_expired_heartbeat_disabled_container_retries_false_stop_after_com
     monkeypatch.setattr(agent_dao, "session", context)
     monkeypatch.setattr(agent_manager, "stop_container", stop)
     # When: two worker reconciliation passes run without any guest traffic.
+    monkeypatch.setattr(agent_manager, "docker_client", None)
     await agent_stops.reconcile_stopped_containers(datetime.now(UTC))
     await agent_stops.reconcile_stopped_containers(datetime.now(UTC))
     # Then: the failed stop remains discoverable, and each attempt follows its commit.

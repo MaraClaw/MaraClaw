@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import pytest
 from agentbay import CreateSessionParams
 
-from app.services import agent_tools, agentbay_client
+from app.services import agent_tools, agentbay_client, take_control_state as state
+from take_control_fakes import SharedRedis
 
 
 def test_factory_rejects_missing_session_argument() -> None:
@@ -54,6 +55,10 @@ async def test_explicit_canonical_key_controls_client_isolation(
     # Given a real client wrapper with only DB configuration and the remote SDK faked.
     same_agent, session_id, image_type, reuse = lookup
     created_images: list[str | None] = []
+    redis = SharedRedis()
+
+    async def connection() -> SharedRedis:
+        return redis
 
     class SDK:
         def __init__(self, *, api_key: str) -> None:
@@ -70,6 +75,7 @@ async def test_explicit_canonical_key_controls_client_isolation(
         return "akm-test"
 
     monkeypatch.setattr(agentbay_client, "AgentBay", SDK)
+    monkeypatch.setattr(state, "_connection", connection)
     monkeypatch.setattr(agent_tools, "_get_tool_config", tool_config)
     monkeypatch.setattr(agentbay_client, "get_agentbay_api_key_for_agent", api_key)
     monkeypatch.setattr(agentbay_client, "_agentbay_sessions", {})

@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Final
 
-from anyio import Path as AsyncPath, get_cancelled_exc_class
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
@@ -28,7 +22,6 @@ from app.dao.local_department_dao import local_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.skill_dao import skill_dao
-from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction, optional_connection_ctx
@@ -37,6 +30,7 @@ from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.agent_manager import agent_manager
+from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 from app.services.enterprise_llm import (
     assert_distinct_model_slots,
     assert_models_in_tenant_pool,
@@ -80,63 +74,6 @@ async def _get_active_admin_users(tenant_id: uuid.UUID | None) -> list[UserRecor
     if not tenant_id:
         return []
     return list(await user_dao.list_active_admins_for_tenant(tenant_id))
-
-
-def _serialize_dt(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
-async def _archive_agent_task_history(agent_id: uuid.UUID, archive_dir: Path) -> Path | None:
-    """Persist task and task-log history into the agent archive directory before DB cleanup."""
-    tasks = await task_dao.list_for_agent(agent_id, ascending=True)
-    if not tasks:
-        return None
-
-    await AsyncPath(archive_dir).mkdir(parents=True, exist_ok=True)
-
-    task_items: list[dict[str, object]] = []
-    payload: dict[str, object] = {
-        "agent_id": str(agent_id),
-        "archived_at": datetime.now(UTC).isoformat(),
-        "tasks": task_items,
-    }
-
-    for task in tasks:
-        logs = await task_log_dao.list_for_task(task.id)
-        task_items.append(
-            {
-                "id": str(task.id),
-                "title": task.title,
-                "description": task.description,
-                "type": task.type,
-                "status": task.status,
-                "priority": task.priority,
-                "assignee": task.assignee,
-                "created_by": str(task.created_by),
-                "due_date": _serialize_dt(task.due_date),
-                "supervision_target_user_id": (
-                    str(task.supervision_target_user_id) if task.supervision_target_user_id else None
-                ),
-                "supervision_target_name": task.supervision_target_name,
-                "supervision_channel": task.supervision_channel,
-                "remind_schedule": task.remind_schedule,
-                "created_at": _serialize_dt(task.created_at),
-                "updated_at": _serialize_dt(task.updated_at),
-                "completed_at": _serialize_dt(task.completed_at),
-                "logs": [
-                    {
-                        "id": str(log.id),
-                        "content": log.content,
-                        "created_at": _serialize_dt(log.created_at),
-                    }
-                    for log in logs
-                ],
-            }
-        )
-
-    archive_path = archive_dir / "task_history.json"
-    _ = await AsyncPath(archive_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return archive_path
 
 
 async def _lazy_reset_token_counters(agent: AgentRecord) -> bool:
@@ -428,6 +365,16 @@ async def create_agent(
     if data.permission_scope_type not in ("company", "user", "custom"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported permission_scope_type")
 
+    department_ids = set(data.department_ids)
+    if department_ids and data.permission_scope_type != "custom":
+        raise HTTPException(status_code=422, detail="Department grants require custom sharing")
+    if department_ids:
+        departments = await local_department_dao.get_many(list(department_ids))
+        if len(departments) != len(department_ids) or any(
+            department.tenant_id != target_tenant_id for department in departments
+        ):
+            raise HTTPException(status_code=422, detail="Invalid department for this organization")
+
     if data.permission_scope_type == "company":
         access_mode = "company"
     elif data.permission_scope_type == "user":
@@ -511,6 +458,15 @@ async def create_agent(
                     "access_level": "manage",
                 }
             )
+            for department_id in sorted(department_ids):
+                _ = await agent_permission_dao.create(
+                    obj_in={
+                        "agent_id": agent.id,
+                        "scope_type": "department",
+                        "scope_id": department_id,
+                        "access_level": "use",
+                    }
+                )
 
     _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
 
@@ -1017,28 +973,10 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
             detail="System agents cannot be deleted. Disable the related feature (e.g. OKR) in Company Settings instead.",
         )
 
-    archive_dir: Path | None = None
-    try:
-        _ = await agent_manager.remove_container(agent)
-    except get_cancelled_exc_class():
-        raise
-    except ClientNotFoundError, DockerException, NoSuchContainer:
-        pass
-    try:
-        archive_dir = await agent_manager.archive_agent_files(agent.id)
-    except get_cancelled_exc_class():
-        raise
-    except OSError, shutil.Error:
-        pass
-    if archive_dir is not None:
-        try:
-            _ = await _archive_agent_task_history(agent.id, archive_dir)
-        except get_cancelled_exc_class():
-            raise
-        except OSError:
-            pass
-
-    await agent_dao.delete_with_related(agent_id)
+    async with connection_ctx():
+        teardown = await snapshot_agent_teardown([agent])
+        await agent_dao.delete_with_related(agent_id)
+        schedule_agent_teardown(teardown)
 
 
 @router.post("/{agent_id}/start", response_model=AgentOut)

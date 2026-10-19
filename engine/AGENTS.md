@@ -131,15 +131,15 @@ uv run --extra dev basedpyright --project pyrightconfig.json app
 uv run --extra dev ty check .
 uv run python scripts/check_no_new_sqlalchemy.py
 uv run python scripts/check_no_direct_loguru.py
-uv run pytest                          # coverage on admin/auth/tenant; no fail-under
-./scripts/test.sh                      # same surface + `--cov-fail-under=90`
-uv run pytest --cov=app --cov-fail-under=0   # full-app report (~39% today)
+uv run pytest                          # no implicit coverage
+./scripts/test.sh                      # admin/auth/tenant branch coverage; fail-under=90
+uv run pytest --cov=app --cov-fail-under=0   # full-app report (~55% measured snapshot)
 uv run python -m app.scripts.bootstrap_db
 ```
 
 ## NOTES
 
-- No `.github/workflows` in this checkout. Local gates: ruff, basedpyright (`reportAny`), both freeze scripts, ty, pytest. No Docker/schema job. `scripts/lint.sh` skips freezes and runs `ty check --force-exclude`. `scripts/test.sh` is the 90% gate.
+- Root `../.github/workflows/engine-ci.yml` runs ruff, basedpyright, ty, and `scripts/test.sh` with its explicit admin/auth/tenant branch-coverage scope, terminal report, and 90% gate. CI adds XML/HTML reports via `PYTEST_ADDOPTS`. No Docker/schema job. Local gates also include both freeze scripts; `scripts/lint.sh` skips freezes and runs `ty check --force-exclude`.
 - Backend `Dockerfile` bootstraps pinned `uv==0.12.23`, exports `uv.lock` with `uv export --locked --no-dev --no-emit-project`, and installs hashed runtime requirements into system Python with `uv pip install --system --require-hashes` (no optional extras). `.dockerignore` excludes secrets, local data, and caches recursively while preserving runtime/build inputs, including the anydoc fixture. `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. It also mounts the host Docker socket plus a Linux `docker` CLI so python-on-whales can start OpenClaw agent containers, dual-mounts `DATA_DIR` so those bind-mounts resolve on the host, and creates `DOCKER_NETWORK` (`maraclaw_network`). Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
 - `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
 - Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.

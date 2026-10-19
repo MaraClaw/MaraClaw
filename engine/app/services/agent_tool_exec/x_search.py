@@ -25,7 +25,7 @@ from app.services.agent_tool_exec.xai_credentials import (
     resolve_xai_base_url,
 )
 
-DEFAULT_X_SEARCH_MODEL = "grok-4.6"
+DEFAULT_X_SEARCH_MODEL = "grok-4.8"
 _X_SEARCH_TIMEOUT_SECONDS = 120
 _MAX_QUERY_CHARS = 2000
 _MAX_OUTPUT_CHARS = 12000

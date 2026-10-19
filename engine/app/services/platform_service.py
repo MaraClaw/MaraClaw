@@ -1,10 +1,19 @@
 """Platform-wide service for URL resolution and host type detection."""
 
-import os
 import re
-from typing import Protocol
+from typing import Protocol, override
 
 from fastapi import Request
+
+from app.config import get_settings
+
+
+class PublicBaseUrlNotConfiguredError(Exception):
+    """An absolute public URL requires deployment-owned configuration."""
+
+    @override
+    def __str__(self) -> str:
+        return "PUBLIC_BASE_URL is not configured on this server. Set PUBLIC_BASE_URL in the deployment settings."
 
 
 class _TenantSsoTarget(Protocol):
@@ -24,25 +33,11 @@ class PlatformService:
         return bool(ip_pattern.match(h))
 
     async def get_public_base_url(self, request: Request | None = None) -> str:
-        """Resolve the platform's public base URL with priority lookup.
-
-        Priority:
-        1. Environment variable (PUBLIC_BASE_URL) - from .env or docker
-        2. Incoming request's base URL (browser address)
-        3. Hardcoded fallback (https://try.maraclaw.ai)
-        """
-        # 1. Try environment variable
-        env_url = os.environ.get("PUBLIC_BASE_URL")
-        if env_url not in (None, ""):
-            return env_url.rstrip("/")
-
-        # 2. Fallback to request (browser address)
-        if request is not None and request:
-            # Note: request.base_url might include trailing slash
-            return str(request.base_url).rstrip("/")
-
-        # 3. Absolute fallback
-        return "https://try.maraclaw.ai"
+        """Resolve Settings.PUBLIC_BASE_URL or raise PublicBaseUrlNotConfiguredError."""
+        base_url = get_settings().PUBLIC_BASE_URL.strip().rstrip("/")
+        if not base_url:
+            raise PublicBaseUrlNotConfiguredError
+        return base_url
 
     async def get_tenant_sso_base_url(
         self,
@@ -57,13 +52,12 @@ class PlatformService:
         ``system_setting_dao.is_sso_custom_domain_redirect_enabled()`` so this
         method never issues an extra DB round-trip for the setting.
         """
+        base_url = await self.get_public_base_url(request)
         if sso_redirect_enabled and tenant.sso_domain not in (None, ""):
             return tenant.sso_domain.rstrip("/")
 
         if not sso_redirect_enabled:
-            return await self.get_public_base_url(request)
-
-        base_url = await self.get_public_base_url(request)
+            return base_url
 
         # Parse protocol and host
         # Example: http://1.2.3.4:8000 or http://maraclaw.ai
@@ -87,7 +81,7 @@ class PlatformService:
         if host == "localhost":
             return f"{protocol}://{host}{port}"
 
-        # Generic logic: if host has a subdomain (e.g. try.maraclaw.ai),
+        # Generic logic: if host has a subdomain,
         # we strip the first component to form a base for tenant subdomains.
         h_parts = host.split(".")
         target_host = ".".join(h_parts[1:]) if len(h_parts) > 2 else host

@@ -414,6 +414,8 @@ class Extractor:
         raise self.error(tokens[0], "channel expansion requires export const CHANNELS")
 
     def paths(self, index: int) -> list[tuple[str, str]]:
+        from client_route_segments import segment_values
+
         token = self.tokens[index]
         parts = []
         for part in token.parts:
@@ -436,7 +438,6 @@ class Extractor:
                     raise self.error(
                         token, f"${{{part.text.strip()}}} is neither a whole path segment nor a provable query suffix"
                     )
-                values = [PLACEHOLDER]
                 if (
                     self.file == CHANNEL_EXPANSION.file
                     and fn is not None
@@ -446,6 +447,8 @@ class Extractor:
                     gated = fn.name in CHANNEL_EXPANSION.webhook_functions
                     values = [path for path, webhook in self.channels() if webhook or not gated]
                     reason = CHANNEL_EXPANSION.reason
+                else:
+                    values = segment_values(self, part, index)
             paths = [prefix + value for prefix in paths for value in values]
         return [(path, reason) for path in paths]
 

@@ -33,7 +33,7 @@ def _model(**kwargs) -> LLMModelRecord:
     defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
         "provider": "grok",
-        "model": "grok-4.6",
+        "model": "grok-4.8",
         "api_key_encrypted": "enc-secret-key-9999",
         "label": "Grok SuperGrok",
         "tenant_id": _TENANT,
@@ -210,7 +210,7 @@ async def test_status_rejects_member_and_other_tenant_org_admin():
 async def test_subscription_model_can_fill_primary_then_distinct_secondary_and_fallback(monkeypatch):
     primary = _model(label="Grok SuperGrok")
     secondary = _model(provider="anthropic", model="claude-sonnet-4-5", label="Claude", auth_kind="api_key")
-    fallback = _model(provider="openai", model="gpt-5.6", label="GPT", auth_kind="api_key")
+    fallback = _model(provider="openai", model="gpt-6.1-sol", label="GPT", auth_kind="api_key")
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=None,
@@ -325,7 +325,7 @@ async def test_probe_uses_stored_subscription_secret(monkeypatch):
     result = await enterprise_api.probe_llm_model(
         enterprise_api.LLMTestRequest(
             provider="grok",
-            model="grok-4.6",
+            model="grok-4.8",
             model_id=str(existing.id),
         ),
         current_user=_user(),

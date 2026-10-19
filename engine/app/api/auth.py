@@ -52,6 +52,7 @@ from app.schemas.schemas import (
 )
 from app.services import chat_tickets
 from app.services.auth_provider import BaseAuthProvider
+from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -138,6 +139,9 @@ async def _send_verification_email_task(
         return
 
     try:
+        from app.services.frontend_origin import resolve_frontend_base_url
+
+        base_url = await resolve_frontend_base_url(request)
         if user.identity_id is None:
             logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
             return
@@ -154,9 +158,6 @@ async def _send_verification_email_task(
             identity.id, identity.email
         )
         expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
-        from app.services.frontend_origin import resolve_frontend_base_url
-
-        base_url = await resolve_frontend_base_url(request)
         verification_url = await email_verification_service.build_email_verification_url(base_url, raw_code)
 
         schedule_background_task(
@@ -168,6 +169,10 @@ async def _send_verification_email_task(
                 verification_url,
             ),
             description="verification email",
+        )
+    except PublicBaseUrlNotConfiguredError:
+        logger.warning(
+            f"Skipping verification email: PUBLIC_BASE_URL and allowlisted origin unavailable, user_id={user.id}"
         )
     except Exception as exc:
         logger.error(f"Failed to create verification token for {user.email}: {exc}")
@@ -551,6 +556,8 @@ async def forgot_password(
                 send_password_reset_email(identity.email, identity.username or "User", reset_url, expiry_minutes),
                 description="password reset email",
             )
+    except PublicBaseUrlNotConfiguredError:
+        logger.warning("Skipping password reset email: PUBLIC_BASE_URL and allowlisted origin unavailable")
     except Exception as exc:
         logger.warning(f"Failed to process password reset email for {data.email}: {exc}")
 

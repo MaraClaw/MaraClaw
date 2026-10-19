@@ -1,6 +1,8 @@
 """Isolated baseline schemas; set MARACLAW_TEST_POSTGRES_DSN to run live regressions."""
 
+import asyncio
 import os
+import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +14,14 @@ from psycopg import AsyncConnection, sql
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.api import background_tasks
 from app.core import access_cache, redis_cache, row_memo, session_cache, tenant_cache
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
+from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+from app.services.agent_manager import agent_manager
 
 BASELINE_SQL = (Path(__file__).resolve().parents[1] / "scripts" / "schema_baseline.sql").read_bytes()
 
@@ -30,6 +35,8 @@ class DeletionPostgres:
     other_user_id: UUID
     agent_id: UUID
     events: list[str]
+    runtime_calls: list[tuple[str, UUID]]
+    runtime_root: Path
 
     async def rows(self, query: str, params: Params = None) -> list[Row]:
         async with self.pool.connection() as raw:
@@ -46,6 +53,16 @@ class DeletionPostgres:
             "agent_templates",
             "enterprise_info",
             "admin_audit_logs",
+            "participants",
+            "plaza_posts",
+            "plaza_comments",
+            "plaza_likes",
+            "sso_scan_sessions",
+            "chat_messages",
+            "chat_sessions",
+            "tasks",
+            "task_logs",
+            "web_search_events",
         )
         result: dict[str, list[Row]] = {}
         async with self.pool.connection() as raw:
@@ -57,7 +74,7 @@ class DeletionPostgres:
 
 @pytest_asyncio.fixture
 async def deletion_pg(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, tmp_path: Path
 ) -> AsyncIterator[DeletionPostgres]:
     dsn = os.environ.get("MARACLAW_TEST_POSTGRES_DSN", "")
     if not dsn:
@@ -96,7 +113,28 @@ async def deletion_pg(
                     other_user_id,
                     agent_id,
                     events,
+                    [],
+                    tmp_path,
                 )
+
+                async def remove_container(agent: AgentRecord) -> bool:
+                    assert await fixture.rows("SELECT id FROM agents WHERE id = %s", (agent.id,)) == []
+                    fixture.runtime_calls.append(("remove", agent.id))
+                    return True
+
+                async def archive_files(agent_id: UUID) -> Path:
+                    fixture.runtime_calls.append(("archive", agent_id))
+                    destination = tmp_path / "archive" / str(agent_id)
+                    destination.parent.mkdir(exist_ok=True)
+                    source = tmp_path / str(agent_id)
+                    if source.exists():
+                        shutil.move(source, destination)
+                    else:
+                        destination.mkdir()
+                    return destination
+
+                monkeypatch.setattr(agent_manager, "remove_container", remove_container)
+                monkeypatch.setattr(agent_manager, "archive_agent_files", archive_files)
 
                 async def version_now(key: str, *, ttl: int | None = None) -> None:
                     remaining = await fixture.rows("SELECT id FROM tenants WHERE id = %s", (tenant_id,))
@@ -181,7 +219,10 @@ async def deletion_pg(
                         (agent_id, user_id, tenant_id),
                     )
                 row_memo.clear_row_memo()
-                yield fixture
-                row_memo.clear_row_memo()
+                try:
+                    yield fixture
+                finally:
+                    await asyncio.gather(*tuple(background_tasks._tasks))
+                    row_memo.clear_row_memo()
         finally:
             await admin.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

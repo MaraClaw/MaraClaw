@@ -4,8 +4,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.core.middleware import TraceIdMiddleware
@@ -14,6 +15,7 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
 from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
+from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 settings = get_settings()
 
@@ -28,6 +30,13 @@ def _role_enabled(*required: str) -> bool:
 
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+
+
+@app.exception_handler(PublicBaseUrlNotConfiguredError)
+async def public_base_url_not_configured(request: Request, exc: PublicBaseUrlNotConfiguredError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
 app.include_router(readiness_router)
 app.add_middleware(TraceIdMiddleware)
 _cors_origins = settings.CORS_ORIGINS

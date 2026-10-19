@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -19,13 +20,18 @@ AGENT_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 
 @pytest.mark.asyncio
-async def test_webhook_echoes_challenge() -> None:
+async def test_webhook_echoes_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        feishu_api.channel_config_dao,
+        "get_for_agent",
+        AsyncMock(return_value=SimpleNamespace(verification_token="token", encrypt_key="", extra_config={})),
+    )
     request = Request(
-        {"type": "http"},
+        {"type": "http", "headers": []},
         AsyncMock(
             return_value={
                 "type": "http.request",
-                "body": b'{"challenge": "verify-me"}',
+                "body": b'{"type":"url_verification","token":"token","challenge":"verify-me"}',
             }
         ),
     )
@@ -100,17 +106,31 @@ async def test_file_webhook_acks_blocked_work_and_logs_background_failure(monkey
         feishu_api.channel_config_dao,
         "get_for_agent",
         AsyncMock(
-            return_value=SimpleNamespace(app_id="app", app_secret="secret"),
+            return_value=SimpleNamespace(
+                app_id="app", app_secret="secret", verification_token="token", encrypt_key="", extra_config={}
+            ),
         ),
     )
     monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
     payload = json.dumps(
         {
-            "header": {"event_id": "file-event", "event_type": "im.message.receive_v1"},
+            "schema": "2.0",
+            "header": {"event_id": "file-event", "event_type": "im.message.receive_v1", "token": "token"},
             "event": {"message": {"message_type": message_type}, "sender": {"sender_id": {"open_id": "user"}}},
         }
     ).encode()
-    request = Request({"type": "http"}, AsyncMock(return_value={"type": "http.request", "body": payload}))
+    signature = hashlib.sha256(b"123nonce" + payload).hexdigest().encode()
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-lark-request-timestamp", b"123"),
+                (b"x-lark-request-nonce", b"nonce"),
+                (b"x-lark-signature", signature),
+            ],
+        },
+        AsyncMock(return_value={"type": "http.request", "body": payload}),
+    )
     started, release, observed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     failure = RuntimeError("file processing failed")
     logger = Mock()
@@ -182,7 +202,9 @@ async def test_config_connector_waits_for_save_and_commit(monkeypatch, existing,
     monkeypatch.setattr(feishu_api.channel_config_dao, "update", save)
     monkeypatch.setattr(feishu_api.channel_config_dao, "create", save)
     monkeypatch.setattr(feishu_ws_manager, "start_client" if mode == "websocket" else "stop_client", connect)
-    data = ChannelConfigCreate(app_id="app", app_secret="secret", extra_config={"connection_mode": mode})
+    data = ChannelConfigCreate(
+        app_id="app", app_secret="secret", verification_token="token", extra_config={"connection_mode": mode}
+    )
     token = session_module._conn_ctx.set(None)
     # When
     try:

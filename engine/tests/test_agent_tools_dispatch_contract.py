@@ -464,25 +464,30 @@ async def test_execute_tool_autonomy_denial_preserves_l2_message(monkeypatch):
 
 
 async def test_execute_tool_agentbay_lock_injects_session_id_before_block(monkeypatch):
-    from app.api import agentbay_control
+    from app.services import take_control_state
+    from take_control_fakes import SharedRedis
 
     agent_id = uuid.uuid4()
     arguments: ToolParameters = {"url": "https://example.invalid"}
-    lock_calls = []
+    redis = SharedRedis()
 
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
         return "tenant-agentbay"
 
-    def is_session_locked(observed_agent_id: str, observed_session_id: str) -> bool:
-        lock_calls.append((observed_agent_id, observed_session_id, arguments.copy()))
-        return True
+    async def connection() -> SharedRedis:
+        return redis
 
     def fail_resolve_handler(_tool_name: str):
         raise AssertionError("locked AgentBay execution must not reach handler resolution")
 
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
-    monkeypatch.setattr(agentbay_control, "is_session_locked", is_session_locked)
+    monkeypatch.setattr(take_control_state, "_connection", connection)
     monkeypatch.setattr(agent_tools, "resolve_tool_handler", fail_resolve_handler)
+    key = take_control_state.SessionKey(str(agent_id), "session-agentbay", "browser")
+    await take_control_state.register_remote(
+        key, take_control_state.RemoteSession(remote_id="replica-browser", image="browser_latest")
+    )
+    await take_control_state.acquire(key, "api-owner", None)
 
     result = await agent_tools.execute_tool(
         "agentbay_browser_navigate",
@@ -498,13 +503,33 @@ async def test_execute_tool_agentbay_lock_injects_session_id_before_block(monkey
         "browser/computer operations."
     )
     assert arguments["_session_id"] == "session-agentbay"
-    assert lock_calls == [
-        (
-            str(agent_id),
-            "session-agentbay",
-            {"url": "https://example.invalid", "_session_id": "session-agentbay"},
-        )
-    ]
+
+
+async def test_execute_tool_agentbay_fails_closed_when_shared_redis_is_down(monkeypatch):
+    from app.services import take_control_state
+    from take_control_fakes import SharedRedis
+
+    redis = SharedRedis()
+    redis.available = False
+
+    async def tenant_lookup(_agent_id: uuid.UUID) -> str:
+        return "tenant-agentbay"
+
+    async def connection() -> SharedRedis:
+        return redis
+
+    def fail_resolve_handler(_tool_name: str):
+        raise AssertionError("Redis outage reached handler resolution")
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(take_control_state, "_connection", connection)
+    monkeypatch.setattr(agent_tools, "resolve_tool_handler", fail_resolve_handler)
+
+    result = await agent_tools.execute_tool(
+        "agentbay_browser_navigate", {}, agent_id=uuid.uuid4(), user_id=uuid.uuid4(), session_id="chat"
+    )
+
+    assert "Take Control state unavailable" in result
 
 
 async def test_execute_tool_unknown_unregistered_tool_invokes_mcp_fallback(monkeypatch):

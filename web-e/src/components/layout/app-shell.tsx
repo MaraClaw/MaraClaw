@@ -21,7 +21,6 @@ const nav: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/app/okr', label: 'OKR', icon: 'okr' },
   { to: '/app/directory', label: 'Directory', icon: 'directory' },
   { to: '/app/notifications', label: 'Inbox', icon: 'inbox' },
-  { to: '/app/account', label: 'Account', icon: 'account' },
   { to: '/app/settings', label: 'Settings', icon: 'settings' },
 ]
 

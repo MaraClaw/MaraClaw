@@ -326,6 +326,7 @@ async def test_delete_tenant_and_release_identities(monkeypatch):
     )
     cascade = AsyncMock()
     tombstone = AsyncMock()
+    monkeypatch.setattr("app.services.tenant_provisioning.agent_dao.list_for_tenant", AsyncMock(return_value=[]))
     monkeypatch.setattr("app.services.tenant_provisioning.tenant_dao.delete_cascade", cascade)
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.tombstone_orphans", tombstone)
     with patch("app.services.tenant_provisioning.connection_ctx") as ctx:

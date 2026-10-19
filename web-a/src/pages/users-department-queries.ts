@@ -7,6 +7,11 @@ import {
   setUserDepartment,
   type DepartmentsResponse,
 } from '@/lib/departments-api'
+import { renameDepartmentOptions } from './users-department-mutations'
+
+export function useRenameDepartment() {
+  return useMutation(renameDepartmentOptions(useQueryClient()))
+}
 
 export function useDepartments(tenantId: string) {
   const queryClient = useQueryClient()

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from app.config import Settings
+from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import (
     OPENAI_OAUTH_PROFILE_ID,
@@ -111,6 +112,8 @@ def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_installe
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
+    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"]["enabled"] is True
     assert config["plugins"]["slots"]["memory"] == "memory-tencentdb"
     assert config["plugins"]["slots"]["contextEngine"] == "memory-tencentdb"
@@ -131,7 +134,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="xai-sub-access-token",
         auth_kind="grok_subscription",
         label="Grok SuperGrok",
@@ -158,9 +161,9 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     )
 
     assert "agent" not in config
-    assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.6"
+    assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.8"
     assert config["agents"]["defaults"]["model"]["fallbacks"] == ["xai/grok-4.5"]
-    assert config["agents"]["defaults"]["models"]["xai/grok-4.6"] == {"alias": "primary"}
+    assert config["agents"]["defaults"]["models"]["xai/grok-4.8"] == {"alias": "primary"}
     assert config["env"]["vars"]["XAI_API_KEY"] == "xai-fallback-token"
     assert "GROK_API_KEY" not in config["env"]["vars"]
     assert config["auth"]["profiles"][XAI_OAUTH_PROFILE_ID] == {"provider": "xai", "mode": "oauth"}
@@ -169,7 +172,8 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
     assert config["agents"]["defaults"]["heartbeat"]["every"] == "30s"
-    assert config["agents"]["defaults"]["memorySearch"] == {"enabled": False, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
 
@@ -184,7 +188,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="hgklshglsjgh-not-a-key",
         auth_kind="api_key",
         label="Grok 4.6",
@@ -194,6 +198,51 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
 
     assert "XAI_API_KEY" not in config["env"]["vars"]
     assert "auth" not in config
+
+
+def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cache(monkeypatch, tmp_path) -> None:
+    # Given
+    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
+    manager = AgentManager.__new__(AgentManager)
+    agent = AgentRecord(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4())
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.3", encoding="utf-8")
+    tencentdb_plugins = {
+        "enabled": True,
+        "slots": {"memory": "memory-tencentdb", "contextEngine": "memory-tencentdb"},
+        "entries": {
+            "memory-tencentdb": {
+                "enabled": True,
+                "hooks": {"allowConversationAccess": True},
+                "config": {"storeBackend": "sqlite", "offload": {"enabled": True}},
+            },
+        },
+    }
+    config_path = agent_dir / "openclaw.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"memorySearch": {"enabled": False, "provider": "none"}}},
+                "plugins": tencentdb_plugins,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # When
+    path = manager.write_guest_config(agent, primary=None)
+
+    # Then
+    assert path == config_path
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert "memorySearch" not in config["agents"]["defaults"]
+    assert config["plugins"] == tencentdb_plugins
 
 
 def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> None:
@@ -212,7 +261,7 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="grok",
-        model="grok-4.6",
+        model="grok-4.8",
         api_key_encrypted="xai-sub-access-token",
         refresh_token_encrypted="xai-sub-refresh-token",
         token_expires_at=expires,
@@ -257,7 +306,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
     fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
-        model="gpt-5.6",
+        model="gpt-6.1-sol",
         api_key_encrypted="sk-openai-key",
         auth_kind="api_key",
         label="GPT API",
@@ -402,6 +451,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
 
 
 async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch, tmp_path):
+    # Given
     settings = OpenClawMemorySettings(
         agent_manager_module.settings, memory_enabled=True, plugin_version="7.8.9", storage_root=str(tmp_path)
     )
@@ -410,6 +460,10 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("7.8.9", encoding="utf-8")
+    (agent_dir / "openclaw.json").write_text(
+        json.dumps({"agents": {"defaults": {"memorySearch": {"enabled": False, "provider": "none"}}}}),
+        encoding="utf-8",
+    )
     manager = AgentManager.__new__(AgentManager)
     docker_client = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
@@ -423,10 +477,14 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
         id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
     )
 
+    # When
     container_id = await manager.start_container(agent=agent)
 
+    # Then
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
+    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"]["slots"]["memory"] == "memory-tencentdb"
 
 

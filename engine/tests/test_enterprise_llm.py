@@ -161,7 +161,7 @@ async def test_list_providers_rejects_members():
     grok = next(item for item in result if item["provider"] == "grok")
     assert grok["display_name"] == "Grok (xAI)"
     assert grok["default_base_url"] == "https://api.x.ai/v1"
-    assert grok["default_model"] == "grok-4.6"
+    assert grok["default_model"] == "grok-4.8"
 
 
 @pytest.mark.asyncio

@@ -10,13 +10,12 @@ Cookie export occurs automatically when the Take Control session ends.
 
 import asyncio
 import json
-import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -26,11 +25,30 @@ from app.core.permissions import check_agent_access
 from app.core.security import encrypt_data, get_current_user
 from app.dao.agent_credential_dao import agent_credential_dao
 from app.records.user import UserRecord
+from app.services import take_control_state as control_state
 
 if TYPE_CHECKING:
     from app.services.agentbay_client import AgentBayClient
 
-router = APIRouter(prefix="/agents/{agent_id}/control", tags=["agentbay-control"])
+
+async def _state_errors() -> AsyncIterator[None]:
+    try:
+        yield
+    except control_state.TakeControlLostError as error:
+        raise HTTPException(status_code=409, detail={"code": "take_control_lost", "message": str(error)}) from error
+    except control_state.TakeControlUnavailableError as error:
+        raise HTTPException(
+            status_code=503, detail={"code": "take_control_unavailable", "message": str(error)}
+        ) from error
+    except control_state.SessionUnavailableError as error:
+        raise HTTPException(
+            status_code=404, detail={"code": "take_control_session_unavailable", "message": str(error)}
+        ) from error
+
+
+router = APIRouter(
+    prefix="/agents/{agent_id}/control", tags=["agentbay-control"], dependencies=[Depends(_state_errors)]
+)
 
 type AgentBaySessionKey = tuple[uuid.UUID, str, str]
 
@@ -57,6 +75,8 @@ class _ControlEndpointResult(TypedDict, total=False):
     locked_by: str
     cookies_exported: bool
     cookie_count: int
+    owner_token: str
+    lease_ttl_seconds: int
 
 
 def _command_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -67,21 +87,6 @@ def _mapping_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-# ── In-memory Take Control lock registry ──
-# Key: (agent_id_str, session_id_str) → (user_id, lock_timestamp, env_type)
-# env_type: 'browser' | 'computer' | 'code' - which AgentBay environment the
-# user is controlling. Stored at lock time so all subsequent TC endpoints can
-# look up the correct session type without re-deriving it from the frontend.
-_take_control_locks: dict[tuple[str, str], tuple[str, float, str]] = {}
-_LOCK_TIMEOUT_SECONDS = 600  # Auto-expire stale locks after 10 minutes
-
-# Cache of sessions that have already had browser initialization called.
-# Avoids redundant _ensure_browser_initialized() on every screenshot poll.
-_browser_initialized: set[AgentBaySessionKey] = set()
-
-# Per-session interaction locks to serialize concurrent TC interactions.
-# Without this, two rapid clicks both write tc_action.js simultaneously,
-# corrupting one script's execution. Each TC session gets its own Lock.
 _tc_interaction_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -93,40 +98,15 @@ def _get_interaction_lock(agent_id: uuid.UUID, session_id: str) -> asyncio.Lock:
     return _tc_interaction_locks[key]
 
 
-def is_session_locked(agent_id: str, session_id: str) -> bool:
-    """Check if a session is currently under human Take Control.
-
-    Called by execute_tool to block automatic agentbay_* tool calls.
-    Automatically clears expired locks.
-    """
-    key = (agent_id, session_id)
-    if key not in _take_control_locks:
-        return False
-    _user_id, locked_at, _env_type = _take_control_locks[key]
-    if time.time() - locked_at > _LOCK_TIMEOUT_SECONDS:
-        logger.info(f"[TakeControl] Auto-expired stale lock for session={session_id[:8]}")
-        del _take_control_locks[key]
-        return False
-    return True
-
-
-def _get_session_env_type(agent_id: str, session_id: str) -> str:
-    """Return the env_type stored in the lock registry for this session.
-
-    Falls back to 'browser' if no lock entry is found (backward compat).
-    """
-    key = (agent_id, session_id)
-    entry = _take_control_locks.get(key)
-    if entry:
-        _user_id, _locked_at, env_type = entry
-        return env_type
-    return "browser"
+class ControlRequest(BaseModel):
+    session_id: str
+    owner_token: str | None = None
 
 
 # ── Request schemas ──
 
 
-class ClickRequest(BaseModel):
+class ClickRequest(ControlRequest):
     """Mouse click event forwarding."""
 
     session_id: str
@@ -135,21 +115,21 @@ class ClickRequest(BaseModel):
     button: str = "left"  # left | right | middle
 
 
-class TypeRequest(BaseModel):
+class TypeRequest(ControlRequest):
     """Text input event forwarding."""
 
     session_id: str
     text: str
 
 
-class PressKeysRequest(BaseModel):
+class PressKeysRequest(ControlRequest):
     """Keyboard key press event forwarding."""
 
     session_id: str
     keys: list[str]  # e.g. ["ctrl", "v"] or ["Tab"]
 
 
-class DragRequest(BaseModel):
+class DragRequest(ControlRequest):
     """Mouse drag event forwarding - used for slider CAPTCHAs and drag-and-drop."""
 
     session_id: str
@@ -160,13 +140,13 @@ class DragRequest(BaseModel):
     duration_ms: int = 600  # Total drag duration in milliseconds
 
 
-class ScreenshotRequest(BaseModel):
+class ScreenshotRequest(ControlRequest):
     """Request an immediate screenshot."""
 
     session_id: str
 
 
-class LockRequest(BaseModel):
+class LockRequest(ControlRequest):
     """Enter Take Control mode."""
 
     session_id: str
@@ -174,7 +154,7 @@ class LockRequest(BaseModel):
     env_type: str | None = "browser"  # which env the user is controlling: browser | computer | code
 
 
-class UnlockRequest(BaseModel):
+class UnlockRequest(ControlRequest):
     """Exit Take Control mode."""
 
     session_id: str
@@ -186,114 +166,17 @@ class UnlockRequest(BaseModel):
 
 
 async def _get_client(agent_id: uuid.UUID, session_id: str, env_type: str = "browser") -> AgentBayClient:
-    """Retrieve the AgentBay client for the given agent + session.
+    from app.services.agentbay_client import _agentbay_sessions
+    from app.services.agentbay_shared_sessions import get_client
 
-    Search order (most to least specific):
-    1. Exact match: (agent_id, session_id, env_type) - fastest, correct in normal flow.
-    2. Env-type preference, any session: search all cached sessions for this agent
-       by env_type preference. This handles the common case where the TC frontend's
-       session_id doesn't exactly match the session_id the agent used when it created
-       the AgentBay session (e.g., new chat thread opened mid-task).
-    3. Create new session: last resort - will show a blank desktop/browser.
+    key = control_state.SessionKey(str(agent_id), session_id, env_type)
+    return await get_client(key, _agentbay_sessions, create=False)
 
-    IMPORTANT: For browser sessions, this also calls _ensure_browser_initialized()
-    because the browser SDK requires explicit initialization before screenshot/
-    interaction APIs will work. Without this, get_browser_snapshot_base64() returns
-    None ("Browser not initialized") and all CDP-based interactions fail silently.
-    """
-    from app.services.agentbay_client import _AGENTBAY_SESSION_TIMEOUT, _agentbay_sessions
 
-    now = datetime.now(UTC)
-
-    # Build search order: requested env_type first, then the rest as fallback
-    all_types = ["browser", "computer", "code"]
-    search_order = [env_type] + [t for t in all_types if t != env_type]
-
-    # ── Phase 1: Exact (agent_id, session_id, env_type) match ──
-    for image_type in search_order:
-        cache_key = (agent_id, session_id, image_type)
-        if cache_key in _agentbay_sessions:
-            client, last_used = _agentbay_sessions[cache_key]
-            if now - last_used < _AGENTBAY_SESSION_TIMEOUT:
-                _agentbay_sessions[cache_key] = (client, now)
-                logger.info(
-                    f"[TakeControl] Found existing {image_type} session (exact match) for "
-                    + f"agent={agent_id}, session={session_id[:8]} "
-                    + f"(requested env_type={env_type})"
-                )
-                if image_type in ("browser", "browser_latest") and cache_key not in _browser_initialized:
-                    try:
-                        _ = await client._ensure_browser_initialized()
-                        _browser_initialized.add(cache_key)
-                    except Exception as e:
-                        logger.warning(f"[TakeControl] Browser init on cached session failed: {e}")
-                return client
-
-    # ── Phase 2: Fallback - search all sessions for this agent by env_type preference ──
-    # The TC frontend session_id may not match the session_id that the agent used
-    # when it created the AgentBay session (e.g., agent started in conversation A,
-    # user opens TC from conversation B). We still want to connect to the agent's
-    # ACTIVE session rather than spin up a blank new one.
-    best_match: tuple[AgentBaySessionKey, AgentBayClient] | None = None
-    best_ts: datetime | None = None
-
-    # Scan all cached sessions; prefer env_type match and most-recently-used
-    for img_type in search_order:
-        for (ag_id, sess_id, it), (client, last_used) in list(_agentbay_sessions.items()):
-            if ag_id != agent_id or it != img_type:
-                continue
-            if now - last_used >= _AGENTBAY_SESSION_TIMEOUT:
-                continue
-            # Pick the most recently used session among candidates
-            if best_ts is None or last_used > best_ts:
-                best_match = ((ag_id, sess_id, it), client)
-                best_ts = last_used
-        if best_match is not None:
-            break  # Found a match for preferred env_type - stop
-
-    if best_match is not None:
-        best_cache_key, best_client = best_match
-        best_image_type = best_cache_key[2]
-        # Refresh the timestamp so this session stays warm
-        _agentbay_sessions[best_cache_key] = (best_client, now)
-        logger.info(
-            f"[TakeControl] Found existing {best_image_type} session (agent-id fallback) for "
-            + f"agent={agent_id} (requested session={session_id[:8]}, "
-            + f"actual session={best_cache_key[1][:8]}, env_type={env_type})"
-        )
-        if best_image_type in ("browser", "browser_latest") and best_cache_key not in _browser_initialized:
-            try:
-                _ = await best_client._ensure_browser_initialized()
-                _browser_initialized.add(best_cache_key)
-            except Exception as e:
-                logger.warning(f"[TakeControl] Browser init on fallback session failed: {e}")
-        return best_client
-
-    # ── Phase 3: No cached session found - create a new session ──
-    # This is a last resort: the agent has no active AgentBay session at all.
-    # The resulting session will show a blank browser/desktop until the agent
-    # starts using it via its tools.
-    from app.services.agentbay_client import get_agentbay_client_for_agent
-
-    logger.warning(
-        f"[TakeControl] No cached AgentBay session found for agent={agent_id} "
-        + f"(env_type={env_type}). Creating new session - will show blank screen."
-    )
-    try:
-        client = await get_agentbay_client_for_agent(agent_id, image_type=env_type, session_id=session_id)
-        if env_type == "browser":
-            try:
-                _ = await client._ensure_browser_initialized()
-                _browser_initialized.add((agent_id, session_id, "browser"))
-                logger.info(f"[TakeControl] Browser initialized for new session, agent={agent_id}")
-            except Exception as e:
-                logger.warning(f"[TakeControl] Browser init on new session failed: {e}")
-        return client
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active {env_type} session found: {e}",
-        ) from e
+async def _owned_client(agent_id: uuid.UUID, data: ControlRequest, user: UserRecord) -> AgentBayClient:
+    key = control_state.SessionKey(str(agent_id), data.session_id, "browser")
+    lease = await control_state.renew(key, str(user.id), data.owner_token)
+    return await _get_client(agent_id, data.session_id, lease.image_type)
 
 
 # ── Session-aware input helpers ──
@@ -312,10 +195,10 @@ async def _cdp_exec(client: AgentBayClient, script: str, timeout_ms: int = 15000
     Uses the AgentBayClient.command_exec wrapper which properly handles
     the SDK call and returns a dict with {success, stdout, stderr, ...}.
     """
-    # Write script to temp file inside the container
+    script_path = f"tc_action_{uuid.uuid4().hex}.js"
     write_result = _command_mapping(
         await client.command_exec(
-            f"cat > /tmp/_tc_action.js << 'TCEOF'\n{script}\nTCEOF",
+            f"cat > {script_path} << 'TCEOF'\n{script}\nTCEOF",
             timeout_ms=5000,
         )
     )
@@ -325,7 +208,7 @@ async def _cdp_exec(client: AgentBayClient, script: str, timeout_ms: int = 15000
 
     result = _command_mapping(
         await client.command_exec(
-            "node /tmp/_tc_action.js",
+            f"node {script_path}; result=$?; rm -f {script_path}; exit $result",
             timeout_ms=timeout_ms,
         )
     )
@@ -353,12 +236,14 @@ async def _eval_cdp_script(client: AgentBayClient, script_body: str) -> _CdpExec
         if session is None:
             return {"success": False, "output": "No session"}
 
-        # Write base64 to file and decode it to tc_action.js (in current working dir, since /tmp might be restricted)
-        cmd_write = f"echo '{script_b64}' | /usr/bin/base64 -d > tc_action.js"
+        script_path = f"tc_action_{uuid.uuid4().hex}.js"
+        cmd_write = f"echo '{script_b64}' | /usr/bin/base64 -d > {script_path}"
         await asyncio.to_thread(session.command.exec, cmd_write)
 
         # Execute the script
-        result_obj: object = await asyncio.to_thread(session.command.exec, "node tc_action.js")
+        result_obj: object = await asyncio.to_thread(
+            session.command.exec, f"node {script_path}; result=$?; rm -f {script_path}; exit $result"
+        )
 
         success = bool(getattr(result_obj, "success", False))
         output_raw: object = getattr(result_obj, "output", "") or getattr(result_obj, "stdout", "") or ""
@@ -374,100 +259,6 @@ async def _eval_cdp_script(client: AgentBayClient, script_body: str) -> _CdpExec
     except Exception as e:
         logger.error(f"[TakeControl] CDP exception: {e}")
         return {"success": False, "output": str(e)}
-
-
-async def _tc_browser_cleanup(agent_id: uuid.UUID, session_id: str) -> None:
-    """Best-effort cleanup immediately after Take Control exits.
-
-    Uses the AgentBay SDK's own browser.operator.navigate() to navigate to
-    about:blank. This goes through the SERVICE'S Playwright instance (not a
-    new connectOverCDP connection), so there's no competing CDP session,
-    no Target.attachToTarget/detachFromTarget events, and no risk of confusing
-    the service's internal page state.
-
-    IMPORTANT: Previous approaches that used connectOverCDP + browser.close()
-    for cleanup were sending Target.detachFromTarget events to Chrome while
-    navigation was in progress. The AgentBay service's Playwright received
-    these detach events mid-navigation, which put its internal state machine
-    into a 60-second recovery loop before it could accept the next page.goto().
-    """
-    from app.services.agentbay_client import _agentbay_sessions
-
-    cleanup_client = None
-    for img_type in ("browser", "browser_latest"):
-        ck = (agent_id, session_id, img_type)
-        if ck in _agentbay_sessions:
-            cleanup_client = _agentbay_sessions[ck][0]
-            break
-    if not cleanup_client:
-        return
-
-    try:
-        # Cleanup strategy: stop all in-flight page navigations, then navigate
-        # the active content page to about:blank.
-        #
-        # WHY multi-step:
-        # 1. stopLoading on all pages: a TC click may have opened a NEW TAB
-        #    (target=_blank link on baidu) that is still loading a heavy article.
-        #    Page.stopLoading kills that load immediately so Chrome's DevTools
-        #    is no longer blocked draining a multi-MB response.
-        # 2. Page.navigate to about:blank on the active page: gives the AgentBay
-        #    service's page.goto() a clean starting point. about:blank commits in
-        #    <10ms; the service no longer has to wait for tieba/zhihu/baidu to drain.
-        # 3. Wait for Page.loadEventFired before process.exit(): ensures Chrome has
-        #    fully settled at about:blank before we disconnect. This means Chrome
-        #    emits Target.detachedFromTarget (from our WebSocket close) while the
-        #    page is in a stable, loaded state - not mid-navigation - so the
-        #    service's Playwright state machine doesn't enter a 60-second recovery.
-        # 4. No browser.close(): we let Node.js exit naturally. Chrome handles
-        #    the WebSocket close without an explicit Target.detachFromTarget CDP
-        #    command that races with other async CDP events.
-        cleanup_script = """
-const { chromium } = require('/usr/local/lib/node_modules/playwright');
-(async () => {
-    try {
-        const browser = await chromium.connectOverCDP('http://localhost:9222');
-        const context = browser.contexts()[0];
-        const allPages = context.pages();
-
-        // Stop all loading pages so Chrome is not draining heavy responses.
-        // tc clicks frequently open new tabs (target=_blank) that stay loading
-        // for 20-40s; stopping them is critical for fast post-TC recovery.
-        for (const p of allPages) {
-            try {
-                const cdp = await context.newCDPSession(p);
-                await cdp.send('Page.stopLoading');
-                await cdp.detach();
-            } catch(_) {}
-        }
-
-        // Navigate the active content page (last non-blank) to about:blank.
-        // Use raw CDP Page.navigate - the AgentBay SDK rejects about:blank
-        // ("must start with http or https") but Chrome's CDP has no such rule.
-        const contentPage = allPages.slice().reverse().find(p => p.url() !== 'about:blank')
-                            || allPages[allPages.length - 1];
-        const cdp = await context.newCDPSession(contentPage);
-
-        // Navigate and wait for loadEventFired so about:blank is fully settled.
-        await new Promise((resolve) => {
-            cdp.on('Page.loadEventFired', () => resolve());
-            cdp.send('Page.navigate', { url: 'about:blank' }).catch(() => resolve());
-            setTimeout(resolve, 800);  // Fallback: about:blank always loads in <100ms
-        });
-
-        console.log('CLEANUP_OK');
-    } catch(e) {
-        console.error('CLEANUP_FAIL: ' + e.message);
-    }
-    // No browser.close() - let Chrome handle WebSocket close gracefully after
-    // the page is in a stable loaded state (about:blank).
-    process.exit(0);
-})();
-"""
-        res = await _eval_cdp_script(cleanup_client, cleanup_script)
-        logger.info(f"[TakeControl] Cleanup: {res.get('output', 'no output')[:100]} for session={session_id[:8]}")
-    except Exception as e:
-        logger.warning(f"[TakeControl] Cleanup failed (non-fatal): {e}")
 
 
 async def _perform_click(client: AgentBayClient, x: int, y: int, button: str = "left") -> _ControlActionResult:
@@ -745,7 +536,7 @@ let browser;
 # ── Endpoints ──
 
 
-class CurrentUrlRequest(BaseModel):
+class CurrentUrlRequest(ControlRequest):
     """Request to get the current page URL from the browser session."""
 
     session_id: str
@@ -762,8 +553,7 @@ async def control_current_url(
     """
     _agent, _access = await check_agent_access(current_user, agent_id)
 
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
+    client = await _owned_client(agent_id, data, current_user)
 
     script = """
 const { chromium } = require('/usr/local/lib/node_modules/playwright');
@@ -807,14 +597,8 @@ async def control_click(
     Returns {status: 'ok'|'error', detail: str} so the frontend knows if it worked.
     """
     _agent, _access = await check_agent_access(current_user, agent_id)
-    if not is_session_locked(str(agent_id), data.session_id):
-        raise HTTPException(status_code=400, detail="Session is not in Take Control mode")
-
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
-    # Serialize interactions per-session: rapid clicks would otherwise overwrite
-    # tc_action.js concurrently, causing the second script to read wrong content.
     async with _get_interaction_lock(agent_id, data.session_id):
+        client = await _owned_client(agent_id, data, current_user)
         try:
             result = await _perform_click(client, data.x, data.y, data.button)
             if result.get("success"):
@@ -832,12 +616,8 @@ async def control_type(
 ) -> _ControlEndpointResult:
     """Forward text input to the AgentBay session."""
     _agent, _access = await check_agent_access(current_user, agent_id)
-    if not is_session_locked(str(agent_id), data.session_id):
-        raise HTTPException(status_code=400, detail="Session is not in Take Control mode")
-
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
     async with _get_interaction_lock(agent_id, data.session_id):
+        client = await _owned_client(agent_id, data, current_user)
         try:
             result = await _perform_type(client, data.text)
             if result.get("success"):
@@ -855,12 +635,8 @@ async def control_press_keys(
 ) -> _ControlEndpointResult:
     """Forward keyboard key presses to the AgentBay session."""
     _agent, _access = await check_agent_access(current_user, agent_id)
-    if not is_session_locked(str(agent_id), data.session_id):
-        raise HTTPException(status_code=400, detail="Session is not in Take Control mode")
-
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
     async with _get_interaction_lock(agent_id, data.session_id):
+        client = await _owned_client(agent_id, data, current_user)
         try:
             result = await _perform_press_keys(client, data.keys)
             if result.get("success"):
@@ -883,12 +659,8 @@ async def control_drag(
     mimic natural mouse movement, which is required to bypass bot detection.
     """
     _agent, _access = await check_agent_access(current_user, agent_id)
-    if not is_session_locked(str(agent_id), data.session_id):
-        raise HTTPException(status_code=400, detail="Session is not in Take Control mode")
-
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
     async with _get_interaction_lock(agent_id, data.session_id):
+        client = await _owned_client(agent_id, data, current_user)
         try:
             result = await _perform_drag(
                 client,
@@ -918,8 +690,7 @@ async def control_screenshot(
     """
     _agent, _access = await check_agent_access(current_user, agent_id)
 
-    env_type = _get_session_env_type(str(agent_id), data.session_id)
-    client = await _get_client(agent_id, data.session_id, env_type=env_type)
+    client = await _owned_client(agent_id, data, current_user)
     try:
         # Try browser snapshot first, then desktop
         screenshot_b64 = await client.get_browser_snapshot_base64()
@@ -966,30 +737,21 @@ async def control_lock(
     # Allow any user with access (manage or use) - Take Control is part of
     # the normal interaction flow, not an admin-only operation.
 
-    key = (str(agent_id), data.session_id)
-    existing = _take_control_locks.get(key)
-    if existing:
-        existing_user_id, locked_at, _existing_env_type = existing
-        if existing_user_id != str(current_user.id):
-            # Check if the lock has expired
-            if time.time() - locked_at > _LOCK_TIMEOUT_SECONDS:
-                logger.info(f"[TakeControl] Cleared expired lock held by {existing_user_id}")
-            else:
-                return {"status": "already_locked", "locked_by": existing_user_id}
-
     # Sanitize env_type - default to 'browser' if empty or unknown
     env_type = (data.env_type or "browser").lower()
     if env_type not in ("browser", "computer", "code"):
         env_type = "browser"
 
-    # Acquire or refresh lock with current timestamp and env_type
-    _take_control_locks[key] = (str(current_user.id), time.time(), env_type)
-    is_reentry = existing is not None
-    logger.info(
-        f"[TakeControl] Lock acquired: agent={agent_id}, session={data.session_id}, "
-        + f"user={current_user.id}, env_type={env_type}, re_entry={is_reentry}"
-    )
-    return {"status": "locked", "locked_by": str(current_user.id)}
+    key = control_state.SessionKey(str(agent_id), data.session_id, env_type)
+    lease, acquired = await control_state.acquire(key, str(current_user.id), data.owner_token)
+    if not acquired:
+        return {"status": "already_locked", "locked_by": lease.user_id}
+    return {
+        "status": "locked",
+        "locked_by": lease.user_id,
+        "owner_token": lease.owner_token,
+        "lease_ttl_seconds": control_state.LEASE_TTL_SECONDS,
+    }
 
 
 @router.post("/unlock")
@@ -1004,10 +766,8 @@ async def control_unlock(
     """
     _agent, _access = await check_agent_access(current_user, agent_id)
 
-    key = (str(agent_id), data.session_id)
-    if key not in _take_control_locks:
-        logger.info(f"[TakeControl] Unlock called but no lock found: agent={agent_id}, session={data.session_id}")
-        return {"status": "not_locked"}
+    key = control_state.SessionKey(str(agent_id), data.session_id, "browser")
+    lease = await control_state.renew(key, str(current_user.id), data.owner_token)
 
     exported = False
     export_count = 0
@@ -1016,41 +776,19 @@ async def control_unlock(
         # Export cookies if requested (non-critical - lock is released regardless)
         if data.export_cookies and data.platform_hint not in (None, ""):
             try:
-                locked_env_type = _get_session_env_type(str(agent_id), data.session_id)
-                client = await _get_client(agent_id, data.session_id, env_type=locked_env_type)
+                client = await _get_client(agent_id, data.session_id, env_type=lease.image_type)
                 export_count = await _export_cookies_from_session(client, agent_id, data.platform_hint)
                 exported = True
                 logger.info(
                     f"[TakeControl] Cookies exported: agent={agent_id}, "
                     + f"platform={data.platform_hint}, count={export_count}"
                 )
+            except control_state.TakeControlLostError, control_state.TakeControlUnavailableError:
+                raise
             except Exception as e:
                 logger.warning(f"[TakeControl] Cookie export failed (non-fatal): {e}")
     finally:
-        # ALWAYS release the lock, even if cookie export fails
-        _ = _take_control_locks.pop(key, None)
-        logger.info(f"[TakeControl] Lock released: agent={agent_id}, session={data.session_id}")
-        # Reset browser initialization flag so the next agentbay browser tool
-        # call re-initializes the SDK's browser.operator. This clears any stale
-        # page references left by TC's CDP interactions that would otherwise
-        # cause browser.operator.navigate to hang indefinitely.
-        from app.services.agentbay_client import _agentbay_sessions
-
-        for _img_type in ("browser", "browser_latest"):
-            _ck = (agent_id, data.session_id, _img_type)
-            if _ck in _agentbay_sessions:
-                _tc_client, _ts = _agentbay_sessions[_ck]
-                _tc_client._browser_initialized = False
-                logger.info(
-                    f"[TakeControl] Reset _browser_initialized after TC unlock for session={data.session_id[:8]}"
-                )
-        # Clear from the control-layer initialization tracking set as well
-        _browser_initialized.discard((agent_id, data.session_id, "browser"))
-        _browser_initialized.discard((agent_id, data.session_id, "browser_latest"))
-
-    # Post-unlock CDP cleanup: cancel any in-progress navigations and release
-    # held mouse buttons before the agent resumes its browser tool calls.
-    await _tc_browser_cleanup(agent_id, data.session_id)
+        await control_state.release(key, str(current_user.id), data.owner_token)
 
     return {
         "status": "unlocked",
@@ -1126,14 +864,17 @@ let browser;
 """
     # Use base64 encoding to write script to current directory (not /tmp, which may lack write perms)
     script_b64 = base64.b64encode(export_script.encode("utf-8")).decode("ascii")
+    script_path = f"tc_export_cookies_{uuid.uuid4().hex}.js"
     write_result = _command_mapping(
-        await client.command_exec(f"echo '{script_b64}' | /usr/bin/base64 -d > tc_export_cookies.js")
+        await client.command_exec(f"echo '{script_b64}' | /usr/bin/base64 -d > {script_path}")
     )
     logger.info(
         f"[TakeControl] Cookie export script write: success={write_result.get('success')}, stderr={str(write_result.get('stderr', ''))[:100]}"
     )
 
-    result = _command_mapping(await client.command_exec("node tc_export_cookies.js", timeout_ms=15000))
+    result = _command_mapping(
+        await client.command_exec(f"node {script_path}; result=$?; rm -f {script_path}; exit $result", timeout_ms=15000)
+    )
     stdout = str(result.get("stdout", "") or "")
     stderr = str(result.get("stderr", "") or "")
     logger.info(

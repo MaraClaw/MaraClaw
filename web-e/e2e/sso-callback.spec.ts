@@ -57,7 +57,7 @@ test('SSO displays a current asynchronous callback failure', async ({ page }) =>
   await expect(page.getByRole('link', { name: 'Back to sign in' })).toBeVisible()
 })
 
-test('SSO bind completes once and returns to the account page', async ({ page }) => {
+test('SSO bind completes once and returns to settings', async ({ page }) => {
   await prepareWorkspace(page)
   await page.addInitScript(() => sessionStorage.setItem('maraclaw-sso-intent', 'bind'))
   const bodies: unknown[] = []
@@ -68,7 +68,7 @@ test('SSO bind completes once and returns to the account page', async ({ page })
 
   await page.goto('/sso/callback?provider=example&code=bind-code')
 
-  await expect(page).toHaveURL('/app/account')
+  await expect(page).toHaveURL('/app/settings')
   await expect(page.getByLabel('Display name')).toHaveValue(originalUser.display_name)
   expect(bodies).toEqual([{ provider_type: 'example', code: 'bind-code' }])
 })

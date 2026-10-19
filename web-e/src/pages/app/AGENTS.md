@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages.
+Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages. Settings is an AppShell child outside OnboardingGate, so profile and password remain accessible before onboarding or a required password change. Legacy Account URLs redirect to Settings.
 
 ## WHERE TO LOOK
 
@@ -12,14 +12,14 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 |-------|------|-----|
 | `/app` | → `agents` | — |
 | `/app/onboarding` | `onboarding.tsx` | workspace-api |
-| `/app/account` | `account.tsx` | auth-api (profile, password, SSO bind) |
-| `/app/settings` | `settings.tsx` | auth-api tenants/switch |
+| `/app/account` | → `/app/settings` | Legacy redirect |
+| `/app/settings` | `settings.tsx` | auth-api (profile, password, SSO bind, tenants/switch) |
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
-| `/app/directory` | `directory.tsx` | directory-api; People/Synced/Departments icon rail; `?tab=` `?q=`. Those departments are provider sync, not the local directory |
+| `/app/directory` | `directory.tsx` | People/Synced/Departments icon rail; `?tab=` `?q=`. `local-departments-api` serves local name cards with org-admin inline rename; `directory-api` serves the separate provider-sync section |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
-| `/app/agents/new` | `agent-new.tsx` | workspace-api; default `permission_scope_type: user`; always OpenClaw |
+| `/app/agents/new` | `agent-new.tsx` | workspace-api; Private defaults to `user`, Company-wide to `company`, Department to `custom` + one `department_ids` entry in the creation POST. Options use `local-departments-api`; creator manages, department members use. Always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
 | `…/chat` (+ `:sessionId`) | `agent-chat.tsx` | workspace-api REST history + `connectAgentChat` WS |
 | `…/files` `skills` `tools` `tasks` `schedules` `channels` `relationships` `permissions` `settings` | `agent-*.tsx` | workspace-api |
@@ -36,6 +36,7 @@ Member `/app/*` screens (23). Gate: ProtectedRoute → AppShell (owns QueryClien
 - Chat events: `ChatInbound` + `onEvent` switch in `agent-chat.tsx`.
 - Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`. Company Grok and ChatGPT subscriptions are connected in web-a; members inherit them through the company pool. If chat fails with no model, the engine message points admins at Models.
 - Permissions tab department grants: `components/agent-department-access.tsx` + `lib/agent-departments-api.ts` (query `['permission-departments', agentId]`). Custom list only; level is `use`, not `manage`. Saving Private or Whole company clears them. Admins create the departments on web-a Users.
+- Directory local departments: `components/local-departments.tsx` + `local-department-card.tsx`, query `['local-departments']`. Members read `/api/departments/options`; only `org_admin` can rename here. Rename refreshes local names and the `permissions` / `permission-departments` prefixes. Creation and membership stay in web-a Users; never use the privileged `GET /api/departments` for members.
 - Forms: most tabs are useState + sonner, not RHF. Motion wrappers are marketing-only.
 - Query keys invented in pages (`['agent', id]`, `['sessions', agent.id]`, `['plaza', …]`) — keep consistent when sharing.
 

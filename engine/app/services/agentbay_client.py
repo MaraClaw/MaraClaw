@@ -14,9 +14,7 @@ from pydantic import BaseModel, JsonValue, RootModel
 
 from app.core.json_types import (
     json_as_str,
-    json_as_str_or,
     json_loads_value,
-    json_object_from,
     object_attr,
     object_call,
 )
@@ -121,17 +119,9 @@ class AgentBayClient:
 
     async def close_session(self):
         """Release the current session."""
-        if not self._session:
-            return
-        session = self._session
-        try:
-            _ = await asyncio.to_thread(session.delete)
-            logger.info("[AgentBay] Closed session")
-        except Exception as e:
-            logger.warning(f"[AgentBay] Failed to close session: {e}")
-        finally:
-            self._session = None
-            self._browser_initialized = False
+        from app.services.agentbay_shared_sessions import close_client
+
+        await close_client(self)
 
     # ─── Browser Operations ──────────────────────────
 
@@ -759,84 +749,17 @@ async def get_agentbay_client_for_agent(agent_id: uuid.UUID, image_type: str, se
         session_id: Explicit ChatSession ID, or '' for non-chat callers.
     """
 
-    now = datetime.now(UTC)
-    cache_key = (agent_id, session_id, image_type)
+    from app.services.agentbay_shared_sessions import get_client
+    from app.services.take_control_state import SessionKey
 
-    if cache_key in _agentbay_sessions:
-        client, last_used = _agentbay_sessions[cache_key]
-        if now - last_used < _AGENTBAY_SESSION_TIMEOUT:
-            # Session still valid, refresh timestamp and reuse
-            _agentbay_sessions[cache_key] = (client, now)
-            return client
-        # Session expired, close and remove
-        logger.info(f"[AgentBay] Session expired for {image_type} (session={session_id[:8]}), closing")
-        await client.close_session()
-        del _agentbay_sessions[cache_key]
-
-    from app.services.agent_tools import _get_tool_config
-
-    tool_config = json_object_from(await _get_tool_config(agent_id, "agentbay_browser_navigate"))
-    api_key: str | None = None
-    stored_api_key = json_as_str(tool_config.get("api_key"))
-
-    if stored_api_key not in (None, ""):
-        from app.config import get_settings
-        from app.core.security import decrypt_data
-
-        try:
-            api_key = decrypt_data(stored_api_key, get_settings().SECRET_KEY)
-        except ValueError as exc:
-            logger.debug(
-                "[AgentBay] Stored API key could not be decrypted; using plaintext fallback: {}", type(exc).__name__
-            )
-            api_key = stored_api_key
-        from app.services.agentbay_config import is_plausible_agentbay_api_key
-
-        if not is_plausible_agentbay_api_key(api_key):
-            api_key = None
-
-    if api_key in (None, ""):
-        api_key = await get_agentbay_api_key_for_agent(agent_id)
-
-    if api_key in (None, ""):
-        raise RuntimeError("AgentBay not configured for this agent. Please configure in Tools > AgentBay.")
-
-    client = AgentBayClient(api_key)
-
-    if image_type == "browser":
-        _ = await client.create_session("browser_latest")
-        # Inject stored cookies after browser initialization
-        await _inject_credentials(client, agent_id)
-    elif image_type == "computer":
-        # Read OS preference from tool config (default: windows)
-        os_type = json_as_str_or(tool_config.get("os_type"), "windows")
-        computer_image = "windows_latest" if os_type == "windows" else "linux_latest"
-        logger.info(
-            f"[AgentBay] Creating computer session with OS: {os_type} (image: {computer_image}) for session={session_id[:8]}"
-        )
-        _ = await client.create_session(computer_image)
-    else:
-        _ = await client.create_session("code_latest")
-
-    _agentbay_sessions[cache_key] = (client, now)
-    return client
+    return await get_client(SessionKey(str(agent_id), session_id, image_type), _agentbay_sessions, create=True)
 
 
 async def cleanup_agentbay_sessions():
     """Clean up expired AgentBay sessions."""
-    now = datetime.now(UTC)
-    expired = [
-        cache_key
-        for cache_key, (client, last_used) in _agentbay_sessions.items()
-        if now - last_used > _AGENTBAY_SESSION_TIMEOUT
-    ]
-    for cache_key in expired:
-        client, _ = _agentbay_sessions.pop(cache_key)
-        agent_id, session_id, image_type = cache_key
-        logger.info(
-            f"[AgentBay] Cleaning up expired {image_type} session for agent {agent_id} (session={session_id[:8]})"
-        )
-        await client.close_session()
+    from app.services.agentbay_shared_sessions import cleanup
+
+    await cleanup(_agentbay_sessions)
 
 
 async def _inject_credentials(client: AgentBayClient, agent_id: uuid.UUID):

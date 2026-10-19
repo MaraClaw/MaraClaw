@@ -149,9 +149,13 @@ async def execute_tool(
     if tool_name.startswith("agentbay_"):
         arguments["_session_id"] = session_id
 
-        from app.api.agentbay_control import is_session_locked
+        from app.services.take_control_state import TakeControlUnavailableError, is_session_locked
 
-        if is_session_locked(str(agent_id), session_id):
+        try:
+            locked = await is_session_locked(str(agent_id), session_id)
+        except TakeControlUnavailableError:
+            return "Take Control state unavailable. Operation blocked for safety; please retry."
+        if locked:
             return (
                 "⏸️ A human operator is currently controlling this browser session "
                 + "(Take Control mode). Please wait for them to finish before retrying "

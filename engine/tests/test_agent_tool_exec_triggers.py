@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.config import Settings
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.services import agent_tools, audit_logger, platform_service as platform_module
@@ -240,13 +241,10 @@ async def test_on_message_set_trigger_keeps_fallback_when_snapshot_fails(monkeyp
 async def test_webhook_set_trigger_adds_token_and_returns_url(monkeypatch: pytest.MonkeyPatch):
     created_holder = _install_dao_defaults(monkeypatch)
 
-    async def public_base_url() -> str:
-        return "https://agents.example/"
-
     monkeypatch.setattr(triggers, "ensure_focus_item", _ensure_focus_item)
     monkeypatch.setattr(audit_logger, "write_audit_log", AsyncMock())
     monkeypatch.setattr(secrets, "token_urlsafe", lambda _length: "token123")
-    monkeypatch.setattr(platform_module.platform_service, "get_public_base_url", public_base_url)
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://agents.example/"))
 
     result = await agent_tools._handle_set_trigger(uuid.uuid4(), _set_args(name="hook", type_="webhook", config={}))
 
@@ -255,6 +253,23 @@ async def test_webhook_set_trigger_adds_token_and_returns_url(monkeypatch: pytes
         "✅ Webhook trigger 'hook' created.\n\nWebhook URL: https://agents.example/api/webhooks/t/token123"
     )
     assert "Tell the user to configure this URL" in result
+
+
+@pytest.mark.asyncio
+async def test_webhook_set_trigger_fails_without_configured_base(monkeypatch: pytest.MonkeyPatch):
+    created = _install_dao_defaults(monkeypatch)
+    focus = AsyncMock()
+    monkeypatch.setattr(triggers, "ensure_focus_item", focus)
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
+
+    result = await agent_tools._handle_set_trigger(uuid.uuid4(), _set_args(type_="webhook", config={}))
+
+    assert result.startswith("❌")
+    assert "PUBLIC_BASE_URL" in result
+    assert "Webhook URL:" not in result
+    assert "https://" not in result
+    assert created == []
+    focus.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,5 @@
 """Microsoft Teams Bot Channel API routes."""
 
-import json
 import os
 import time
 import uuid
@@ -17,7 +16,6 @@ from app.core.json_types import (
     is_json_object,
     json_as_str,
     json_as_str_or,
-    json_loads_value,
     json_object_from,
     json_object_from_response,
     mapping_from_row,
@@ -32,6 +30,11 @@ from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs_s
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
+from app.services.channels.teams_auth import (
+    TeamsAuthenticationError,
+    authenticate_teams_activity,
+    is_bot_framework_service_url,
+)
 
 settings = get_settings()
 
@@ -206,15 +209,14 @@ async def _send_teams_message(
     config: ChannelConfigRecord, conversation_id: str, activity: JsonObject, *, strict: bool = False
 ) -> None:
     """Send an activity (message) to Microsoft Teams."""
+    service_url = _extra_config(config).get("service_url")
+    if not isinstance(service_url, str) or not is_bot_framework_service_url(service_url):
+        raise ValueError("Invalid Bot Framework service URL")
+
     access_token = await _get_teams_access_token(config)
     if access_token in (None, ""):
         logger.error(f"Teams: No access token for agent {config.agent_id}, cannot send message")
         raise ValueError("No access token available")
-
-    service_url = _extra_config(config).get("service_url")
-    if not isinstance(service_url, str) or not service_url:
-        logger.error(f"Teams: No service_url in config for agent {config.agent_id}, cannot send message")
-        raise ValueError(f"No service_url in config for agent {config.agent_id}")
 
     if "type" not in activity:
         activity["type"] = "message"
@@ -303,9 +305,9 @@ async def configure_teams_channel(
     tenant_id = data.get("tenant_id", "").strip()
     use_managed_identity = data.get("use_managed_identity", False)
 
-    if not use_managed_identity and (not app_id or not app_secret):
+    if not app_id or (not use_managed_identity and not app_secret):
         raise HTTPException(
-            status_code=422, detail="Either use_managed_identity must be enabled, or app_id and app_secret are required"
+            status_code=422, detail="app_id is required; app_secret is required without managed identity"
         )
 
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
@@ -317,6 +319,7 @@ async def configure_teams_channel(
             extra.pop("tenant_id", None)
         extra["use_managed_identity"] = use_managed_identity
         obj_in: dict[str, object] = {
+            "app_id": app_id,
             "is_configured": True,
             "extra_config": extra,
         }
@@ -336,7 +339,7 @@ async def configure_teams_channel(
         obj_in={
             "agent_id": agent_id,
             "channel_type": "microsoft_teams",
-            "app_id": app_id if not use_managed_identity else None,
+            "app_id": app_id,
             "app_secret": app_secret if not use_managed_identity else None,
             "is_configured": True,
             "extra_config": extra_config,
@@ -387,37 +390,16 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 @router.post("/channel/teams/{agent_id}/webhook")
 async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
     """Handle Microsoft Teams Bot Framework callbacks."""
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
+    if not config:
+        return Response(status_code=404)
     try:
-        body_bytes = await request.body()
-        try:
-            parsed_body = json_loads_value(body_bytes)
-        except json.JSONDecodeError as e:
-            logger.error(f"Teams: Failed to parse JSON body: {e}, body={body_bytes[:200]}")
-            return Response(status_code=400, content="Invalid JSON")
+        activity = await authenticate_teams_activity(config, await request.body(), request.headers)
+    except TeamsAuthenticationError:
+        return Response(status_code=401)
 
-        activity: JsonObject
-        if is_json_object(parsed_body) and "type" in parsed_body:
-            activity = parsed_body
-        elif is_json_object(parsed_body) and "activity" in parsed_body:
-            activity = _json_mapping(parsed_body.get("activity"))
-        else:
-            logger.warning(
-                f"Teams: Unexpected body structure for agent {agent_id}: {list(parsed_body.keys()) if is_json_object(parsed_body) else type(parsed_body)}"
-            )
-            activity = parsed_body if is_json_object(parsed_body) else {}
-
+    try:
         from_account = _json_mapping(activity.get("from"))
-        from_id = json_as_str_or(from_account.get("id"), "unknown")
-        text_preview = json_as_str(activity.get("text"))
-        logger.info(
-            f"Teams: Webhook received for agent {agent_id}, activity type={activity.get('type')}, from={from_id}, text={text_preview[:50] if text_preview not in (None, '') else 'no text'}"
-        )
-
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
-        if not config:
-            logger.warning(f"Teams: Webhook received for unconfigured agent {agent_id}")
-            return Response(status_code=404)
-
         extra = _extra_config(config)
         service_url = json_as_str(activity.get("serviceUrl"))
         if service_url not in (None, "") and extra.get("service_url") != service_url:

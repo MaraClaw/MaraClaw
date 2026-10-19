@@ -30,7 +30,7 @@ const PROVIDER_REASONING_EFFORTS: Record<string, readonly string[]> = {
 
 export function reasoningEffortLabel(effort: string): string {
   if (effort === 'none') return 'None'
-  if (effort === 'xhigh') return 'Extra high'
+  if (effort === 'xhigh') return 'Extra High'
   if (effort === 'low') return 'Low'
   if (effort === 'medium') return 'Medium'
   if (effort === 'high') return 'High'
@@ -47,7 +47,7 @@ export const GROK_PROVIDER: LlmProvider = {
   display_name: 'Grok (xAI)',
   protocol: 'openai_compatible',
   default_base_url: 'https://api.x.ai/v1',
-  default_model: 'grok-4.6',
+  default_model: 'grok-4.8',
   reasoning_efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
   supports_tool_choice: true,
   default_max_tokens: 16384,

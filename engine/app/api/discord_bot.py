@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from nacl.exceptions import BadSignatureError
+from nacl.signing import VerifyKey
 
 from app.core.json_types import (
     JsonObject,
@@ -69,8 +71,10 @@ async def configure_discord_channel(
 
     if not bot_token:
         raise HTTPException(status_code=422, detail="bot_token is required")
-    if connection_mode == "webhook" and (not application_id or not public_key):
-        raise HTTPException(status_code=422, detail="application_id and public_key are required for webhook mode")
+    if connection_mode != "gateway" and (not application_id or not _valid_discord_public_key(public_key)):
+        raise HTTPException(
+            status_code=422, detail="application_id and a 32-byte hex public_key are required for webhook mode"
+        )
 
     extra_config: JsonObject = {"connection_mode": connection_mode}
 
@@ -182,20 +186,25 @@ async def _register_slash_commands(application_id: str, bot_token: str) -> Disco
 # ─── Interactions Webhook ───────────────────────────────
 
 
+def _valid_discord_public_key(public_key: str) -> bool:
+    try:
+        return len(public_key) == 64 and len(bytes.fromhex(public_key)) == 32
+    except ValueError:
+        return False
+
+
 def _verify_discord_signature(public_key: str, body: bytes, headers: Mapping[str, str]) -> bool:
     """Verify Discord ed25519 signature."""
     try:
-        from nacl.signing import VerifyKey
-
         timestamp = headers.get("x-signature-timestamp", "")
         signature = headers.get("x-signature-ed25519", "")
-        if not timestamp or not signature:
+        if not _valid_discord_public_key(public_key) or not timestamp or len(signature) != 128:
             return False
 
         verify_key = VerifyKey(bytes.fromhex(public_key))
         _ = verify_key.verify(f"{timestamp}".encode() + body, bytes.fromhex(signature))
         return True
-    except Exception:
+    except BadSignatureError, ValueError:
         return False
 
 
@@ -227,14 +236,17 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
     body_bytes = await request.body()
 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
-    if not config:
+    if not config or (config.extra_config or {}).get("connection_mode") == "gateway":
         return Response(status_code=404)
 
     public_key = config.encrypt_key or ""
-    if public_key and not _verify_discord_signature(public_key, body_bytes, dict(request.headers)):
+    if not _verify_discord_signature(public_key, body_bytes, request.headers):
         return Response(content="Invalid signature", status_code=401)
 
-    body = json_loads_object(body_bytes)
+    try:
+        body = json_loads_object(body_bytes)
+    except ValueError, UnicodeError:
+        return Response(status_code=401)
     interaction_type = json_as_int(body.get("type"))
 
     # Type 1: PING - Discord URL verification

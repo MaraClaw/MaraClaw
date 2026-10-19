@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router-dom'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
 import { PersonCard, PersonCardList } from '@/components/directory-people'
+import { LocalDepartments } from '@/components/local-departments'
 import { Input } from '@/components/ui/input'
 import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
 import { ApiError } from '@/lib/http'
@@ -140,7 +141,10 @@ export function DirectoryPage() {
       ) : null}
 
       {tab === 'departments' ? (
-        <div className="space-y-2">
+        <div className="space-y-8">
+          <LocalDepartments />
+          <section aria-labelledby="synced-departments-heading" className="space-y-2">
+            <h2 id="synced-departments-heading" className="font-display text-lg font-semibold">Provider-synced departments</h2>
           {departments.isLoading ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           ) : null}
@@ -164,6 +168,7 @@ export function DirectoryPage() {
           </ul>
             </>
           )}
+          </section>
         </div>
       ) : null}
         </div>

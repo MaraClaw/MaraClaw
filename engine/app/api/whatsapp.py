@@ -65,7 +65,7 @@ def _verify_signature(app_secret: str, body: bytes, signature: str | None) -> bo
     if not app_secret or signature in (None, "") or not signature.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return hmac.compare_digest(expected.encode(), signature.encode())
 
 
 def _extract_message_text(message: JsonObject) -> str:
@@ -137,8 +137,10 @@ async def configure_whatsapp_channel(
     app_secret = str(data.get("app_secret") or "").strip()
     api_version = str(data.get("api_version") or DEFAULT_WHATSAPP_API_VERSION).strip()
 
-    if not access_token or not phone_number_id or not verify_token:
-        raise HTTPException(status_code=422, detail="access_token, phone_number_id, and verify_token are required")
+    if not access_token or not phone_number_id or not verify_token or not app_secret:
+        raise HTTPException(
+            status_code=422, detail="access_token, phone_number_id, verify_token, and app_secret are required"
+        )
 
     extra_config: JsonObject = {"api_version": api_version}
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
@@ -229,10 +231,13 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
 
     app_secret = (config.encrypt_key or "").strip()
     signature = request.headers.get("x-hub-signature-256")
-    if app_secret and not _verify_signature(app_secret, body, signature):
+    if not _verify_signature(app_secret, body, signature):
         return Response(status_code=401)
 
-    payload = json_loads_object(body)
+    try:
+        payload = json_loads_object(body)
+    except ValueError, UnicodeError:
+        return Response(status_code=401)
     entries = payload.get("entry")
     for entry_raw in entries if isinstance(entries, list) else []:
         entry = json_object_from(entry_raw)

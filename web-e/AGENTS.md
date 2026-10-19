@@ -37,7 +37,7 @@ web-e/
 | Task | Location | Notes |
 |------|----------|-------|
 | Route table | `src/routes/index.tsx` | Public auth + nested `/app` |
-| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/auth-provider.tsx`, `hooks/use-auth.ts` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` allows only `/app/account` and `/app/settings` |
+| Auth / org / force-password gates | `routes/protected.tsx`, `hooks/auth-provider.tsx`, `hooks/use-auth.ts` | Rejects `platform_admin`; no tenant → `/join`; `must_change_password` redirects to `/app/settings`; `/app/account` is a legacy redirect |
 | Landing + public auth | `pages/` | Nested `pages/AGENTS.md`. Landing composer: `landing.tsx` |
 | Login / register / SSO | `pages/login.tsx`, `register.tsx`, `sso-callback.tsx` | Chrome: `components/auth/auth-shell.tsx` |
 | Join / transfer | `pages/join-org.tsx`, `transfer.tsx` | Outside `/app`; require a session |

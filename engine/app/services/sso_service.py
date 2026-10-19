@@ -14,7 +14,7 @@ from app.dao import identity_dao, identity_provider_dao, org_member_dao, tenant_
 from app.dao.base import as_uuid
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
-from app.services.platform_service import platform_service
+from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 
 
 class SSOService:
@@ -325,7 +325,10 @@ class SSOService:
         if tenant and tenant.sso_enabled:
             return True
 
-        base_url = await platform_service.get_public_base_url()
+        try:
+            base_url = await platform_service.get_public_base_url()
+        except PublicBaseUrlNotConfiguredError:
+            return True
         parts = base_url.split("://")
         if len(parts) < 2:
             return True

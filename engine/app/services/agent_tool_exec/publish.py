@@ -1,6 +1,5 @@
 """Public HTML page publishing tool behavior."""
 
-import os
 import re
 import secrets
 import uuid
@@ -9,6 +8,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from app.dao.agent_dao import agent_dao
 from app.dao.published_page_dao import published_page_dao
 from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 from app.services.storage_runtime import get_storage_backend, normalize_storage_key
 
 
@@ -79,11 +79,9 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
         return f"Failed to publish: {e}"
 
     try:
-        from app.config import get_settings as _get_publish_settings
-
-        public_base = (_get_publish_settings().PUBLIC_BASE_URL or os.environ.get("PUBLIC_BASE_URL", "")).rstrip("/")
-    except Exception:
-        public_base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+        public_base = await platform_service.get_public_base_url()
+    except PublicBaseUrlNotConfiguredError:
+        public_base = ""
     if not public_base:
         url = f"/p/{short_id}"
         url_note = (
@@ -107,11 +105,9 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
 async def _list_published_pages(agent_id: uuid.UUID) -> str:
     """List all published pages for this agent."""
     try:
-        from app.config import get_settings as _get_publish_settings
-
-        public_base = (_get_publish_settings().PUBLIC_BASE_URL or os.environ.get("PUBLIC_BASE_URL", "")).rstrip("/")
-    except Exception:
-        public_base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+        public_base = await platform_service.get_public_base_url()
+    except PublicBaseUrlNotConfiguredError:
+        public_base = ""
 
     try:
         pages = await published_page_dao.list_for_agent(agent_id)
@@ -127,6 +123,8 @@ async def _list_published_pages(agent_id: uuid.UUID) -> str:
             lines.append(f"  Source: {page.source_path}")
             lines.append(f"  Views: {page.view_count}")
             lines.append("")
+        if not public_base:
+            lines.append("> Note: PUBLIC_BASE_URL is not configured on this server. Links above are relative paths.")
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to list pages: {e}"
