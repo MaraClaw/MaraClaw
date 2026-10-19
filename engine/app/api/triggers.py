@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user
-from app.core.json_types import JsonObject, json_as_str, object_mapping_from
+from app.core.json_types import JsonObject, json_as_str, json_object_from, object_mapping_from
+from app.core.permissions import check_agent_access
 from app.dao.trigger_dao import agent_trigger_dao
 from app.records.user import UserRecord
 
@@ -40,10 +41,15 @@ class TriggerUpdate(BaseModel):
     expires_at: str | None = None
 
 
+def _can_manage(user: UserRecord, access_level: str) -> bool:
+    return access_level == "manage" or user.role in ("platform_admin", "org_admin")
+
+
 @router.get("/{agent_id}/triggers", response_model=list[TriggerResponse])
 async def list_agent_triggers(agent_id: uuid.UUID, user: UserRecord = Depends(get_current_user)):
     """List all triggers for an agent."""
-    _ = user
+    _, access_level = await check_agent_access(user, agent_id)
+    can_manage = _can_manage(user, access_level)
     triggers = await agent_trigger_dao.list_for_agent(agent_id)
 
     return [
@@ -51,7 +57,11 @@ async def list_agent_triggers(agent_id: uuid.UUID, user: UserRecord = Depends(ge
             id=str(t.id),
             name=t.name,
             type=t.type,
-            config=t.config or {},
+            config={
+                key: value
+                for key, value in json_object_from(t.config).items()
+                if can_manage or key not in ("token", "secret")
+            },
             reason=t.reason or "",
             focus_ref=t.focus_ref,
             is_enabled=t.is_enabled,
@@ -75,12 +85,18 @@ async def update_trigger(
     user: UserRecord = Depends(get_current_user),
 ):
     """Update a trigger (from frontend management UI)."""
-    _ = user
+    _, access_level = await check_agent_access(user, agent_id)
+    if not _can_manage(user, access_level):
+        raise HTTPException(403, "Manage access required")
     trigger = await agent_trigger_dao.get_for_agent(trigger_id, agent_id)
     if not trigger:
         raise HTTPException(404, "Trigger not found")
 
     updates = object_mapping_from(body.model_dump(exclude_unset=True))
+    if "config" in updates:
+        config = dict(json_object_from(trigger.config))
+        config.update({key: value for key, value in (body.config or {}).items() if key not in ("token", "secret")})
+        updates["config"] = config
     expires_at = updates.get("expires_at")
     if expires_at is not None:
         if isinstance(expires_at, datetime):
@@ -102,7 +118,9 @@ async def delete_trigger(
     user: UserRecord = Depends(get_current_user),
 ):
     """Delete a trigger entirely."""
-    _ = user
+    _, access_level = await check_agent_access(user, agent_id)
+    if not _can_manage(user, access_level):
+        raise HTTPException(403, "Manage access required")
     trigger = await agent_trigger_dao.get_for_agent(trigger_id, agent_id)
     if not trigger:
         raise HTTPException(404, "Trigger not found")
