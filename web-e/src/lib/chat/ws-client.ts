@@ -6,6 +6,11 @@ import { ApiError } from '../http.ts'
 import type { AuthSessionStore, SessionOwner } from '../auth-session.ts'
 
 export type ChatInbound = z.infer<typeof inboundSchema>
+export type ChatTurnRejection = z.infer<typeof turnRejectedSchema>
+
+export function isTurnRejected(event: ChatInbound): event is ChatTurnRejection {
+  return event.type === 'turn_rejected'
+}
 
 export type ChatOutbound = {
   content?: string
@@ -53,7 +58,7 @@ type Handlers = {
   readonly issueTicket?: typeof issueChatTicket
 }
 
-const inboundSchema = z.object({
+const eventSchema = z.object({
   type: z.string(), content: z.string().optional(), session_id: z.string().optional(),
   message_id: z.string().optional(), entry_id: z.string().optional(),
   name: z.string().optional(), status: z.string().optional(), result: z.string().optional(),
@@ -63,6 +68,17 @@ const inboundSchema = z.object({
     env: z.string().optional(), screenshot_url: z.string().optional(), output: z.string().optional(),
   }).optional(),
 })
+
+const turnRejectedSchema = eventSchema.extend({
+  type: z.literal('turn_rejected'),
+  reason: z.enum(['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed']),
+  content: z.string(),
+})
+
+const inboundSchema = z.union([
+  turnRejectedSchema,
+  eventSchema.refine((event) => event.type !== 'turn_rejected'),
+])
 
 export function connectAgentChat(
   agentId: string,

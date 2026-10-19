@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { connectAgentChat } from '../src/lib/chat/ws-client.ts'
+import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
 import { ControlledSocket, fixture } from './socket-fixture.ts'
 
 test('queued sends flush in order when the current socket opens', async () => {
@@ -227,3 +227,43 @@ test('only current reconnect opens notify and only unsent payloads flush', async
   assert.deepEqual(first.sent.map((data) => JSON.parse(data)), [{ content: 'already sent' }])
   conn.close()
 })
+
+for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed']) {
+  test(`turn rejection ${reason} decodes without becoming a completion or closing the socket`, async (t) => {
+    // Given
+    const f = fixture()
+    const conn = f.connect()
+    t.after(() => conn.close())
+    await Promise.resolve()
+    f.socket().open()
+    const frame = { type: 'turn_rejected', reason, content: 'Message not accepted.' }
+    // When
+    f.socket().frame(JSON.stringify(frame))
+    // Then
+    assert.deepEqual(f.events, [frame])
+    const event = f.events[0]
+    assert.ok(event && isTurnRejected(event))
+    assert.equal(event.reason, reason)
+    assert.equal(f.socket().readyState, 1)
+    assert.deepEqual(f.codes, [])
+  })
+}
+
+for (const frame of [
+  { type: 'turn_rejected', content: 'Missing reason' },
+  { type: 'turn_rejected', reason: 'unknown', content: 'Unknown reason' },
+  { type: 'turn_rejected', reason: 'quota_exceeded' },
+  { type: 'turn_rejected', reason: 'quota_exceeded', content: 42 },
+]) {
+  test(`malformed rejection ${JSON.stringify(frame)} remains a protocol error`, async (t) => {
+    // Given
+    const f = fixture()
+    const conn = f.connect()
+    t.after(() => conn.close())
+    await Promise.resolve()
+    // When
+    f.socket().frame(JSON.stringify(frame))
+    // Then
+    assert.deepEqual(f.events, [{ type: 'error', content: 'Malformed chat event' }])
+  })
+}
