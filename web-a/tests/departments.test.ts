@@ -4,10 +4,10 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { renameDepartment, type DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { groupDepartmentAssignments, listDepartments, renameDepartment, setUserDepartments, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { renameDepartmentOptions } from '../src/pages/users-department-mutations.ts'
+import { replaceUserDepartmentsOptions, renameDepartmentOptions } from '../src/pages/users-department-mutations.ts'
 import { createFixture } from './helpers.ts'
 
 const original = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', created_at: '2026-10-18T00:00:00Z' }
@@ -135,3 +135,110 @@ test('a late rename cannot rewrite or invalidate a retired session cache', async
   assert.deepEqual(client.getQueryData(queryKey), initial)
   assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
 })
+
+const memberId = 'member/a +?'
+const memberships: DepartmentsResponse = {
+  ...initial,
+  assignments: [
+    { tenant_id: original.tenant_id, user_id: memberId, department_id: original.id },
+    { tenant_id: original.tenant_id, user_id: 'member-b', department_id: 'engineering' },
+    { tenant_id: original.tenant_id, user_id: memberId, department_id: 'engineering' },
+  ],
+}
+
+test('loading departments groups every membership row without losing earlier selections', async (t) => {
+  // Given
+  t.mock.method(globalThis, 'fetch', async () => Response.json(memberships))
+  // When
+  const grouped = groupDepartmentAssignments((await listDepartments(original.tenant_id)).assignments)
+  // Then
+  assert.deepEqual(grouped.get(memberId), [original.id, 'engineering'])
+  assert.deepEqual(grouped.get('member-b'), ['engineering'])
+})
+
+test('replace-set sends an encoded scoped plural PUT and parses the complete response', async (t) => {
+  // Given
+  const updated = { tenant_id: original.tenant_id, user_id: memberId, department_ids: ['engineering', original.id] }
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _request?: RequestInit) => Response.json({ ...updated, ignored: true }))
+  // When
+  const result = await setUserDepartments(original.tenant_id, memberId, [original.id, 'engineering'])
+  // Then
+  const [url, request] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, '/api/users/member%2Fa%20%2B%3F/departments?tenant_id=tenant+%26a')
+  assert.equal(request?.method, 'PUT')
+  assert.deepEqual(JSON.parse(String(request?.body)), { department_ids: [original.id, 'engineering'] })
+  assert.deepEqual(result, updated)
+  assert.equal(Object.isFrozen(result.department_ids), true)
+})
+
+test('replace-set rejects a malformed membership response', async (t) => {
+  // Given
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ user_id: memberId, tenant_id: original.tenant_id, department_ids: [null] }))
+  // When
+  const pending = setUserDepartments(original.tenant_id, memberId, [])
+  // Then
+  await assert.rejects(pending, z.ZodError)
+})
+
+for (const departmentIds of [['engineering', original.id], ['engineering'], []]) {
+  test(`replace-set reconciles ${departmentIds.length} memberships and only invalidates exact owned keys`, async (t) => {
+    // Given
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    const ownedKeys = [queryKey, ['admin-users', original.tenant_id], ['admin-user', memberId]]
+    const unrelatedKeys = [['admin-departments', 'tenant-b'], [...queryKey, 'detail'], ['admin-users', 'tenant-b'], ['admin-user', 'member-b']]
+    for (const key of [...ownedKeys, ...unrelatedKeys]) client.setQueryData(key, memberships)
+    const updated = { tenant_id: original.tenant_id, user_id: memberId, department_ids: departmentIds }
+    t.mock.method(globalThis, 'fetch', async () => Response.json(updated))
+    const observer = new MutationObserver(client, replaceUserDepartmentsOptions(client))
+    // When
+    await observer.mutate({ tenantId: original.tenant_id, userId: memberId, departmentIds: ['ignored-request-id'] })
+    // Then
+    const result = client.getQueryData<DepartmentsResponse>(queryKey)
+    assert.deepEqual(result?.assignments, [memberships.assignments[1], ...departmentIds.map((department_id) => ({ user_id: memberId, tenant_id: original.tenant_id, department_id }))])
+    assert.deepEqual(result?.departments, memberships.departments)
+    for (const key of ownedKeys) assert.equal(client.getQueryState(key)?.isInvalidated, true)
+    for (const key of unrelatedKeys) {
+      assert.deepEqual(client.getQueryData(key), memberships)
+      assert.equal(client.getQueryState(key)?.isInvalidated, false)
+    }
+  })
+}
+
+test('a rejected replace-set preserves every cached membership for inline error recovery', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  client.setQueryData(queryKey, memberships)
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Department belongs to another tenant' }, { status: 403 }))
+  const observer = new MutationObserver(client, replaceUserDepartmentsOptions(client))
+  // When
+  const pending = observer.mutate({ tenantId: original.tenant_id, userId: memberId, departmentIds: [] })
+  // Then
+  await assert.rejects(pending, (error) => error instanceof ApiError && error.status === 403)
+  assert.deepEqual(client.getQueryData(queryKey), memberships)
+  assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+})
+
+for (const status of [200, 403]) {
+  test(`a late replace-set ${status} response cannot affect a replacement session`, async (t) => {
+    // Given
+    const { policy } = createFixture()
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    client.setQueryData(queryKey, memberships)
+    const response = Promise.withResolvers<Response>()
+    const started = Promise.withResolvers<void>()
+    t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
+    const observer = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), replaceUserDepartmentsOptions(client)))
+    const rejected = assert.rejects(observer.mutate({ tenantId: original.tenant_id, userId: memberId, departmentIds: [] }), StaleSessionError)
+    await started.promise
+    // When
+    policy.replace('token-b')
+    response.resolve(Response.json({ tenant_id: original.tenant_id, user_id: memberId, department_ids: [] }, { status }))
+    // Then
+    await rejected
+    assert.deepEqual(client.getQueryData(queryKey), memberships)
+    assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+  })
+}

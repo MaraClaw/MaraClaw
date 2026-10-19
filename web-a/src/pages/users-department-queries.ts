@@ -4,10 +4,9 @@ import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import {
   createDepartment,
   listDepartments,
-  setUserDepartment,
   type DepartmentsResponse,
 } from '@/lib/departments-api'
-import { renameDepartmentOptions } from './users-department-mutations'
+import { replaceUserDepartmentsOptions, renameDepartmentOptions } from './users-department-mutations'
 
 export function useRenameDepartment() {
   return useMutation(renameDepartmentOptions(useQueryClient()))
@@ -35,35 +34,7 @@ export function useDepartments(tenantId: string) {
     },
   })
 
-  const assign = useMutation({
-    mutationFn: (input: {
-      readonly tenantId: string
-      readonly userId: string
-      readonly departmentId: string | null
-    }) => setUserDepartment(input.tenantId, input.userId, input.departmentId),
-    onSuccess: async (updated, input) => {
-      const queryKey = ['admin-departments', input.tenantId]
-      queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => {
-        if (!current) return undefined
-        const assignments = current.assignments.filter((assignment) => assignment.user_id !== input.userId)
-        return {
-          ...current,
-          assignments: updated.department_id === null
-            ? assignments
-            : [...assignments, {
-                user_id: updated.user_id,
-                tenant_id: updated.tenant_id,
-                department_id: updated.department_id,
-              }],
-        }
-      })
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey, exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['admin-user', input.userId], exact: true }),
-      ])
-    },
-  })
+  const assign = useMutation(replaceUserDepartmentsOptions(queryClient))
 
   return { departments, create, assign }
 }
