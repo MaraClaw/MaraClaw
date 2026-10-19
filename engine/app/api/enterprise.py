@@ -672,7 +672,11 @@ async def list_audit_logs(
     current_user: UserRecord = Depends(get_current_admin),
 ):
     """List audit logs scoped to a tenant (admin only)."""
-    _ = current_user
+    if not current_user.is_platform_admin:
+        if tenant_id not in (None, "") and str(current_user.tenant_id) != tenant_id:
+            raise HTTPException(status_code=403, detail="Cannot access other tenant's audit logs")
+        if current_user.tenant_id is None:
+            raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     logs = await audit_log_dao.list_scoped(
         tenant_id=uuid.UUID(tid) if tid not in (None, "") else None,
