@@ -1,6 +1,10 @@
 import type { ChatMessage } from './message.ts'
 
-export type ChatLine = ChatMessage & { readonly pending?: boolean; readonly fromHistory?: true }
+export type ChatLine = ChatMessage & {
+  readonly pending?: boolean
+  readonly fromHistory?: true
+  readonly composerText?: string
+}
 
 function sameUserLine(saved: ChatLine, pending: ChatLine): boolean {
   if (saved.role !== 'user') return false
