@@ -1,6 +1,8 @@
 import { apiFormRequest, apiRequest } from './http.ts'
 import type { ChatMessage } from './chat/message.ts'
 export type { ChatMessage } from './chat/message.ts'
+export { createSchedule, deleteSchedule, listScheduleHistory, listSchedules, runSchedule, updateSchedule } from './schedules-api.ts'
+export type { ScheduleOut } from './schedules-api.ts'
 
 export type AgentTemplate = {
   id: string
@@ -87,16 +89,6 @@ export type TaskOut = {
   status?: string
   priority?: string
   created_at?: string
-}
-
-export type ScheduleOut = {
-  id: string
-  name: string
-  instruction: string
-  cron_expr: string
-  is_enabled: boolean
-  next_run_at?: string | null
-  last_run_at?: string | null
 }
 
 export type FocusItem = {
@@ -305,25 +297,6 @@ export async function triggerTask(agentId: string, taskId: string): Promise<unkn
   return apiRequest(`/api/agents/${agentId}/tasks/${taskId}/trigger`, { method: 'POST' })
 }
 
-export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
-  return apiRequest(`/api/agents/${agentId}/schedules/`)
-}
-
-export async function createSchedule(
-  agentId: string,
-  body: { name: string; instruction: string; cron_expr: string; is_enabled?: boolean },
-): Promise<ScheduleOut> {
-  return apiRequest(`/api/agents/${agentId}/schedules/`, { method: 'POST', body })
-}
-
-export async function runSchedule(agentId: string, scheduleId: string): Promise<unknown> {
-  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}/run`, { method: 'POST' })
-}
-
-export async function deleteSchedule(agentId: string, scheduleId: string): Promise<void> {
-  await apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}`, { method: 'DELETE' })
-}
-
 export async function listFocus(agentId: string): Promise<FocusItem[]> {
   return apiRequest(`/api/agents/${agentId}/focus/`)
 }
@@ -390,21 +363,6 @@ export async function browseSkillRead(path: string): Promise<{ content: string }
 
 export async function listTaskLogs(agentId: string, taskId: string): Promise<Array<{ id?: string; content: string; created_at?: string }>> {
   return apiRequest(`/api/agents/${agentId}/tasks/${taskId}/logs`)
-}
-
-export async function updateSchedule(
-  agentId: string,
-  scheduleId: string,
-  body: { name?: string; instruction?: string; cron_expr?: string; is_enabled?: boolean },
-): Promise<ScheduleOut> {
-  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}`, { method: 'PATCH', body })
-}
-
-export async function listScheduleHistory(
-  agentId: string,
-  scheduleId: string,
-): Promise<Array<{ id: string; created_at?: string | null; summary?: string; reply?: string }>> {
-  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}/history`)
 }
 
 export async function deleteTrigger(agentId: string, triggerId: string): Promise<void> {

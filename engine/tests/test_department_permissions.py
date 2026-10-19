@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import agents
-from app.core import access_cache
+from app.core import access_cache, permissions
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.identity import IdentityRecord
 from app.records.local_department import LocalDepartmentRecord
@@ -156,3 +156,46 @@ async def test_department_candidates_are_agent_tenant_scoped(directory, monkeypa
     assert await agents.get_agent_permission_departments(agent.id, owner) == {
         "departments": [{"id": str(department.id), "name": "Sales"}]
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct_manage", [False, True])
+async def test_multiple_department_grants_preserve_use_only_and_direct_manage(directory, monkeypatch, direct_manage):
+    owner, agent, department, grants = directory
+    member = UserRecord(id=uuid4(), tenant_id=owner.tenant_id)
+    second = replace(department, id=uuid4(), name="Project")
+    grants.append(AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type="department", scope_id=second.id))
+    if direct_manage:
+        grants.append(
+            AgentPermissionRecord(
+                id=uuid4(), agent_id=agent.id, scope_type="user", scope_id=member.id, access_level="manage"
+            )
+        )
+    before = list(grants)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=member))
+    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", AsyncMock(return_value=True))
+
+    _, level = await permissions.check_agent_access(member, agent.id, fresh=True)
+
+    assert level == ("manage" if direct_manage else "use")
+    assert grants == before
+
+
+@pytest.mark.asyncio
+async def test_membership_join_deduplicates_relationship_directory(monkeypatch):
+    from app.dao.local_department_dao import LocalDepartmentDAO
+
+    member = uuid4()
+    db = AsyncMock()
+    db.fetchall.return_value = [{"id": member}, {"id": member}]
+
+    @asynccontextmanager
+    async def transaction():
+        yield db
+
+    dao = LocalDepartmentDAO()
+    monkeypatch.setattr(dao, "session", transaction)
+
+    result = await dao.accessible_user_ids(uuid4())
+
+    assert result == {member}

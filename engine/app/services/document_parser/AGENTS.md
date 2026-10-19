@@ -14,7 +14,7 @@ Do not import `anydoc` from routes or tool handlers. Catch `DocumentParseError` 
 
 ## Callers
 
-- Chat upload: `app/api/upload.py` (`convert_document_isolated`). Bounded read. Typed extract failures.
+- Chat upload: `app/api/upload.py`. Async callers use `convert_document_isolated_async`; keep synchronous extraction for synchronous callers. Bounded read. Typed extract failures.
 - Agent + enterprise sidecars: `app/api/files.py` `_persist_office_sidecar` (isolated). Names the `.md` from the original filename, not `ensure_local_path` (S3 temp stems). Does not overwrite an existing `{stem}.md`. Preview reads companions from storage, not from the materialized temp path.
 - Preview: companion `.md` first (no parser slot). DOCX/PPTX live text via isolated convert, capped. XLSX `sheets` via isolated `openpyxl`; `text` comes from sheets or companion, not a second anydoc pass.
 - `read_document`: storage bytes + isolated convert. Does **not** go through the 10 MiB temp-workspace materialize. Enterprise `enterprise_info/` uses `enterprise_info_{tenant_id}`.
@@ -23,4 +23,4 @@ Outbound CSV/HTML/Markdown generation stays in `document_conversion/`. PDF previ
 
 ## Bounds
 
-50 MiB input (uploads and `read_document`), 2M-char parser output (callers may request less; `read_document` caps at 20_000; preview caps at 8_000), 5s slot wait + 25s parse, 2 concurrent workers. Child is process-group killed on timeout; permit is released only after the child is reaped. Temp files are always removed. Isolation is crash/timeout containment, not a jail.
+50 MiB input (uploads and `read_document`), 2M-char parser output (callers may request less; `read_document` caps at 20_000; preview caps at 8_000), 5s slot wait + 25s parse, 2 concurrent workers shared by synchronous and asynchronous callers. Cancellation while waiting never starts a late worker. Cancellation or timeout terminates and reaps the whole process group off the event loop; repeated cancellation waits for the same cleanup. Capacity and temporary files are released only after confirmed reap. Unconfirmed cleanup quarantines both until process shutdown. Isolation is crash/timeout containment, not a jail.

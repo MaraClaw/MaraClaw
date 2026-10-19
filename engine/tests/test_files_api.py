@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api import files as files_api
 from app.core.security import create_access_token
+from app.records.user import UserRecord
 from app.services import file_download_tickets
 from app.services.storage_runtime.local import LocalStorageBackend
 
@@ -26,6 +28,73 @@ def make_user(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pptx", "xls"])
+async def test_preview_cancel_reaches_owned_parser(monkeypatch, tmp_path, suffix):
+    # Given
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path))
+    rel = f"workspace/report.{suffix}"
+    key = f"{agent_id}/{rel}"
+    await storage.write_bytes(key, b"document")
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def parse(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def sheets(*_args, **_kwargs):
+        raise files_api.DocumentParseError("not an xlsx")
+
+    async def local(_key):
+        return tmp_path / key
+
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock())
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(files_api, "ensure_local_path", local)
+    monkeypatch.setattr(files_api, "convert_document_isolated_async", parse)
+    monkeypatch.setattr(files_api, "extract_xlsx_sheets_isolated_async", sheets)
+    task = asyncio.create_task(files_api.preview_file(agent_id=agent_id, path=rel, current_user=user))
+    # When
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    # Then
+    assert cancelled.is_set()
+
+
+async def test_cancelled_office_sidecar_keeps_attachment_without_markdown(monkeypatch, tmp_path):
+    # Given
+    storage = LocalStorageBackend(str(tmp_path))
+    await storage.write_bytes("report.docx", b"document")
+    started = asyncio.Event()
+
+    async def parse(*_args, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(files_api, "convert_document_isolated_async", parse)
+    task = asyncio.create_task(
+        files_api._persist_office_sidecar(storage, lambda rel: rel, "report.docx", "report.docx", b"document")
+    )
+    await started.wait()
+    # When
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Then
+    assert await storage.read_bytes("report.docx") == b"document"
+    assert not await storage.is_file("report.md")
+    assert not await storage.is_file("report.docx.md")
 
 
 def make_agent(creator_id: uuid.UUID, **overrides):

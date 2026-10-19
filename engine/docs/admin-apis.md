@@ -164,6 +164,20 @@ quota_message_limit, quota_message_period, quota_messages_used,
 quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 ```
 
+#### Local department memberships
+
+**Router:** `app/api/departments.py`. These tenant-local departments are separate from provider-synced organization departments. Org admins operate in their own tenant; platform admins must select `?tenant_id=UUID` for administration.
+
+| Method | Path | Request | Response / notes |
+|--------|------|---------|------------------|
+| `GET` | `/api/departments` | Query: `tenant_id?` | `{ departments, assignments }`; assignments retain one `{ user_id, tenant_id, department_id }` row per membership, ordered by user then department UUID. |
+| `POST` | `/api/departments` | `{ name }` | **201** department. Names are trimmed; duplicate case-insensitive name → **409**. |
+| `PATCH` | `/api/departments/{department_id}` | `{ name }` | Rename without changing membership rows. |
+| `PUT` | `/api/users/{user_id}/departments` | `{ department_ids: UUID[] }` | Full-set replacement for `member` / `agent_admin`. Returns `{ user_id, tenant_id, department_ids }` with unique UUIDs in ascending order. `[]` clears all; missing/null/non-array input → **422**. Any missing or foreign department rejects the complete set with **422**, without changing memberships. |
+| `PUT` | `/api/users/{user_id}/department` | `{ department_id: UUID \| null }` | Existing singular contract: replace with one membership or clear all. Returns `{ user_id, tenant_id, department_id }`. |
+
+Members may belong to multiple local departments. Department agent grants are the union of memberships and confer only `use`, never `manage`; direct agent permissions are unchanged. Replacement freshly authorizes the actor and subject under tenant-first locks, then invalidates every agent affected by either the old or new set in the same transaction. Tenant transfer and promotion out of end-user roles clear all local memberships; user deletion cascades membership removal.
+
 ### B3. Org user profile - `/api/org/*`
 
 **Router:** `app/api/organization.py`

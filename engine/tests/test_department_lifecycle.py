@@ -18,7 +18,7 @@ from app.records.user import UserRecord
 class DirectoryConnection:
     def __init__(self, user: UserRecord):
         self.user = user
-        self.assignment: UUID | None = uuid4()
+        self.assignments = {uuid4(), uuid4()}
         self.tenant_agents = {user.tenant_id: uuid4()}
         self.operations: list[str] = []
         self.tenant_locks: list[UUID] = []
@@ -34,7 +34,7 @@ class DirectoryConnection:
 
     async def execute(self, query, _params):
         if "DELETE FROM local_department_memberships" in query:
-            self.assignment = None
+            self.assignments.clear()
             self.operations.append("clear_local_assignment")
 
 
@@ -51,7 +51,7 @@ async def test_transfer_clears_local_assignment_before_tenant_change_and_invalid
         yield db
 
     async def update(_self, *, db_obj, obj_in):
-        assert db.assignment is None
+        assert db.assignments == set()
         db.operations.append("change_tenant")
         return replace(db_obj, **obj_in)
 
@@ -85,7 +85,7 @@ async def test_moved_user_precondition_rejects_update_before_assignment_delete(m
     with pytest.raises(HTTPException) as error:
         await user_dao.update(db_obj=before, obj_in={"tenant_id": uuid4()})
     assert error.value.status_code == 409
-    assert db.assignment is not None
+    assert len(db.assignments) == 2
     assert db.operations == []
 
 
@@ -100,7 +100,7 @@ async def test_promotion_clears_department_and_invalidates_tenant_agents(monkeyp
         yield db
 
     async def update(_self, *, db_obj, obj_in):
-        assert db.assignment is None
+        assert db.assignments == set()
         return replace(db_obj, **obj_in)
 
     monkeypatch.setattr(session, "optional_connection_ctx", context)
@@ -110,7 +110,7 @@ async def test_promotion_clears_department_and_invalidates_tenant_agents(monkeyp
     monkeypatch.setattr(acl_locks, "bump_agent_acl_version", bump)
     result = await user_dao.update(db_obj=user, obj_in={"role": role})
     assert result.role == role
-    assert db.assignment is None
+    assert db.assignments == set()
     assert bump.await_args is not None
     assert bump.await_args.args == (db.tenant_agents[user.tenant_id],)
 

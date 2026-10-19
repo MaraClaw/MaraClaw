@@ -13,7 +13,7 @@ from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut, DepartmentCreate, DepartmentOut
+from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentCreate, DepartmentOut
 from app.services.admin_provisioning import END_USER_ROLES
 
 
@@ -54,6 +54,18 @@ async def rename_department(
 
 
 async def assign_department(actor: UserRecord, assignment: AssignmentOut) -> AssignmentOut:
+    await assign_departments(
+        actor,
+        AssignmentsOut(
+            user_id=assignment.user_id,
+            tenant_id=assignment.tenant_id,
+            department_ids=[] if assignment.department_id is None else [assignment.department_id],
+        ),
+    )
+    return assignment
+
+
+async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> AssignmentsOut:
     async with connection_ctx() as db:
         await lock_tenants(db, (assignment.tenant_id, actor.tenant_id))
         await lock_user(db, actor.id, actor.tenant_id)
@@ -69,14 +81,19 @@ async def assign_department(actor: UserRecord, assignment: AssignmentOut) -> Ass
             raise HTTPException(403, "User belongs to another organization")
         await lock_user(db, subject.id, assignment.tenant_id)
         subject = await user_dao.get(subject.id)
-        if subject is None or subject.role not in END_USER_ROLES:
-            raise HTTPException(422, "Only end users may have a department")
-        if assignment.department_id is not None:
-            department = await local_department_dao.get(assignment.department_id)
-            if department is None or department.tenant_id != assignment.tenant_id:
-                raise HTTPException(422, "Invalid department for this organization")
+        if subject is None:
+            raise HTTPException(404, "User not found")
+        if subject.tenant_id != assignment.tenant_id:
+            raise HTTPException(403, "User belongs to another organization")
+        if subject.role not in END_USER_ROLES:
+            raise HTTPException(422, "Only end users may have departments")
+        departments = await local_department_dao.get_many(assignment.department_ids)
+        if len(departments) != len(assignment.department_ids) or any(
+            department.tenant_id != assignment.tenant_id for department in departments
+        ):
+            raise HTTPException(422, "Invalid department for this organization")
         affected = await local_department_dao.grant_agents_for_user(subject.id)
-        await local_department_dao.assign(assignment)
+        await local_department_dao.replace_assignments(assignment)
         affected.update(await local_department_dao.grant_agents_for_user(subject.id))
         for agent_id in sorted(affected):
             await lock_agent(db, agent_id, assignment.tenant_id)

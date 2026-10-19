@@ -10,12 +10,13 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
 - `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. No proactive outbound sender yet. `background_tasks.py` is a helper, not a router.
 - Launch route background work with `schedule_background_task`, not `asyncio.create_task`. It starts the work after the request transaction commits, in a fresh context that carries only the trace id, and drops it on rollback. FastAPI `BackgroundTasks` still run before the request commits.
-- `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/department`).
+- `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/departments`, and singular `/department`).
 
 ## Local departments
 
 - `GET/POST /departments`: `org_admin` is own-tenant; `platform_admin` must pass `tenant_id`. Duplicate name → 409. Create locks in the router and does not bump ACL.
-- `PUT /users/{id}/department`: `local_departments.assign_department`. End users only. Locks tenant, user, then affected agents, then bumps `aclver`.
+- `PUT /users/{id}/departments`: `local_departments.assign_departments`. `{department_ids: UUID[]}` replaces the full set, normalizes duplicates, and clears on `[]`; returns `{user_id, tenant_id, department_ids}` sorted by UUID. Invalid/foreign departments reject the entire set. End users only. Fresh actor/subject checks follow tenant-first locks; affected old/new agents are locked in UUID order and `aclver` is bumped in the same transaction.
+- `PUT /users/{id}/department`: singular compatibility route via `assign_department`; non-null replaces with one membership, null clears all. `GET /departments` still lists one assignment row per membership.
 - Not `org_sync`, and not `GET /enterprise/org/departments`.
 - `agents.py` stores `scope_type=department` at `access_level=use` only, and only for custom scope (other scopes with `department_ids` → 422). Saving private or company deletes every permission row, so those grants disappear. DB check: `ck_department_permission_use`. `GET /{agent_id}/permissions/departments` is managers-only.
 - `POST /agents/` accepts optional `department_ids` (default `[]`). Nonempty selections require custom sharing; validate every department against the resolved target tenant before writes. Creator `manage` and deduplicated department `use` grants share the agent creation transaction through `AgentPermissionDAO.create`.

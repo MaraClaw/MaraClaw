@@ -24,8 +24,23 @@ const userDepartmentSchema = assignmentSchema.extend({
   department_id: z.string().nullable(),
 }).readonly()
 
+const userDepartmentsSchema = z.object({
+  user_id: z.string(),
+  tenant_id: z.string(),
+  department_ids: z.array(z.string()).readonly(),
+}).readonly()
+
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
 export type Department = z.infer<typeof departmentSchema>
+export type UserDepartments = z.infer<typeof userDepartmentsSchema>
+
+export function groupDepartmentAssignments(assignments: DepartmentsResponse['assignments']): ReadonlyMap<string, readonly string[]> {
+  const grouped = new Map<string, readonly string[]>()
+  for (const assignment of assignments) {
+    grouped.set(assignment.user_id, [...grouped.get(assignment.user_id) ?? [], assignment.department_id])
+  }
+  return grouped
+}
 
 export async function listDepartments(tenantId: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ tenant_id: tenantId })
@@ -64,6 +79,16 @@ export async function setUserDepartment(
     await apiRequest<unknown>(`/api/users/${encodeURIComponent(userId)}/department?${query}`, {
       method: 'PUT',
       body: { department_id: departmentId },
+    }),
+  )
+}
+
+export async function setUserDepartments(tenantId: string, userId: string, departmentIds: readonly string[]) {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  return userDepartmentsSchema.parse(
+    await apiRequest<unknown>(`/api/users/${encodeURIComponent(userId)}/departments?${query}`, {
+      method: 'PUT',
+      body: { department_ids: departmentIds },
     }),
   )
 }

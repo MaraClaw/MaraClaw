@@ -9,14 +9,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
+import { groupDepartmentAssignments } from '@/lib/departments-api'
 import { isEndUserRole, type AdminUser } from '@/lib/users-api'
 import { useDepartments } from '@/pages/users-department-queries'
 import { DepartmentCard } from '@/pages/users-department-card'
+import { DepartmentMemberships } from '@/pages/users-department-memberships'
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Enter a department name').max(100, 'Use 100 characters or fewer'),
@@ -52,9 +53,7 @@ export function TenantUsers({
     resolver: zodResolver(schema),
     defaultValues: { name: '' },
   })
-  const assignments = new Map((departments.data?.assignments ?? []).map((assignment) =>
-    [assignment.user_id, assignment.department_id] as const,
-  ))
+  const assignments = groupDepartmentAssignments(departments.data?.assignments ?? [])
   const savingAssignment = assign.isPending ? assign.variables : undefined
 
   useEffect(() => {
@@ -89,7 +88,7 @@ export function TenantUsers({
         <CardHeader>
           <CardTitle>Departments</CardTitle>
           <CardDescription>
-            Create local departments for this company, then assign members below. Each person can belong to one department.
+            Create local departments for this company, then assign members below. Each person can belong to multiple departments.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -167,10 +166,9 @@ export function TenantUsers({
       </Card>
       <div className="grid gap-4">
         {rows.map((row) => {
-          const selectorId = `${formId}-${row.id}-department`
-          const isSaving = savingAssignment?.userId === row.id
-          const departmentId = isSaving ? savingAssignment.departmentId : assignments.get(row.id) ?? null
-          const error = assign.variables?.userId === row.id ? assign.error : null
+          const isSaving = savingAssignment?.tenantId === tenantId && savingAssignment.userId === row.id
+          const departmentIds = isSaving ? savingAssignment.departmentIds : assignments.get(row.id) ?? []
+          const error = assign.variables?.tenantId === tenantId && assign.variables.userId === row.id ? assign.error : null
           const name = row.display_name || row.email || row.username || 'user'
           return (
             <UserCard
@@ -181,46 +179,20 @@ export function TenantUsers({
               onToggle={() => onToggle(row)}
             >
               {isEndUserRole(row.role) && row.tenant_id === tenantId ? (
-                <div className="relative z-20 grid w-full min-w-0 gap-1.5 sm:max-w-xs">
-                  <Label htmlFor={selectorId}>
-                    Department<span className="sr-only"> for {name}</span>
-                  </Label>
-                  <Select
-                    id={selectorId}
-                    value={departmentId ?? ''}
-                    disabled={!departments.isSuccess || assign.isPending}
-                    aria-busy={isSaving}
-                    aria-invalid={error ? true : undefined}
-                    aria-describedby={error ? `${selectorId}-error` : `${selectorId}-status`}
-                    onChange={(event) => {
-                      const nextDepartmentId = event.target.value || null
-                      if (nextDepartmentId === departmentId) return
-                      assign.mutate({ tenantId, userId: row.id, departmentId: nextDepartmentId }, {
-                        onSuccess: fenceCallback(isCurrent, () => toast.success(`Department updated for ${name}`)),
-                        onError: fenceCallback(isCurrent, (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : 'Could not update department. Try again.')),
-                      })
-                    }}
-                  >
-                    <option value="">
-                      {departments.data ? 'Unassigned' : departments.isLoading ? 'Loading departments…' : 'Departments unavailable'}
-                    </option>
-                    {(departments.data?.departments ?? []).map((department) => (
-                      <option key={department.id} value={department.id}>{department.name}</option>
-                    ))}
-                  </Select>
-                  <p
-                    id={`${selectorId}-status`}
-                    role="status"
-                    className={isSaving ? 'text-xs text-muted-foreground' : 'sr-only'}
-                  >
-                    {isSaving ? 'Saving department…' : ''}
-                  </p>
-                  {error ? (
-                    <p id={`${selectorId}-error`} className="text-xs text-destructive">
-                      {error instanceof ApiError ? error.message : 'Could not update department. Try again.'}
-                    </p>
-                  ) : null}
-                </div>
+                <DepartmentMemberships
+                  name={name}
+                  departments={departments.data?.departments ?? []}
+                  departmentIds={departmentIds}
+                  available={departments.isSuccess}
+                  loading={departments.isLoading}
+                  pending={assign.isPending}
+                  saving={isSaving}
+                  error={error}
+                  onChange={(nextDepartmentIds) => assign.mutate({ tenantId, userId: row.id, departmentIds: nextDepartmentIds }, {
+                    onSuccess: fenceCallback(isCurrent, () => toast.success(`Departments updated for ${name}`)),
+                    onError: fenceCallback(isCurrent, (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : 'Could not update departments. Try again.')),
+                  })}
+                />
               ) : null}
             </UserCard>
           )

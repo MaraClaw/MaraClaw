@@ -31,7 +31,6 @@ from app.services import file_download_tickets, workspace_collaboration as works
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
     PREVIEW_MAX_CHARS,
-    convert_document_isolated,
     convert_document_isolated_async,
     extract_xlsx_sheets_isolated_async,
     format_parse_failure,
@@ -517,18 +516,18 @@ def _find_companion_text_preview(target: Path) -> Path | None:
     return None
 
 
-def _extract_document_text(target: Path) -> str:
+async def _extract_document_text(target: Path, filename: str) -> str:
     """Best-effort rich document text extraction for lightweight previews."""
     try:
-        size = target.stat().st_size
+        size = (await asyncio.to_thread(target.stat)).st_size
     except OSError as exc:
         return f"Preview extraction failed: {str(exc)[:200]}"
     if size > MAX_INPUT_BYTES:
         return f"Preview extraction failed: {format_parse_failure(DocumentTooLargeError('too large', size_bytes=size))}"
     try:
-        return convert_document_isolated(
-            target.read_bytes(),
-            target.name,
+        return await convert_document_isolated_async(
+            await asyncio.to_thread(target.read_bytes),
+            filename,
             max_output_chars=PREVIEW_MAX_CHARS,
         )
     except DocumentParseError as exc:
@@ -744,7 +743,7 @@ async def preview_file(
             elif sheets is not None and sheets:
                 text = sheets_preview_text(sheets, PREVIEW_MAX_CHARS)
             else:
-                text = await asyncio.to_thread(_extract_document_text, target)
+                text = await _extract_document_text(target, Path(path).name)
                 if text.startswith("Preview extraction failed") and sheets_error:
                     text = sheets_error
             payload: dict[str, Any] = {
@@ -777,7 +776,7 @@ async def preview_file(
             extracted_text = _preview_text(companion_content)
         else:
             target = await ensure_local_path(key)
-            extracted_text = await asyncio.to_thread(_extract_document_text, target)
+            extracted_text = await _extract_document_text(target, Path(path).name)
         return {
             "path": path,
             "kind": kind,

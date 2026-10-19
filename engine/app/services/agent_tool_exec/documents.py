@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import multiprocessing as mp
 import uuid
 from pathlib import Path
@@ -33,7 +32,7 @@ def _read_document_with_timeout(ws: Path, rel_path: str, max_chars: int = 8000, 
 
 async def _read_document(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
     """Read content from office documents (PDF, DOCX, XLSX, PPTX)."""
-    return await asyncio.to_thread(_read_document_with_timeout, ws, rel_path, max_chars, tenant_id)
+    return await document_reading._read_document_async(ws, rel_path, max_chars, tenant_id)
 
 
 async def _read_document_from_storage(
@@ -62,4 +61,4 @@ async def _read_document_from_storage(
 
     data = await storage.read_bytes(storage_key)
     filename = Path(normalized).name or Path(rel_path).name
-    return await asyncio.to_thread(document_reading._read_document_from_bytes, data, filename, max_chars)
+    return await document_reading._read_document_from_bytes_async(data, filename, max_chars)

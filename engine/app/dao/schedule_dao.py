@@ -17,6 +17,7 @@ _COLUMNS = (
     "name",
     "instruction",
     "cron_expr",
+    "timezone",
     "is_enabled",
     "last_run_at",
     "next_run_at",
@@ -59,7 +60,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             return [AgentScheduleRecord.from_row(row) for row in rows]
 
     async def claim_due(
-        self, now: datetime, compute_next_run: Callable[[str, datetime], datetime | None]
+        self, now: datetime, compute_next_run: Callable[[str, datetime, str], datetime | None]
     ) -> Sequence[AgentScheduleRecord]:
         """Claim each missed schedule once, advancing its slot before releasing row locks."""
         claimed: list[AgentScheduleRecord] = []
@@ -71,7 +72,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             )
             for row in rows:
                 schedule = AgentScheduleRecord.from_row(row)
-                next_run = compute_next_run(schedule.cron_expr, now)
+                next_run = compute_next_run(schedule.cron_expr, now, schedule.timezone)
                 if next_run is None:
                     await db.execute(
                         "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL WHERE id = %(id)s",
