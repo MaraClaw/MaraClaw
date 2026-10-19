@@ -1,0 +1,74 @@
+{
+  "project": "maraclaw-dev-qa-0c48d9ee86",
+  "daemon_gib": 7.748142242431641,
+  "steady_gib": 2.75,
+  "external_bytes": 0,
+  "containers": [
+    {
+      "service": "web-a",
+      "id": "6fd9886d56d29acf8abb2a90a027015365eaeebad8cd69eda9b64879be568753",
+      "memory": 134217728,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "web-e",
+      "id": "70e91f95aecd08d9cd68f4baac568cc39e49966a07bc95b4d499d44c4356c7b5",
+      "memory": 134217728,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "ingress",
+      "id": "8e854f07a5e6a66395ad7de3f22030c18bd832bbe0d07caaa7aaa562401db910",
+      "memory": 134217728,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "engine",
+      "id": "a8e044e803ba3c0775635031d3677df111a500937b6ddecb1dea3529153ec76e",
+      "memory": 805306368,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "background",
+      "id": "10ac665b43f3f232b0161a6d67ce63fcb53ab124a0d112ae2e9880cfb197a4e3",
+      "memory": 805306368,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "bootstrap",
+      "id": "f6c9fdf3e0879738e31deb106aff0aeffbdaccfb1040c485748582e97d114102",
+      "memory": 805306368,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "postgres",
+      "id": "f227e29f86e6e799447148918bc455e943f4a923ae9422b4c660a8ff6af9d1ea",
+      "memory": 805306368,
+      "oom": false,
+      "restarts": 0
+    },
+    {
+      "service": "redis",
+      "id": "e7cbba16bf7d48297c9b6ff05be9d7aefe20869ee874d6da2ad876dfa4d132e8",
+      "memory": 134217728,
+      "oom": false,
+      "restarts": 0
+    }
+  ],
+  "growth": [
+    "grow service=engine replicas=2",
+    "grow service=web-a replicas=2",
+    "grow service=web-e replicas=2"
+  ],
+  "checkpoint_reused": true,
+  "https_and_auth": true,
+  "env_file_removed": true,
+  "foreground_exit": 0,
+  "cleanup": "owned Compose containers, networks, volumes, controller and temporary data removed"
+}
