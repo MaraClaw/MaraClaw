@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import google_workspace as api
+from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.user_dao import user_dao
 from app.db import session as db_session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
@@ -105,9 +106,12 @@ def google_flow(monkeypatch: pytest.MonkeyPatch) -> GoogleFlow:
         await flow.write("membership")
         return flow.actor, True
 
-    async def update_scan(*, db_obj, obj_in):
+    async def authorize_scan(_sid, *, user_id, provider_type, tenant_id):
+        assert user_id == flow.actor.id
+        assert provider_type == "google_workspace"
+        assert tenant_id == flow.actor.tenant_id
         await flow.write("scan")
-        return db_obj
+        return flow.scan
 
     async def update_provider(*, db_obj, obj_in):
         await flow.write("provider")
@@ -116,8 +120,8 @@ def google_flow(monkeypatch: pytest.MonkeyPatch) -> GoogleFlow:
     monkeypatch.setattr(api, "get_google_provider", get_provider)
     monkeypatch.setattr(api.identity_provider_dao, "get", get_provider)
     monkeypatch.setattr(user_dao, "get_with_identity", get_actor)
-    monkeypatch.setattr(api.sso_scan_session_dao, "get", get_scan)
-    monkeypatch.setattr(api.sso_scan_session_dao, "update", update_scan)
+    monkeypatch.setattr(sso_scan_session_dao, "get", get_scan)
+    monkeypatch.setattr(sso_scan_session_dao, "authorize", authorize_scan)
     monkeypatch.setattr(api.identity_provider_dao, "update", update_provider)
     monkeypatch.setattr(api, "get_google_redirect_uri", redirect)
     monkeypatch.setattr(api, "probe_google_directory", probe)

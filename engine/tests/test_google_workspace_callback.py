@@ -1,7 +1,12 @@
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
 import pytest
 from fastapi.responses import HTMLResponse
 
 from app.api import google_workspace
+from app.dao.sso_scan_session_dao import sso_scan_session_dao
+from app.records.sso_scan_session import SSOScanSessionRecord
 from app.services.auth_provider import AuthProviderPayload, ExternalUserInfo
 
 
@@ -44,6 +49,11 @@ async def test_google_sso_callback_redacts_invalid_token_payload(monkeypatch: py
     }
     provider = InvalidTokenProvider(token_data)
     log_recorder = ErrorLogRecorder()
+    scan = SSOScanSessionRecord(uuid4(), datetime.now(UTC) + timedelta(minutes=5))
+
+    async def get_scan(sid: UUID) -> SSOScanSessionRecord:
+        assert sid == scan.id
+        return scan
 
     async def get_provider(provider_type: str, tenant_id: str | None) -> InvalidTokenProvider:
         assert provider_type == "google_workspace"
@@ -61,9 +71,10 @@ async def test_google_sso_callback_redacts_invalid_token_payload(monkeypatch: py
     monkeypatch.setattr(google_workspace, "get_preferred_identity_provider", get_preferred_provider)
     monkeypatch.setattr(google_workspace, "get_google_redirect_uri", get_google_redirect_uri)
     monkeypatch.setattr(google_workspace, "logger", log_recorder)
+    monkeypatch.setattr(sso_scan_session_dao, "get", get_scan)
 
     # When: the SSO callback handles the OAuth exchange response.
-    response = await google_workspace._handle_google_sso_callback("authorization-code", None, None, None)
+    response = await google_workspace._handle_google_sso_callback("authorization-code", scan.id, None, None)
 
     # Then: the public failure response is unchanged and the payload stays out of logs.
     assert isinstance(response, HTMLResponse)

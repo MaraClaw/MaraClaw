@@ -9,9 +9,8 @@ from fastapi.responses import HTMLResponse
 
 from app.config import get_settings
 from app.core.logging import logger
-from app.core.security import create_access_token, encrypt_data, get_current_admin
+from app.core.security import encrypt_data, get_current_admin
 from app.dao.identity_provider_dao import identity_provider_dao
-from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, optional_connection_ctx
 from app.records.user import UserRecord
@@ -31,6 +30,7 @@ from app.services.google_workspace_oauth import (
 )
 from app.services.identity_provider_lookup import get_preferred_identity_provider
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
+from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 
 router = APIRouter(tags=["google_workspace"])
 settings = get_settings()
@@ -62,34 +62,36 @@ async def _handle_google_sso_callback(
     provider_id: uuid.UUID | None,
     request: Request | None,
 ):
-    async with optional_connection_ctx():
-        tenant_id = None
-        if sid:
-            session = await sso_scan_session_dao.get(sid)
-            if not session or session.status != "pending" or session.expires_at <= datetime.now(UTC):
+    if sid is None:
+        return HTMLResponse("Auth failed: invalid SSO session")
+    try:
+        async with optional_connection_ctx():
+            session = await load_authorizable_session(sid)
+            if session is None:
                 return HTMLResponse("Auth failed: invalid SSO session")
             tenant_id = session.tenant_id
-        provider = await get_google_provider(provider_id) if provider_id else None
-        if provider and tenant_id and provider.tenant_id != tenant_id:
-            return HTMLResponse("Auth failed: provider does not belong to this tenant")
-        if provider:
-            auth_provider = GoogleWorkspaceAuthProvider(provider=deepcopy(provider), config=provider.config or {})
-        else:
-            auth_provider = await auth_provider_registry.get_provider(
-                "google_workspace", str(tenant_id) if tenant_id else None
-            )
-        if not auth_provider:
-            return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
-        if not provider:
-            provider = await get_preferred_identity_provider("google_workspace", str(tenant_id) if tenant_id else None)
-        provider = deepcopy(provider)
-        if provider is not None:
-            if not provider.is_active:
+            provider = await get_google_provider(provider_id) if provider_id else None
+            if provider and tenant_id and provider.tenant_id != tenant_id:
+                return HTMLResponse("Auth failed: provider does not belong to this tenant")
+            if provider:
+                auth_provider = GoogleWorkspaceAuthProvider(provider=deepcopy(provider), config=provider.config or {})
+            else:
+                auth_provider = await auth_provider_registry.get_provider(
+                    "google_workspace", str(tenant_id) if tenant_id else None
+                )
+            if not auth_provider:
                 return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
-            auth_provider.config = deepcopy(auth_provider.config)
-            auth_provider.config["redirect_uri"] = await get_google_redirect_uri(provider, request)
+            if not provider:
+                provider = await get_preferred_identity_provider(
+                    "google_workspace", str(tenant_id) if tenant_id else None
+                )
+            provider = deepcopy(provider)
+            if provider is not None:
+                if not provider.is_active:
+                    return HTMLResponse("Auth failed: Google Workspace provider not configured for this tenant")
+                auth_provider.config = deepcopy(auth_provider.config)
+                auth_provider.config["redirect_uri"] = await get_google_redirect_uri(provider, request)
 
-    try:
         token_data = await auth_provider.exchange_code_for_token(code)
         access_token = token_data.get("access_token")
         if not isinstance(access_token, str) or not access_token:
@@ -105,13 +107,8 @@ async def _handle_google_sso_callback(
                     != auth_provider.config["redirect_uri"]
                 ):
                     raise RuntimeError("Google redirect configuration changed")
-            session = await sso_scan_session_dao.get(sid) if sid else None
-            if sid and (
-                not session
-                or session.tenant_id != tenant_id
-                or session.status != "pending"
-                or session.expires_at <= datetime.now(UTC)
-            ):
+            session = await load_authorizable_session(sid)
+            if session is None or session.tenant_id != tenant_id:
                 raise RuntimeError("Invalid SSO session")
             user, _is_new = await auth_provider.find_or_create_user(
                 user_info, tenant_id=str(tenant_id) if tenant_id else None
@@ -129,33 +126,21 @@ async def _handle_google_sso_callback(
                 or (tenant_id is not None and user.tenant_id != tenant_id)
             ):
                 raise RuntimeError("SSO account authorization is no longer valid")
-            token = create_access_token(str(user.id), user.role)
-            if session:
-                _ = await sso_scan_session_dao.update(
-                    db_obj=session,
-                    obj_in={
-                        "status": "authorized",
-                        "provider_type": "google_workspace",
-                        "user_id": user.id,
-                        "access_token": token,
-                        "error_msg": None,
-                    },
-                )
-        if sid:
-            return HTMLResponse(
-                f"""<html><head><meta charset="utf-8" /></head>
-                    <body style="font-family: sans-serif; padding: 24px;">
-                        <div>SSO login successful. Redirecting...</div>
-                        <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
-                    </body></html>"""
-            )
+            if not await authorize_scan_session(sid, user=user, provider_type="google_workspace"):
+                raise RuntimeError("Invalid SSO session")
     except PublicBaseUrlNotConfiguredError:
         raise
     except Exception:
         logger.error("Google Workspace login error")
         return HTMLResponse("Auth failed: Authentication error")
 
-    return HTMLResponse(f"Logged in. Token: {token}")
+    return HTMLResponse(
+        f"""<html><head><meta charset="utf-8" /></head>
+        <body style="font-family: sans-serif; padding: 24px;">
+            <div>SSO login successful. Redirecting...</div>
+            <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
+        </body></html>"""
+    )
 
 
 async def _handle_google_admin_sync_callback(
@@ -249,11 +234,5 @@ async def google_workspace_callback(code: str, request: Request, state: str | No
             provider_id = state_value[1] if len(state_value) > 1 else None
             return await _handle_google_sso_callback(code, sid, provider_id, request)
 
-    sid: uuid.UUID | None = None
-    if state not in (None, ""):
-        try:
-            sid = uuid.UUID(state)
-        except ValueError, AttributeError:
-            return HTMLResponse("Authorization failed: invalid state")
-
+    sid = parse_scan_state(state)
     return await _handle_google_sso_callback(code, sid, None, request)

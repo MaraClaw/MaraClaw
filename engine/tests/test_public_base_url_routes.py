@@ -10,6 +10,7 @@ from tests.transaction_pool_fakes import CountingPool
 from app.api import auth, enterprise, google_chat, google_workspace, slack, sso, teams
 from app.config import Settings
 from app.core.security import get_current_admin, get_current_user
+from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.db import session
 from app.main import app
 from app.records.identity import IdentityProviderRecord
@@ -126,7 +127,7 @@ async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url
         scan = SimpleNamespace(
             status="pending", tenant_id=tenant.id, expires_at=datetime.now(UTC) + timedelta(minutes=5)
         )
-        monkeypatch.setattr(google_workspace.sso_scan_session_dao, "get", AsyncMock(return_value=scan))
+        monkeypatch.setattr(sso_scan_session_dao, "get", AsyncMock(return_value=scan))
         state = google_workspace_oauth.sign_google_sso_state(uuid4(), provider.id)
     path = (
         f"/api/enterprise/identity-providers/{provider.id}/google-workspace-sync/authorize-url"
