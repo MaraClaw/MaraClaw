@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_loads_object
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
@@ -65,7 +65,7 @@ def configured(monkeypatch: pytest.MonkeyPatch) -> ChannelConfigRecord:
         extra_config=update_wechat_context_cache(
             {
                 "wecom_agent_id": "1",
-                "service_url": "https://teams.example",
+                "service_url": "https://smba.trafficmanager.net/amer/",
                 "bot_token": "token",
                 "service_account_json": {"client_email": "bot@example.test", "private_key": "fake"},
             },
@@ -104,6 +104,18 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> Callable[[int, JsonObject], list[ht
         return requests
 
     return install
+
+
+def _assert_teams_request(requests: list[httpx.Request]) -> None:
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://smba.trafficmanager.net/amer/v3/conversations/recipient/activities"
+    assert request.headers["Authorization"] == "Bearer token"
+    payload = json_loads_object(request.content)
+    assert payload["type"] == "message"
+    assert payload["text"] == "report"
+    assert payload["conversation"] == {"id": "recipient"}
 
 
 @pytest.fixture(autouse=True)
@@ -145,18 +157,22 @@ def token_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     ],
 )
 async def test_provider_rejection_is_retry_visible(configured, wire, channel, body) -> None:
-    wire(200, body)
+    requests = wire(200, body)
     agent, session = _session(channel)
     with pytest.raises(RuntimeError):
         await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+    if channel == "microsoft_teams":
+        _assert_teams_request(requests)
 
 
 @pytest.mark.parametrize("channel", CHANNELS)
 async def test_http_error_is_retry_visible(configured, wire, channel: str) -> None:
-    wire(503, {"ok": True, "errcode": 0, "code": 0, "id": "id", "processQueryKey": "query"})
+    requests = wire(503, {"ok": True, "errcode": 0, "code": 0, "id": "id", "processQueryKey": "query"})
     agent, session = _session(channel)
     with pytest.raises(httpx.HTTPStatusError):
         await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+    if channel == "microsoft_teams":
+        _assert_teams_request(requests)
 
 
 @pytest.mark.parametrize(
@@ -178,6 +194,25 @@ async def test_provider_success_completes(configured, wire, channel, body) -> No
     agent, session = _session(channel)
     await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
     assert requests[-1].method == "POST"
+    if channel == "microsoft_teams":
+        _assert_teams_request(requests)
+
+
+@pytest.mark.parametrize(
+    "service_url",
+    [
+        "https://teams.example",
+        "http://smba.trafficmanager.net/amer/",
+        "https://smba.trafficmanager.net.attacker.example/amer/",
+    ],
+)
+async def test_teams_untrusted_service_url_is_rejected_before_send(configured, wire, service_url: str) -> None:
+    configured.extra_config["service_url"] = service_url
+    requests = wire(200, {"id": "id"})
+    agent, session = _session("microsoft_teams")
+    with pytest.raises(ValueError, match="Invalid Bot Framework service URL"):
+        await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+    assert requests == []
 
 
 async def test_default_remains_best_effort(configured, wire) -> None:
