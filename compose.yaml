@@ -32,7 +32,7 @@ x-engine: &engine
     context: ./engine
   image: maraclaw-engine:${RELEASE_TAG:-local}
   env_file:
-    - path: ./deploy/.env
+    - path: ${MARACLAW_ENV_FILE:-./deploy/.env}
       required: false
   environment: *runtime-env
   volumes:
@@ -215,6 +215,7 @@ services:
 
   ingress:
     image: haproxy:${HAPROXY_TAG:-3.4.6-alpine}
+    user: "0:0"
     environment:
       API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}
@@ -230,6 +231,11 @@ services:
         source: ${TLS_PEM_PATH:?Set TLS_PEM_PATH}
         target: /usr/local/etc/haproxy/tls.pem
         read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${AUTOSCALER_STATE_DIR:-/var/lib/maraclaw-autoscaler}
+        target: /run/maraclaw-autoscaler
         bind:
           create_host_path: false
     ports:
