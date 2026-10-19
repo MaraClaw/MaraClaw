@@ -42,6 +42,20 @@ class AssignmentOut(DepartmentAssignment):
     tenant_id: UUID
 
 
+class DepartmentAssignments(BaseModel):
+    department_ids: list[UUID]
+
+    @field_validator("department_ids")
+    @classmethod
+    def normalize_departments(cls, value: list[UUID]) -> list[UUID]:
+        return sorted(set(value))
+
+
+class AssignmentsOut(DepartmentAssignments):
+    user_id: UUID
+    tenant_id: UUID
+
+
 class DepartmentsOut(BaseModel):
     departments: list[DepartmentOut]
     assignments: list[AssignmentOut]

@@ -157,3 +157,28 @@ def test_baseline_splits_into_complete_statements() -> None:
     do_blocks = [body for body in bodies if body.lstrip().startswith("DO $$")]
     assert do_blocks, "baseline should include DO $$ enum/constraint blocks"
     assert all(body.rstrip().endswith("$$") for body in do_blocks)
+
+
+def test_schedule_timezone_defaults_to_utc() -> None:
+    # Given the fresh-install schedule statement.
+    sql = BASELINE.read_text(encoding="utf-8")
+    # When bootstrap parses the table definition.
+    statement = next(
+        body for body in _statement_bodies(sql) if body.startswith("CREATE TABLE IF NOT EXISTS agent_schedules")
+    )
+    # Then omitted timezone values persist as UTC, not the database host zone.
+    assert "timezone TEXT NOT NULL DEFAULT 'UTC'" in statement
+
+
+def test_department_memberships_allow_distinct_department_pairs() -> None:
+    # Given the fresh-install membership statement.
+    sql = BASELINE.read_text(encoding="utf-8")
+    # When bootstrap parses the table definition.
+    statement = next(
+        body
+        for body in _statement_bodies(sql)
+        if body.startswith("CREATE TABLE IF NOT EXISTS local_department_memberships")
+    )
+    # Then uniqueness applies to a membership, not the user's whole department set.
+    assert "PRIMARY KEY (user_id, department_id)" in statement
+    assert "user_id UUID PRIMARY KEY" not in statement

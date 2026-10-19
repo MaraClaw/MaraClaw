@@ -6,7 +6,7 @@ from uuid import UUID
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.local_department import LocalDepartmentRecord
-from app.schemas.department import AssignmentOut
+from app.schemas.department import AssignmentOut, AssignmentsOut
 
 
 @final
@@ -28,26 +28,25 @@ class LocalDepartmentDAO(BaseDAO[LocalDepartmentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT user_id, tenant_id, department_id FROM local_department_memberships "
-                "WHERE tenant_id = %(tenant)s ORDER BY user_id",
+                "WHERE tenant_id = %(tenant)s ORDER BY user_id, department_id",
                 {"tenant": tenant_id},
             )
             return [AssignmentOut.model_validate(row) for row in rows]
 
-    async def assign(self, assignment: AssignmentOut) -> None:
+    async def replace_assignments(self, assignment: AssignmentsOut) -> None:
         async with self.session() as db:
-            if assignment.department_id is None:
-                await db.execute(
-                    "DELETE FROM local_department_memberships WHERE user_id = %(user)s", {"user": assignment.user_id}
-                )
-            else:
+            await db.execute(
+                "DELETE FROM local_department_memberships WHERE user_id = %(user)s AND tenant_id = %(tenant)s",
+                {"user": assignment.user_id, "tenant": assignment.tenant_id},
+            )
+            if assignment.department_ids:
                 await db.execute(
                     "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) "
-                    "VALUES (%(user)s, %(tenant)s, %(department)s) ON CONFLICT (user_id) DO UPDATE "
-                    "SET tenant_id = EXCLUDED.tenant_id, department_id = EXCLUDED.department_id, updated_at = now()",
+                    "SELECT %(user)s, %(tenant)s, department_id FROM unnest(%(departments)s::uuid[]) AS department_id",
                     {
                         "user": assignment.user_id,
                         "tenant": assignment.tenant_id,
-                        "department": assignment.department_id,
+                        "departments": assignment.department_ids,
                     },
                 )
 

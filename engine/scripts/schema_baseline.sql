@@ -763,6 +763,7 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	name VARCHAR(200) NOT NULL, 
 	instruction TEXT NOT NULL, 
 	cron_expr VARCHAR(100) NOT NULL, 
+	timezone TEXT NOT NULL DEFAULT 'UTC',
 	is_enabled BOOLEAN NOT NULL DEFAULT true, 
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
@@ -1329,10 +1330,11 @@ CREATE TABLE IF NOT EXISTS local_departments (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_local_departments_tenant_name
     ON local_departments (tenant_id, lower(name));
 CREATE TABLE IF NOT EXISTS local_department_memberships (
-    user_id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
     department_id UUID NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, department_id),
     FOREIGN KEY (user_id, tenant_id) REFERENCES users(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (department_id, tenant_id) REFERENCES local_departments(id, tenant_id) ON DELETE CASCADE
 );

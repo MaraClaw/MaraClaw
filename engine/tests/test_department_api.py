@@ -33,7 +33,7 @@ def directory(monkeypatch):
     second = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Support", created_at=datetime.now(UTC))
     people = {actor.id: actor, subject.id: subject}
     department_rows = {first.id: first, second.id: second}
-    assignments = {subject.id: first.id}
+    assignments = {subject.id: {first.id}}
     old_agent, new_agent = uuid4(), uuid4()
 
     async def get_user(user_id, *, fresh=False):
@@ -42,18 +42,25 @@ def directory(monkeypatch):
     async def get_department(department_id):
         return department_rows.get(department_id)
 
-    async def assigned_agents(user_id):
-        selected = assignments.get(user_id)
-        return {old_agent} if selected == first.id else {new_agent} if selected == second.id else set()
+    async def get_departments(ids):
+        return [department_rows[department_id] for department_id in ids if department_id in department_rows]
 
-    async def assign(assignment):
-        if assignment.department_id is None:
-            assignments.pop(assignment.user_id, None)
+    async def assigned_agents(user_id):
+        selected = assignments.get(user_id, set())
+        return ({old_agent} if first.id in selected else set()) | ({new_agent} if second.id in selected else set())
+
+    async def replace_assignments(assignment):
+        if assignment.department_ids:
+            assignments[assignment.user_id] = set(assignment.department_ids)
         else:
-            assignments[assignment.user_id] = assignment.department_id
+            assignments.pop(assignment.user_id, None)
 
     async def list_assignments(_tenant):
-        return [AssignmentOut(user_id=uid, tenant_id=tenant.id, department_id=did) for uid, did in assignments.items()]
+        return [
+            AssignmentOut(user_id=uid, tenant_id=tenant.id, department_id=did)
+            for uid, ids in sorted(assignments.items())
+            for did in sorted(ids)
+        ]
 
     async def list_for_tenant(tenant_id):
         return [row for row in department_rows.values() if row.tenant_id == tenant_id]
@@ -85,7 +92,8 @@ def directory(monkeypatch):
     monkeypatch.setattr(local_departments.user_dao, "get_with_identity", get_user)
     monkeypatch.setattr(departments.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(local_departments.local_department_dao, "get", get_department)
-    monkeypatch.setattr(local_departments.local_department_dao, "assign", assign)
+    monkeypatch.setattr(local_departments.local_department_dao, "get_many", get_departments)
+    monkeypatch.setattr(local_departments.local_department_dao, "replace_assignments", replace_assignments)
     monkeypatch.setattr(local_departments.local_department_dao, "grant_agents_for_user", assigned_agents)
     monkeypatch.setattr(departments.local_department_dao, "list_assignments", list_assignments)
     monkeypatch.setattr(departments.local_department_dao, "list_for_tenant", list_for_tenant)
@@ -129,7 +137,7 @@ def test_privileged_write_rejects_fresh_password_change_requirement(directory, m
             f"/api/users/{subject.id}/department?tenant_id={actor.tenant_id}", json={"department_id": str(second.id)}
         )
     assert response.status_code == 403
-    assert assignments[subject.id] == first.id
+    assert assignments[subject.id] == {first.id}
     assert len(rows) == count
     bumped.assert_not_awaited()
 
@@ -143,7 +151,7 @@ def test_assignment_invalidates_old_and_new_department_grants(directory, selecti
     )
     assert response.status_code == 200
     assert response.json() == {"user_id": str(subject.id), "tenant_id": str(actor.tenant_id), "department_id": selected}
-    assert assignments.get(subject.id) == (second.id if selected not in (None, "") else None)
+    assert assignments.get(subject.id) == ({second.id} if selected not in (None, "") else None)
     assert {call.args[0] for call in bumped.await_args_list} == (
         {old_agent, new_agent} if selected not in (None, "") else {old_agent}
     )
@@ -180,7 +188,7 @@ def test_invalid_assignment_does_not_mutate_directory(directory, case, status):
         f"/api/users/{subject_id}/department?tenant_id={actor.tenant_id}", json={"department_id": str(selected)}
     )
     assert response.status_code == status
-    assert assignments == {subject.id: first.id}
+    assert assignments == {subject.id: {first.id}}
     assert not bumped.await_args_list
 
 

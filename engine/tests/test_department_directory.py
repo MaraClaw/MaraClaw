@@ -72,7 +72,7 @@ def test_rename_preserves_department_identity_and_assignments(directory, name, e
         "created_at": first.created_at.isoformat().replace("+00:00", "Z"),
     }
     assert rest[-1][first.id] == replace(first, name=expected)
-    assert assignments == {subject.id: first.id}
+    assert assignments == {subject.id: {first.id}}
     bumped.assert_not_awaited()
 
 
@@ -83,7 +83,7 @@ def test_rename_duplicate_name_conflicts_without_mutation(directory):
 
     assert response.status_code == 409
     assert rest[-1][first.id] == first
-    assert assignments == {subject.id: first.id}
+    assert assignments == {subject.id: {first.id}}
     bumped.assert_not_awaited()
 
 
@@ -159,7 +159,7 @@ def test_rename_rechecks_fresh_actor_before_mutation(directory, monkeypatch, cas
 
     assert response.status_code == 403
     assert rest[-1][first.id] == first
-    assert assignments == {subject.id: first.id}
+    assert assignments == {subject.id: {first.id}}
     bumped.assert_not_awaited()
     loader.assert_awaited_once_with(actor.id, fresh=True)
 

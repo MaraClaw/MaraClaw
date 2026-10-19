@@ -8,7 +8,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
 from app.db.connection import DbConnection
-from app.db.errors import CheckViolationError, UniqueViolationError
+from app.db.errors import CheckViolationError, ForeignKeyViolationError, UniqueViolationError
 from app.db.pool import EnginePool, close_pool, get_pool, init_pool
 from app.scripts import bootstrap_db
 
@@ -61,6 +61,7 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("users", "quota_max_agents"): "2",
         ("users", "quota_agent_ttl_hours"): "0",
         ("llm_models", "auth_kind"): "'api_key'::character varying",
+        ("agent_schedules", "timezone"): "'UTC'::text",
         ("tenants", "is_system"): "false",
         ("tenants", "is_default_end_user_org"): "false",
     }
@@ -141,6 +142,12 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "local_department_memberships_user_id_tenant_id_fkey",
         "local_department_memberships_department_id_tenant_id_fkey",
     } <= {row["conname"] for row in constraints}
+    membership_key = await schema_db.fetchall(
+        "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+        "WHERE connamespace = current_schema()::regnamespace "
+        "AND conrelid = 'local_department_memberships'::regclass AND contype = 'p'"
+    )
+    assert membership_key == [{"definition": "PRIMARY KEY (user_id, department_id)"}]
     assert await schema_db.fetchall("SELECT id FROM linkup_key_ring_state") == [{"id": 1}]
     enums = await schema_db.fetchall(
         "SELECT t.typname FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid "
@@ -175,3 +182,53 @@ async def test_singleton_constraint_rejects_second_row(schema_db: DbConnection) 
     # When a second singleton id is inserted, Then the database rejects it.
     with pytest.raises(CheckViolationError):
         await schema_db.execute("INSERT INTO linkup_key_ring_state (id) VALUES (2)")
+
+
+@pytest.mark.parametrize("candidate", ["distinct", "duplicate", "other_tenant"])
+async def test_department_membership_pair_constraints(schema_db: DbConnection, candidate: str) -> None:
+    # Given one existing membership in a fresh, task-owned schema.
+    await bootstrap_db.main()
+    tenant_id, other_tenant_id, user_id = uuid4(), uuid4(), uuid4()
+    first_id, second_id, foreign_id = uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(first)s, 'First', 'first'), (%(second)s, 'Second', 'second')",
+        {"first": tenant_id, "second": other_tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'QA member')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO local_departments (id, tenant_id, name) VALUES "
+        "(%(first)s, %(tenant)s, 'Engineering'), (%(second)s, %(tenant)s, 'Operations'), "
+        "(%(foreign)s, %(other_tenant)s, 'Other company')",
+        {
+            "first": first_id,
+            "second": second_id,
+            "foreign": foreign_id,
+            "tenant": tenant_id,
+            "other_tenant": other_tenant_id,
+        },
+    )
+    statement = (
+        "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) "
+        "VALUES (%(user)s, %(tenant)s, %(department)s)"
+    )
+    await schema_db.execute(statement, {"user": user_id, "tenant": tenant_id, "department": first_id})
+    # When another membership is submitted, Then only a distinct same-tenant pair is accepted.
+    match candidate:
+        case "distinct":
+            await schema_db.execute(statement, {"user": user_id, "tenant": tenant_id, "department": second_id})
+            rows = await schema_db.fetchall(
+                "SELECT department_id FROM local_department_memberships WHERE user_id = %(user)s",
+                {"user": user_id},
+            )
+            assert {row["department_id"] for row in rows} == {first_id, second_id}
+        case "duplicate":
+            with pytest.raises(UniqueViolationError):
+                await schema_db.execute(statement, {"user": user_id, "tenant": tenant_id, "department": first_id})
+        case "other_tenant":
+            with pytest.raises(ForeignKeyViolationError):
+                await schema_db.execute(statement, {"user": user_id, "tenant": tenant_id, "department": foreign_id})
+        case _:
+            pytest.fail(f"Unknown membership scenario: {candidate}")

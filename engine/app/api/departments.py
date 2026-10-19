@@ -14,14 +14,16 @@ from app.db.session import connection_ctx
 from app.records.user import UserRecord
 from app.schemas.department import (
     AssignmentOut,
+    AssignmentsOut,
     DepartmentAssignment,
+    DepartmentAssignments,
     DepartmentCreate,
     DepartmentOptionOut,
     DepartmentOptionsOut,
     DepartmentOut,
     DepartmentsOut,
 )
-from app.services.local_departments import admin_tenant, assign_department, rename_department
+from app.services.local_departments import admin_tenant, assign_department, assign_departments, rename_department
 
 router = APIRouter(tags=["departments"])
 
@@ -90,4 +92,17 @@ async def set_department(
     tenant = admin_tenant(current_user, tenant_id)
     return await assign_department(
         current_user, AssignmentOut(user_id=user_id, tenant_id=tenant, department_id=data.department_id)
+    )
+
+
+@router.put("/users/{user_id}/departments", response_model=AssignmentsOut)
+async def set_departments(
+    user_id: UUID,
+    data: DepartmentAssignments,
+    tenant_id: UUID | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> AssignmentsOut:
+    tenant = admin_tenant(current_user, tenant_id)
+    return await assign_departments(
+        current_user, AssignmentsOut(user_id=user_id, tenant_id=tenant, department_ids=data.department_ids)
     )
