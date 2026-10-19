@@ -25,6 +25,7 @@ class AgentScheduleRecord:
     next_run_at: datetime | None = None
     run_count: int = 0
     created_at: datetime | None = None
+    timezone: str = "UTC"
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentScheduleRecord:
@@ -40,4 +41,5 @@ class AgentScheduleRecord:
             next_run_at=datetime_from_row(row.get("next_run_at")),
             run_count=int_from_row(row.get("run_count")),
             created_at=datetime_from_row(row.get("created_at")),
+            timezone=str_from_row(row["timezone"]),
         )

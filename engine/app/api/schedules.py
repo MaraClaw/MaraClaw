@@ -3,10 +3,10 @@
 import uuid
 from datetime import datetime
 from functools import partial
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.core.json_types import json_as_bool, json_as_str_or, mapping_from_row, object_mapping_from
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
@@ -15,15 +15,18 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
+from app.services.schedule_time import ScheduleTimezoneError, validate_timezone
 from app.services.scheduler import compute_next_run
 
 router = APIRouter(prefix="/agents/{agent_id}/schedules", tags=["schedules"])
+ScheduleTimezone = Annotated[str, AfterValidator(validate_timezone)]
 
 
 class ScheduleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     instruction: str = Field(default="", max_length=5000)
     cron_expr: str = Field(min_length=1, max_length=100)
+    timezone: ScheduleTimezone = "UTC"
     is_enabled: bool = True
 
 
@@ -31,6 +34,7 @@ class ScheduleUpdate(BaseModel):
     name: str | None = None
     instruction: str | None = None
     cron_expr: str | None = None
+    timezone: ScheduleTimezone = "UTC"
     is_enabled: bool | None = None
 
 
@@ -40,6 +44,7 @@ class ScheduleOut(BaseModel):
     name: str
     instruction: str
     cron_expr: str
+    timezone: str
     is_enabled: bool
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
@@ -49,6 +54,16 @@ class ScheduleOut(BaseModel):
     created_at: datetime | None = None
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+def _validated_next_run(cron_expr: str, timezone: str) -> datetime:
+    try:
+        next_run = compute_next_run(cron_expr, timezone=timezone)
+    except ScheduleTimezoneError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if next_run is None:
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {cron_expr}")
+    return next_run
 
 
 @router.get("/", response_model=list[ScheduleOut])
@@ -77,9 +92,7 @@ async def create_schedule(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can manage schedules")
 
-    next_run = compute_next_run(data.cron_expr)
-    if not next_run:
-        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {data.cron_expr}")
+    next_run = _validated_next_run(data.cron_expr, data.timezone)
 
     sched = await agent_schedule_dao.create(
         obj_in={
@@ -87,6 +100,7 @@ async def create_schedule(
             "name": data.name,
             "instruction": data.instruction,
             "cron_expr": data.cron_expr,
+            "timezone": data.timezone,
             "is_enabled": data.is_enabled,
             "next_run_at": next_run if data.is_enabled else None,
             "created_by": current_user.id,
@@ -113,16 +127,19 @@ async def update_schedule(
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     updates = object_mapping_from(data.model_dump(exclude_unset=True))
-    if "cron_expr" in updates or "is_enabled" in updates:
+    if "cron_expr" in updates or "is_enabled" in updates or "timezone" in updates:
         is_enabled = (
             sched.is_enabled if "is_enabled" not in updates else json_as_bool(updates["is_enabled"], sched.is_enabled)
         )
         cron_expr = (
             sched.cron_expr if "cron_expr" not in updates else json_as_str_or(updates["cron_expr"], sched.cron_expr)
         )
-        next_run = compute_next_run(cron_expr) if is_enabled or "cron_expr" in updates else None
-        if (is_enabled or "cron_expr" in updates) and next_run is None:
-            raise HTTPException(status_code=400, detail=f"Invalid cron expression: {cron_expr}")
+        timezone = data.timezone if "timezone" in updates else sched.timezone
+        next_run = (
+            _validated_next_run(cron_expr, timezone)
+            if is_enabled or "cron_expr" in updates or "timezone" in updates
+            else None
+        )
         updates["next_run_at"] = next_run if is_enabled else None
 
     updated = await agent_schedule_dao.update(db_obj=sched, obj_in=updates)

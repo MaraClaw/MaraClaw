@@ -72,9 +72,9 @@ class _Cursor:
             pool.rows[schedule_id] = replace(row, is_enabled=False, next_run_at=None)
         else:
             assert sql == "UPDATE agent_schedules SET next_run_at = %(next_run_at)s WHERE id = %(id)s"
-            assert params == {"id": schedule_id, "next_run_at": NEXT}
+            assert params == {"id": schedule_id, "next_run_at": pool.next_run}
             assert schedule_id in self.raw.locked
-            pool.rows[schedule_id] = replace(row, next_run_at=NEXT)
+            pool.rows[schedule_id] = replace(row, next_run_at=pool.next_run)
 
     async def fetchall(self) -> list[dict[str, object]]:
         return self.rows
@@ -108,6 +108,7 @@ class _Pool:
         self.counts: dict[UUID, int | None] = {}
         self.locked: set[UUID] = set()
         self.connections: list[_Raw] = []
+        self.next_run: datetime = NEXT
         self.pause_first = False
         self.selected = asyncio.Event()
         self.release = asyncio.Event()
@@ -143,9 +144,10 @@ def _schedule() -> AgentScheduleRecord:
     )
 
 
-def _next_run(cron_expr: str, after: datetime) -> datetime:
+def _next_run(cron_expr: str, after: datetime, timezone: str = "UTC") -> datetime:
     assert cron_expr == "0 12 * * *"
     assert after == NOW
+    assert timezone == "UTC"
     return NEXT
 
 
@@ -218,7 +220,7 @@ async def test_claim_disables_invalid_cron_without_blocking_valid_rows(
     monkeypatch.setattr("app.dao.schedule_dao.logger", _Logger())
     # When the callback reports an unparseable cron via None.
     claims = await agent_schedule_dao.claim_due(
-        NOW, lambda cron, after: None if cron == "invalid" else _next_run(cron, after)
+        NOW, lambda cron, after, timezone: None if cron == "invalid" else _next_run(cron, after, timezone)
     )
     # Then the broken schedule is disabled, logged, and excluded without a count update.
     assert claims == [replace(valid, next_run_at=NEXT)]

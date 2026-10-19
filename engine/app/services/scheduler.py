@@ -9,25 +9,17 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 from functools import partial
-from typing import cast
-
-from croniter import croniter
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
+from app.services.schedule_time import next_local_run
 from app.services.scheduler_tasks import schedule_execution
 
 
-def compute_next_run(cron_expr: str, after: datetime | None = None) -> datetime | None:
-    """Compute the next run time from a cron expression."""
-    try:
-        base = after or datetime.now(UTC)
-        cron = croniter(cron_expr, base)
-        return cast(datetime, cron.get_next(datetime)).replace(tzinfo=UTC)
-    except Exception as e:
-        logger.error(f"Invalid cron expression '{cron_expr}': {e}")
-        return None
+def compute_next_run(cron_expr: str, after: datetime | None = None, timezone: str = "UTC") -> datetime | None:
+    """Return the first eligible local occurrence strictly after the base, in UTC."""
+    return next_local_run(cron_expr, after or datetime.now(UTC), timezone)
 
 
 async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruction: str) -> None:
