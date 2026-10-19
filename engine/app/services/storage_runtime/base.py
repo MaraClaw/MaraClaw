@@ -48,6 +48,20 @@ class ConditionalWriteResult:
     current_version: StorageVersion | None = None
 
 
+class AtomicCreateUnsupportedError(NotImplementedError):
+    def __init__(self, backend: str, key: str):
+        self.backend: str = backend
+        self.key: str = key
+        super().__init__(f"Atomic creation is not supported by {backend}: {key}")
+
+
+class StorageConditionalRaceError(RuntimeError):
+    def __init__(self, key: str, attempts: int):
+        self.key: str = key
+        self.attempts: int = attempts
+        super().__init__(f"Conditional storage race persisted after {attempts} attempts: {key}")
+
+
 class StorageBackend:
     async def exists(self, key: str) -> bool:
         raise NotImplementedError
@@ -70,6 +84,16 @@ class StorageBackend:
 
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         raise NotImplementedError
+
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        """Publish complete bytes without replacement, or report an occupied key.
+
+        Backends must implement a native atomic primitive. Capability, provider,
+        and transport failures raise; they must never become absence/conflicts.
+        """
+        raise AtomicCreateUnsupportedError(type(self).__name__, key)
 
     async def write_text(self, key: str, content: str, encoding: str = "utf-8") -> None:
         await self.write_bytes(key, content.encode(encoding), content_type="text/plain; charset=utf-8")
@@ -107,12 +131,15 @@ class StorageBackend:
         condition: WriteCondition | None = None,
         content_type: str | None = None,
     ) -> ConditionalWriteResult:
+        if condition and condition.require_absent:
+            if condition.version_token is not None:
+                current = await self.get_version(key)
+                if current.token != condition.version_token:
+                    return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
+            return await self.create_bytes_if_absent(key, data, content_type=content_type)
         current = await self.get_version(key)
-        if condition:
-            if condition.require_absent and current.exists:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-            if condition.version_token is not None and current.token != condition.version_token:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
+        if condition and condition.version_token is not None and current.token != condition.version_token:
+            return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
         await self.write_bytes(key, data, content_type=content_type)
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
 

@@ -1,9 +1,17 @@
+from pathlib import Path
 from typing import override
 
 import pytest
 
-from app.services.storage_runtime.base import StorageBackend, StorageEntry
+from app.services.storage_runtime.base import (
+    ConditionalWriteResult,
+    StorageBackend,
+    StorageConditionalRaceError,
+    StorageEntry,
+    WriteCondition,
+)
 from app.services.storage_runtime.fallback import FallbackStorageBackend
+from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.storage_runtime.s3 import S3StorageBackend
 
 
@@ -43,6 +51,15 @@ class MemoryStorageBackend(StorageBackend):
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.files[key] = data
+
+    @override
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        if key in self.files:
+            return ConditionalWriteResult(ok=False, conflict=True)
+        self.files[key] = data
+        return ConditionalWriteResult(ok=True)
 
     @override
     async def delete(self, key: str) -> None:
@@ -99,3 +116,89 @@ async def test_s3_local_path_for_preserves_suffix_and_materialized_content(monke
         assert path.read_bytes() == b"agent-id/report.txt"
     finally:
         path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "local_path_for", "presign_download_url"])
+async def test_fallback_promotion_returns_primary_when_upload_wins(
+    surface: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    key = "report.txt"
+    await legacy.write_bytes(key, b"old")
+    original_read = legacy.read_bytes
+
+    async def raced_read(key: str) -> bytes:
+        data = await original_read(key)
+        await primary.write_bytes(key, b"winning upload")
+        return data
+
+    async def presign(key: str, filename: str | None = None, inline: bool = False) -> str:
+        return (await primary.read_bytes(key)).decode()
+
+    monkeypatch.setattr(legacy, "read_bytes", raced_read)
+    monkeypatch.setattr(primary, "presign_download_url", presign)
+    storage = FallbackStorageBackend(primary, legacy)
+
+    result = await getattr(storage, surface)(key)
+
+    assert await primary.read_bytes(key) == b"winning upload"
+    if surface == "read_bytes":
+        assert result == b"winning upload"
+    elif surface in {"stat", "get_version"}:
+        assert result.size == len(b"winning upload")
+    elif surface == "local_path_for":
+        assert result == tmp_path / "primary" / key
+        assert result.read_bytes() == b"winning upload"
+    else:
+        assert result == "winning upload"
+    assert await original_read(key) == b"old"
+
+
+@pytest.mark.parametrize("via_condition", [False, True])
+async def test_fallback_create_treats_legacy_only_object_as_occupied(via_condition: bool):
+    primary = MemoryStorageBackend()
+    legacy = MemoryStorageBackend({"report.txt": b"old"})
+    storage = FallbackStorageBackend(primary, legacy)
+
+    if via_condition:
+        result = await storage.write_bytes_if_match("report.txt", b"new", condition=WriteCondition(require_absent=True))
+    else:
+        result = await storage.create_bytes_if_absent("report.txt", b"new")
+
+    assert result.conflict
+    assert not result.ok
+    assert primary.files == {}
+    assert legacy.files == {"report.txt": b"old"}
+
+
+async def test_fallback_create_only_creates_new_key_in_primary():
+    primary = MemoryStorageBackend()
+    legacy = MemoryStorageBackend()
+    storage = FallbackStorageBackend(primary, legacy)
+
+    result = await storage.create_bytes_if_absent("report.txt", b"new")
+
+    assert result.ok
+    assert primary.files == {"report.txt": b"new"}
+    assert legacy.files == {}
+
+
+async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing():
+    class DisappearingPrimary(MemoryStorageBackend):
+        attempts = 0
+
+        @override
+        async def create_bytes_if_absent(
+            self, key: str, data: bytes, content_type: str | None = None
+        ) -> ConditionalWriteResult:
+            self.attempts += 1
+            return ConditionalWriteResult(ok=False, conflict=True)
+
+    primary = DisappearingPrimary()
+    storage = FallbackStorageBackend(primary, MemoryStorageBackend({"report.txt": b"old"}))
+
+    with pytest.raises(StorageConditionalRaceError):
+        await storage.read_bytes("report.txt")
+
+    assert primary.attempts == 3

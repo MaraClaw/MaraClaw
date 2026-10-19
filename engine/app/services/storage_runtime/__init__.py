@@ -10,8 +10,10 @@ from app.services.storage_runtime.agent_files import (
     tenant_storage_key,
 )
 from app.services.storage_runtime.base import (
+    AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageBackend,
+    StorageConditionalRaceError,
     StorageEntry,
     StorageVersion,
     WriteCondition,
@@ -27,11 +29,13 @@ from app.services.storage_runtime.s3 import S3StorageBackend
 from app.services.storage_runtime.utils import agent_storage_prefix, normalize_storage_key, tenant_storage_prefix
 
 __all__ = [
+    "AtomicCreateUnsupportedError",
     "ConditionalWriteResult",
     "FallbackStorageBackend",
     "LocalStorageBackend",
     "S3StorageBackend",
     "StorageBackend",
+    "StorageConditionalRaceError",
     "StorageEntry",
     "StorageVersion",
     "WriteCondition",

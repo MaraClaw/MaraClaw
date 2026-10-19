@@ -8,6 +8,7 @@ from typing import override
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
+    StorageConditionalRaceError,
     StorageEntry,
     StorageVersion,
     WriteCondition,
@@ -49,11 +50,8 @@ class FallbackStorageBackend(StorageBackend):
 
     @override
     async def read_bytes(self, key: str) -> bytes:
-        if await self.primary.exists(key) and await self.primary.is_file(key):
-            return await self.primary.read_bytes(key)
-        data = await self.fallback.read_bytes(key)
-        await self.primary.write_bytes(key, data)
-        return data
+        await self._promote_file(key)
+        return await self.primary.read_bytes(key)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -71,25 +69,23 @@ class FallbackStorageBackend(StorageBackend):
 
     @override
     async def stat(self, key: str) -> StorageEntry:
-        if await self.primary.exists(key):
+        if await self._promote_file(key):
             return await self.primary.stat(key)
-        entry = await self.fallback.stat(key)
-        if not entry.is_dir:
-            data = await self.fallback.read_bytes(key)
-            await self.primary.write_bytes(key, data)
-        return entry
+        return await self.fallback.stat(key)
 
     @override
     async def get_version(self, key: str) -> StorageVersion:
-        primary_version = await self.primary.get_version(key)
-        if primary_version.exists:
-            return primary_version
-        fallback_version = await self.fallback.get_version(key)
-        if fallback_version.exists and not fallback_version.is_dir:
-            data = await self.fallback.read_bytes(key)
-            await self.primary.write_bytes(key, data)
+        if await self._promote_file(key):
             return await self.primary.get_version(key)
-        return fallback_version
+        return await self.fallback.get_version(key)
+
+    @override
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        if await self.fallback.exists(key):
+            return ConditionalWriteResult(ok=False, conflict=True)
+        return await self.primary.create_bytes_if_absent(key, data, content_type=content_type)
 
     @override
     async def write_bytes_if_match(
@@ -100,21 +96,29 @@ class FallbackStorageBackend(StorageBackend):
         condition: WriteCondition | None = None,
         content_type: str | None = None,
     ) -> ConditionalWriteResult:
+        if condition and condition.require_absent:
+            return await super().write_bytes_if_match(key, data, condition=condition, content_type=content_type)
         return await self.primary.write_bytes_if_match(key, data, condition=condition, content_type=content_type)
 
     @override
     async def local_path_for(self, key: str) -> Path | None:
-        if await self.primary.exists(key):
+        if await self._promote_file(key):
             return await self.primary.local_path_for(key)
-        path = await self.fallback.local_path_for(key)
-        if path is not None and await self.fallback.is_file(key):
-            data = await self.fallback.read_bytes(key)
-            await self.primary.write_bytes(key, data)
-        return path
+        return await self.fallback.local_path_for(key)
 
     @override
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
-        if not await self.primary.exists(key) and await self.fallback.exists(key) and await self.fallback.is_file(key):
-            data = await self.fallback.read_bytes(key)
-            await self.primary.write_bytes(key, data)
+        await self._promote_file(key)
         return await self.primary.presign_download_url(key, filename=filename, inline=inline)
+
+    async def _promote_file(self, key: str) -> bool:
+        for _attempt in range(3):
+            if await self.primary.exists(key):
+                return True
+            if not await self.fallback.is_file(key):
+                return False
+            data = await self.fallback.read_bytes(key)
+            await self.primary.create_bytes_if_absent(key, data)
+            if await self.primary.exists(key):
+                return True
+        raise StorageConditionalRaceError(key, 3)

@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import cast, override
 
 import aiofiles
+import anyio
 from fastapi import HTTPException, status
 
 from app.services.storage_runtime.base import (
@@ -15,7 +17,6 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageEntry,
     StorageVersion,
-    WriteCondition,
     content_hash_bytes,
 )
 from app.services.storage_runtime.utils import normalize_storage_key
@@ -153,22 +154,11 @@ class LocalStorageBackend(StorageBackend):
         )
 
     @override
-    async def write_bytes_if_match(
-        self,
-        key: str,
-        data: bytes,
-        *,
-        condition: WriteCondition | None = None,
-        content_type: str | None = None,
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
     ) -> ConditionalWriteResult:
-        current = await self.get_version(key)
-        if condition:
-            if condition.require_absent and current.exists:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-            if condition.version_token is not None and current.token != condition.version_token:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-        await self.write_bytes(key, data, content_type=content_type)
-        return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+        created = await anyio.to_thread.run_sync(_publish_complete_file, self._full_path(key), data)
+        return ConditionalWriteResult(ok=created, conflict=not created, current_version=await self.get_version(key))
 
     @override
     async def local_path_for(self, key: str) -> Path | None:
@@ -184,3 +174,21 @@ def _local_delete_tree(path: Path) -> None:
 def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
     hash_part = file_hash or ""
     return f"{stat.st_mtime_ns}:{stat.st_size}:{hash_part}"
+
+
+def _publish_complete_file(path: Path, data: bytes) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(dir=path.parent, prefix=".storage-create-", delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+        try:
+            temporary.write(data)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary.close()
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            temporary_path.unlink(missing_ok=True)
