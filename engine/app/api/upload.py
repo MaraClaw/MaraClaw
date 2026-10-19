@@ -1,6 +1,5 @@
 """File upload API for chat - saves files to agent workspace and extracts text."""
 
-import asyncio
 import base64
 import os
 import uuid
@@ -17,6 +16,7 @@ from app.services.document_parser import (
     OFFICE_EXTENSIONS,
     TEXT_EXTENSIONS,
     convert_document_isolated,
+    convert_document_isolated_async,
     decode_text_bytes,
     format_parse_failure,
     needs_extraction,
@@ -64,6 +64,18 @@ def extract_text(content: bytes, filename: str, extension: str) -> str:
     return _upload_extract_failure(extension, None)
 
 
+async def extract_text_async(content: bytes, filename: str, extension: str) -> str:
+    if extension in TEXT_EXTENSIONS:
+        return decode_text_bytes(content)
+    if not needs_extraction(filename):
+        return f"[Unsupported file format: {extension}]"
+    try:
+        extracted = await convert_document_isolated_async(content, filename)
+    except DocumentParseError as exc:
+        return _upload_extract_failure(extension, exc)
+    return extracted or _upload_extract_failure(extension, None)
+
+
 def _upload_extract_failure(extension: str, exc: DocumentParseError | None) -> str:
     detail = format_parse_failure(exc) if exc is not None else f"Unsupported file format: {extension}"
     if extension == ".pdf":
@@ -109,16 +121,20 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="Invalid agent_id") from exc
         _ = await check_agent_access(current_user, agent_uuid)
         storage = get_storage_backend()
-        workspace_path = f"workspace/uploads/{filename}"
-        key = normalize_storage_key(f"{agent_id}/{workspace_path}")
-        counter = 1
-        while await storage.exists(key):
-            stem, ext = os.path.splitext(filename)
-            filename = f"{stem}_{counter}{ext}"
-            workspace_path = f"workspace/uploads/{filename}"
-            key = normalize_storage_key(f"{agent_id}/{workspace_path}")
-            counter += 1
-        await storage.write_bytes(key, content, content_type=guess_content_type(filename))
+        stem, suffix = os.path.splitext(filename)
+        for counter in range(100):
+            candidate = filename if counter == 0 else f"{stem}_{counter}{suffix}"
+            candidate_path = f"workspace/uploads/{candidate}"
+            key = normalize_storage_key(f"{agent_id}/{candidate_path}")
+            result = await storage.create_bytes_if_absent(key, content, content_type=guess_content_type(candidate))
+            if result.ok:
+                filename = candidate
+                workspace_path = candidate_path
+                break
+            if not result.conflict:
+                raise HTTPException(status_code=503, detail="Storage did not accept the upload")
+        else:
+            raise HTTPException(status_code=409, detail="Too many attachments share this filename; rename the file")
         _ = await ensure_local_path(key)
         saved_filename = filename
     else:
@@ -133,7 +149,7 @@ async def upload_file(
         image_data_url = f"data:{mime};base64,{b64}"
         extracted = f"[Image file: {filename}; visual model analysis required]"
     elif ext in EXTRACTABLE:
-        extracted = await asyncio.to_thread(extract_text, content, filename, ext)
+        extracted = await extract_text_async(content, filename, ext)
     else:
         extracted = (
             f"[File saved. Text extraction is not supported for {ext}; the agent can use the read_document tool.]"

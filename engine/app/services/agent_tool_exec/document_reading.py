@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from app.services.document_parser import (
@@ -7,6 +8,7 @@ from app.services.document_parser import (
     DocumentParseError,
     DocumentTooLargeError,
     convert_document_isolated,
+    convert_document_isolated_async,
     decode_text_bytes,
     format_parse_failure,
     is_plain_text_document,
@@ -24,9 +26,7 @@ def _truncate_document_text(content: str, max_chars: int) -> str:
     return content[:max_chars] + f"\n\n...[truncated, {len(content)} chars total]"
 
 
-def _read_document_from_bytes(data: bytes, filename: str, max_chars: int = 8000) -> str:
-    """Parse already-loaded document bytes. Shared by disk and storage readers."""
-    max_chars = min(max(int(max_chars), 1), _READ_DOCUMENT_MAX_CHARS)
+def _local_document_text(data: bytes, filename: str, max_chars: int) -> str | None:
     if len(data) > MAX_INPUT_BYTES:
         return format_parse_failure(DocumentTooLargeError("too large", size_bytes=len(data)))
 
@@ -36,7 +36,15 @@ def _read_document_from_bytes(data: bytes, filename: str, max_chars: int = 8000)
 
     if not needs_extraction(filename):
         return unsupported_read_document_message(suffix or filename)
+    return None
 
+
+def _read_document_from_bytes(data: bytes, filename: str, max_chars: int = 8000) -> str:
+    """Parse already-loaded document bytes. Shared by disk and storage readers."""
+    max_chars = min(max(int(max_chars), 1), _READ_DOCUMENT_MAX_CHARS)
+    local = _local_document_text(data, filename, max_chars)
+    if local is not None:
+        return local
     try:
         content = convert_document_isolated(data, filename, max_output_chars=max_chars)
     except DocumentParseError as exc:
@@ -49,11 +57,23 @@ def _read_document_from_bytes(data: bytes, filename: str, max_chars: int = 8000)
     return content
 
 
-def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
-    """Synchronous document extraction. Must run outside the uvicorn event loop."""
+async def _read_document_from_bytes_async(data: bytes, filename: str, max_chars: int = 8000) -> str:
+    max_chars = min(max(int(max_chars), 1), _READ_DOCUMENT_MAX_CHARS)
+    local = _local_document_text(data, filename, max_chars)
+    if local is not None:
+        return local
+    try:
+        content = await convert_document_isolated_async(data, filename, max_output_chars=max_chars)
+    except DocumentParseError as exc:
+        return format_parse_failure(exc)
+    except OSError as exc:
+        return f"Document read failed: {str(exc)[:200]}"
+    return content if content.strip() else _EMPTY_DOCUMENT
+
+
+def _load_document(ws: Path, rel_path: str, tenant_id: str | None) -> tuple[bytes, str] | str:
     from app.services import agent_tools
 
-    max_chars = min(max(int(max_chars), 1), _READ_DOCUMENT_MAX_CHARS)
     try:
         file_path = agent_tools._resolve_tool_source_path(ws, rel_path, tenant_id=tenant_id)
     except ValueError as exc:
@@ -75,4 +95,21 @@ def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_i
         data = file_path.read_bytes()
     except OSError as exc:
         return f"Document read failed: {str(exc)[:200]}"
-    return _read_document_from_bytes(data, file_path.name, max_chars)
+    return data, file_path.name
+
+
+def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
+    """Synchronous document extraction. Must run outside the uvicorn event loop."""
+    loaded = _load_document(ws, rel_path, tenant_id)
+    if isinstance(loaded, str):
+        return loaded
+    data, filename = loaded
+    return _read_document_from_bytes(data, filename, max_chars)
+
+
+async def _read_document_async(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
+    loaded = await asyncio.to_thread(_load_document, ws, rel_path, tenant_id)
+    if isinstance(loaded, str):
+        return loaded
+    data, filename = loaded
+    return await _read_document_from_bytes_async(data, filename, max_chars)

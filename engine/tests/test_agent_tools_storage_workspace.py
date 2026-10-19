@@ -1,3 +1,4 @@
+import asyncio
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -25,6 +26,48 @@ from app.services.storage_runtime.base import (
     StorageVersion,
     WriteCondition,
 )
+
+
+@pytest.mark.parametrize("source", ["local", "storage", "enterprise"])
+async def test_read_document_cancel_reaches_owned_parser(monkeypatch, tmp_path, source):
+    # Given
+    from app.services.agent_tool_exec import document_reading, documents
+
+    agent_id = uuid.uuid4()
+    tenant_id = str(uuid.uuid4())
+    rel = "enterprise_info/report.docx" if source == "enterprise" else "workspace/report.docx"
+    key = f"enterprise_info_{tenant_id}/report.docx" if source == "enterprise" else f"{agent_id}/{rel}"
+    backend = MemoryStorageBackend({key: b"document"})
+    target = tmp_path / "workspace/report.docx"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"document")
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def parse(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(document_reading, "convert_document_isolated_async", parse, raising=False)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: backend)
+    operation = (
+        documents._read_document(tmp_path, rel)
+        if source == "local"
+        else documents._read_document_from_storage(agent_id, rel, tenant_id=tenant_id)
+    )
+    task = asyncio.create_task(operation)
+    # When
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    # Then
+    assert cancelled.is_set()
 
 
 @pytest.fixture(autouse=True)

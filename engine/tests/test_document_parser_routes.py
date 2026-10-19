@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from app.api import files as files_api, upload as upload_api
 from app.services.agent_tool_exec import document_reading, documents
@@ -141,6 +143,75 @@ async def test_chat_upload_when_storage_backed_then_retains_original(
     assert stored.exists()
     assert stored.read_bytes() == _fixture("supported.docx")
     assert "Ada" in result["extracted_text"]
+
+
+async def test_chat_upload_when_same_name_concurrent_then_retains_both_payloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage = LocalStorageBackend(str(tmp_path))
+    agent_id = str(uuid.uuid4())
+    _bind_storage(monkeypatch, storage, tmp_path)
+    original_exists = storage.exists
+    checked_absent = asyncio.Event()
+    absent_checks = 0
+
+    async def synchronized_exists(key: str) -> bool:
+        nonlocal absent_checks
+        occupied = await original_exists(key)
+        if not occupied and absent_checks < 2:
+            absent_checks += 1
+            if absent_checks == 2:
+                checked_absent.set()
+            await asyncio.wait_for(checked_absent.wait(), timeout=5)
+        return occupied
+
+    async def allow_access(_user: object, _agent_id: uuid.UUID) -> object:
+        return make_agent(uuid.uuid4()), "manage"
+
+    monkeypatch.setattr(upload_api, "check_agent_access", allow_access)
+    monkeypatch.setattr(storage, "exists", synchronized_exists)
+    payloads = [b"first attachment", b"second attachment"]
+    results = await asyncio.gather(
+        *(
+            upload_api.upload_file(
+                file=UploadFile(BytesIO(payload), filename="same.txt"), agent_id=agent_id, current_user=make_user()
+            )
+            for payload in payloads
+        )
+    )
+    paths = [result["workspace_path"] for result in results]
+    assert len(set(paths)) == 2
+    for result, payload in zip(results, payloads, strict=True):
+        assert result["saved_filename"] == Path(result["workspace_path"]).name
+        assert result["filename"] == result["saved_filename"]
+        assert await storage.read_bytes(f"{agent_id}/{result['workspace_path']}") == payload
+
+
+async def test_chat_upload_when_extraction_cancelled_then_keeps_saved_attachment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage = LocalStorageBackend(str(tmp_path))
+    agent_id = str(uuid.uuid4())
+    _bind_storage(monkeypatch, storage, tmp_path)
+
+    async def allow_access(_user: object, _agent_id: uuid.UUID) -> object:
+        return make_agent(uuid.uuid4()), "manage"
+
+    async def cancelled_parser(_content: bytes, _filename: str) -> str:
+        raise asyncio.CancelledError
+
+    def reject_sync_parser(_content: bytes, _filename: str) -> str:
+        raise AssertionError("request extraction must own asynchronous worker cancellation")
+
+    monkeypatch.setattr(upload_api, "check_agent_access", allow_access)
+    monkeypatch.setattr(upload_api, "convert_document_isolated", reject_sync_parser)
+    monkeypatch.setattr(upload_api, "convert_document_isolated_async", cancelled_parser, raising=False)
+    payload = _fixture("supported.docx")
+    with pytest.raises(asyncio.CancelledError):
+        await upload_api.upload_file(
+            file=UploadFile(BytesIO(payload), filename="cancelled.docx"), agent_id=agent_id, current_user=make_user()
+        )
+    assert await storage.read_bytes(f"{agent_id}/workspace/uploads/cancelled.docx") == payload
 
 
 async def test_agent_upload_when_office_file_then_writes_same_stem_sidecar(
@@ -533,12 +604,12 @@ async def test_preview_when_companion_exists_then_skips_anydoc(monkeypatch: pyte
     async def fake_check_agent_access(_current_user: object, _agent_id: uuid.UUID) -> object:
         return agent, "manage"
 
-    def fail_convert(*_args: object, **_kwargs: object) -> str:
+    async def fail_convert(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("anydoc should not run when a companion exists")
 
     _bind_storage(monkeypatch, storage, tmp_path)
     monkeypatch.setattr(files_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(files_api, "convert_document_isolated", fail_convert)
+    monkeypatch.setattr(files_api, "convert_document_isolated_async", fail_convert)
 
     result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
     assert result["text"] == "sidecar only"
