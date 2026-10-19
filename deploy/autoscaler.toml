@@ -1,0 +1,14 @@
+sample_seconds = 10
+high_samples = 3
+low_samples = 30
+cooldown_seconds = 120
+drain_seconds = 120
+minimum = 1
+maximum = 16
+engine_rps = 20
+web_rps = 100
+# Zero means use Docker daemon MemTotal, not a fixed 16 GiB ceiling.
+capacity_gib = 0
+guest_gib = 2
+# Aggregate operator allocation for ALL unlimited external containers; zero blocks growth.
+external_unlimited_gib = 0
