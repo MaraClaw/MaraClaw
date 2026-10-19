@@ -1,20 +1,22 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { createFilePreview, reduceFilePreview } from '@/lib/file-download'
+import { ApiError, formatApiDetail, userFacingRequestError } from '@/lib/http'
 import {
   deleteFileContent,
-  fileDownloadUrl,
+  fileTicketUrl,
   listFileRevisions,
   listFiles,
   lockFile,
+  mintFileDownloadTicket,
   readFileContent,
   restoreFileRevision,
   unlockFile,
@@ -22,6 +24,43 @@ import {
   writeFileContent,
   type AgentOut,
 } from '@/lib/workspace-api'
+
+function FileImagePreview({ agentId, path }: { agentId: string; path: string }) {
+  const scope = useWorkspaceSession()
+  const [preview, dispatch] = useReducer(reduceFilePreview, undefined, () => createFilePreview(agentId, path))
+  const { status, request } = preview
+
+  useEffect(() => {
+    if (status !== 'minting' || !scope.isCurrent()) return
+    let active = true
+    void mintFileDownloadTicket(request.agentId, request.path, { inline: true }).then(
+      ({ ticket }) => {
+        if (!active || !scope.isCurrent()) return
+        dispatch({ type: 'minted', request, url: fileTicketUrl(request.agentId, request.path, ticket, { inline: true }) })
+      },
+      () => {
+        if (active && scope.isCurrent()) dispatch({ type: 'mint-failed', request })
+      },
+    )
+    return () => { active = false }
+  }, [request, scope, status])
+
+  switch (preview.status) {
+    case 'minting':
+      return <p className="mb-3 text-xs text-muted-foreground" role="status">Loading preview...</p>
+    case 'failed':
+      return <p className="mb-3 text-xs text-muted-foreground" role="status">Preview unavailable. Download the file to view it.</p>
+    case 'ready':
+      return (
+        <img
+          src={preview.url}
+          alt={path}
+          className="mb-3 max-h-72 rounded-xl border border-border object-contain"
+          onError={() => dispatch({ type: 'image-error', request })}
+        />
+      )
+  }
+}
 
 export function AgentFilesPage() {
   const scope = useWorkspaceSession()
@@ -65,6 +104,21 @@ export function AgentFilesPage() {
     },
     onError(error) {
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Save failed')
+    },
+  })
+
+  const download = useMutation({
+    mutationFn: async (filePath: string) => {
+      const { ticket } = await mintFileDownloadTicket(agent.id, filePath, { inline: false })
+      if (!scope.isCurrent()) return
+      const link = document.createElement('a')
+      link.href = fileTicketUrl(agent.id, filePath, ticket, { inline: false })
+      document.body.append(link)
+      link.click()
+      link.remove()
+    },
+    onError(error) {
+      toast.error(userFacingRequestError(error, 'Unable to start download. Try again.'))
     },
   })
 
@@ -124,10 +178,16 @@ export function AgentFilesPage() {
               <div className="flex gap-2">
                 {token ? (
                   <>
-                    <Button size="sm" variant="outline" asChild>
-                      <a href={fileDownloadUrl(agent.id, selected, token)} target="_blank" rel="noreferrer">
-                        Download
-                      </a>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={download.isPending}
+                      aria-busy={download.isPending}
+                      onClick={() => download.mutate(selected)}
+                    >
+                      {download.isPending ? <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : null}
+                      Download
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success('Locked for edit'))).catch(scope.rethrowCurrent)}>
                       Lock
@@ -159,11 +219,7 @@ export function AgentFilesPage() {
               </div>
             </div>
             {token && /\.(png|jpe?g|gif|webp|svg)$/i.test(selected) ? (
-              <img
-                src={fileDownloadUrl(agent.id, selected, token)}
-                alt={selected}
-                className="mb-3 max-h-72 rounded-xl border border-border object-contain"
-              />
+              <FileImagePreview key={`${agent.id}:${selected}`} agentId={agent.id} path={selected} />
             ) : null}
             <Textarea className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
             {(revisions.data ?? []).length > 0 ? (
