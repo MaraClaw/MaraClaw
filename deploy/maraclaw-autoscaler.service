@@ -1,0 +1,20 @@
+[Unit]
+Description=MaraClaw single-host request autoscaler
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+WorkingDirectory=@ROOT@
+ExecStart=@PYTHON@ -m deploy.autoscale --root @ROOT@
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=240
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
