@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
@@ -19,11 +20,16 @@ from app.services.chat_persist import persist_chat_message
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
+from app.services.openclaw_routing import (
+    NoCompanyModelError,
+    enqueue_prepared_openclaw_message,
+    prepare_openclaw_message,
+)
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
+    charge_conversation_quota,
     check_agent_expired,
-    check_conversation_quota,
 )
 from app.services.realtime import realtime_router
 
@@ -339,18 +345,49 @@ class WebSocketChatHandler:
 
             self.current_user_text = content
 
-            # Quota Checks
             if not await self._check_quotas():
                 continue
 
-            # Add user message to in-memory context
+            try:
+                prepared = await prepare_openclaw_message(agent=self.agent, content=content, history=self.conversation)
+            except NoCompanyModelError as exc:
+                logger.warning("[WS] OpenClaw preparation blocked: {}", exc)
+                await self.websocket.send_json(
+                    {"type": "turn_rejected", "reason": "no_company_model", "content": str(exc)}
+                )
+                continue
+
+            try:
+                async with connection_ctx():
+                    if is_onboarding_trigger:
+                        if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
+                            await self.websocket.send_json({"type": "onboarded", "agent_id": str(self.agent_id)})
+                            continue
+                    else:
+                        await charge_conversation_quota(self.user)
+                    await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
+                    _ = await enqueue_prepared_openclaw_message(
+                        prepared, sender_user_id=self.user.id, conversation_id=self.conv_id
+                    )
+            except QuotaExceeded as exc:
+                await self.websocket.send_json(
+                    {"type": "turn_rejected", "reason": "quota_exceeded", "content": exc.message}
+                )
+                continue
+            except Exception:
+                logger.exception("[WS] Turn transaction failed")
+                await self.websocket.send_json(
+                    {
+                        "type": "turn_rejected",
+                        "reason": "enqueue_failed",
+                        "content": "Your message could not be sent. Please try again.",
+                    }
+                )
+                continue
+
             self.conversation.append({"role": "user", "content": content})
-
-            # Save user message to DB
-            await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
-
-            await self._route_openclaw(content)
-            continue
+            await self.websocket.send_json({"type": "status", "content": "thinking"})
+            logger.info("[WS] OpenClaw: message queued for gateway poll")
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already started)."""
@@ -363,29 +400,15 @@ class WebSocketChatHandler:
                 }
             )
             return True
-        claimed = await try_begin_onboarding_greeting(self.agent_id, self.user.id)
-        if not claimed:
-            logger.info("[WS] Onboarding trigger ignored - greeting already claimed")
-            await self.websocket.send_json(
-                {
-                    "type": "onboarded",
-                    "agent_id": str(self.agent_id),
-                }
-            )
-            return True
         return False
 
     async def _check_quotas(self) -> bool:
-        """Checks conversation and agent LLM quotas. Sends message and returns False if exceeded."""
+        """Check expiry before opening the turn transaction, including expiry side effects."""
         try:
-            await check_conversation_quota(self.user.id)
             await check_agent_expired(self.agent_id)
             return True
-        except QuotaExceeded as qe:
-            await self.websocket.send_json({"type": "done", "role": "assistant", "content": f"⚠️ {qe.message}"})
-            return False
         except AgentExpired as ae:
-            await self.websocket.send_json({"type": "done", "role": "assistant", "content": f"⚠️ {ae.message}"})
+            await self.websocket.send_json({"type": "turn_rejected", "reason": "agent_expired", "content": ae.message})
             return False
 
     async def _save_user_message(self, content: str, display_content: str, file_name: str, is_onboarding_trigger: bool):
@@ -426,23 +449,3 @@ class WebSocketChatHandler:
                 title_if_default=title_if_default,
             )
             logger.info("[WS] User message saved")
-
-    async def _route_openclaw(self, content: str):
-        """Enqueues message for OpenClaw edge node poll."""
-        from app.services.openclaw_routing import NoCompanyModelError, enqueue_openclaw_message
-
-        await self.websocket.send_json({"type": "status", "content": "thinking"})
-        try:
-            _ = await enqueue_openclaw_message(
-                agent=self.agent,
-                content=content,
-                sender_user_id=self.user.id,
-                conversation_id=self.conv_id,
-                history=self.conversation,
-                await_wake=False,
-            )
-        except NoCompanyModelError as exc:
-            logger.warning("[WS] OpenClaw enqueue blocked: {}", exc)
-            await self.websocket.send_json({"type": "error", "content": str(exc)})
-            return
-        logger.info("[WS] OpenClaw: message queued for gateway poll")

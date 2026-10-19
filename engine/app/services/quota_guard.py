@@ -1,12 +1,12 @@
 """Usage quota guard - check and enforce usage limits."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, datetime
 
 from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.records.user import UserRecord
 
 
 class QuotaExceededError(Exception):
@@ -33,49 +33,18 @@ AgentExpired = AgentExpiredError
 # ── Conversation quota ──────────────────────────────────────────────
 
 
-async def check_conversation_quota(user_id: uuid.UUID) -> None:
-    """Check if user has remaining conversation quota. Raises QuotaExceeded if not."""
-    user = await user_dao.get(user_id)
-    if not user:
-        return
-
-    # Admin users are exempt
+async def charge_conversation_quota(user: UserRecord) -> None:
+    """Charge one accepted turn using the freshly authorized principal's exemption."""
     if user.role in ("platform_admin", "org_admin"):
         return
 
-    # Check period reset
-    now = datetime.now(UTC)
-    if user.quota_message_period != "permanent" and user.quota_period_start:
-        period_duration = _get_period_duration(user.quota_message_period)
-        if now - user.quota_period_start >= period_duration:
-            _ = await user_dao.update(
-                db_obj=user,
-                obj_in={"quota_messages_used": 0, "quota_period_start": now},
-            )
-            user = await user_dao.get(user_id) or user
-
-    if user.quota_messages_used >= user.quota_message_limit:
+    if await user_dao.charge_message_quota(user.id) is None:
+        current = await user_dao.get(user.id) or user
         raise QuotaExceeded(
-            f"Message quota exceeded ({user.quota_messages_used}/{user.quota_message_limit}). "
-            + f"Period: {user.quota_message_period}.",
+            f"Message quota exceeded ({current.quota_messages_used}/{current.quota_message_limit}). "
+            + f"Period: {current.quota_message_period}.",
             quota_type="conversation",
         )
-
-
-async def increment_conversation_usage(user_id: uuid.UUID) -> None:
-    """Increment conversation usage counter for a user."""
-    user = await user_dao.get(user_id)
-    if not user:
-        return
-
-    if user.role in ("platform_admin", "org_admin"):
-        return
-
-    now = datetime.now(UTC)
-    updates: dict[str, Any] = {"quota_messages_used": (user.quota_messages_used or 0) + 1}
-    if user.quota_message_period != "permanent" and not user.quota_period_start:
-        updates["quota_period_start"] = now
-    _ = await user_dao.update(db_obj=user, obj_in=updates)
 
 
 # ── Agent expiry ────────────────────────────────────────────────────
@@ -193,16 +162,3 @@ async def enforce_heartbeat_floor(tenant_id: uuid.UUID, floor: int | None = None
         floor_val = tenant.min_heartbeat_interval_minutes
 
     return await agent_dao.raise_heartbeat_floor(tenant_id, floor_val)
-
-
-# ── Helper ─────────────────────────────────────────────────────────
-
-
-def _get_period_duration(period: str) -> timedelta:
-    """Convert period string to timedelta."""
-    mapping = {
-        "daily": timedelta(days=1),
-        "weekly": timedelta(weeks=1),
-        "monthly": timedelta(days=30),
-    }
-    return mapping.get(period, timedelta(days=36500))  # permanent = ~100 years

@@ -1,4 +1,5 @@
 import time
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -43,7 +44,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     async def department_access(_user, _agent):
         return state["granted"]
 
-    async def dispatch(_content):
+    async def dispatch(_prepared, **_kwargs):
         if revocation == "membership":
             state["granted"] = False
         elif revocation == "inactive":
@@ -57,6 +58,16 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     handler.binding = chat_tickets.ChatTicketBinding(
         user_id=user.id, tenant_id=tenant, agent_id=agent.id, session_id=uuid4(), auth_deadline=int(time.time()) + 3600
     )
+    handler.conv_id = str(handler.binding.session_id)
+
+    @asynccontextmanager
+    async def turn_connection():
+        yield
+
+    monkeypatch.setattr(ws_api, "connection_ctx", turn_connection)
+    monkeypatch.setattr(ws_api, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(ws_api, "prepare_openclaw_message", AsyncMock())
+    monkeypatch.setattr(ws_api, "enqueue_prepared_openclaw_message", dispatch)
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     monkeypatch.setattr(security.user_dao, "get_with_identity", identity)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
@@ -68,7 +79,6 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(handler, "_check_quotas", AsyncMock(return_value=True))
     persist = AsyncMock()
     monkeypatch.setattr(handler, "_save_user_message", persist)
-    monkeypatch.setattr(handler, "_route_openclaw", dispatch)
     # When the first dispatch revokes access and the next frame is received.
     await handler.message_loop()
     # Then only the first message persisted and the existing error/close envelope was sent.
