@@ -154,11 +154,18 @@ async def create_template(data: TemplateCreate, current_user: UserRecord = Depen
 
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_template(template_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
-    """Delete a template (admin or creator)."""
-    _ = current_user
+    """Delete a template within the admin's scope."""
     template = await agent_template_dao.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    if not current_user.is_platform_admin:
+        if template.is_builtin:
+            raise HTTPException(status_code=403, detail="Only platform admins can delete builtin templates")
+        if template.created_by is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        creator = await user_dao.get(template.created_by)
+        if creator is None or current_user.tenant_id is None or creator.tenant_id != current_user.tenant_id:
+            raise HTTPException(status_code=404, detail="Template not found")
     _ = await agent_template_dao.delete(id=template.id)
 
 
