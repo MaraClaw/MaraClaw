@@ -5,7 +5,7 @@ description = "Backend workspace for the MaraClaw enterprise digital employee pl
 requires-python = ">=3.14.8"
 dependencies = [
     "alibabacloud-credentials>=1.0.12",
-    "fastapi[standard]>=0.146.0",
+    "fastapi[standard]>=0.148.0",
     "uvicorn[standard]>=0.54.0",
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
@@ -31,7 +31,7 @@ dependencies = [
     "lark-oapi>=1.7.5",
     "dingtalk-stream>=0.24.3",
     "wecom-aibot-sdk-python>=0.1.7",
-    "pycryptodome>=4.0.1",
+    "pycryptodome>=4.1.0",
     "loguru>=0.7.3",
     "discord.py>=2.7.1",
     "wuying-agentbay-sdk>=0.22.3",
