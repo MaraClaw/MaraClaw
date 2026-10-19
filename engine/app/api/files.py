@@ -20,14 +20,14 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
-from app.core.security import get_current_user
+from app.core.security import decode_access_token, get_current_user, load_user_from_access_token, security
 from app.dao.skill_dao import skill_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db.session import connection_ctx, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.records.workspace import WorkspaceFileRevisionRecord
-from app.services import workspace_collaboration as workspace
+from app.services import file_download_tickets, workspace_collaboration as workspace
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
     PREVIEW_MAX_CHARS,
@@ -367,7 +367,7 @@ def _is_enterprise_visible_path(rel_path: str) -> bool:
 
 
 def _visible_storage_key(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUID | None) -> tuple[str, bool]:
-    normalized = (rel_path or "").strip().strip("/")
+    normalized = file_download_tickets.normalize_download_path(rel_path)
     if _is_enterprise_visible_path(normalized):
         if not tenant_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant associated")
@@ -801,41 +801,16 @@ async def preview_file(
     }
 
 
-@router.get("/download")
-async def download_file(
-    agent_id: uuid.UUID,
-    path: str,
-    token: str = "",
-    inline: bool = False,
-    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
-):
-    """Download / serve a file from the agent workspace (browser-friendly).
-
-    Auth via Bearer header OR `token` query parameter (for <img> tags).
-    """
-    from app.core.security import load_user_from_access_token
-
-    # Resolve JWT token from either Bearer header or query param
-    jwt_token = None
-    if credentials:
-        jwt_token = credentials.credentials
-    elif token:
-        jwt_token = token
-
-    if jwt_token in (None, ""):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-
-    user = await load_user_from_access_token(
-        jwt_token,
-        require_active=True,
-        enforce_password_change=True,
-    )
-
-    _ = await check_agent_access(user, agent_id)
+async def _downloadable_storage_key(agent_id: uuid.UUID, path: str, tenant_id: uuid.UUID | None) -> str:
     storage = get_storage_backend()
-    key, _ = _visible_storage_key(agent_id, path, user.tenant_id)
+    key, _ = _visible_storage_key(agent_id, path, tenant_id)
     if not await storage.exists(key) or not await storage.is_file(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    return key
+
+
+async def _download_response(key: str, path: str, inline: bool) -> Response:
+    storage = get_storage_backend()
     presigned = await storage.presign_download_url(key, filename=Path(path).name, inline=inline)
     if presigned not in (None, ""):
         return Response(
@@ -856,6 +831,52 @@ async def download_file(
         media_type=guess_content_type(Path(path).name),
         headers={"Content-Disposition": f'{disposition}; filename="{Path(path).name}"'},
     )
+
+
+@router.post("/download-ticket", response_model=file_download_tickets.DownloadTicketResponse)
+async def create_download_ticket(
+    agent_id: uuid.UUID,
+    body: file_download_tickets.DownloadTicketRequest,
+    response: Response,
+    current_user: UserRecord = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> file_download_tickets.DownloadTicketResponse:
+    """Mint a single-use ticket so browsers can download without a session JWT in the URL."""
+    _ = await check_agent_access(current_user, agent_id, fresh=True)
+    _ = await _downloadable_storage_key(agent_id, body.path, current_user.tenant_id)
+    payload = decode_access_token(credentials.credentials)
+    result = await file_download_tickets.create(current_user, agent_id, body.path, body.inline, payload["exp"])
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/download")
+async def download_file(
+    agent_id: uuid.UUID,
+    path: str,
+    inline: bool = False,
+    ticket: str = "",
+    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+) -> Response:
+    """Download / serve a file from the agent workspace (browser-friendly).
+
+    Auth via Bearer header OR a single-use `ticket` from `POST /download-ticket`. Bearer wins when both are sent.
+    """
+    if credentials is not None:
+        user = await load_user_from_access_token(
+            credentials.credentials,
+            require_active=True,
+            enforce_password_change=True,
+        )
+        _ = await check_agent_access(user, agent_id)
+    elif ticket:
+        binding = await file_download_tickets.redeem(ticket)
+        user = await file_download_tickets.authorize_binding(binding, agent_id=agent_id, path=path, inline=inline)
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    key = await _downloadable_storage_key(agent_id, path, user.tenant_id)
+    return await _download_response(key, path, inline)
 
 
 @router.put("/content")

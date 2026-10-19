@@ -34,12 +34,11 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
-from app.core.security import create_access_token, get_current_user
+from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.identity_provider_dao import identity_provider_dao
-from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
@@ -48,6 +47,7 @@ from app.services.auth_registry import auth_provider_registry
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
 from app.services.platform_service import platform_service
+from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 from app.services.wecom_stream import wecom_stream_manager
 
 router = APIRouter(tags=["wecom"])
@@ -698,25 +698,19 @@ async def _process_wecom_text(
 
 
 @router.get("/auth/wecom/callback")
-async def wecom_callback(code: str, state: str | None = None):
-    # 1. Resolve session to get tenant context
-    tenant_id = None
-    if state not in (None, ""):
-        try:
-            sid = uuid.UUID(state)
-            session = await sso_scan_session_dao.get(sid)
-            if session:
-                tenant_id = session.tenant_id
-        except ValueError, AttributeError:
-            pass
+async def wecom_callback(code: str, state: str | None = None) -> HTMLResponse:
+    sid = parse_scan_state(state)
+    if sid is None:
+        return HTMLResponse("Auth failed: invalid SSO session")
 
-    # 1. Get WeCom provider config
-    provider = await identity_provider_dao.get_by_type_and_tenant("wecom", tenant_id)
-    if not provider:
-        raise HTTPException(status_code=404, detail="WeCom provider not configured for this tenant")
-
-    # 2. Extract user info and login/register via RegistrationService
     try:
+        session = await load_authorizable_session(sid)
+        if session is None:
+            return HTMLResponse("Auth failed: invalid SSO session")
+        tenant_id = session.tenant_id
+        provider = await identity_provider_dao.get_by_type_and_tenant("wecom", tenant_id)
+        if not provider:
+            return HTMLResponse("Auth failed: WeCom provider not configured for this tenant")
         provider_tenant_id = str(tenant_id) if tenant_id else (str(provider.tenant_id) if provider.tenant_id else None)
         auth_provider = await auth_provider_registry.get_provider("wecom", provider_tenant_id)
         if not auth_provider:
@@ -731,38 +725,17 @@ async def wecom_callback(code: str, state: str | None = None):
         if user_info.provider_user_id in (None, ""):
             return HTMLResponse("Auth failed: No UserId returned")
 
-        # Find or Create User (handles Identity and OrgMember linking)
         user, _is_new = await auth_provider.find_or_create_user(user_info, tenant_id=provider_tenant_id)
-    except Exception as e:
-        logger.exception(f"WeCom login/register error: {e}")
-        return HTMLResponse(f"Auth failed: {e!s}")
+        if not await authorize_scan_session(sid, user=user, provider_type="wecom"):
+            return HTMLResponse("Auth failed: invalid SSO session")
+    except Exception:
+        logger.error("WeCom login/register error")
+        return HTMLResponse("Auth failed: Authentication error")
 
-    # Standard login
-    token = create_access_token(str(user.id), user.role)
-
-    if state not in (None, ""):
-        try:
-            sid = uuid.UUID(state)
-            session = await sso_scan_session_dao.get(sid)
-            if session:
-                _ = await sso_scan_session_dao.update(
-                    db_obj=session,
-                    obj_in={
-                        "status": "authorized",
-                        "provider_type": "wecom",
-                        "user_id": user.id,
-                        "access_token": token,
-                        "error_msg": None,
-                    },
-                )
-                return HTMLResponse(
-                    f"""<html><head><meta charset="utf-8" /></head>
-                    <body style="font-family: sans-serif; padding: 24px;">
-                        <div>SSO login successful. Redirecting...</div>
-                        <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
-                    </body></html>"""
-                )
-        except Exception as e:
-            logger.exception("Failed to update SSO session (wecom) %s", e)
-
-    return HTMLResponse(f"Logged in. Token: {token}")
+    return HTMLResponse(
+        f"""<html><head><meta charset="utf-8" /></head>
+        <body style="font-family: sans-serif; padding: 24px;">
+            <div>SSO login successful. Redirecting...</div>
+            <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
+        </body></html>"""
+    )

@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.tenant_dao import tenant_dao
-from app.dao.user_dao import user_dao
 from app.schemas.schemas import UserOut
+from app.services.sso_scan_sessions import ScanLoginUnavailableError, redeem_scan_session
 
 router = APIRouter(tags=["sso"])
 
@@ -29,40 +29,41 @@ async def create_sso_session(tenant_id: uuid.UUID | None = None) -> dict[str, An
 
 
 @router.get("/sso/session/{sid}/status")
-async def get_sso_session_status(sid: uuid.UUID) -> dict[str, Any]:
+async def get_sso_session_status(sid: uuid.UUID) -> dict[str, object]:
     """Check the status of an SSO scan session."""
     session = await sso_scan_session_dao.get(sid)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.expires_at < datetime.now(UTC):
-        session = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "expired"}) or session
+    if session.expires_at <= datetime.now(UTC):
+        session = await sso_scan_session_dao.expire(sid) or await sso_scan_session_dao.get(sid) or session
 
-    response: dict[str, Any] = {
+    response: dict[str, object] = {
         "status": session.status,
         "provider_type": session.provider_type,
         "error_msg": session.error_msg,
     }
 
-    if session.status == "authorized" and session.access_token not in (None, ""):
-        user = await user_dao.get_with_identity(session.user_id) if session.user_id else None
-
-        response["access_token"] = session.access_token
-        if user:
-            response["user"] = UserOut.model_validate(user).model_dump()
-
-        # Mark as completed so it can't be reused
-        _ = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "completed"})
+    if session.status == "authorized":
+        try:
+            login = await redeem_scan_session(sid)
+        except ScanLoginUnavailableError:
+            return {"status": "failed", "provider_type": session.provider_type, "error_msg": "Unable to sign in"}
+        if login is not None:
+            response["access_token"] = login.access_token
+            response["user"] = UserOut.model_validate(login.user).model_dump()
+        else:
+            current = await sso_scan_session_dao.get(sid)
+            if current is not None:
+                response.update(status=current.status, provider_type=current.provider_type, error_msg=current.error_msg)
 
     return response
 
 
 @router.put("/sso/session/{sid}/scan")
-async def mark_sso_session_scanned(sid: uuid.UUID):
+async def mark_sso_session_scanned(sid: uuid.UUID) -> dict[str, str]:
     """Optional: Mark session as 'scanned' when the landing page loads on mobile."""
-    session = await sso_scan_session_dao.get(sid)
-    if session and session.status == "pending":
-        _ = await sso_scan_session_dao.update(db_obj=session, obj_in={"status": "scanned"})
+    _ = await sso_scan_session_dao.mark_scanned(sid)
     return {"status": "ok"}
 
 

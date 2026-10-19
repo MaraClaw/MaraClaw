@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { appendCompletion, mergeServerHistory } from '../src/lib/chat/transcript.ts'
 import type { ChatLine } from '../src/lib/chat/transcript.ts'
+import { recoverRejectedTurn } from '../src/lib/chat/turn-rejection.ts'
 
 const saved = (message_id: string, content = 'same', role = 'assistant'): ChatLine => ({
   message_id, entry_id: message_id, role, content,
@@ -82,4 +83,30 @@ test('legacy completion fallback does not content-match a persisted UUID', () =>
   const result = appendCompletion([persisted], { role: 'assistant', content: 'same' })
   // Then
   assert.equal(result.length, 2)
+})
+
+test('history refresh does not resurrect a rejected turn or report a pending reply', () => {
+  // Given
+  const server = [saved('reply', 'Earlier reply')]
+  const local = mergeServerHistory(server, [{ role: 'user', content: 'Rejected question', pending: true }])
+  const recovery = recoverRejectedTurn(local, {
+    type: 'turn_rejected', reason: 'enqueue_failed', content: 'Could not send the message.',
+  })
+  // When
+  const refreshed = mergeServerHistory(server, recovery.lines)
+  // Then
+  assert.deepEqual(refreshed, mergeServerHistory(server, []))
+  assert.equal(refreshed.some((row) => row.pending) || refreshed.at(-1)?.role === 'user', false)
+})
+
+test('history refresh still preserves unmatched pending lines for other turns after a rejection', () => {
+  // Given
+  const older: ChatLine = { role: 'user', content: 'Other turn', pending: true }
+  const recovery = recoverRejectedTurn([older, { role: 'user', content: 'Rejected', pending: true }], {
+    type: 'turn_rejected', reason: 'agent_expired', content: 'Agent expired.',
+  })
+  // When
+  const refreshed = mergeServerHistory([], recovery.lines)
+  // Then
+  assert.deepEqual(refreshed, [older])
 })

@@ -173,14 +173,16 @@ async def test_socket_deadline_cancels_inflight_phase(context, monkeypatch, phas
     issued = await tickets.issue(binding)
     cancelled = []
 
-    async def blocked(*args):
+    async def blocked(*args, **kwargs):
         try:
             await anyio.sleep_forever()
         finally:
             cancelled.append(True)
 
-    method = "_load_history" if phase == "setup" else "_route_openclaw"
-    monkeypatch.setattr(websocket.WebSocketChatHandler, method, blocked)
+    if phase == "setup":
+        monkeypatch.setattr(websocket.WebSocketChatHandler, "_load_history", blocked)
+    else:
+        monkeypatch.setattr(websocket, "prepare_openclaw_message", blocked)
     monkeypatch.setattr(websocket.WebSocketChatHandler, "_save_user_message", AsyncMock())
     monkeypatch.setattr(websocket.WebSocketChatHandler, "_check_quotas", AsyncMock(return_value=True))
     monkeypatch.setattr(websocket.time, "time", lambda: binding.auth_deadline - 0.05)

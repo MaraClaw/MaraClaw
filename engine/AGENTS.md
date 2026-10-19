@@ -60,7 +60,7 @@ No `alembic/`, no `app/models/`.
 | Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
 | Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
 | Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
-| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.11.1 / gogcli 0.45.0 / OpenClaw 2026.10.4; Hub publish is `publish-openclaw-local-dockerfile.sh` |
+| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.11.1 / gogcli 0.45.0 / OpenClaw 2026.10.5; Hub publish is `publish-openclaw-local-dockerfile.sh` |
 
 ## CODE MAP
 
@@ -94,7 +94,7 @@ No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, n
 - Pydantic v2: `model_config`, `Field(default_factory=...)`.
 - Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** - every process still mounts all routers.
 - Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
-- Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Non-Depends JWT paths (file download) must call `load_user_from_access_token`. Chat WebSockets accept only single-use tickets issued by `POST /api/auth/chat-ticket`; ticket authorization uses `load_user_principal(fresh=True)`.
+- Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Browser file downloads use single-use `file_download_tickets` minted by `POST /api/agents/{id}/files/download-ticket` (Bearer); `GET .../files/download` accepts a Bearer header or `ticket` (never a query JWT) and redemption uses `load_user_principal(fresh=True)`. Chat WebSockets accept only single-use tickets issued by `POST /api/auth/chat-ticket`; ticket authorization uses `load_user_principal(fresh=True)`.
 - New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone; platform settings expose only invitation and SSO-domain toggles.
 - Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis is persisted on `users.is_genesis` (not recomputed from `created_at`). Genesis rows cannot be demoted, reassigned, or converted by join.
 - Login ignores inactive memberships. Deactivating an org admin does not flip `identity.is_active` (multi-tenant identities). Deactivating a platform admin does. Deactivating an end user also stops their agents/triggers/schedules.

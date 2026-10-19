@@ -17,7 +17,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `types/auth.ts` | `UserOut`, `TokenResponse`, `MultiTenantResponse`, `isPlatformAdminUser`, `isTokenResponse` |
 | `sso-storage.ts` | sessionStorage `maraclaw-sso-state` / `provider` / `intent` |
 | `auth-highlights.ts` | AuthShell copy for forgot/reset/verify/sso. Login/register inline their own. |
-| `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, schedules, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, notifications, onboarding + `ONBOARDING_SKIP_KEY`. `fileDownloadUrl` is same-origin only (does **not** use `apiUrl`). |
+| `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, schedules, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, notifications, onboarding + `ONBOARDING_SKIP_KEY`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
 | `plaza-api.ts` | `/api/plaza/*` |
 | `okr-api.ts` | `/api/okr/*` |
@@ -51,7 +51,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 - New tenant/domain → new `*-api.ts`. Do **not** grow `workspace-api.ts`. Control/vault/pages already split even though agent-scoped.
 - Public auth endpoints pass `token: null`.
 - Chat WS is not React Query. Single-use tickets only in the query string; bearer JWT stays in HTTP headers.
-- `fileDownloadUrl` stays same-origin; do not route through `apiUrl`.
+- File downloads/previews mint a fresh 60-second, single-use ticket per action/mount. `fileTicketUrl` stays relative and same-origin; do not route through `apiUrl`. Session JWTs stay in headers, never URLs. Preview image errors may re-mint once; ignore stale results after selection changes/unmount.
 - `motion.ts` is landing-only.
 
 ## ANTI-PATTERNS
@@ -59,6 +59,6 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 - Adding a new domain into `workspace-api.ts` (Plaza/OKR/control/directory/agent-departments already split).
 - Using `directory-api.ts` for local department grants, or `agent-departments-api.ts` for the provider directory.
 - `fetch()` in pages; wrapping chat WS in Query.
-- Using `apiUrl` for `fileDownloadUrl`.
+- Using `apiUrl` for `fileTicketUrl`, caching/reusing ticket URLs, or fetching download bodies through `apiRequest` (native browser navigation follows S3 redirects).
 - Importing `motion.ts` from `/app`.
 - A second fetch wrapper beside `http.ts`.

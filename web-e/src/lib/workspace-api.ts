@@ -1,4 +1,4 @@
-import { apiFormRequest, apiRequest } from '@/lib/http'
+import { apiFormRequest, apiRequest } from './http.ts'
 import type { ChatMessage } from './chat/message.ts'
 export type { ChatMessage } from './chat/message.ts'
 
@@ -604,9 +604,30 @@ export async function restoreFileRevision(agentId: string, revisionId: string): 
   await apiRequest(`/api/agents/${agentId}/files/restore`, { method: 'POST', body: { revision_id: revisionId } })
 }
 
-export function fileDownloadUrl(agentId: string, path: string, token: string): string {
-  const query = new URLSearchParams({ path, token })
-  return `/api/agents/${agentId}/files/download?${query.toString()}`
+export type FileDownloadTicket = {
+  readonly ticket: string
+  readonly expires_in: number
+}
+
+export function mintFileDownloadTicket(
+  agentId: string,
+  path: string,
+  { inline }: { readonly inline: boolean },
+): Promise<FileDownloadTicket> {
+  return apiRequest(`/api/agents/${encodeURIComponent(agentId)}/files/download-ticket`, {
+    method: 'POST',
+    body: { path, inline },
+  })
+}
+
+export function fileTicketUrl(
+  agentId: string,
+  path: string,
+  ticket: string,
+  { inline }: { readonly inline: boolean },
+): string {
+  const query = new URLSearchParams({ path, inline: String(inline), ticket })
+  return `/api/agents/${encodeURIComponent(agentId)}/files/download?${query.toString()}`
 }
 
 export async function listAgentToolsWithConfig(agentId: string): Promise<

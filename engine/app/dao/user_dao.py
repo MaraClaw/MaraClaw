@@ -206,6 +206,33 @@ class UserDAO(BaseDAO[UserRecord]):
                 )
             return user
 
+    async def charge_message_quota(self, user_id: UUID) -> int | None:
+        """Atomically reset an elapsed period and admit one message below the limit."""
+        reset_period = """
+            quota_message_period <> 'permanent'
+            AND (
+                quota_period_start IS NULL
+                OR now() >= quota_period_start + CASE quota_message_period
+                    WHEN 'daily' THEN interval '1 day'
+                    WHEN 'weekly' THEN interval '7 days'
+                    WHEN 'monthly' THEN interval '30 days'
+                END
+            )
+        """
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""
+                UPDATE users
+                SET quota_messages_used = CASE WHEN {reset_period} THEN 0 ELSE quota_messages_used END + 1,
+                    quota_period_start = CASE WHEN {reset_period} THEN now() ELSE quota_period_start END
+                WHERE id = %(id)s
+                    AND CASE WHEN {reset_period} THEN 0 ELSE quota_messages_used END < quota_message_limit
+                RETURNING quota_messages_used
+                """,
+                {"id": user_id},
+            )
+            return int_from_row(row["quota_messages_used"]) if row is not None else None
+
     @override
     async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:
         if not {"tenant_id", "role", "is_active"}.intersection(obj_in):

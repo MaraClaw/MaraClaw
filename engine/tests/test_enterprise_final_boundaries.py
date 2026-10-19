@@ -15,6 +15,7 @@ from app.dao.user_dao import user_dao
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.audit import ApprovalRequestRecord
+from app.records.user import UserRecord
 from app.services import autonomy_service as autonomy_module, notification_service
 from app.services.subscription_boundaries import fresh_subscription_actor
 
@@ -115,3 +116,16 @@ async def test_approval_audit_is_atomic_and_remote_work_follows_commit(monkeypat
         assert owned_pool.raw.rollbacks == 1
     assert observed[0] is not None
     assert observed[0] is observed[1]
+
+
+@pytest.mark.parametrize("tenant_id", [None, ""])
+async def test_tenantless_org_admin_cannot_read_unscoped_audit_logs(monkeypatch, tenant_id):
+    user = UserRecord(id=uuid.uuid4(), role="org_admin")
+    listing = AsyncMock(return_value=[])
+    monkeypatch.setattr(audit_log_dao, "list_scoped", listing)
+
+    with pytest.raises(HTTPException) as error:
+        await enterprise.list_audit_logs(tenant_id=tenant_id, current_user=user)
+
+    assert error.value.status_code == 403
+    listing.assert_not_awaited()

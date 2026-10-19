@@ -9,8 +9,9 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { authSession } from '@/lib/auth-session'
 import type { SessionOwner } from '@/lib/auth-session'
-import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
+import { connectAgentChat, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
+import { recoverRejectedTurn, restoreComposerDraft } from '@/lib/chat/turn-rejection'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
@@ -72,14 +73,20 @@ export function AgentChatPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
-  const queuedSendRef = useRef<string | null>(null)
+  const queuedSendRef = useRef<Line | null>(null)
   const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
   const threadRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const linesRef = useRef<Line[]>([])
+  const rejectedTurnRef = useRef(false)
   const historyCountRef = useRef(0)
   const historySessionRef = useRef<string | undefined>(undefined)
-  useLayoutEffect(() => { linesRef.current = lines }, [lines])
+  const updateLines = useCallback((update: Line[] | ((previous: Line[]) => Line[])) => {
+    const next = typeof update === 'function' ? update(linesRef.current) : update
+    linesRef.current = next
+    setLines(next)
+  }, [])
 
   useLayoutEffect(() => authSession.subscribe(() => {
     if (authSession.isCurrent(owner)) return
@@ -112,8 +119,9 @@ export function AgentChatPage() {
     historySessionRef.current = activeId
     historyCountRef.current = historyQuery.data.length
     const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
-    setLines(next)
+    updateLines(next)
     if (switched) {
+      rejectedTurnRef.current = false
       liveRef.current = ''
       setLive('')
       setThinking('')
@@ -125,10 +133,10 @@ export function AgentChatPage() {
       setBusy(false)
       setInfo(null)
       setThinking('')
-    } else if (next.at(-1)?.role === 'user') {
+    } else if (!rejectedTurnRef.current && next.at(-1)?.role === 'user') {
       setBusy(true)
     }
-  }, [historyQuery.data, activeId, owner, isCurrent])
+  }, [historyQuery.data, activeId, owner, isCurrent, updateLines])
 
   useEffect(() => {
     if (!isCurrent() || !busy || !activeId) return
@@ -156,11 +164,12 @@ export function AgentChatPage() {
     const sendFn = sendRef.current
     if (!queued || !sendFn || !activeId || historyQuery.isLoading) return
     queuedSendRef.current = null
-    setLines((prev) => isCurrent() ? [...prev, { role: 'user', content: queued, pending: true }] : prev)
+    updateLines((prev) => prev.includes(queued) ? prev : [...prev, queued])
+    rejectedTurnRef.current = false
     setBusy(true)
     setInfo(null)
-    sendFn({ content: queued })
-  }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady, owner, isCurrent])
+    sendFn({ content: queued.content })
+  }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady, owner, isCurrent, updateLines])
 
   useEffect(() => {
     if (!isCurrent()) return
@@ -206,7 +215,7 @@ export function AgentChatPage() {
           if (event.live_preview?.screenshot_url) {
             setLivePreview({ env: event.live_preview.env, screenshot: event.live_preview.screenshot_url })
           }
-          setLines((prev) => isCurrent() ? [
+          updateLines((prev) => isCurrent() ? [
             ...prev,
             {
               role: 'tool',
@@ -240,6 +249,20 @@ export function AgentChatPage() {
           setInfo(text || null)
           return
         }
+        if (isTurnRejected(event)) {
+          const recovery = recoverRejectedTurn(linesRef.current, event)
+          updateLines(recovery.lines)
+          rejectedTurnRef.current = true
+          setDraft((current) => restoreComposerDraft(current, recovery.restoredText))
+          liveRef.current = ''
+          setLive('')
+          setThinking('')
+          setInfo(null)
+          setBusy(false)
+          toast.error(recovery.notice, { duration: Infinity })
+          composerRef.current?.focus()
+          return
+        }
         if (event.type === 'error') {
           setInfo(event.content ?? 'Chat error')
           setThinking('')
@@ -250,7 +273,7 @@ export function AgentChatPage() {
           const content = event.content || liveRef.current
           const role = event.role ?? 'assistant'
           if (content) {
-            setLines((prev) => {
+            updateLines((prev) => {
               if (!isCurrent()) return prev
               return appendCompletion(prev, {
                 role, content,
@@ -290,7 +313,7 @@ export function AgentChatPage() {
       if (sendRef.current === conn.send) sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, token, owner, queryClient, historyQuery.isLoading, isCurrent])
+  }, [agent.id, agent.onboarded_for_me, activeId, token, owner, queryClient, historyQuery.isLoading, isCurrent, updateLines])
 
   const newSession = useMutation({
     mutationFn: async (origin: MutationOrigin) => isCurrent(origin.owner) ? createSession(origin.agentId, 'New chat') : null,
@@ -333,14 +356,16 @@ export function AgentChatPage() {
       toast.error('Sign in again to send.')
       return
     }
+    const pendingLine: Line = { role: 'user', content: text, composerText: draft, pending: true }
     if (!activeId) {
       if (creatingSessionRef.current) return
       creatingSessionRef.current = true
-      queuedSendRef.current = text
+      queuedSendRef.current = pendingLine
+      rejectedTurnRef.current = false
       setDraft('')
       setBusy(true)
       setInfo(null)
-      setLines([{ role: 'user', content: text, pending: true }])
+      updateLines([pendingLine])
       try {
         const session = await createSession(agent.id, text.slice(0, 48) || 'New chat')
         if (!isCurrent()) return
@@ -362,7 +387,8 @@ export function AgentChatPage() {
       return
     }
     setDraft('')
-    setLines((prev) => isCurrent() ? [...prev, { role: 'user', content: text, pending: true }] : prev)
+    updateLines((prev) => [...prev, pendingLine])
+    rejectedTurnRef.current = false
     setBusy(true)
     setInfo(null)
     sendRef.current({ content: text })
@@ -380,17 +406,18 @@ export function AgentChatPage() {
       const uploaded = await uploadChatFile(file, agent.id)
       if (!isCurrent() || sendRef.current !== sendFile) return
       const extracted = uploaded.extracted_text || `[Uploaded ${uploaded.filename}]`
-      setLines((prev) => isCurrent() ? [
+      updateLines((prev) => isCurrent() ? [
         ...prev,
         { role: 'user', content: extracted, file_name: uploaded.filename, pending: true },
       ] : prev)
+      rejectedTurnRef.current = false
+      setBusy(true)
+      setInfo(null)
       sendFile({
         content: extracted,
         display_content: uploaded.filename,
         file_name: uploaded.filename,
       })
-      setBusy(true)
-      setInfo(null)
     } catch (error) {
       if (!isCurrent()) return
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Upload failed')
@@ -520,6 +547,8 @@ export function AgentChatPage() {
           }}
         >
           <Textarea
+            ref={composerRef}
+            aria-label={`Message ${agent.name}`}
             value={draft}
             onChange={(event) => { if (isCurrent()) setDraft(event.target.value) }}
             placeholder={`Message ${agent.name}…`}

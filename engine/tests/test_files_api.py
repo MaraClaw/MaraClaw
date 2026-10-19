@@ -1,11 +1,18 @@
+import time
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.testclient import TestClient
 
 from app.api import files as files_api
+from app.core.security import create_access_token
+from app.services import file_download_tickets
 from app.services.storage_runtime.local import LocalStorageBackend
 
 
@@ -115,3 +122,144 @@ async def test_manage_access_can_delete_agent_workspace_file(monkeypatch, tmp_pa
 
     assert result == {"status": "ok", "path": "workspace/obsolete.md"}
     assert not workspace_file.exists()
+
+
+class DownloadStorage:
+    def __init__(self, key: str, *, presigned: str | None = None, local_path=None):
+        self.key = key
+        self.presigned = presigned
+        self.local_path = local_path
+        self.presign_calls = []
+
+    async def exists(self, key):
+        return key == self.key
+
+    async def is_file(self, key):
+        return key == self.key
+
+    async def presign_download_url(self, key, *, filename, inline):
+        self.presign_calls.append((key, filename, inline))
+        return self.presigned
+
+    async def local_path_for(self, _key):
+        return self.local_path
+
+    async def read_bytes(self, _key):
+        return b"report-bytes"
+
+
+class DownloadRedis:
+    def __init__(self):
+        self.values = {}
+
+    async def set(self, key, value, *, nx, ex):
+        assert nx
+        assert ex == 60
+        self.values[key] = value
+        return True
+
+    async def getdel(self, key):
+        return self.values.pop(key, None)
+
+
+@pytest.fixture
+def download(monkeypatch):
+    user = make_user(identity=SimpleNamespace(is_active=True))
+    agent_id = uuid.uuid4()
+    redis = DownloadRedis()
+    loader = AsyncMock(return_value=user)
+    monkeypatch.setattr(files_api, "load_user_from_access_token", loader)
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use")))
+    monkeypatch.setattr(file_download_tickets, "get_redis", AsyncMock(return_value=redis))
+    monkeypatch.setattr(file_download_tickets, "load_user_principal", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        file_download_tickets, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use"))
+    )
+    return SimpleNamespace(user=user, agent_id=agent_id, redis=redis, loader=loader)
+
+
+async def _issue_ticket(download, path: str, inline: bool) -> str:
+    binding = file_download_tickets.DownloadTicketBinding(
+        user_id=download.user.id,
+        tenant_id=download.user.tenant_id,
+        agent_id=download.agent_id,
+        path=path,
+        inline=inline,
+        auth_deadline=int(time.time()) + 3600,
+    )
+    return (await file_download_tickets.issue(binding)).ticket
+
+
+async def _download(download, auth: str, *, inline: bool = False):
+    path = "workspace/report.pdf"
+    if auth == "bearer":
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
+        return await files_api.download_file(download.agent_id, path, inline=inline, credentials=credentials)
+    ticket = await _issue_ticket(download, path, inline)
+    return await files_api.download_file(download.agent_id, path, inline=inline, ticket=ticket, credentials=None)
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_presigned_branch_redirects(monkeypatch, download, auth):
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", presigned="https://s3.example/signed")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, auth, inline=True)
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://s3.example/signed"
+    assert storage.presign_calls == [(storage.key, "report.pdf", True)]
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_local_branch_returns_file_response(monkeypatch, tmp_path, download, auth):
+    local = tmp_path / "report.pdf"
+    local.write_bytes(b"local-bytes")
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", local_path=local)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, auth)
+    assert isinstance(response, FileResponse)
+    assert response.path == str(local)
+    assert response.headers["content-disposition"] == 'attachment; filename="report.pdf"'
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_bytes_branch_sets_disposition(monkeypatch, download, auth):
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, auth, inline=True)
+    assert response.body == b"report-bytes"
+    assert response.media_type == "application/pdf"
+    assert response.headers["content-disposition"] == 'inline; filename="report.pdf"'
+
+
+async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    ticket = await _issue_ticket(download, "workspace/report.pdf", False)
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
+    response = await files_api.download_file(
+        download.agent_id, "workspace/report.pdf", ticket=ticket, credentials=credentials
+    )
+    assert response.status_code == 200
+    assert len(download.redis.values) == 1
+    download.loader.assert_awaited_once_with("session-jwt", require_active=True, enforce_password_change=True)
+
+
+async def test_ticket_for_other_path_is_consumed_and_refused(monkeypatch, download):
+    storage = DownloadStorage(f"{download.agent_id}/workspace/other.pdf")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    ticket = await _issue_ticket(download, "workspace/report.pdf", False)
+    with pytest.raises(HTTPException) as exc:
+        await files_api.download_file(download.agent_id, "workspace/other.pdf", ticket=ticket, credentials=None)
+    assert exc.value.status_code == 403
+    assert download.redis.values == {}
+
+
+@pytest.mark.parametrize("query", ["token={jwt}", "", "ticket="])
+def test_download_rejects_query_jwt_and_missing_credentials(download, query):
+    jwt = create_access_token(str(download.user.id), "member")
+    app = FastAPI()
+    app.include_router(files_api.router, prefix="/api")
+    url = f"/api/agents/{download.agent_id}/files/download?path=workspace/report.pdf&{query.format(jwt=jwt)}"
+    response = TestClient(app).get(url)
+    assert response.status_code == 401
+    download.loader.assert_not_awaited()
