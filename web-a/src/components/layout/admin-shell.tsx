@@ -6,7 +6,7 @@ import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 const navItems: {
@@ -15,11 +15,13 @@ const navItems: {
   icon: NavIconName
   end?: boolean
   platformAdminOnly?: boolean
+  broadcastOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
   { to: '/account', label: 'Account', icon: 'account' },
@@ -80,8 +82,9 @@ function NavItems({
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
+        if (broadcastOnly && !canSendBroadcast(user)) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
           return (
