@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -26,10 +27,13 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     content = await seed_deletion_content(deletion_pg)
     app = FastAPI()
     app.include_router(tenants.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
-    app.dependency_overrides[get_current_user] = lambda: deletion_pg.actor
+    app.dependency_overrides[get_current_user] = lambda: replace(deletion_pg.actor, role="platform_admin")
     # When
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.delete(f"/api/tenants/{deletion_pg.tenant_id}")
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.delete(f"/api/tenants/{deletion_pg.tenant_id}")
+    finally:
+        app.dependency_overrides.clear()
     # Then
     assert response.status_code == 200
     assert response.json() == {"status": "deleted", "fallback_tenant_id": None}
@@ -45,7 +49,7 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     assert audit["tenant_id"] is None
     assert audit["target_id"] == deletion_pg.tenant_id
     assert audit["actor_email"] == "owner@example.test"
-    assert audit["actor_role"] == "org_admin"
+    assert audit["actor_role"] == "platform_admin"
     assert audit["action"] == "tenant_delete"
     assert audit["changes"] == {"deleted": {"before": False, "after": True}}
     assert audit["details"] == {"tenant_name": "Target"}
@@ -79,7 +83,7 @@ async def test_delete_clears_only_departing_author_links_and_tombstones_orphans(
     # Given
     before = await deletion_pg.snapshot()
     # When
-    await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+    await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     after = await deletion_pg.snapshot()
     for table, author in (("agent_templates", "created_by"), ("enterprise_info", "updated_by")):
@@ -105,7 +109,7 @@ async def test_delete_succeeds_when_real_audit_insert_violates_sql_constraint(de
     async with connection_ctx() as db:
         await db.execute("ALTER TABLE admin_audit_logs ADD CONSTRAINT reject_delete CHECK (action <> 'tenant_delete')")
     # When
-    result = await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+    result = await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     assert result == {"status": "deleted", "fallback_tenant_id": None}
     assert await deletion_pg.rows("SELECT id FROM tenants WHERE id = %s", (deletion_pg.tenant_id,)) == []
@@ -146,7 +150,7 @@ async def test_delete_rolls_back_audit_rows_and_invalidation_when_later_fallback
     monkeypatch.setattr(tenants.user_dao, "fallback_tenant_for_identity", failed_fallback)
     # When
     with pytest.raises(RuntimeError, match="later failure"):
-        await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+        await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     assert await deletion_pg.snapshot() == before
     assert deletion_pg.events == []
@@ -164,7 +168,7 @@ async def test_delete_rolls_back_all_changes_when_unexpected_fk_blocks_tenant(de
     before = await deletion_pg.snapshot()
     # When
     with pytest.raises(ForeignKeyViolationError):
-        await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+        await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     assert await deletion_pg.snapshot() == before
     assert deletion_pg.events == []
@@ -189,7 +193,7 @@ async def test_delete_retains_identity_with_inactive_remaining_membership(
         )
     before = await deletion_pg.rows("SELECT * FROM identities WHERE id = %s", (deletion_pg.actor.identity_id,))
     # When
-    result = await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+    result = await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     assert await deletion_pg.rows("SELECT * FROM identities WHERE id = %s", (deletion_pg.actor.identity_id,)) == before
     assert result["fallback_tenant_id"] == (str(remaining_tenant) if remaining_tenant else None)
@@ -204,7 +208,7 @@ async def test_delete_defers_snapshots_versions_and_acl_until_outer_request_comm
     assert deletion_pg.events == []
     # When
     async with connection_ctx():
-        await tenants.delete_tenant(deletion_pg.tenant_id, deletion_pg.actor)
+        await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
         assert deletion_pg.events == []
         assert deletion_pg.runtime_calls == []
         assert (deletion_pg.runtime_root / str(deletion_pg.agent_id) / "SOUL.md").exists()

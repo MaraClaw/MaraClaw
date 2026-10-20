@@ -19,7 +19,7 @@ from app.core.json_types import JsonObject, int_from_row, json_as_bool, object_m
 from app.core.security import get_current_user, require_role
 from app.dao.agent_dao import agent_dao
 from app.dao.system_setting_dao import system_setting_dao
-from app.dao.tenant_dao import tenant_dao
+from app.dao.tenant_dao import TenantDeletionPreview, tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
 from app.records.tenant import TenantRecord
@@ -914,12 +914,37 @@ async def repair_genesis_org_admin(
 # ─── Authenticated: Delete Company ─────────────────────
 
 
+@router.get("/{tenant_id}/deletion-preview")
+async def get_tenant_deletion_preview(
+    tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> TenantDeletionPreview:
+    """Let platform admins preview current impact without authorizing a later delete."""
+    if current_user.role != "platform_admin":
+        raise HTTPException(status_code=403, detail="Only platform admins can preview company deletion")
+
+    tenant = await tenant_dao.get(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    from app.services.org_membership import assert_may_delete_tenant
+
+    try:
+        assert_may_delete_tenant(tenant)
+    except DefaultOrgUnavailableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if current_user.identity_id is None:
+        raise HTTPException(status_code=400, detail="Account has no identity")
+
+    return await tenant_dao.deletion_preview(tenant_id)
+
+
 @router.delete("/{tenant_id}")
 async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
     """Permanently delete a company and ALL its data.
 
-    Only the org_admin of the specified tenant (or a platform_admin) may call
-    this endpoint.  After deletion the caller receives a `fallback_tenant_id`
+    Only a platform_admin may call this endpoint.
+    After deletion the caller receives a `fallback_tenant_id`
     pointing to another company the user's identity belongs to, or `None` if
     the user has no other company.
 
@@ -927,12 +952,8 @@ async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends
     agent-level data → agents → OKR/org data → users → tenant.
     """
     # ── Auth check ──────────────────────────────────────────────────────────
-    is_platform_admin = current_user.role == "platform_admin"
-    is_own_org_admin = current_user.role == "org_admin" and str(current_user.tenant_id) == str(tenant_id)
-    if not is_platform_admin and not is_own_org_admin:
-        raise HTTPException(
-            status_code=403, detail="Only the org admin of this company (or a platform admin) can delete it"
-        )
+    if current_user.role != "platform_admin":
+        raise HTTPException(status_code=403, detail="Only platform admins can delete companies")
 
     tenant = await tenant_dao.get(tenant_id)
     if not tenant:
