@@ -4,9 +4,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import { localDepartmentNameSchema, renameLocalDepartment, type LocalDepartment } from '@/lib/local-departments-api'
+import { listLocalDepartmentMembers, localDepartmentNameSchema, renameLocalDepartment, type LocalDepartment } from '@/lib/local-departments-api'
 
 export function LocalDepartmentCard({ department, canEdit }: {
   readonly department: LocalDepartment
@@ -14,6 +14,7 @@ export function LocalDepartmentCard({ department, canEdit }: {
 }) {
   const scope = useWorkspaceSession()
   const inputId = useId()
+  const rosterId = useId()
   const input = useRef<HTMLInputElement>(null)
   const editButton = useRef<HTMLButtonElement>(null)
   const restoreFocus = useRef(false)
@@ -21,6 +22,32 @@ export function LocalDepartmentCard({ department, canEdit }: {
   const [name, setName] = useState(department.name)
   const [fieldError, setFieldError] = useState('')
   const [saveError, setSaveError] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const roster = useQuery({
+    queryKey: ['local-department-members', department.id],
+    queryFn: ({ signal }) => listLocalDepartmentMembers(department.id, signal),
+    enabled: expanded,
+  })
+
+  const rosterContent = (() => {
+    switch (roster.status) {
+      case 'pending':
+        return <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">Loading members...</p>
+      case 'error':
+        return <div className="space-y-3">
+          <p role="status" className="text-base leading-normal text-destructive sm:text-sm">{userFacingRequestError(roster.error, 'Unable to load department members. Try again.')}</p>
+          <Button type="button" variant="outline" disabled={roster.isFetching} onClick={scope.effect(() => { void roster.refetch() })}>Retry</Button>
+        </div>
+      case 'success':
+        return roster.data.length === 0
+          ? <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">No members in this department yet.</p>
+          : <ul className="space-y-2 text-lg leading-normal sm:text-sm" aria-label={`${department.name} member names`}>
+            {roster.data.map((member) => <li key={member.membership_id} className="wrap-anywhere">{member.display_name?.trim() || 'Name unavailable'}</li>)}
+          </ul>
+      default:
+        return roster satisfies never
+    }
+  })()
 
   function closeEditor() {
     restoreFocus.current = true
@@ -63,7 +90,7 @@ export function LocalDepartmentCard({ department, canEdit }: {
 
   return (
     <Card className="min-w-0">
-      <CardContent>
+      <CardContent className="space-y-4">
         {editing ? (
           <form
             aria-label={`Rename ${department.name}`}
@@ -139,6 +166,17 @@ export function LocalDepartmentCard({ department, canEdit }: {
             ) : null}
           </div>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          aria-label={`${expanded ? 'Hide' : 'Show'} members for ${department.name}`}
+          aria-expanded={expanded}
+          aria-controls={rosterId}
+          onClick={scope.effect(() => { setExpanded((current) => !current) })}
+        >{expanded ? 'Hide members' : 'Show members'}</Button>
+        <section id={rosterId} aria-label={`${department.name} members`} hidden={!expanded}>
+          {expanded ? rosterContent : null}
+        </section>
       </CardContent>
     </Card>
   )
