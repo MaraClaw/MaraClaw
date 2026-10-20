@@ -102,6 +102,30 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("web_search_export_payloads", "raw_query"),
     }
     assert required <= defaults.keys()
+    member_columns = {row["column_name"] for row in columns if row["table_name"] == "org_members"}
+    assert member_columns == {
+        "id",
+        "open_id",
+        "unionid",
+        "external_id",
+        "provider_id",
+        "name",
+        "name_translit_full",
+        "name_translit_initial",
+        "email",
+        "avatar_url",
+        "title",
+        "phone",
+        "status",
+        "tenant_id",
+        "user_id",
+    }
+    assert (
+        await schema_db.fetchall(
+            "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'org_departments'"
+        )
+        == []
+    )
     assert (
         next(
             row["is_generated"] for row in columns if (row["table_name"], row["column_name"]) == ("tenants", "name_tsv")
@@ -130,7 +154,8 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "ix_linkup_api_keys_position",
     } <= {row["indexname"] for row in indexes}
     constraints = await schema_db.fetchall(
-        "SELECT conname FROM pg_constraint WHERE connamespace = current_schema()::regnamespace"
+        "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+        "WHERE connamespace = current_schema()::regnamespace"
     )
     assert {
         "ck_department_permission_use",
@@ -142,6 +167,16 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "local_department_memberships_user_id_tenant_id_fkey",
         "local_department_memberships_department_id_tenant_id_fkey",
     } <= {row["conname"] for row in constraints}
+    definitions = {row["conname"]: row["definition"] for row in constraints}
+    assert definitions["org_members_tenant_id_fkey"] == "FOREIGN KEY (tenant_id) REFERENCES tenants(id)"
+    assert definitions["agent_relationships_member_id_fkey"] == "FOREIGN KEY (member_id) REFERENCES org_members(id)"
+    assert (
+        definitions["agent_relationships_agent_id_fkey"]
+        == "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE"
+    )
+    for audit_column in ("created_by_user_id", "updated_by_user_id"):
+        expected_fk = f"FOREIGN KEY ({audit_column}) REFERENCES users(id)"
+        assert definitions[f"agent_relationships_{audit_column}_fkey"] == expected_fk
     membership_key = await schema_db.fetchall(
         "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
         "WHERE connamespace = current_schema()::regnamespace "

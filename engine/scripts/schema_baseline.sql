@@ -315,26 +315,6 @@ CREATE TABLE IF NOT EXISTS okr_settings (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS org_departments (
-	id UUID NOT NULL, 
-	external_id VARCHAR(100), 
-	provider_id UUID, 
-	name VARCHAR(200) NOT NULL, 
-	parent_id UUID, 
-	path VARCHAR(500) NOT NULL, 
-	member_count INTEGER NOT NULL, 
-	status VARCHAR(20) NOT NULL, 
-	tenant_id UUID, 
-	synced_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	PRIMARY KEY (id), 
-	FOREIGN KEY(parent_id) REFERENCES org_departments (id), 
-	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_org_departments_external_id ON org_departments (external_id);
-
-CREATE INDEX IF NOT EXISTS ix_org_departments_tenant_id ON org_departments (tenant_id);
-
 CREATE TABLE IF NOT EXISTS plaza_comments (
 	id UUID NOT NULL, 
 	post_id UUID NOT NULL, 
@@ -522,15 +502,11 @@ CREATE TABLE IF NOT EXISTS org_members (
 	email VARCHAR(200), 
 	avatar_url VARCHAR(500), 
 	title VARCHAR(200) NOT NULL, 
-	department_id UUID, 
-	department_path VARCHAR(500) NOT NULL DEFAULT '', 
 	phone VARCHAR(50), 
 	status VARCHAR(20) NOT NULL, 
 	tenant_id UUID, 
 	user_id UUID, 
-	synced_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(department_id) REFERENCES org_departments (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
 );
 
