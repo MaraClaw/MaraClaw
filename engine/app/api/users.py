@@ -1,15 +1,18 @@
 import uuid
+from base64 import b64decode, urlsafe_b64encode
+from binascii import Error as Base64Error
 from datetime import datetime
-from typing import Any, ClassVar
+from hashlib import sha256
+from typing import Any, ClassVar, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
-from app.dao.user_dao import user_dao
+from app.dao.user_dao import UserPagePosition, user_dao
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
@@ -71,6 +74,22 @@ class UserOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
+class UsersPageOut(BaseModel):
+    items: list[UserOut]
+    next_cursor: str | None
+
+
+class _UsersPageCursor(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1]
+    tenant_id: uuid.UUID
+    search_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    role_rank: int = Field(strict=True, ge=0, le=1)
+    created_at: AwareDatetime | None
+    user_id: uuid.UUID
+
+
 def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
     return UserOut(
         id=u.id,
@@ -121,6 +140,63 @@ async def list_users(
         agents_count = await agent_dao.count_active_for_creator(u.id)
         out.append(_user_out(u, agents_count=agents_count))
     return out
+
+
+@router.get("/page", response_model=UsersPageOut)
+async def list_users_page(
+    tenant_id: str | None = None,
+    search: str = "",
+    cursor: str | None = Query(default=None, max_length=1024),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: UserRecord = Depends(get_current_user),
+) -> UsersPageOut:
+    """Page company users, with admins first and null creation times last per group."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if current_user.role == "org_admin":
+        if current_user.tenant_id is None:
+            raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
+        tenant_uuid = current_user.tenant_id
+    else:
+        if tenant_id in (None, ""):
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        try:
+            tenant_uuid = uuid.UUID(tenant_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid tenant_id") from exc
+
+    normalized_search = search.strip()
+    search_digest = sha256(normalized_search.encode()).hexdigest()
+    after = None
+    if cursor is not None:
+        try:
+            payload = b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+            position = _UsersPageCursor.model_validate_json(payload)
+        except (Base64Error, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+        if position.tenant_id != tenant_uuid or position.search_digest != search_digest:
+            raise HTTPException(status_code=400, detail="Cursor does not match tenant or search")
+        after = UserPagePosition(position.role_rank, position.created_at, position.user_id)
+
+    rows = await user_dao.list_for_tenant_page(tenant_uuid, search=normalized_search, after=after, limit=limit)
+    page = rows[:limit]
+    counts = await agent_dao.count_active_for_creators([user.id for user in page])
+    next_cursor = None
+    if len(rows) > limit:
+        last = page[-1]
+        next_position = _UsersPageCursor(
+            version=1,
+            tenant_id=tenant_uuid,
+            search_digest=search_digest,
+            role_rank=int(last.role in ("member", "agent_admin")),
+            created_at=last.created_at,
+            user_id=last.id,
+        )
+        next_cursor = urlsafe_b64encode(next_position.model_dump_json().encode()).decode().rstrip("=")
+    return UsersPageOut(
+        items=[_user_out(user, agents_count=counts.get(user.id, 0)) for user in page],
+        next_cursor=next_cursor,
+    )
 
 
 @router.patch("/{user_id}/quota", response_model=UserOut)
