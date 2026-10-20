@@ -29,7 +29,6 @@ from app.dao.okr_dao import (
 )
 from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.onboarding_dao import user_tenant_onboarding_dao
-from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
@@ -84,7 +83,6 @@ __all__ = [
     "okr_objective_dao",
     "okr_progress_log_dao",
     "okr_settings_dao",
-    "org_department_dao",
     "org_member_dao",
     "participant_dao",
     "plaza_comment_dao",

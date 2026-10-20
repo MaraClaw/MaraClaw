@@ -17,11 +17,7 @@ from app.core.json_types import (
     JsonObject,
     int_from_row,
     json_as_int,
-    json_as_str_or,
-    json_object_from,
     object_mapping_from,
-    uuid_from_row,
-    uuid_from_row_opt,
 )
 from app.core.logging import logger
 from app.core.security import encrypt_data, get_current_admin, get_current_user
@@ -33,8 +29,6 @@ from app.dao.identity_dao import identity_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.invitation_code_dao import invitation_code_dao
 from app.dao.llm_dao import llm_model_dao
-from app.dao.org_department_dao import org_department_dao
-from app.dao.org_member_dao import org_member_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
@@ -87,7 +81,6 @@ from app.services.llm import (
     get_model_api_key,
     get_provider_manifest,
 )
-from app.services.org_sync import derive_member_department_paths
 from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 from app.services.sso_service import sso_service
 from app.services.subscription_boundaries import fresh_subscription_actor, unchanged_subscription_model
@@ -1153,7 +1146,6 @@ def _identity_provider_response(
 ) -> dict[str, object]:
     data = dict[str, object](IdentityProviderOut.model_validate(provider).model_dump())
     data["config"] = _sanitize_identity_provider_config(provider.provider_type, provider.config)
-    data["last_synced_at"] = (provider.config or {}).get("last_synced_at")
     if sso_domain is not None:
         data["sso_domain"] = sso_domain
     return data
@@ -1403,222 +1395,6 @@ async def _delete_identity_provider(provider_id: uuid.UUID, current_user: UserRe
         raise HTTPException(
             status_code=500, detail="Failed to delete identity provider due to database constraints"
         ) from e
-
-
-# ─── Org Structure ──────────────────────────────────────
-
-
-@router.get("/org/departments")
-async def list_org_departments(
-    tenant_id: str | None = None, provider_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
-    async with optional_connection_ctx():
-        return await _list_org_departments(tenant_id, provider_id, current_user)
-
-
-async def _list_org_departments(tenant_id: str | None, provider_id: str | None, current_user: UserRecord):
-    """List all departments, optionally filtered by tenant or provider."""
-    effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    is_global_admin = current_user.role == "platform_admin" and effective_tenant_id in (None, "")
-
-    if tenant_id not in (None, ""):
-        if not is_global_admin and effective_tenant_id not in (None, "") and effective_tenant_id != tenant_id:
-            raise HTTPException(status_code=403, detail="Cannot access other tenant's data")
-    else:
-        tenant_id = effective_tenant_id
-
-    rows = await org_department_dao.list_active_with_provider(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
-        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
-    )
-    total_member = await org_member_dao.count_active(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
-        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
-    )
-
-    items: list[dict[str, object]] = []
-    for row in rows:
-        mapping = object_mapping_from(row)
-        provider_id_val = uuid_from_row_opt(mapping.get("provider_id"))
-        parent_id_val = uuid_from_row_opt(mapping.get("parent_id"))
-        items.append(
-            {
-                "id": str(uuid_from_row(mapping["id"])),
-                "external_id": mapping.get("external_id"),
-                "provider_id": str(provider_id_val) if provider_id_val else None,
-                "provider_name": mapping.get("provider_name") if provider_id_val else None,
-                "provider_type": mapping.get("provider_type") if provider_id_val else None,
-                "name": mapping.get("name"),
-                "parent_id": str(parent_id_val) if parent_id_val else None,
-                "path": mapping.get("path"),
-                "member_count": mapping.get("member_count"),
-            }
-        )
-    return {
-        "items": items,
-        "total_member": total_member,
-    }
-
-
-@router.get("/org/members")
-async def list_org_members(
-    department_id: str | None = None,
-    search: str | None = None,
-    tenant_id: str | None = None,
-    provider_id: str | None = None,
-    current_user: UserRecord = Depends(get_current_user),
-) -> list[dict[str, Any]]:
-    async with optional_connection_ctx():
-        return await _list_org_members(department_id, search, tenant_id, provider_id, current_user)
-
-
-async def _list_org_members(
-    department_id: str | None,
-    search: str | None,
-    tenant_id: str | None,
-    provider_id: str | None,
-    current_user: UserRecord,
-) -> list[dict[str, Any]]:
-    """List org members, optionally filtered by department, search, tenant, or provider."""
-    effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    is_global_admin = current_user.role == "platform_admin" and effective_tenant_id in (None, "")
-
-    if tenant_id not in (None, ""):
-        if not is_global_admin and effective_tenant_id not in (None, "") and effective_tenant_id != tenant_id:
-            raise HTTPException(status_code=403, detail="Cannot access other tenant's data")
-    else:
-        tenant_id = effective_tenant_id
-
-    dept_ids = None
-    if department_id not in (None, ""):
-        dept_ids = await org_department_dao.subtree_ids(uuid.UUID(department_id))
-
-    pairs = await org_member_dao.list_active_filtered(
-        tenant_id=uuid.UUID(tenant_id) if tenant_id not in (None, "") else None,
-        provider_id=uuid.UUID(provider_id) if provider_id not in (None, "") else None,
-        department_ids=dept_ids,
-        search=search,
-        limit=100,
-    )
-    members = [m for m, _pn, _pt in pairs]
-    member_paths = await derive_member_department_paths(members)
-    return [
-        {
-            "id": str(m.id),
-            "name": m.name,
-            "email": m.email,
-            "title": m.title,
-            "department_path": member_paths.get(m.id, m.department_path),
-            "avatar_url": m.avatar_url,
-            "external_id": m.external_id,
-            "provider_id": str(m.provider_id) if m.provider_id else None,
-            "provider_name": provider_name if m.provider_id else None,
-            "provider_type": provider_type if m.provider_id else None,
-        }
-        for m, provider_name, provider_type in pairs
-    ]
-
-
-@router.post("/org/sync")
-async def trigger_org_sync(provider_id: str | None = None, current_user: UserRecord = Depends(get_current_admin)):
-    """Manually trigger org structure sync from a specific identity provider."""
-    from app.services.org_sync_service import org_sync_service
-
-    if provider_id in (None, ""):
-        raise HTTPException(status_code=400, detail="provider_id is required")
-
-    try:
-        pid = uuid.UUID(provider_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid provider_id") from e
-
-    provider = await identity_provider_dao.get(pid)
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-
-    if not provider.tenant_id:
-        raise HTTPException(status_code=400, detail="Provider must be bound to a tenant")
-
-    if not _is_platform_admin_user(current_user) and provider.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Cannot sync other tenant's provider")
-
-    return await org_sync_service.sync_provider(provider_id, actor=current_user)
-
-
-@router.get("/org/wecom-verify/{provider_id}")
-async def wecom_org_sync_verify(
-    provider_id: uuid.UUID, msg_signature: str = "", timestamp: str = "", nonce: str = "", echostr: str = ""
-):
-    """Handle WeCom receive-message-server URL verification for the org sync app."""
-    from fastapi.responses import Response as _Response
-
-    from app.api.wecom import _decrypt_msg, _verify_signature
-
-    provider = await identity_provider_dao.get(provider_id)
-    if not provider:
-        return _Response(status_code=404)
-
-    config = json_object_from(provider.config)
-    token = json_as_str_or(config.get("verify_token"))
-    aes_key = json_as_str_or(config.get("verify_aes_key"))
-
-    if not token or not aes_key:
-        logger.warning(
-            f"[WeCom Verify] Provider {provider_id} is missing verify_token or verify_aes_key in config. "
-            + "Please configure them in the WeCom provider settings."
-        )
-        return _Response(status_code=400)
-
-    expected_sig = _verify_signature(token, timestamp, nonce, echostr)
-    if expected_sig != msg_signature:
-        logger.warning(f"[WeCom Verify] Signature mismatch for provider {provider_id}")
-        return _Response(status_code=403)
-
-    try:
-        decrypted, _ = _decrypt_msg(aes_key, echostr)
-        logger.info(f"[WeCom Verify] Successfully verified org sync callback for provider {provider_id}")
-        return _Response(content=decrypted, media_type="text/plain")
-    except Exception as e:
-        logger.error(f"[WeCom Verify] Failed to decrypt echostr for provider {provider_id}: {e}")
-        return _Response(status_code=500)
-
-
-@router.get("/org/wecom-callback/{token}", include_in_schema=False)
-async def wecom_callback_verify_universal(
-    token: str,
-    aes_key: str = "",
-    msg_signature: str = "",
-    timestamp: str = "",
-    nonce: str = "",
-    echostr: str = "",
-):
-    """Universal WeCom callback URL verification endpoint (no database lookup required)."""
-    from fastapi.responses import Response as _Response
-
-    from app.api.wecom import _decrypt_msg, _verify_signature
-
-    if not token:
-        return _Response(status_code=400, content="verify_token is required in URL path")
-
-    if not aes_key:
-        logger.warning("[WeCom Callback] Missing aes_key query param in universal callback URL")
-        return _Response(status_code=400, content="aes_key query param is required")
-
-    expected_sig = _verify_signature(token, timestamp, nonce, echostr)
-    if expected_sig != msg_signature:
-        logger.warning(
-            f"[WeCom Callback] Signature mismatch: token={token[:8]}... "
-            + f"expected={expected_sig[:16]}... got={msg_signature[:16]}..."
-        )
-        return _Response(status_code=403)
-
-    try:
-        decrypted, _ = _decrypt_msg(aes_key, echostr)
-        logger.info(f"[WeCom Callback] Universal callback verified successfully for token={token[:8]}...")
-        return _Response(content=decrypted, media_type="text/plain")
-    except Exception as e:
-        logger.error(f"[WeCom Callback] Failed to decrypt echostr: {e}")
-        return _Response(status_code=500)
 
 
 # ─── Invitation Codes ───────────────────────────────────

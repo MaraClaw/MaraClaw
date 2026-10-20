@@ -45,13 +45,6 @@ class AuditAction(StrEnum):
     ROLE_UPDATE = "role_update"
     ROLE_DELETE = "role_delete"
 
-    # Org sync
-    ORG_SYNC = "org_sync"
-    ORG_DEPARTMENT_CREATE = "org_department_create"
-    ORG_DEPARTMENT_UPDATE = "org_department_update"
-    ORG_MEMBER_CREATE = "org_member_create"
-    ORG_MEMBER_UPDATE = "org_member_update"
-
     # Agent
     AGENT_CREATE = "agent_create"
     AGENT_UPDATE = "agent_update"

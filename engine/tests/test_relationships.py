@@ -4,10 +4,16 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.api import relationships
+from app.core import permissions
+from app.records.agent import AgentRecord
+from app.records.agent_relationship import AgentRelationshipRecord
+from app.records.org import OrgMemberRecord
+from app.records.user import UserRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +28,6 @@ class CandidateMember:
     name: str
     email: str | None = None
     title: str | None = None
-    department_path: str | None = None
     avatar_url: str | None = None
     external_id: str | None = None
     provider_id: uuid.UUID | None = None
@@ -53,9 +58,6 @@ def _install_candidate_dependencies(monkeypatch: pytest.MonkeyPatch, rows: tuple
     async def check_access(_user: Any, _agent_id: uuid.UUID) -> tuple[CandidateAgent, str]:
         return agent, "manage"
 
-    async def department_paths(_members: list[CandidateMember]) -> dict[uuid.UUID, str]:
-        return {}
-
     async def platform_access(_user_id: uuid.UUID, _agent: CandidateAgent) -> str:
         return "manage"
 
@@ -63,7 +65,6 @@ def _install_candidate_dependencies(monkeypatch: pytest.MonkeyPatch, rows: tuple
         return list(rows)
 
     monkeypatch.setattr(relationships, "check_agent_access", check_access)
-    monkeypatch.setattr(relationships, "derive_member_department_paths", department_paths)
     monkeypatch.setattr(relationships, "get_agent_access_level_for_user_id", platform_access)
     monkeypatch.setattr(relationships.org_member_dao, "list_relationship_candidates", list_candidates)
     return current_user
@@ -81,6 +82,7 @@ async def test_member_candidates_return_dao_rows(
 
     # Then
     assert [candidate["name"] for candidate in candidates] == ["Alpha"]
+    assert candidates[0]["department_path"] == ""
 
 
 @pytest.mark.asyncio
@@ -164,3 +166,47 @@ async def test_member_candidates_cap_case_insensitive_order_at_one_hundred(
     assert [candidate["name"] for candidate in candidates] == list(names[:100])
     assert len(candidates) == 100
     assert "candidate-100" not in [candidate["name"] for candidate in candidates]
+
+
+async def test_relationship_response_keeps_ids_and_empty_department_without_synced_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    tenant_id, user_id, agent_id, member_id, relationship_id = (uuid.uuid4() for _ in range(5))
+    user = UserRecord(id=user_id, tenant_id=tenant_id, role="org_admin")
+    agent = AgentRecord(id=agent_id, name="Agent", creator_id=user_id, tenant_id=tenant_id)
+    member = OrgMemberRecord(id=member_id, name="Employee", tenant_id=tenant_id, user_id=user_id)
+    relation = AgentRelationshipRecord(
+        id=relationship_id,
+        agent_id=agent_id,
+        member_id=member_id,
+        member=member,
+        provider_name="Feishu",
+        provider_type="feishu",
+    )
+    monkeypatch.setattr(relationships, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(relationships, "ensure_access_granted_platform_relationships", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        relationships.agent_relationship_dao,
+        "list_for_agent_with_members_and_providers",
+        AsyncMock(return_value=[relation]),
+    )
+    monkeypatch.setattr(relationships.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(permissions, "get_agent_access_level_for_user_id", AsyncMock(return_value="use"))
+    # When
+    result = await relationships.get_relationships(agent_id, current_user=user)
+    # Then
+    assert result[0]["id"] == str(relationship_id)
+    assert result[0]["member_id"] == str(member_id)
+    assert result[0]["access_allowed"] is True
+    assert result[0]["member"] == {
+        "name": "Employee",
+        "title": "",
+        "department_path": "",
+        "avatar_url": None,
+        "email": None,
+        "provider_name": "Feishu",
+        "provider_type": "feishu",
+        "user_id": str(user_id),
+        "is_platform_user": True,
+    }

@@ -6,7 +6,10 @@ from collections import deque
 from types import SimpleNamespace
 from typing import Literal
 
+import pytest
+
 from app.core.json_types import JsonObject
+from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.agent_tool_exec import channel_context, registry
 from app.services.agent_tool_exec.registry import ToolArgumentValue
@@ -374,17 +377,22 @@ async def test_approval_handlers_preserve_check_err_mapping_success_and_exceptio
     assert failed == f"Failed: {'x' * 300}"
 
 
-async def test_user_search_uses_facade_db_seams_and_contact_refresh_deletes_cache(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("search", ["Alice", "alicefull", "af"])
+async def test_user_search_uses_facade_db_seams_and_contact_refresh_deletes_cache(
+    monkeypatch, tmp_path, search
+) -> None:
     from app.dao.agent_dao import agent_dao
     from app.dao.org_member_dao import org_member_dao
 
     target = _contacts_module()
-    member = SimpleNamespace(
+    member = OrgMemberRecord(
+        id=uuid.uuid4(),
         name="Alice",
         external_id="user-alice",
         open_id="ou_Alice123",
         email="alice@example.test",
-        department_path="Engineering",
+        name_translit_full="alicefull",
+        name_translit_initial="af",
     )
     _patch_credentials(monkeypatch)
 
@@ -397,15 +405,14 @@ async def test_user_search_uses_facade_db_seams_and_contact_refresh_deletes_cach
     monkeypatch.setattr(agent_dao, "get", fake_get_agent)
     monkeypatch.setattr(org_member_dao, "list_active_filtered", fake_list_active_filtered)
 
-    result = await target._feishu_user_search(uuid.uuid4(), {"name": "Alice"})
+    result = await target._feishu_user_search(uuid.uuid4(), {"name": search})
 
     assert result == (
-        "🔍 从通讯录找到 1 位匹配「Alice」的用户：\n\n"
+        f"🔍 从通讯录找到 1 位匹配「{search}」的用户：\n\n"
         "• **Alice**\n"
         "  user_id: `user-alice`\n"
         "  open_id: `ou_Alice123`\n"
-        "  邮箱: alice@example.test\n"
-        "  部门: Engineering"
+        "  邮箱: alice@example.test"
     )
 
     cache_file = tmp_path / "feishu_contacts_cache.json"

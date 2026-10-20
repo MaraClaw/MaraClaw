@@ -198,14 +198,10 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
             return int_from_row(value)
 
     async def delete_nullifying_org_refs(self, provider_id: UUID) -> None:
-        """Nullify org member/department FKs then delete the provider."""
+        """Delete a provider without discarding shared member identities."""
         async with self.session() as db:
             await db.execute(
                 "UPDATE org_members SET provider_id = NULL WHERE provider_id = %(provider_id)s",
-                {"provider_id": provider_id},
-            )
-            await db.execute(
-                "UPDATE org_departments SET provider_id = NULL WHERE provider_id = %(provider_id)s",
                 {"provider_id": provider_id},
             )
             await db.execute(

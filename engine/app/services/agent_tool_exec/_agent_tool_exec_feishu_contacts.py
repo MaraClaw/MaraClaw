@@ -54,8 +54,6 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolArguments) -> 
                         lines.append(f"  open_id: `{member.open_id}`")
                     if member.email not in (None, ""):
                         lines.append(f"  邮箱: {member.email}")
-                    if member.department_path:
-                        lines.append(f"  部门: {member.department_path}")
                 return "\n".join(lines)
 
     with suppress(Exception):

@@ -20,7 +20,6 @@ from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.access_relationships import ensure_access_granted_platform_relationships
-from app.services.org_sync import derive_member_department_paths
 
 router = APIRouter(prefix="/agents/{agent_id}/relationships", tags=["relationships"])
 
@@ -146,9 +145,6 @@ async def get_relationships(
         await _regenerate_relationships_file(agent_id)
 
     rows = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
-    member_paths = await derive_member_department_paths(
-        [r.member for r in rows if r.member],
-    )
     out: list[dict[str, object]] = []
     for r in rows:
         linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
@@ -163,7 +159,7 @@ async def get_relationships(
                 "member": {
                     "name": r.member.name,
                     "title": r.member.title,
-                    "department_path": member_paths.get(r.member.id, r.member.department_path),
+                    "department_path": "",
                     "avatar_url": r.member.avatar_url,
                     "email": r.member.email,
                     "provider_name": _display_provider_name(r.provider_name, r.provider_type),
@@ -221,16 +217,13 @@ async def search_human_relationship_candidates(
     filtered = [*deduped_filtered, *by_user_id.values()]
 
     filtered = sorted(filtered, key=lambda row: (row[0].name or "").lower())[:100]
-    member_paths = await derive_member_department_paths(
-        [m for m, _provider_name, _provider_type, _linked_user_id in filtered],
-    )
     org_member_candidates: list[HumanRelationshipCandidate] = [
         {
             "id": str(m.id),
             "name": m.name,
             "email": m.email,
             "title": m.title,
-            "department_path": member_paths.get(m.id, m.department_path),
+            "department_path": "",
             "avatar_url": m.avatar_url,
             "external_id": m.external_id,
             "provider_id": str(m.provider_id) if m.provider_id else None,
@@ -289,7 +282,6 @@ async def save_relationships(
                         "email": platform_user.email,
                         "avatar_url": platform_user.avatar_url,
                         "title": platform_user.title or "",
-                        "department_path": "",
                         "status": "active",
                     }
                 )
