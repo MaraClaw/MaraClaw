@@ -21,7 +21,7 @@ class DockerImageApi(Protocol):
 class DockerContainerApi(Protocol):
     def wait(self, container: object) -> object: ...
 
-    def logs(self, container: object, stream: bool = False) -> str | Iterable[object]: ...
+    def logs(self, container: object, stream: bool = False) -> Iterable[tuple[str, bytes]]: ...
 
     def remove(self, container: object, force: bool = True) -> None: ...
 
@@ -203,6 +203,7 @@ class DockerBackend(BaseSandboxBackend):
                         container,
                         abandon_on_cancel=True,
                     )
+                    stdout, stderr = await run_sync(self._collect_logs, container, abandon_on_cancel=True)
             except TimeoutError:
                 return ExecutionResult(
                     success=False,
@@ -212,9 +213,6 @@ class DockerBackend(BaseSandboxBackend):
                     duration_ms=int((time.time() - start_time) * 1000),
                     error=f"Code execution timed out after {timeout}s",
                 )
-
-            # Get output
-            stdout, stderr = _collect_logs(self.client.container.logs(container, stream=True))
 
             duration_ms = int((time.time() - start_time) * 1000)
             exit_code = _normalize_exit_code(result)
@@ -259,34 +257,24 @@ class DockerBackend(BaseSandboxBackend):
                 except Exception as cleanup_error:
                     logger.warning(f"[Docker] Failed to remove container after execution: {cleanup_error}")
 
-
-def _decode_log(log: bytes | str) -> str:
-    if isinstance(log, bytes):
-        return log.decode("utf-8", errors="replace")
-    return log
+    def _collect_logs(self, container: object) -> tuple[str, str]:
+        return _collect_logs(self.client.container.logs(container, stream=True), self.config)
 
 
-def _is_log_pair(item: object) -> TypeIs[tuple[object, object]]:
-    return isinstance(item, tuple) and len(item) == 2
-
-
-def _collect_logs(logs: str | Iterable[object]) -> tuple[str, str]:
-    if isinstance(logs, str):
-        return logs[:10000], ""
-    stdout_parts = []
-    stderr_parts = []
-    for item in logs:
-        if isinstance(item, (bytes, str)):
-            stdout_parts.append(_decode_log(item))
+def _collect_logs(logs: Iterable[tuple[str, bytes]], config: SandboxConfig) -> tuple[str, str]:
+    stdout = bytearray()
+    stderr = bytearray()
+    for stream_name, content in logs:
+        if stream_name == "stdout":
+            target, limit = stdout, config.max_stdout_bytes
+        elif stream_name == "stderr":
+            target, limit = stderr, config.max_stderr_bytes
+        else:
             continue
-        if not _is_log_pair(item):
-            continue
-        stream_name, content = item
-        if stream_name == "stdout" and isinstance(content, (bytes, str)):
-            stdout_parts.append(_decode_log(content))
-        elif stream_name == "stderr" and isinstance(content, (bytes, str)):
-            stderr_parts.append(_decode_log(content))
-    return "".join(stdout_parts)[:10000], "".join(stderr_parts)[:5000]
+        remaining = limit - len(target)
+        if remaining > 0:
+            target.extend(content[:remaining])
+    return stdout.decode("utf-8", errors="replace")[:10000], stderr.decode("utf-8", errors="replace")[:5000]
 
 
 def _normalize_exit_code(result: object) -> int:

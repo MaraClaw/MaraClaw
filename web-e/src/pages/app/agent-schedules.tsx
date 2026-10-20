@@ -8,10 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { ScheduleRunHistory } from './schedule-run-history'
 import {
   createSchedule,
   deleteSchedule,
-  listScheduleHistory,
   listSchedules,
   runSchedule,
   updateSchedule,
@@ -24,8 +24,12 @@ import { formatScheduleNextRun, scheduleTimezoneError } from '@/lib/schedule-tim
 import { useAuth } from '@/hooks/use-auth'
 
 export function AgentSchedulesPage() {
-  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
+  return <AgentSchedules key={agent.id} agent={agent} />
+}
+
+function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
+  const scope = useWorkspaceSession()
   const { user } = useAuth()
   const isCreator = user?.id === agent.creator_id
   const queryClient = useQueryClient()
@@ -36,11 +40,6 @@ export function AgentSchedulesPage() {
   const timezoneInput = useRef<HTMLInputElement>(null)
   const [historyId, setHistoryId] = useState<string | null>(null)
   const schedules = useQuery({ queryKey: ['schedules', agent.id], queryFn: () => listSchedules(agent.id) })
-  const history = useQuery({
-    queryKey: ['schedule-history', agent.id, historyId],
-    queryFn: () => listScheduleHistory(agent.id, historyId ?? ''),
-    enabled: Boolean(historyId),
-  })
 
   const save = useMutation({
     mutationFn: (values: ScheduleDraft) => editing
@@ -167,19 +166,7 @@ export function AgentSchedulesPage() {
           </li>
         ))}
       </ul>
-      {historyId ? (
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold">Run history</h3>
-          <ul className="space-y-1 text-xs text-muted-foreground">
-            {(history.data ?? []).map((row) => (
-              <li key={row.id}>
-                {row.created_at?.slice(0, 19)} · {row.summary || row.reply || 'ran'}
-              </li>
-            ))}
-            {(history.data ?? []).length === 0 ? <li>No history yet.</li> : null}
-          </ul>
-        </div>
-      ) : null}
+      {historyId && isCreator ? <ScheduleRunHistory key={historyId} agentId={agent.id} scheduleId={historyId} /> : null}
     </div>
   )
 }

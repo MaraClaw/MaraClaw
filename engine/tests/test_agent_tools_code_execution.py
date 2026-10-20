@@ -207,3 +207,65 @@ async def test_backend_timeout_result_preserves_partial_output(tmp_path: Path, b
     # Then
     assert result == "📤 Output:\npartial\n\n⚠️ Stderr:\nwarning\n\n❌ Error: timed out"
     assert len(backend.calls) == 1
+
+
+@pytest.mark.parametrize("tool_name", ["execute_code", "execute_code_e2b"])
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"max_stdout_bytes": 0}, (0, 43)),
+        ({"max_stderr_bytes": 7}, (29, 7)),
+        ({"max_stdout_bytes": 11, "max_stderr_bytes": 13}, (11, 13)),
+        ({"max_stdout_bytes": True, "max_stderr_bytes": "3"}, (29, 43)),
+        ({"max_stdout_bytes": None, "max_stderr_bytes": 1.5}, (29, 43)),
+    ],
+)
+async def test_output_budget_overrides_reach_selected_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    backend: RecordingBackend,
+    tool_name: str,
+    overrides: JsonObject,
+    expected: tuple[int, int],
+) -> None:
+    # Given: each platform limit differs from the agent's supplied override.
+    configs: list[SandboxConfig] = []
+
+    async def get_tool_config(_: uuid.UUID | None, __: str) -> JsonObject:
+        return overrides
+
+    def select(config: SandboxConfig) -> RecordingBackend:
+        configs.append(config)
+        return backend
+
+    monkeypatch.setattr(
+        "app.config.get_sandbox_config", lambda: SandboxConfig(max_stdout_bytes=29, max_stderr_bytes=43)
+    )
+    monkeypatch.setattr(agent_tools, "_get_tool_config", get_tool_config)
+    monkeypatch.setattr("app.services.sandbox.registry.get_sandbox_backend", select)
+    # When
+    await agent_tools._execute_code(None, tmp_path, {"code": "pass"}, tool_name=tool_name)
+    # Then: missing or non-integer JSON fields inherit independently, including zero overrides.
+    assert [(config.max_stdout_bytes, config.max_stderr_bytes) for config in configs] == [expected]
+    assert len(backend.calls) == 1
+
+
+@pytest.mark.parametrize("field", ["max_stdout_bytes", "max_stderr_bytes"])
+async def test_negative_output_budget_prevents_backend_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    backend: RecordingBackend,
+    host_launches: list[bool],
+    field: str,
+) -> None:
+    # Given: a typed but invalid per-agent limit.
+    async def get_tool_config(_: uuid.UUID | None, __: str) -> JsonObject:
+        return {field: -1}
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", get_tool_config)
+    # When
+    result = await agent_tools._execute_code(None, tmp_path, {"code": "pass"})
+    # Then: validation fails closed, without a backend call or host retry.
+    assert "sandbox configuration error" in result.lower()
+    assert backend.calls == []
+    assert host_launches == []

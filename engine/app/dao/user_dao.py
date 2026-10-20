@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, final, override
 from uuid import UUID
@@ -61,6 +62,15 @@ _IDENTITY_COLUMNS = (
     "created_at",
     "updated_at",
 )
+
+_USER_PAGE_ROLE_RANK = "CASE WHEN u.role IN ('member', 'agent_admin') THEN 1 ELSE 0 END"
+
+
+@dataclass(frozen=True, slots=True)
+class UserPagePosition:
+    role_rank: int
+    created_at: datetime | None
+    user_id: UUID
 
 
 def _user_record_from_row(row: Mapping[str, object]) -> UserRecord:
@@ -562,6 +572,49 @@ class UserDAO(BaseDAO[UserRecord]):
                 {"tenant_id": tenant_id, "roles": ["org_admin", "platform_admin"]},
             )
             return int_from_row(value)
+
+    async def list_for_tenant_page(
+        self,
+        tenant_id: UUID,
+        *,
+        search: str = "",
+        after: UserPagePosition | None = None,
+        limit: int = 50,
+    ) -> Sequence[UserRecord]:
+        """Fetch at most limit + 1 identity-backed rows, including one lookahead."""
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit + 1}
+        clauses = ["u.tenant_id = %(tenant_id)s"]
+        if search:
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params["search"] = f"%{escaped}%"
+            clauses.append(
+                "(u.display_name ILIKE %(search)s ESCAPE E'\\\\' "
+                "OR i.email ILIKE %(search)s ESCAPE E'\\\\' "
+                "OR i.username ILIKE %(search)s ESCAPE E'\\\\')"
+            )
+        if after is not None:
+            params.update({"role_rank": after.role_rank, "user_id": after.user_id})
+            if after.created_at is None:
+                same_role_seek = "u.created_at IS NULL AND u.id > %(user_id)s"
+            else:
+                params["created_at"] = after.created_at
+                same_role_seek = (
+                    "u.created_at IS NULL OR u.created_at > %(created_at)s "
+                    "OR (u.created_at = %(created_at)s AND u.id > %(user_id)s)"
+                )
+            clauses.append(
+                f"({_USER_PAGE_ROLE_RANK} > %(role_rank)s OR "
+                f"({_USER_PAGE_ROLE_RANK} = %(role_rank)s AND ({same_role_seek})))"
+            )
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('u')}, {self._identity_select()} "
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                f"WHERE {' AND '.join(clauses)} "
+                f"ORDER BY {_USER_PAGE_ROLE_RANK} ASC, u.created_at ASC NULLS LAST, u.id ASC LIMIT %(limit)s",
+                params,
+            )
+            return [_user_from_joined_row(row) for row in rows]
 
     async def find_by_username_or_display_name(
         self, name: str, *, tenant_id: UUID | None = None, include_identity: bool = True

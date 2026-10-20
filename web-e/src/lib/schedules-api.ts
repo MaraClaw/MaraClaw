@@ -11,13 +11,22 @@ const scheduleSchema = scheduleFields.extend({
 }).readonly()
 const createSchema = scheduleFields.extend({ timezone: z.string().default('UTC'), is_enabled: z.boolean().optional() })
 const patchSchema = scheduleFields.partial()
-const historySchema = z.array(z.object({
-  id: z.string(), created_at: z.string().nullable().optional(), summary: z.string().optional(), reply: z.string().optional(),
-}))
+const historyItemSchema = z.object({
+  id: z.string(), created_at: z.string().nullable().optional(),
+  summary: z.string().optional(), instruction: z.string().optional(), reply: z.string().optional(),
+  status: z.enum(['success', 'failure', 'cancelled', 'unknown']).default('unknown'),
+}).readonly()
+const historySchema = z.array(historyItemSchema)
+const historyPageSchema = z.object({
+  items: historySchema.readonly(), next_cursor: z.string().nullable(),
+}).readonly()
 
 export type ScheduleOut = z.infer<typeof scheduleSchema>
 export type ScheduleCreate = Readonly<z.input<typeof createSchema>>
 export type SchedulePatch = Readonly<z.input<typeof patchSchema>>
+export type ScheduleHistoryItem = z.infer<typeof historyItemSchema>
+export type ScheduleHistoryPage = z.infer<typeof historyPageSchema>
+type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal }>
 
 export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
   return z.array(scheduleSchema).parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/`))
@@ -45,4 +54,19 @@ export async function deleteSchedule(agentId: string, scheduleId: string): Promi
 
 export async function listScheduleHistory(agentId: string, scheduleId: string) {
   return historySchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}/history`))
+}
+
+export async function listScheduleHistoryPage(
+  agentId: string, scheduleId: string, { cursor, signal }: HistoryPageRequest = {},
+): Promise<ScheduleHistoryPage> {
+  const query = new URLSearchParams({ limit: '20' })
+  if (cursor !== undefined) query.set('cursor', cursor)
+  if (signal !== undefined) {
+    return historyPageSchema.parse(await apiRequest<unknown>(
+      `/api/agents/${agentId}/schedules/${scheduleId}/history/page?${query}`, { signal },
+    ))
+  }
+  return historyPageSchema.parse(await apiRequest<unknown>(
+    `/api/agents/${agentId}/schedules/${scheduleId}/history/page?${query}`,
+  ))
 }

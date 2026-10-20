@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final, override
+from typing import Any, ClassVar, TypedDict, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_findall, uuid_from_row
@@ -18,6 +18,12 @@ from app.records.tenant import TenantRecord
 _SEARCH_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _MAX_SEARCH_TOKENS = 8
 _DEFAULT_SEARCH_LIMIT = 50
+
+
+class TenantDeletionPreview(TypedDict):
+    users_count: int
+    agents_count: int
+    schedules_count: int
 
 
 def tenant_name_tsquery(raw: str) -> str | None:
@@ -258,6 +264,24 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 + "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
             )
             return [TenantRecord.from_row(row) for row in rows]
+
+    async def deletion_preview(self, tenant_id: UUID) -> TenantDeletionPreview:
+        """Count affected rows in one advisory snapshot without locking or cleanup."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT (SELECT COUNT(*) FROM users WHERE tenant_id = %(tid)s) AS users_count, "
+                "(SELECT COUNT(*) FROM agents WHERE tenant_id = %(tid)s) AS agents_count, "
+                "(SELECT COUNT(*) FROM agent_schedules "
+                "WHERE agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tid)s) "
+                "OR created_by IN (SELECT id FROM users WHERE tenant_id = %(tid)s)) AS schedules_count",
+                {"tid": tenant_id},
+            )
+            row = rows[0]
+            return {
+                "users_count": int_from_row(row["users_count"]),
+                "agents_count": int_from_row(row["agents_count"]),
+                "schedules_count": int_from_row(row["schedules_count"]),
+            }
 
     async def delete_cascade(self, tenant_id: UUID) -> None:
         """Delete a tenant and all dependent rows in FK-safe order."""

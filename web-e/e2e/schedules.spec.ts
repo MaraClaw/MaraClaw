@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { fillSchedule, prepareSchedules, savedSchedule, schedulesApiPath, schedulesPath } from './schedules-fixture'
+import { historyPath, historyRun } from './schedule-history-fixture'
 
 test.use({ timezoneId: 'Pacific/Honolulu' })
 
@@ -142,4 +143,93 @@ test('unavailable saved timezone is named without falling back to browser-local 
   await expect(row).toContainText('Not/A_Zone')
   await expect(row).toContainText('Timezone unavailable')
   await expect(row).not.toContainText('15 Jan 2026')
+})
+
+test('history distinguishes outcomes and loads older runs without losing rows on a page error', async ({ page }) => {
+  await prepareSchedules(page, [savedSchedule])
+  const firstRequested = Promise.withResolvers<void>()
+  const firstRelease = Promise.withResolvers<void>()
+  const olderRequested = Promise.withResolvers<void>()
+  const olderRelease = Promise.withResolvers<void>()
+  const cursors: (string | null)[] = []
+  const cursor = 'opaque/+?=& cursor'
+  let olderAttempts = 0
+  await page.route(`**${historyPath}*`, async (route) => {
+    const url = new URL(route.request().url())
+    expect(url.searchParams.get('limit')).toBe('20')
+    cursors.push(url.searchParams.get('cursor'))
+    if (!url.searchParams.has('cursor')) {
+      firstRequested.resolve()
+      await firstRelease.promise
+      return route.fulfill({ json: { items: [historyRun('latest', 'success'), historyRun('failed', 'failure')], next_cursor: cursor } })
+    }
+    expect(url.searchParams.get('cursor')).toBe(cursor)
+    if (++olderAttempts === 1) return route.fulfill({ status: 503, json: { detail: 'History unavailable' } })
+    olderRequested.resolve()
+    await olderRelease.promise
+    await route.fulfill({ json: { items: [historyRun('cancelled', 'cancelled'), { id: 'legacy', reply: 'Completed successfully' }], next_cursor: null } })
+  })
+  await page.goto(schedulesPath)
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await firstRequested.promise
+  const history = page.getByRole('region', { name: 'Run history', exact: true })
+  await expect(history.getByRole('status')).toHaveText('Loading run history...')
+  await expect(history.getByText('No history yet.', { exact: true })).toHaveCount(0)
+  firstRelease.resolve()
+  await expect(history.getByText('Success', { exact: true })).toBeVisible()
+  await expect(history.getByText('Failure', { exact: true })).toBeVisible()
+
+  await history.getByRole('button', { name: 'Load older runs', exact: true }).click()
+
+  await expect(history.getByRole('status')).toHaveText('Unable to load older runs. Try again.')
+  await expect(history.getByRole('listitem')).toHaveCount(2)
+  await history.getByRole('button', { name: 'Retry older runs', exact: true }).click()
+  await olderRequested.promise
+  await expect(history.getByRole('button', { name: 'Loading older runs...', exact: true })).toBeDisabled()
+  await expect(history.getByRole('status')).toHaveText('Loading older runs...')
+  await expect(history.getByRole('listitem')).toHaveCount(2)
+  olderRelease.resolve()
+  await expect(history.getByRole('listitem')).toHaveCount(4)
+  await expect(history.getByText('Cancelled', { exact: true })).toBeVisible()
+  await expect(history.getByText('Unknown', { exact: true })).toBeVisible()
+  await expect(history.getByText('No older runs.', { exact: true })).toBeVisible()
+  await expect(history.getByRole('button')).toHaveCount(0)
+  expect(cursors).toEqual([null, cursor, cursor])
+})
+
+test('history first-page errors offer a retry and only a successful empty page shows empty state', async ({ page }) => {
+  await prepareSchedules(page, [savedSchedule])
+  let attempts = 0
+  await page.route(`**${historyPath}*`, (route) => ++attempts === 1
+    ? route.fulfill({ status: 503, json: { detail: 'Unavailable' } })
+    : route.fulfill({ json: { items: [], next_cursor: null } }))
+  await page.goto(schedulesPath)
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  const history = page.getByRole('region', { name: 'Run history', exact: true })
+  await expect(history.getByRole('status')).toHaveText('Unable to load run history. Try again.')
+  await expect(history.getByText('No history yet.', { exact: true })).toHaveCount(0)
+
+  await history.getByRole('button', { name: 'Retry history', exact: true }).click()
+
+  await expect(history.getByText('No history yet.', { exact: true })).toBeVisible()
+  await expect(history.getByRole('status')).toHaveCount(0)
+  await expect(history.getByRole('button')).toHaveCount(0)
+  expect(attempts).toBe(2)
+})
+
+test('deleting a schedule preserves its open run history and older-page control', async ({ page }) => {
+  await prepareSchedules(page, [savedSchedule])
+  await page.route(`**${historyPath}*`, (route) => route.fulfill({ json: {
+    items: [historyRun(new URL(route.request().url()).searchParams.has('cursor') ? 'older-deleted-run' : 'latest-deleted-run')],
+    next_cursor: new URL(route.request().url()).searchParams.has('cursor') ? null : 'older',
+  } }))
+  await page.goto(schedulesPath)
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await expect(page.getByText('latest-deleted-run', { exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+
+  await expect(page.getByRole('listitem', { name: savedSchedule.name, exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Load older runs' }).click()
+  await expect(page.getByText('older-deleted-run', { exact: true })).toBeVisible()
 })

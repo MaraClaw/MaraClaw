@@ -173,7 +173,7 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
         assert activity.await_args_list[0].kwargs["detail"] == {
             "schedule_id": str(row.id),
             "instruction": row.instruction,
-            "status": "failed",
+            "status": "failure",
         }
     else:
         assert activity.await_args_list[0].args[2] == f"Scheduled task executed: {row.instruction[:60]}"
@@ -181,20 +181,28 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
             "schedule_id": str(row.id),
             "instruction": row.instruction,
             "reply": "R" * 500,
+            "status": "success",
         }
 
 
+@pytest.mark.parametrize("stage", ["context", "provider"])
 async def test_execution_retains_cancelled_history_when_owner_stops(
     pool: _Pool,
     monkeypatch: pytest.MonkeyPatch,
+    stage: str,
 ) -> None:
     # Given an owned execution blocked in its provider after the start committed.
     row = _schedule()
     pool.rows[row.id] = row
     agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("static", "dynamic")))
     started = asyncio.Event()
+
+    async def context(*_args: object) -> tuple[str, str]:
+        if stage == "context":
+            started.set()
+            await asyncio.Event().wait()
+        return "static", "dynamic"
 
     async def llm(**_kwargs: object) -> str:
         assert session.get_connection() is None
@@ -203,6 +211,7 @@ async def test_execution_retains_cancelled_history_when_owner_stops(
         await asyncio.Event().wait()
         return "unreachable"
 
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", context)
     monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", llm)
     activity = AsyncMock()
     monkeypatch.setattr("app.services.activity_logger.log_activity", activity)

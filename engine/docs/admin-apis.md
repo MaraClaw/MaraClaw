@@ -114,7 +114,8 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 | `DELETE` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | - | **204**. Promotes another default when needed |
 | `POST` | `/api/tenants/{tenant_id}/logo` | platform / org | Multipart image PNG/JPEG/WebP, ≤1 MB, 1:1 square | `TenantOut` |
 | `DELETE` | `/api/tenants/{tenant_id}/logo` | platform / org | - | `TenantOut` |
-| `DELETE` | `/api/tenants/{tenant_id}` | own org_admin **or** platform | - | Cascade delete. `{ status: "deleted", fallback_tenant_id }` |
+| `GET` | `/api/tenants/{tenant_id}/deletion-preview` | platform_admin | - | Read-only `{ users_count, agents_count, schedules_count }`. Org admins (including genesis) receive **403**. |
+| `DELETE` | `/api/tenants/{tenant_id}` | platform_admin | - | Cascade delete. `{ status: "deleted", fallback_tenant_id }`. Org admins (including genesis) receive **403**. |
 
 #### `TenantOut` shape
 
@@ -134,7 +135,7 @@ is_system, is_default_end_user_org, can_disable
 | `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
 | `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
 | `GET` | `/api/tenants/registration-config` | Public. Always `{ tenant_creation: "platform_admin_only" }`. |
-| `DELETE` | `/api/tenants/{tenant_id}` | Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
+| `DELETE` | `/api/tenants/{tenant_id}` | Platform admin only. Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
 | `GET` | `/api/tenants/me` | Any member; company + default model |
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |

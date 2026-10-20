@@ -56,6 +56,12 @@ def _sandbox_overrides(config: JsonObject) -> SandboxConfigOverrides:
     max_timeout = config.get("max_timeout")
     if isinstance(max_timeout, int) and not isinstance(max_timeout, bool):
         overrides["max_timeout"] = max_timeout
+    max_stdout_bytes = config.get("max_stdout_bytes")
+    if isinstance(max_stdout_bytes, int) and not isinstance(max_stdout_bytes, bool):
+        overrides["max_stdout_bytes"] = max_stdout_bytes
+    max_stderr_bytes = config.get("max_stderr_bytes")
+    if isinstance(max_stderr_bytes, int) and not isinstance(max_stderr_bytes, bool):
+        overrides["max_stderr_bytes"] = max_stderr_bytes
     http_proxy = json_as_str(config.get("http_proxy"))
     if http_proxy is not None:
         overrides["http_proxy"] = http_proxy

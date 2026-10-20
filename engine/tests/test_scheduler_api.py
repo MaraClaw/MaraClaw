@@ -150,16 +150,15 @@ async def test_history_retains_deleted_schedule_logs_and_filters_other_schedules
     api.get_schedule.return_value = None
     log_id = uuid4()
     rows = [
-        {"id": uuid4(), "detail_json": {"schedule_id": str(uuid4())}},
-        *[
-            {
-                "id": log_id,
-                "created_at": NOW,
-                "summary": "summary",
-                "detail_json": {"schedule_id": str(api.row.id), "instruction": "Report", "reply": "reply"},
-            }
-            for _ in range(22)
-        ],
+        {
+            "id": log_id,
+            "agent_id": api.row.agent_id,
+            "action_type": "schedule_run",
+            "created_at": NOW,
+            "summary": "summary",
+            "detail_json": {"schedule_id": str(api.row.id), "instruction": "Report", "reply": "reply"},
+        }
+        for _ in range(20)
     ]
     fetch = AsyncMock(return_value=rows)
     monkeypatch.setattr(DbConnection, "fetchall", fetch)
@@ -176,6 +175,7 @@ async def test_history_retains_deleted_schedule_logs_and_filters_other_schedules
                 "summary": "summary",
                 "instruction": "Report",
                 "reply": "reply",
+                "status": "unknown",
             }
         ]
         * 20
@@ -183,8 +183,9 @@ async def test_history_retains_deleted_schedule_logs_and_filters_other_schedules
     api.get_schedule.assert_not_awaited()
     query, params = fetch.await_args_list[0].args
     assert "action_type = 'schedule_run'" in query
-    assert "ORDER BY created_at DESC LIMIT 200" in query
-    assert params == {"agent_id": api.row.agent_id}
+    assert "detail_json ->> 'schedule_id' = %(schedule_id)s" in query
+    assert "ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s" in query
+    assert params == {"agent_id": api.row.agent_id, "schedule_id": str(api.row.id), "limit": 20}
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -212,3 +213,13 @@ async def test_create_preserves_enabled_and_initial_accounting_contract(
     assert values["run_count"] == 0
     assert values["is_enabled"] is enabled
     assert (values["next_run_at"] is not None) is enabled
+
+
+@pytest.mark.parametrize("method", ["post", "patch", "delete"])
+async def test_mutations_remain_creator_only(api: _HTTP, method: str) -> None:
+    api.agent.creator_id = uuid4()
+    path = api.url.rsplit("/", 1)[0] + "/" if method == "post" else api.url
+    response = await api.client.request(method, path, json={"name": "Daily", "cron_expr": "0 12 * * *"})
+    assert response.status_code == 403
+    api.get_schedule.assert_not_awaited()
+    api.update.assert_not_awaited()

@@ -16,9 +16,6 @@ from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, Sandb
 from app.services.sandbox.config import SandboxConfig
 from app.services.workspace_paths import WorkspacePathError, resolve_path_within_root
 
-MAX_STDOUT_CAPTURE_BYTES = 1_000_000
-MAX_STDERR_CAPTURE_BYTES = 500_000
-
 
 class SubprocessExecKwargs(TypedDict):
     stdout: int
@@ -521,6 +518,7 @@ class SubprocessBackend(BaseSandboxBackend):
         script_path = work_path / f"_exec_tmp{ext}"
 
         proc: asyncio.subprocess.Process | None = None
+        readers: list[asyncio.Task[None]] = []
         try:
             await self._ensure_workspace_venv(venv_path)
             _ = await asyncio.to_thread(script_path.write_text, code, encoding="utf-8")
@@ -563,7 +561,7 @@ class SubprocessBackend(BaseSandboxBackend):
             async def read_stream(stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout") -> None:
                 if stream is None:
                     return
-                capture_limit = MAX_STDERR_CAPTURE_BYTES if label == "stderr" else MAX_STDOUT_CAPTURE_BYTES
+                capture_limit = self.config.max_stderr_bytes if label == "stderr" else self.config.max_stdout_bytes
                 while True:
                     chunk = await stream.read(4096)
                     if not chunk:
@@ -579,8 +577,10 @@ class SubprocessBackend(BaseSandboxBackend):
                         except Exception as exc:
                             logger.debug(f"[Subprocess] Output callback failed: {exc}")
 
-            task1 = asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout"))
-            task2 = asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr"))
+            readers = [
+                asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout")),
+                asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr")),
+            ]
 
             is_timeout = False
             try:
@@ -589,7 +589,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 await _terminate_process_group(proc)
                 is_timeout = True
 
-            _ = await asyncio.gather(task1, task2)
+            _ = await asyncio.gather(*readers)
             stdout = bytes(stdout_data)
             stderr = bytes(stderr_data)
 
@@ -635,5 +635,8 @@ class SubprocessBackend(BaseSandboxBackend):
             )
 
         finally:
+            for reader in readers:
+                _ = reader.cancel()
+            _ = await asyncio.gather(*readers, return_exceptions=True)
             # Clean up temp script
             await asyncio.to_thread(script_path.unlink, missing_ok=True)

@@ -18,6 +18,7 @@ import {
   setDefaultEmailDomain,
 } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
+import { CompanyDeletion } from '@/pages/company-deletion'
 
 export function CompanyDetailPage() {
   const { companyId } = useParams<{ companyId: string }>()
@@ -155,6 +156,9 @@ export function CompanyDetailPage() {
           ))}
         </CardContent>
       </Card>
+      {company && !companies.error && !company.is_system && !company.is_default_end_user_org ? (
+        <CompanyDeletion key={JSON.stringify([company.id, company.name])} company={company} />
+      ) : null}
     </div>
   )
 }

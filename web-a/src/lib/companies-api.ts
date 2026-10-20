@@ -1,4 +1,21 @@
-import { apiRequest } from '@/lib/http'
+import { z } from 'zod'
+
+import { apiRequest } from './http.ts'
+
+const companyDeletionPreviewSchema = z.object({
+  users_count: z.number().int().nonnegative(),
+  agents_count: z.number().int().nonnegative(),
+  schedules_count: z.number().int().nonnegative(),
+}).readonly()
+
+export type CompanyDeletionPreview = z.infer<typeof companyDeletionPreviewSchema>
+
+const companyDeletionResponseSchema = z.object({
+  status: z.literal('deleted'),
+  fallback_tenant_id: z.string().nullable(),
+}).readonly()
+
+export type CompanyDeletionResponse = z.infer<typeof companyDeletionResponseSchema>
 
 export type CompanyStats = {
   id: string
@@ -87,6 +104,18 @@ export async function toggleCompany(companyId: string): Promise<{ ok: boolean; i
   return apiRequest<{ ok: boolean; is_active: boolean }>(`/api/admin/companies/${companyId}/toggle`, {
     method: 'PUT',
   })
+}
+
+export async function getCompanyDeletionPreview(companyId: string, signal?: AbortSignal): Promise<CompanyDeletionPreview> {
+  return companyDeletionPreviewSchema.parse(await apiRequest<unknown>(
+    `/api/tenants/${encodeURIComponent(companyId)}/deletion-preview`, { signal },
+  ))
+}
+
+export async function deleteCompany(companyId: string): Promise<CompanyDeletionResponse> {
+  return companyDeletionResponseSchema.parse(await apiRequest<unknown>(
+    `/api/tenants/${encodeURIComponent(companyId)}`, { method: 'DELETE' },
+  ))
 }
 
 export async function listEmailDomains(tenantId: string, signal?: AbortSignal): Promise<EmailDomain[]> {

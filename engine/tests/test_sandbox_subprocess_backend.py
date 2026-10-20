@@ -1,8 +1,12 @@
 import asyncio
+import itertools
+import tracemalloc
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from app.services.sandbox.config import SandboxConfig, SandboxConfigOverrides, SandboxType
 from app.services.sandbox.local.subprocess_backend import SubprocessBackend
@@ -349,3 +353,211 @@ def test_get_sandbox_config_does_not_inherit_global_http_proxy(monkeypatch: pyte
         assert config.no_proxy is None
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("field", ["max_stdout_bytes", "max_stderr_bytes"])
+@pytest.mark.parametrize("value", [-1, True, False, 1.5, "4", None])
+def test_output_budget_rejects_invalid_configuration(field: str, value: object) -> None:
+    # Given: a boundary value that is not a nonnegative integer.
+    # When / Then
+    with pytest.raises(ValidationError):
+        SandboxConfig.model_validate({field: value})
+
+
+def test_output_budget_defaults_and_field_fallback() -> None:
+    # Given: distinct fallback limits.
+    fallback = SandboxConfig(max_stdout_bytes=17, max_stderr_bytes=31)
+    # When
+    defaults = SandboxConfig.from_dict({})
+    partial = SandboxConfig.from_dict({"max_stdout_bytes": 0}, fallback)
+    # Then: omitted settings use defaults or their own fallback, not the other stream's limit.
+    assert (defaults.max_stdout_bytes, defaults.max_stderr_bytes) == (1_000_000, 500_000)
+    assert (partial.max_stdout_bytes, partial.max_stderr_bytes) == (0, 31)
+
+
+class ChunkStream:
+    def __init__(self, chunks: Iterator[bytes], finished: asyncio.Event) -> None:
+        self.chunks = chunks
+        self.finished = finished
+        self.exhausted = asyncio.Event()
+        self.read_count = 0
+
+    async def read(self, size: int) -> bytes:
+        chunk = next(self.chunks, b"")
+        self.read_count += 1
+        if chunk:
+            assert len(chunk) <= size
+            return chunk
+        self.exhausted.set()
+        await self.finished.wait()
+        return b""
+
+
+class OutputProcess:
+    def __init__(self, stdout: Iterator[bytes], stderr: Iterator[bytes], *, running: bool = False) -> None:
+        self.pid = 999_999
+        self.returncode: int | None = None
+        self.started = asyncio.Event()
+        self.finished = asyncio.Event()
+        self.killed = False
+        self.reaped = False
+        self.stdout = ChunkStream(stdout, self.finished)
+        self.stderr = ChunkStream(stderr, self.finished)
+        self.running = running
+
+    async def wait(self) -> int:
+        self.started.set()
+        if not self.running:
+            await self.stdout.exhausted.wait()
+            await self.stderr.exhausted.wait()
+            self.returncode = 0
+            self.finished.set()
+        await self.finished.wait()
+        self.reaped = True
+        return self.returncode if self.returncode is not None else -9
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self.finished.set()
+
+
+def streaming_backend(
+    monkeypatch: pytest.MonkeyPatch, config: SandboxConfig, process: OutputProcess
+) -> SubprocessBackend:
+    backend = SubprocessBackend(config)
+
+    async def ensure_venv(_: Path) -> None:
+        return None
+
+    async def launch(*_: object, **__: object) -> OutputProcess:
+        return process
+
+    monkeypatch.setattr(backend, "_ensure_workspace_venv", ensure_venv)
+    monkeypatch.setattr(backend, "_build_bwrap_command", lambda *_: ["sandbox"])
+    monkeypatch.setattr("app.services.sandbox.local.subprocess_backend.asyncio.create_subprocess_exec", launch)
+    return backend
+
+
+@pytest.mark.parametrize(
+    ("stdout_limit", "stderr_limit", "expected_stdout", "expected_stderr"),
+    [(0, 0, "", ""), (3, 1, "A\ufffd", "\ufffd"), (7, 4, "A\u20acBCD", "\u00e9\ufffd!")],
+)
+async def test_execute_retains_raw_byte_prefixes_and_drains_both_streams(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout_limit: int,
+    stderr_limit: int,
+    expected_stdout: str,
+    expected_stderr: str,
+) -> None:
+    # Given: code points cross read boundaries, with invalid bytes and asymmetric budgets.
+    process = OutputProcess(iter((b"A\xe2", b"\x82\xacBCDE")), iter((b"\xc3", b"\xa9\xff!end")))
+    backend = streaming_backend(
+        monkeypatch, SandboxConfig(max_stdout_bytes=stdout_limit, max_stderr_bytes=stderr_limit), process
+    )
+    chunks: list[tuple[str, str]] = []
+    stderr_seen = asyncio.Event()
+
+    async def on_output(text: str, label: str) -> None:
+        chunks.append((text, label))
+        if label == "stderr":
+            stderr_seen.set()
+        else:
+            await stderr_seen.wait()
+
+    # When
+    result = await backend.execute("pass", "python", work_dir=str(tmp_path), on_output=on_output)
+    # Then: clipping cannot fabricate a process error, and callback delivery is independent of capture.
+    assert result.success
+    assert (result.stdout, result.stderr) == (expected_stdout, expected_stderr)
+    assert process.stdout.read_count == process.stderr.read_count == 3
+    assert len(chunks) == 4
+    assert [label for _, label in chunks] == ["stdout", "stderr", "stderr", "stdout"]
+    assert not (tmp_path / "_exec_tmp.py").exists()
+
+
+async def test_execute_large_output_remains_bounded_and_preserves_display_clipping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: each pipe emits eight MiB, far more than either retained budget.
+    process = OutputProcess(itertools.repeat(b"s" * 4096, 2048), itertools.repeat(b"e" * 4096, 2048))
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=12000, max_stderr_bytes=7000), process)
+    # When
+    tracemalloc.start()
+    try:
+        result = await backend.execute("pass", "python", work_dir=str(tmp_path))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Then: both pipes are exhausted without retaining the full output or changing final display limits.
+    assert result.success
+    assert result.stdout == "s" * 10000
+    assert result.stderr == "e" * 5000
+    assert process.stdout.read_count == process.stderr.read_count == 2049
+    assert peak < 2_000_000
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_execute_over_budget_preserves_timeout_and_cancellation_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    # Given: a child remains alive after exhausting both retention limits.
+    process = OutputProcess(itertools.repeat(b"s" * 4096, 8), itertools.repeat(b"e" * 4096, 8), running=True)
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=3, max_stderr_bytes=2), process)
+    # When: it is either cancelled after draining, or immediately exceeds its timeout.
+    if cancel:
+        execution = asyncio.create_task(backend.execute("pass", "python", work_dir=str(tmp_path)))
+        await process.started.wait()
+        await process.stdout.exhausted.wait()
+        await process.stderr.exhausted.wait()
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+    else:
+        result = await backend.execute("pass", "python", exec_timeout=0, work_dir=str(tmp_path))
+        assert result.exit_code == 124
+        assert (result.stdout, result.stderr) == ("sss", "ee")
+    # Then: the process is reaped and its temporary script is removed even after overflow.
+    assert process.killed
+    assert process.reaped
+    assert not (tmp_path / "_exec_tmp.py").exists()
+
+
+async def test_execute_cancellation_joins_output_readers_after_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: both readers block in callbacks after exhausting their retention budgets.
+    process = OutputProcess(iter((b"stdout overflow",)), iter((b"stderr overflow",)), running=True)
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=1, max_stderr_bytes=1), process)
+    callbacks_started = asyncio.Event()
+    release_callbacks = asyncio.Event()
+    active_callbacks = 0
+
+    async def on_output(_: str, __: str) -> None:
+        nonlocal active_callbacks
+        active_callbacks += 1
+        if active_callbacks == 2:
+            callbacks_started.set()
+        try:
+            await release_callbacks.wait()
+        finally:
+            active_callbacks -= 1
+
+    execution = asyncio.create_task(backend.execute("pass", "python", work_dir=str(tmp_path), on_output=on_output))
+    try:
+        await process.started.wait()
+        await callbacks_started.wait()
+        # When
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+        # Then: no reader survives execution cancellation, even if its callback was suspended.
+        assert active_callbacks == 0
+        assert process.killed
+        assert process.reaped
+        assert not (tmp_path / "_exec_tmp.py").exists()
+    finally:
+        release_callbacks.set()
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
