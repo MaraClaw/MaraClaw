@@ -174,6 +174,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         created_at=now,
         participant_id=None,
         thinking=None,
+        client_submission_id=None,
     )
 
     async def fake_check_agent_access(_user, _agent_id):
@@ -204,6 +205,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
             "role": "user",
             "content": "hello",
             "created_at": now.isoformat(),
+            "client_submission_id": None,
         }
     ]
 
@@ -233,6 +235,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         created_at=now,
         participant_id=None,
         thinking=None,
+        client_submission_id=None,
     )
 
     async def fake_check_agent_access(_user, _agent_id):
@@ -263,6 +266,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
             "role": "user",
             "content": "hello",
             "created_at": now.isoformat(),
+            "client_submission_id": None,
         }
     ]
 
@@ -325,6 +329,7 @@ async def test_history_http_preserves_content_and_deterministic_persisted_identi
         ]
     ]
     messages[1].thinking = "reasoning"
+    messages[0].client_submission_id = uuid.uuid4()
 
     async def access(_user, _agent_id):
         return SimpleNamespace(id=agent_id, creator_id=uuid.uuid4()), "use"
@@ -357,6 +362,8 @@ async def test_history_http_preserves_content_and_deterministic_persisted_identi
     assert [entry["message_id"] for entry in entries[:4]] == [str(message.id) for message in messages[:4]]
     assert [entry["entry_id"] for entry in entries[:4]] == [str(message.id) for message in messages[:4]]
     assert entries[0]["content"] == entries[1]["content"] == "same"
+    assert entries[0]["client_submission_id"] == str(messages[0].client_submission_id)
+    assert "client_submission_id" not in entries[1]
     assert entries[1]["thinking"] == "reasoning"
     assert entries[2]["toolName"] == "search"
     assert entries[2]["toolArgs"] == {"q": "hello"}

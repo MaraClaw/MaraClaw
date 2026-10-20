@@ -44,6 +44,8 @@ _MESSAGE_COLUMNS = (
     "conversation_id",
     "participant_id",
     "thinking",
+    "client_submission_id",
+    "submission_fingerprint",
     "created_at",
 )
 
@@ -55,6 +57,15 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
     table: ClassVar[str] = "chat_sessions"
     columns: ClassVar[tuple[str, ...]] = _SESSION_COLUMNS
     record_factory = staticmethod(ChatSessionRecord.from_row)
+
+    async def lock_for_agent(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM chat_sessions "
+                "WHERE id = %(session_id)s AND agent_id = %(agent_id)s FOR UPDATE",
+                {"session_id": session_id, "agent_id": agent_id},
+            )
+            return ChatSessionRecord.from_row(row) if row is not None else None
 
     async def get_for_agent(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
         async with self.session() as db:
@@ -482,6 +493,43 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
     table: ClassVar[str] = "chat_messages"
     columns: ClassVar[tuple[str, ...]] = _MESSAGE_COLUMNS
     record_factory = staticmethod(ChatMessageRecord.from_row)
+
+    async def find_submission(self, message: ChatMessageRecord) -> ChatMessageRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM chat_messages "
+                "WHERE user_id = %(user_id)s AND agent_id = %(agent_id)s "
+                "AND conversation_id = %(conversation_id)s AND client_submission_id = %(client_submission_id)s",
+                {
+                    "user_id": message.user_id,
+                    "agent_id": message.agent_id,
+                    "conversation_id": message.conversation_id,
+                    "client_submission_id": message.client_submission_id,
+                },
+            )
+            return ChatMessageRecord.from_row(row) if row is not None else None
+
+    async def reserve_submission(self, message: ChatMessageRecord) -> ChatMessageRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "INSERT INTO chat_messages "
+                "(id, user_id, agent_id, role, content, conversation_id, client_submission_id, submission_fingerprint) "
+                "VALUES (%(id)s, %(user_id)s, %(agent_id)s, 'user', %(content)s, %(conversation_id)s, "
+                "%(client_submission_id)s, %(submission_fingerprint)s) "
+                "ON CONFLICT (user_id, agent_id, conversation_id, client_submission_id) "
+                "WHERE client_submission_id IS NOT NULL DO NOTHING "
+                f"RETURNING {self._select_list()}",
+                {
+                    "id": message.id,
+                    "user_id": message.user_id,
+                    "agent_id": message.agent_id,
+                    "content": message.content,
+                    "conversation_id": message.conversation_id,
+                    "client_submission_id": message.client_submission_id,
+                    "submission_fingerprint": message.submission_fingerprint,
+                },
+            )
+            return ChatMessageRecord.from_row(row) if row is not None else None
 
     async def insert_message(
         self,

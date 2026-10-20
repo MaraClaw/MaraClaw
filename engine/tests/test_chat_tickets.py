@@ -182,7 +182,7 @@ async def test_socket_deadline_cancels_inflight_phase(context, monkeypatch, phas
     if phase == "setup":
         monkeypatch.setattr(websocket.WebSocketChatHandler, "_load_history", blocked)
     else:
-        monkeypatch.setattr(websocket, "prepare_openclaw_message", blocked)
+        monkeypatch.setattr(websocket, "accept_submission", blocked)
     monkeypatch.setattr(websocket.WebSocketChatHandler, "_save_user_message", AsyncMock())
     monkeypatch.setattr(websocket.WebSocketChatHandler, "_check_quotas", AsyncMock(return_value=True))
     monkeypatch.setattr(websocket.time, "time", lambda: binding.auth_deadline - 0.05)
@@ -196,7 +196,7 @@ async def test_socket_deadline_cancels_inflight_phase(context, monkeypatch, phas
     ):
         if phase == "work":
             assert ws.receive_json()["type"] == "connected"
-            ws.send_json({"content": "hello"})
+            ws.send_json({"content": "hello", "client_submission_id": str(uuid.uuid4())})
         assert ws.receive()["code"] == 4001
     assert cancelled == [True]
 

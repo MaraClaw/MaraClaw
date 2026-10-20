@@ -1,3 +1,4 @@
+import json
 import time
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
@@ -9,9 +10,10 @@ from starlette.websockets import WebSocket
 from app.api import websocket as ws_api
 from app.core import access_cache, permissions, security
 from app.records.agent import AgentRecord
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
-from app.services import chat_tickets
+from app.services import chat_submissions, chat_tickets
 
 
 @pytest.mark.asyncio
@@ -32,7 +34,10 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
         state["turn"] += 1
         if state["turn"] > 3:
             raise AssertionError("Revoked socket kept receiving turns")
-        return {"type": "websocket.receive", "text": '{"content":"hello"}'}
+        return {
+            "type": "websocket.receive",
+            "text": json.dumps({"content": "hello", "client_submission_id": str(uuid4())}),
+        }
 
     async def send(message):
         sent.append(message)
@@ -64,10 +69,19 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     async def turn_connection():
         yield
 
-    monkeypatch.setattr(ws_api, "connection_ctx", turn_connection)
-    monkeypatch.setattr(ws_api, "charge_conversation_quota", AsyncMock())
-    monkeypatch.setattr(ws_api, "prepare_openclaw_message", AsyncMock())
-    monkeypatch.setattr(ws_api, "enqueue_prepared_openclaw_message", dispatch)
+    monkeypatch.setattr(chat_submissions, "connection_ctx", turn_connection)
+    monkeypatch.setattr(chat_submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", dispatch)
+    session = ChatSessionRecord(id=handler.binding.session_id, agent_id=agent.id, user_id=user.id)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
+    persist = AsyncMock(
+        return_value=ChatMessageRecord(id=uuid4(), agent_id=agent.id, user_id=user.id, role="user", content="hello")
+    )
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", persist)
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     monkeypatch.setattr(security.user_dao, "get_with_identity", identity)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
@@ -77,8 +91,6 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     # A stale Redis allow must not override the fresh turn's database policy.
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value="use"))
     monkeypatch.setattr(handler, "_check_quotas", AsyncMock(return_value=True))
-    persist = AsyncMock()
-    monkeypatch.setattr(handler, "_save_user_message", persist)
     # When the first dispatch revokes access and the next frame is received.
     await handler.message_loop()
     # Then only the first message persisted and the existing error/close envelope was sent.

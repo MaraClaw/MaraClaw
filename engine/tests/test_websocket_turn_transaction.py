@@ -1,10 +1,11 @@
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import override
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -13,9 +14,10 @@ from app.api import background_tasks, websocket as ws_api
 from app.dao.user_dao import user_dao
 from app.db import session
 from app.records.agent import AgentRecord
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.user import UserRecord
-from app.services import chat_tickets, openclaw_routing as routing
+from app.services import chat_submissions, chat_tickets, openclaw_routing as routing
 from app.services.quota_guard import AgentExpired
 from test_db_session import _FakePool, _FakeRawConnection
 
@@ -32,6 +34,14 @@ class TurnState:
     already_onboarded: bool = False
     claim_won: bool = True
     charge_allowed: bool = True
+    pending_messages: list[ChatMessageRecord] = field(default_factory=list)
+    messages: list[ChatMessageRecord] = field(default_factory=list)
+    user: UserRecord = field(default_factory=lambda: UserRecord(id=uuid4(), tenant_id=uuid4()))
+    agent: AgentRecord = field(default_factory=lambda: AgentRecord(id=uuid4(), name="Agent", creator_id=uuid4()))
+    session_id: str = field(default_factory=lambda: str(uuid4()))
+    submission_id: str = field(default_factory=lambda: str(uuid4()))
+    session_exists: bool = True
+    lookup_count: int = 0
 
 
 class TurnConnection(_FakeRawConnection):
@@ -44,11 +54,14 @@ class TurnConnection(_FakeRawConnection):
         await super().commit()
         self.state.committed.extend(self.state.pending)
         self.state.pending.clear()
+        self.state.messages.extend(self.state.pending_messages)
+        self.state.pending_messages.clear()
 
     @override
     async def rollback(self):
         await super().rollback()
         self.state.pending.clear()
+        self.state.pending_messages.clear()
 
 
 @pytest.fixture
@@ -77,7 +90,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         state.pending.append("title" if kwargs.get("skip_insert") else "chat")
 
     async def prepare(**kwargs):
-        assert session.get_connection() is None
+        assert (session.get_connection() is None) == (kwargs["content"] == "Please begin the onboarding.")
         state.prepared_history.extend(kwargs["history"])
         if state.missing_model:
             raise routing.NoCompanyModelError("No company model is available.")
@@ -101,13 +114,44 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         return message
 
     async def wake(_agent, _content, _message_id):
-        assert raw.commits == 1
+        assert raw.commits >= 1
         assert session.get_connection() is None
         state.wake.set()
 
     async def onboarded(_agent_id, _user_id):
         return state.already_onboarded
 
+    async def lock(session_id, agent_id):
+        assert session.get_connection() is not None
+        if not state.session_exists:
+            return None
+        return ChatSessionRecord(id=session_id, agent_id=agent_id, user_id=state.user.id)
+
+    async def lookup(candidate):
+        assert session.get_connection() is not None
+        state.lookup_count += 1
+        return next(
+            (
+                message
+                for message in state.messages
+                if (message.user_id, message.agent_id, message.conversation_id, message.client_submission_id)
+                == (candidate.user_id, candidate.agent_id, candidate.conversation_id, candidate.client_submission_id)
+            ),
+            None,
+        )
+
+    async def reserve(candidate):
+        assert session.get_connection() is not None
+        state.pending.append("chat")
+        state.pending_messages.append(candidate)
+        return candidate
+
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", lookup)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
     monkeypatch.setattr(user_dao, "charge_message_quota", charge)
     monkeypatch.setattr(user_dao, "get", AsyncMock(return_value=UserRecord(id=uuid4(), quota_message_limit=0)))
     monkeypatch.setattr(ws_api, "try_begin_onboarding_greeting", claim)
@@ -127,11 +171,16 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
 
 
 async def drive_turn(
-    monkeypatch: pytest.MonkeyPatch, state: TurnState, *, onboarding: bool = False, role: str = "member"
+    monkeypatch: pytest.MonkeyPatch,
+    state: TurnState,
+    *,
+    onboarding: bool = False,
+    role: str = "member",
+    payload: dict[str, object] | None = None,
+    denied: bool = False,
 ):
-    tenant_id = uuid4()
-    user = UserRecord(id=uuid4(), tenant_id=tenant_id, role=role)
-    agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id)
+    user, agent = state.user, state.agent
+    user.role = role
     received = 0
 
     async def receive():
@@ -140,7 +189,8 @@ async def drive_turn(
         if received == 1:
             return {"type": "websocket.connect"}
         if received == 2:
-            text = '{"kind":"onboarding_trigger"}' if onboarding else '{"content":"hello"}'
+            data = payload if payload is not None else {"content": "hello", "client_submission_id": state.submission_id}
+            text = '{"kind":"onboarding_trigger"}' if onboarding else json.dumps(data)
             return {"type": "websocket.receive", "text": text}
         raise WebSocketDisconnect()
 
@@ -150,8 +200,11 @@ async def drive_turn(
 
             payload = json_loads_value(message["text"])
             assert isinstance(payload, dict)
-            if payload.get("type") == "status":
+            if payload.get("type") in ("status", "turn_accepted"):
                 assert session.get_connection() is None
+                assert state.committed
+                assert not state.pending
+            if payload.get("type") == "status":
                 assert len(handler.conversation) == 2
             state.frames.append(payload)
         else:
@@ -162,19 +215,31 @@ async def drive_turn(
     state.frames.clear()
     handler = ws_api.WebSocketChatHandler(socket, agent.id, "ticket")
     handler.user = UserRecord(id=user.id, role="member")
-    handler.conv_id = str(uuid4())
+    handler.conv_id = state.session_id
+    assert user.tenant_id is not None
     handler.binding = chat_tickets.ChatTicketBinding(
         user_id=user.id,
-        tenant_id=tenant_id,
+        tenant_id=user.tenant_id,
         agent_id=agent.id,
-        session_id=uuid4(),
+        session_id=UUID(state.session_id),
         auth_deadline=int(time.time()) + 3600,
     )
     handler.conversation = [{"role": "assistant", "content": "prior"}]
-    monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        chat_tickets,
+        "authorize",
+        AsyncMock(side_effect=HTTPException(403, "Revoked"))
+        if denied
+        else AsyncMock(return_value=(user, agent, "use")),
+    )
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
-    with pytest.raises(WebSocketDisconnect):
+    if denied or not state.session_exists:
         await handler.message_loop()
+    else:
+        with pytest.raises(WebSocketDisconnect):
+            await handler.message_loop()
     return handler
 
 
@@ -185,10 +250,21 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
     handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
     await asyncio.wait_for(state.wake.wait(), timeout=1)
 
-    assert state.committed == (["claim", "title", "gateway"] if onboarding else ["charge", "chat", "gateway"])
+    assert state.committed == (["claim", "title", "gateway"] if onboarding else ["chat", "charge", "gateway"])
     assert raw.commits == 1
     assert raw.rollbacks == 0
-    assert state.frames == [{"type": "status", "content": "thinking"}]
+    expected = [{"type": "status", "content": "thinking"}]
+    if not onboarding:
+        expected.insert(
+            0,
+            {
+                "type": "turn_accepted",
+                "message_id": str(state.messages[0].id),
+                "session_id": handler.conv_id,
+                "client_submission_id": state.submission_id,
+            },
+        )
+    assert state.frames == expected
     assert len(handler.conversation) == 2
     assert state.prepared_history == [{"role": "assistant", "content": "prior"}]
 
@@ -207,12 +283,15 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
     assert not state.committed
     assert not state.wake.is_set()
     assert raw.commits == 0
-    assert raw.rollbacks == int(reason == "enqueue_failed")
+    assert raw.rollbacks == int(not onboarding or reason == "enqueue_failed")
     assert len(handler.conversation) == 1
     assert len(state.frames) == 1
     assert state.frames[0]["type"] == "turn_rejected"
     assert state.frames[0]["reason"] == reason
     assert "private" not in str(state.frames[0]["content"])
+    assert not state.messages
+    if not onboarding:
+        assert state.frames[0]["client_submission_id"] == state.submission_id
 
 
 async def test_quota_rejection_rolls_back_and_keeps_socket_open(monkeypatch, turn):
@@ -230,13 +309,14 @@ async def test_quota_rejection_rolls_back_and_keeps_socket_open(monkeypatch, tur
     assert len(handler.conversation) == 1
 
 
-async def test_expiry_rejection_precedes_preparation_and_transaction(monkeypatch, turn):
+async def test_expiry_rejection_precedes_preparation_and_reservation(monkeypatch, turn):
     state, raw = turn
-    monkeypatch.setattr(ws_api, "check_agent_expired", AsyncMock(side_effect=AgentExpired("Agent")))
+    monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock(side_effect=AgentExpired("Agent")))
 
     handler = await drive_turn(monkeypatch, state)
 
-    assert raw.commits == raw.rollbacks == 0
+    assert raw.commits == 0
+    assert raw.rollbacks == 1
     assert not state.prepared_history
     assert not state.committed
     assert state.frames[0]["reason"] == "agent_expired"
@@ -267,4 +347,4 @@ async def test_exemption_uses_reauthorized_principal_not_previous_handler_user(m
     await drive_turn(monkeypatch, state, role=role)
 
     assert state.committed == ["chat", "gateway"]
-    assert state.frames == [{"type": "status", "content": "thinking"}]
+    assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status"]

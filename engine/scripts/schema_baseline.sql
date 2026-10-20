@@ -927,8 +927,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	conversation_id VARCHAR(200) NOT NULL, 
 	participant_id UUID, 
 	thinking TEXT, 
+	client_submission_id UUID,
+	submission_fingerprint TEXT,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
+	CONSTRAINT ck_chat_submission_receipt CHECK (
+		(client_submission_id IS NULL AND submission_fingerprint IS NULL)
+		OR (client_submission_id IS NOT NULL AND submission_fingerprint IS NOT NULL
+			AND role = 'user' AND submission_fingerprint ~ '^v1:[0-9a-f]{64}$')
+	),
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
 	FOREIGN KEY(participant_id) REFERENCES participants (id)
@@ -941,6 +948,26 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created
 CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id);
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created ON chat_messages (conversation_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
+ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
+WHERE client_submission_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION protect_chat_submission_receipt() RETURNS trigger AS $$
+BEGIN
+	IF OLD.client_submission_id IS NOT NULL AND
+		ROW(NEW.id, NEW.user_id, NEW.agent_id, NEW.conversation_id, NEW.role,
+			NEW.client_submission_id, NEW.submission_fingerprint) IS DISTINCT FROM
+		ROW(OLD.id, OLD.user_id, OLD.agent_id, OLD.conversation_id, OLD.role,
+			OLD.client_submission_id, OLD.submission_fingerprint) THEN
+		RAISE EXCEPTION 'Chat submission receipt is immutable' USING ERRCODE = '23514';
+	END IF;
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER chat_submission_receipt_immutable
+BEFORE UPDATE ON chat_messages FOR EACH ROW EXECUTE FUNCTION protect_chat_submission_receipt();
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
 	id UUID NOT NULL, 
