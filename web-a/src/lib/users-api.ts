@@ -1,4 +1,6 @@
-import { apiRequest } from '@/lib/http'
+import { z } from 'zod'
+
+import { apiRequest } from './http.ts'
 
 export type UserAgent = {
   id: string
@@ -82,6 +84,29 @@ export function asAdminUser(admin: PlatformAdmin): AdminUser {
 export async function listUsers(tenantId?: string, signal?: AbortSignal): Promise<AdminUser[]> {
   const suffix = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
   return apiRequest<AdminUser[]>(`/api/users/${suffix}`, { signal })
+}
+
+const usersPageSchema = z.object({
+  items: z.array(z.object({
+    id: z.string(), username: z.string().nullable(), email: z.string().nullable(),
+    display_name: z.string().nullable(), role: z.string(), is_active: z.boolean(),
+    is_genesis: z.boolean().optional(), tenant_id: z.string().nullable(),
+    agents_count: z.number(), created_at: z.string().nullable(), source: z.string(),
+  })),
+  next_cursor: z.string().nullable(),
+})
+
+export type UsersPage = z.infer<typeof usersPageSchema>
+export type UsersPageRequest = {
+  readonly tenantId: string
+  readonly search: string
+  readonly cursor: string | null
+}
+
+export async function listUsersPage(input: UsersPageRequest, signal?: AbortSignal): Promise<UsersPage> {
+  const params = new URLSearchParams({ tenant_id: input.tenantId, search: input.search, limit: '50' })
+  if (input.cursor !== null) params.set('cursor', input.cursor)
+  return usersPageSchema.parse(await apiRequest<unknown>(`/api/users/page?${params}`, { signal }))
 }
 
 export async function getUserDetail(userId: string, signal?: AbortSignal): Promise<UserDetail> {
