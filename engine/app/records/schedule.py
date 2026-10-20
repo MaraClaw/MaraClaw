@@ -26,6 +26,11 @@ class AgentScheduleRecord:
     run_count: int = 0
     created_at: datetime | None = None
     timezone: str = "UTC"
+    pending_due_at: datetime | None = None
+    pending_instruction: str | None = None
+    lease_token: UUID | None = None
+    lease_expires_at: datetime | None = None
+    pending_started_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentScheduleRecord:
@@ -42,4 +47,11 @@ class AgentScheduleRecord:
             run_count=int_from_row(row.get("run_count")),
             created_at=datetime_from_row(row.get("created_at")),
             timezone=str_from_row(row["timezone"]),
+            pending_due_at=datetime_from_row(row.get("pending_due_at")),
+            pending_instruction=(
+                str_from_row(row["pending_instruction"]) if row.get("pending_instruction") is not None else None
+            ),
+            lease_token=uuid_from_row(row["lease_token"]) if row.get("lease_token") is not None else None,
+            lease_expires_at=datetime_from_row(row.get("lease_expires_at")),
+            pending_started_at=datetime_from_row(row.get("pending_started_at")),
         )

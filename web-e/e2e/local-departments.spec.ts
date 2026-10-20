@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { directoryPath, localDepartment, prepareLocalDepartments, siblingDepartment } from './local-departments-fixture'
+import { registerLocalDepartmentRosterTests } from './local-department-rosters-cases'
 import { originalCompany } from './session-fencing-fixture'
 
 for (const role of ['member', 'agent_admin']) {
@@ -12,7 +13,7 @@ for (const role of ['member', 'agent_admin']) {
     // Then
     const local = page.getByRole('region', { name: 'Local departments', exact: true })
     await expect(local.getByRole('heading', { name: localDepartment.name })).toBeVisible()
-    await expect(local.getByRole('button')).toHaveCount(0)
+    await expect(local.getByRole('button', { name: /^Edit name/ })).toHaveCount(0)
     await expect(local).not.toContainText('synced members')
     const synced = page.getByRole('region', { name: 'Provider-synced departments' })
     await expect(synced).toContainText('Synced operations')
@@ -42,6 +43,8 @@ test('org admin saves a trimmed name with Enter and sees the refreshed card', as
   expect(state.optionsRequests).toBe(2)
   expect(state.privilegedRequests).toBe(0)
 })
+
+registerLocalDepartmentRosterTests()
 
 test('successful rename restores focus while the list refresh is still pending', async ({ page }) => {
   // Given

@@ -5,24 +5,25 @@ import { mergeServerHistory } from '../src/lib/chat/transcript.ts'
 import type { ChatLine } from '../src/lib/chat/transcript.ts'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
 import type { ChatTurnRejection } from '../src/lib/chat/ws-client.ts'
-import { fixture } from './socket-fixture.ts'
+import { firstSubmission, secondSubmission, fixture, submission } from './socket-fixture.ts'
 
 const rejection: ChatTurnRejection = {
-  type: 'turn_rejected', reason: 'quota_exceeded', content: 'Message allowance reached.',
+  type: 'turn_rejected', reason: 'quota_exceeded', content: 'Message allowance reached.', client_submission_id: firstSubmission,
 }
 
-test('rejection removes only the latest pending user line and recovers its original composer text', () => {
+test('rejection marks only its correlated submission and preserves a newer equal-text turn', () => {
   // Given
-  const previous: ChatLine = { role: 'user', content: 'older turn', pending: true }
+  const previous: ChatLine = { role: 'user', content: 'question', client_submission_id: secondSubmission, pending: true }
   const tool: ChatLine = { role: 'tool', content: 'progress', pending: true }
   const lines: ChatLine[] = [
-    previous, { role: 'assistant', content: 'previous reply' },
-    { role: 'user', content: 'question', composerText: '  question\n', pending: true }, tool,
+    { role: 'user', content: 'question', client_submission_id: firstSubmission, composerText: '  question\n', pending: true },
+    { role: 'assistant', content: 'previous reply' }, previous, tool,
   ]
   // When
   const result = recoverRejectedTurn(lines, rejection)
   // Then
-  assert.deepEqual(result.lines, [previous, lines[1], tool])
+  assert.equal(result.lines[0]?.delivery, 'rejected')
+  assert.deepEqual(result.lines.slice(1), lines.slice(1))
   assert.equal(result.restoredText, '  question\n')
   assert.equal(lines.length, 4)
   assert.ok(result.notice.includes(rejection.content))
@@ -36,16 +37,19 @@ test('rejection without a pending user line preserves history and restores no te
   // Then
   assert.deepEqual(result.lines, lines)
   assert.equal(result.restoredText, '')
+  assert.equal(result.matched, false)
 })
 
 for (const content of ['Extracted notes', '[Uploaded notes.txt]']) {
   test(`file rejection recovers usable text when content is ${content}`, () => {
     // Given
-    const lines: ChatLine[] = [{ role: 'user', content, file_name: 'notes.txt', pending: true }]
+    const envelope = { ...submission(content), display_content: 'notes.txt', file_name: 'notes.txt' }
+    const lines: ChatLine[] = [{ role: 'user', content, file_name: 'notes.txt', client_submission_id: firstSubmission, submission: envelope, pending: true }]
     // When
     const result = recoverRejectedTurn(lines, rejection)
     // Then
-    assert.deepEqual(result.lines, [])
+    assert.equal(result.lines[0]?.submission, envelope)
+    assert.equal(result.lines[0]?.retryable, true)
     assert.equal(result.restoredText, content)
     assert.ok(result.notice.includes('notes.txt'))
   })
@@ -70,8 +74,8 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
     // Given
     const f = fixture()
     const server: ChatLine[] = [{ role: 'assistant', content: 'Earlier reply', message_id: 'saved', entry_id: 'saved' }]
-    let lines = mergeServerHistory(server, [{ role: 'user', content: 'Retry me', pending: true }])
-    let draft = 'New typing'
+    const envelope = submission('Retry me')
+    let lines = mergeServerHistory(server, [{ role: 'user', content: 'Retry me', client_submission_id: firstSubmission, submission: envelope, pending: true }])
     const notices: string[] = []
     const conn = connectAgentChat('agent-a', 'thread-a', {
       ...f.handlers,
@@ -79,7 +83,6 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
         if (!isTurnRejected(event)) return
         const recovery = recoverRejectedTurn(lines, event)
         lines = recovery.lines
-        draft = restoreComposerDraft(draft, recovery.restoredText)
         notices.push(recovery.notice)
       },
     })
@@ -87,20 +90,18 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
     await Promise.resolve()
     const socket = f.socket()
     socket.open()
-    conn.send({ content: 'Retry me' })
+    conn.send(envelope)
     // When
     socket.frame(JSON.stringify({ ...rejection, reason }))
     lines = mergeServerHistory(server, lines)
-    conn.send({ content: draft })
+    conn.send(envelope)
     // Then
-    assert.deepEqual(lines, mergeServerHistory(server, []))
-    assert.equal(lines.some((row) => row.pending) || lines.at(-1)?.role === 'user', false)
-    assert.equal(draft, 'Retry me\n\nNew typing')
+    assert.equal(lines.at(-1)?.delivery, 'rejected')
+    assert.equal(lines.some((row) => row.pending), false)
     assert.equal(notices.length, 1)
     assert.equal(socket.readyState, 1)
     assert.equal(socket.closes, 0)
     assert.equal(f.sockets.length, 1)
-    assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [{ content: 'Retry me' }, { content: draft }])
-    t.diagnostic(JSON.stringify({ reason, pending: 0, draft, notices: notices.length, socketOpen: true, sends: socket.sent.length }))
+    assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [envelope, envelope])
   })
 }

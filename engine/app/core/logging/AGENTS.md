@@ -6,7 +6,7 @@ Process-wide logging service. Application modules import `logger` from here, nev
 
 - `from app.core.logging import logger` for drop-in `debug` / `info` / `warning` / `error` / `exception` / `opt` / `bind`.
 - `get_logger(__name__)` when the module name should be bound without a stack walk for the name.
-- `configure_logging()` runs on package import and again in `app.main` lifespan (passes `Settings.LOG_*`). It also installs the stdlib intercept.
+- `configure_logging()` runs on package import and again in `app.runtime.lifecycle.Runtime.start()` (passes `Settings.LOG_*`). It also installs the stdlib intercept.
 - `get_trace_id` / `set_trace_id` / `new_trace_id` for request and background-task correlation.
 - Background jobs that are not inside an HTTP request should call `new_trace_id()` before emitting related logs.
 

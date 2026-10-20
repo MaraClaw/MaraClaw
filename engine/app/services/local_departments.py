@@ -13,7 +13,7 @@ from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentCreate, DepartmentOut
+from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentCreate, DepartmentMembersOut, DepartmentOut
 from app.services.admin_provisioning import END_USER_ROLES
 
 
@@ -27,6 +27,22 @@ def admin_tenant(user: UserRecord, selected: UUID | None) -> UUID:
     if selected is not None and selected != user.tenant_id:
         raise HTTPException(403, "Organization access denied")
     return user.tenant_id
+
+
+async def list_department_members(actor: UserRecord, department_id: UUID) -> DepartmentMembersOut:
+    if (
+        not actor.is_active
+        or actor.is_platform_admin
+        or actor.tenant_id is None
+        or actor.role not in (*END_USER_ROLES, "org_admin")
+        or (actor.identity is not None and not actor.identity.is_active)
+    ):
+        raise HTTPException(403, "Organization membership required")
+    raise_if_password_change_required(actor)
+    department = await local_department_dao.get(department_id)
+    if department is None or department.tenant_id != actor.tenant_id:
+        raise HTTPException(404, "Department not found")
+    return DepartmentMembersOut(members=await local_department_dao.list_members(actor.tenant_id, department_id))
 
 
 async def rename_department(

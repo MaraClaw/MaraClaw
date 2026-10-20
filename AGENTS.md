@@ -1,8 +1,8 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-10-07  
-**Commit:** f722496  
-**Branch:** main
+**Generated:** 2026-10-20
+**Commit:** 3942af0
+**Branch:** 2026Oct
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
 **Product:** MaraClaw - OpenClaw digital employees for teams and companies.
@@ -13,7 +13,7 @@ This file is the **repo-level router**. Package contracts live in nested `AGENTS
 
 ## OVERVIEW
 
-Loose sibling checkout (no root workspace / turbo / compose / CI). Three packages: FastAPI `engine/` plus two independent Vite apps. Behavioral truth is `engine/`; frontends are clients.
+Three independently configured packages: FastAPI `engine/` plus two Vite apps, with no root npm workspace. Root `compose.yaml` and `deploy/` own deployment; `.github/workflows/` owns CI. Behavioral truth is `engine/`; frontends are clients.
 
 ## Package map
 
@@ -31,7 +31,9 @@ One/
 ├── .env.example        # Shared/backend env (mirrors engine)
 ├── engine/             # Backend - read engine/AGENTS.md before edits
 ├── web-e/              # End-user UI (landing + members) - web-e/AGENTS.md
-└── web-a/              # Admin - web-a/AGENTS.md
+├── web-a/              # Admin - web-a/AGENTS.md
+├── deploy/             # Compose launcher, autoscaling, host-service lifecycle
+└── .github/workflows/  # Engine and frontend verification gates
 ```
 
 ---
@@ -61,8 +63,20 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
 | Local department directory | `engine` | `app/api/departments.py`. Not org-sync departments. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
+| Compose / autoscaling / host startup | `deploy` | `deploy/AGENTS.md`, root `compose.yaml`, `start-docker-compose.sh` |
+| CI checks / image smoke | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml`, `deploy/smoke_frontend_image.sh` |
 
 ---
+
+## Code map
+
+| Symbol | Location | Role |
+|--------|----------|------|
+| `app` | `engine/app/main.py` | FastAPI assembly and router mounts |
+| `lifespan` | `engine/app/runtime/lifecycle.py` | Role-aware startup and owned shutdown |
+| `BaseDAO` | `engine/app/dao/base.py` | Shared psycopg persistence boundary |
+| `check_agent_access` | `engine/app/core/permissions.py` | Agent authorization |
+| `AppRouter` | Each frontend's `src/routes/index.tsx` | Public/protected route trees |
 
 ## Package briefs
 
@@ -105,6 +119,7 @@ Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fai
 | Admin HTTP + genesis | `engine/docs/admin-apis.md` |
 | Admin console | `web-a/AGENTS.md` |
 | End-user UI (landing + members) | `web-e/AGENTS.md` |
+| Deployment / operational safety | `deploy/AGENTS.md` |
 
 Keep this file a router. New domains get a nested `AGENTS.md`, not more root prose.
 
@@ -127,6 +142,6 @@ Keep this file a router. New domains get a nested `AGENTS.md`, not more root pro
 
 ## NOTES
 
-`engine` / `web-e` (end-user: landing + members) / `web-a` (admin). Classify → open that package’s `AGENTS.md` → implement engine first for behavior → wire only the matching UI → verify in-package (`engine`: pytest/ruff; `web-*`: `npm run build`). No drive-by reformats.
+Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage). Frontend CI runs lint, TypeScript, `npm test` (Node runner), build, and final-image smoke. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
 
 Who is looking, and does it need a secret or privileged role? Public or member → `web-e`. Operator → `web-a`. Data/policy → `engine`.

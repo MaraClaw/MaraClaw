@@ -6,7 +6,7 @@ from uuid import UUID
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.local_department import LocalDepartmentRecord
-from app.schemas.department import AssignmentOut, AssignmentsOut
+from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentMemberOut
 
 
 @final
@@ -32,6 +32,21 @@ class LocalDepartmentDAO(BaseDAO[LocalDepartmentRecord]):
                 {"tenant": tenant_id},
             )
             return [AssignmentOut.model_validate(row) for row in rows]
+
+    async def list_members(self, tenant_id: UUID, department_id: UUID) -> list[DepartmentMemberOut]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT u.id AS membership_id, u.display_name FROM users u "
+                "JOIN local_department_memberships m ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
+                "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
+                "LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE d.id = %(department)s AND d.tenant_id = %(tenant)s "
+                "AND u.is_active IS TRUE AND u.role IN ('member', 'agent_admin') "
+                "AND (i.id IS NULL OR (i.is_active IS TRUE AND i.is_platform_admin IS FALSE)) "
+                "ORDER BY u.display_name, u.id",
+                {"tenant": tenant_id, "department": department_id},
+            )
+            return [DepartmentMemberOut.model_validate(row) for row in rows]
 
     async def replace_assignments(self, assignment: AssignmentsOut) -> None:
         async with self.session() as db:

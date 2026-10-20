@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import anyio
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
 from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
@@ -17,6 +18,7 @@ from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_persist import persist_chat_message
+from app.services.chat_submissions import ChatSubmission, SubmissionConflictError, accept_submission
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
@@ -28,7 +30,6 @@ from app.services.openclaw_routing import (
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
-    charge_conversation_quota,
     check_agent_expired,
 )
 from app.services.realtime import realtime_router
@@ -335,13 +336,32 @@ class WebSocketChatHandler:
                 await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
                 return
 
-            if not content and not is_onboarding_trigger:
+            if not is_onboarding_trigger:
+                try:
+                    submission = ChatSubmission.model_validate(
+                        {
+                            "client_submission_id": _payload_str(data.get("client_submission_id")),
+                            "content": content,
+                            "display_content": display_content,
+                            "file_name": file_name,
+                        }
+                    )
+                except ValidationError:
+                    await self.websocket.send_json(
+                        {
+                            "type": "turn_rejected",
+                            "reason": "invalid_submission_id",
+                            "content": "Submission UUID required.",
+                        }
+                    )
+                    continue
+                if not await self._handle_submission(submission):
+                    return
                 continue
 
-            if is_onboarding_trigger:
-                if await self._handle_onboarding_trigger_guard():
-                    continue
-                content = "Please begin the onboarding."
+            if await self._handle_onboarding_trigger_guard():
+                continue
+            content = "Please begin the onboarding."
 
             self.current_user_text = content
 
@@ -359,12 +379,9 @@ class WebSocketChatHandler:
 
             try:
                 async with connection_ctx():
-                    if is_onboarding_trigger:
-                        if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
-                            await self.websocket.send_json({"type": "onboarded", "agent_id": str(self.agent_id)})
-                            continue
-                    else:
-                        await charge_conversation_quota(self.user)
+                    if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
+                        await self.websocket.send_json({"type": "onboarded", "agent_id": str(self.agent_id)})
+                        continue
                     await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
                     _ = await enqueue_prepared_openclaw_message(
                         prepared, sender_user_id=self.user.id, conversation_id=self.conv_id
@@ -388,6 +405,51 @@ class WebSocketChatHandler:
             self.conversation.append({"role": "user", "content": content})
             await self.websocket.send_json({"type": "status", "content": "thinking"})
             logger.info("[WS] OpenClaw: message queued for gateway poll")
+
+    async def _handle_submission(self, submission: ChatSubmission) -> bool:
+        rejection: RealtimeMessage = {
+            "type": "turn_rejected",
+            "client_submission_id": str(submission.client_submission_id),
+        }
+        try:
+            accepted = await accept_submission(
+                submission,
+                user=self.user,
+                agent=self.agent,
+                session_id=self.binding.session_id,
+                history=self.conversation,
+            )
+        except SubmissionConflictError:
+            rejection.update(reason="submission_conflict", content="Submission UUID already used for another message.")
+        except NoCompanyModelError as exc:
+            rejection.update(reason="no_company_model", content=str(exc))
+        except AgentExpired as exc:
+            rejection.update(reason="agent_expired", content=exc.message)
+        except QuotaExceeded as exc:
+            rejection.update(reason="quota_exceeded", content=exc.message)
+        except HTTPException as exc:
+            await self.websocket.send_json({"type": "error", "content": exc.detail})
+            await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
+            return False
+        except Exception:
+            logger.exception("[WS] Turn transaction failed")
+            rejection.update(reason="enqueue_failed", content="Your message could not be sent. Please try again.")
+        else:
+            await self.websocket.send_json(
+                {
+                    "type": "turn_accepted",
+                    "message_id": str(accepted.message.id),
+                    "session_id": str(self.binding.session_id),
+                    "client_submission_id": str(submission.client_submission_id),
+                }
+            )
+            if not accepted.replayed:
+                self.current_user_text = submission.content
+                self.conversation.append({"role": "user", "content": submission.content})
+                await self.websocket.send_json({"type": "status", "content": "thinking"})
+            return True
+        await self.websocket.send_json(rejection)
+        return True
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already started)."""

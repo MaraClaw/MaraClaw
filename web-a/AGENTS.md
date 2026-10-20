@@ -1,125 +1,73 @@
-# PROJECT KNOWLEDGE BASE
+# web-a - Admin Console
 
-**Generated:** 2026-10-07  
-**Commit:** f722496  
-**Branch:** main
+**Generated:** 2026-10-20
+**Commit:** 3942af0
+**Branch:** 2026Oct
 
-> Monorepo router: `../AGENTS.md`. This file is package implementation truth.
+Parent: `../AGENTS.md`. Follow the owning child guide below for implementation details.
 
 ## OVERVIEW
 
-Operator UI for **platform_admin** and **org_admin**. React 19, Vite 8 `:5174`, Tailwind v4, RR 7, TanStack Query, RHF+Zod, Recharts, Sonner.
-
-JWT in `localStorage` (`maraclaw-admin-token`). `AuthProvider` bootstraps `GET /api/auth/me`. Non-admin roles rejected client-side after a successful credential check.
-
-**Force password change:** OR `must_change_password` from token / `user` / `identity`. `ProtectedRoute` allows only `/account` and `/settings` until cleared. After `PUT /api/auth/me/password`, call `refreshUser()`.
-
-**Role split:** Companies + Search sit behind `PlatformAdminRoute` and `platformAdminOnly` nav. Users and Models are both roles. Org admin is own-tenant only. Only org/platform admins configure the company LLM pool; members never write keys.
-
-Does **not** own the end-user landing or member auth (`web-e`). Does **not** implement APIs — clients call `engine`.
-
-## STRUCTURE
-
-```
-web-a/
-├── Dockerfile           # Node 26.11.1 → nginx-unprivileged :8080
-├── docker/nginx.conf    # SPA fallback, /healthz, CSP; no /api proxy
-├── vite.config.ts       # :5174, @ → src, /api → VITE_DEV_API_PROXY || :8000
-├── .env.example         # VITE_API_BASE_URL (empty = same-origin)
-└── src/
-    ├── main.tsx         # ThemeProvider → App
-    ├── App.tsx          # QueryClient + AuthProvider + Toaster + router
-    ├── routes/          # see routes/AGENTS.md — AppRouter, ProtectedRoute, PlatformAdminRoute
-    ├── pages/           # see pages/AGENTS.md
-    ├── components/
-    │   ├── layout/      # AdminShell, AuthShell, NavIcon, SectionRail
-    │   ├── companies/   # create form + status icon
-    │   ├── users/       # user-card
-    │   ├── brand/       # match web-e mark
-    │   └── ui/          # web-e subset (no accordion/sheet/textarea). Keep Button `destructive`, Badge `success|warning|destructive`, PasswordField `hideLeadingIcon`
-    ├── hooks/           # use-auth; use-theme (maraclaw-admin-theme)
-    └── lib/             # see lib/AGENTS.md
-```
+Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
+Live: auth, force-change, companies + claimed domains, Users + local departments, Models, Linkup keys + search analytics. `/tools` remains a placeholder.
+Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
 
-| Task | Location |
-|------|----------|
-| Login / multi-tenant pick | `src/pages/login.tsx` |
-| Forgot / reset password | `src/pages/forgot-password.tsx`, `reset-password.tsx` |
-| Change password | `src/pages/account.tsx` |
-| Sign out / theme | `src/pages/settings.tsx` |
-| Overview + 7-day search snapshot | `src/pages/overview.tsx` |
-| Companies / claimed domains | `src/pages/companies.tsx`, `company-detail.tsx`, `src/lib/companies-api.ts` |
-| Create company + genesis OA | `src/components/companies/create-company-form.tsx` |
-| Users / activate / local departments | `src/pages/users.tsx`, `user-detail.tsx`, `users-departments.tsx`, `src/lib/users-api.ts`, `departments-api.ts` |
-| LLM models / providers | `src/pages/llm-models.tsx`, `src/lib/llm-models-api.ts` |
-| Linkup keys | `src/pages/search-engine.tsx`, `src/lib/linkup-keys-api.ts` |
-| Search analytics | `src/pages/search-engine-analytics.tsx` (`?tab=analytics`) |
-| Auth session | `src/hooks/use-auth.tsx`, `src/lib/auth-api.ts` |
-| Route / PA guards | `src/routes/` | Nested `routes/AGENTS.md` |
-| Nav / chrome | `src/components/layout/admin-shell.tsx` |
-| HTTP / API base | `src/lib/` |
-| Design tokens | `src/index.css` |
-| Engine admin HTTP | `../engine/docs/admin-apis.md` |
+| Concern | Owner |
+|---------|-------|
+| Boot / theme | `index.html` prevents theme FOUC; `src/main.tsx`: `StrictMode` > `ThemeProvider` > `App` |
+| App composition | `src/App.tsx`: `AuthProvider` wraps `AppRouter` + `Toaster` |
+| Session / Query lifetime | `src/hooks/use-auth.tsx`: `AuthProvider` owns the session-generation-keyed `QueryClientProvider`, not `App` |
+| Paths / access gates | `src/routes/AGENTS.md`: `AppRouter`, `ProtectedRoute`, `PlatformAdminRoute` |
+| Screen composition / queries | `src/pages/AGENTS.md`: auth, overview, companies/domains, users/departments, models, search |
+| Shared UI / domain components | `src/components/AGENTS.md`: primitives, forms, shells, navigation, brand, theme toggle |
+| HTTP / DTOs / API base | `src/lib/AGENTS.md`: `apiRequest`, `ApiError`, `apiUrl`, domain clients |
+| Theme / design tokens | `src/hooks/use-theme.tsx`, `src/index.css` |
+| Engine admin contract | `../engine/docs/admin-apis.md` |
 
-## CODE MAP
+## AUTH AND TENANCY
 
-LSP/codegraph not configured. Centrality unmeasured (grep import/call sites only).
+- JWT storage: `maraclaw-admin-token`. `AuthProvider` bootstraps `GET /api/auth/me`; reject non-admin roles even after valid credentials.
+- OR `must_change_password` from token / `user` / `identity`. Redirect to `/account`; allow `/account`, `/settings` and their subpaths until cleared. After `PUT /api/auth/me/password`, call `refreshUser()`.
+- `403 { must_change_password: true }` means force-change, not logout. Keep the token.
+- Companies + Search require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
+- Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
+- Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 
-| Symbol | Type | Location | Role |
-|--------|------|----------|------|
-| `App` | default | `src/App.tsx` | QueryClient + AuthProvider + router |
-| `AppRouter` | fn | `src/routes/index.tsx` | Path table; analytics is query-string, not a route |
-| `ProtectedRoute` | fn | `src/routes/protected.tsx` | Auth + admin + force-pw lock |
-| `PlatformAdminRoute` | fn | `src/routes/platform-admin.tsx` | `/companies*`, `/search-engine` |
-| `AuthProvider` / `useAuth` | hook | `src/hooks/use-auth.tsx` | Session; rejects non-admin |
-| `AdminShell` | fn | `src/components/layout/admin-shell.tsx` | Nav; PA-only items; force-pw dims links |
-| `apiRequest` / `ApiError` | fn/class | `src/lib/http.ts` | Fetch; 401 clears token only |
-| `getApiBaseUrl` / `apiUrl` | fn | `src/lib/api.ts` | Empty / hostname `0.0.0.0` → same-origin |
-| `isAdminUser` / `isPlatformAdminUser` | fn | `src/lib/types/auth.ts` | Client RBAC |
-| `userMustChangePassword` | fn | `src/lib/types/auth.ts` | Force-pw from `user` flag |
+## CONVENTIONS AND LIMITS
 
-Boot: `index.html` (theme FOUC) → `main.tsx` → `ThemeProvider` → `App` → `AuthProvider` → `AppRouter`.
+- Named PascalCase components in kebab-case files; retain the existing default `App.tsx` entry. Alias `@/*` = `src/*`.
+- Tailwind v4 is CSS-first (`src/index.css`), not a Tailwind config file. Lint with Oxlint; no ESLint/Prettier config.
+- Page data uses TanStack Query; forms use RHF + Zod. New live screens need page + route + nav; shared component rules live in the components guide.
+- HTTP belongs in `src/lib/*-api.ts`, not raw `fetch` in pages/components or REST handlers in Vite.
+- Public `VITE_*` only; never ship `PLATFORM_ADMIN_*`. No hardcoded API hosts or `VITE_API_BASE_URL=http://0.0.0.0:8000`.
+- Keep Disable/Enable visible when `can_disable` is false (MaraClaw + OpenClaw).
+- Users local departments are not provider `org_sync` departments; `web-e` Directory owns that synced view.
+- `VITE_AUTH_BYPASS` is not implemented. README structure/status and bypass claims are not authoritative.
 
-## CONVENTIONS
+## COMMANDS AND CHECKS
 
-- Path alias `@/*` → `src/*`. Lint is **oxlint** (no eslint/prettier config).
-- Public `VITE_*` only. Never ship `PLATFORM_ADMIN_*`.
-- TanStack Query in **pages only**. Forms: RHF + Zod. New screens: `pages/` + `routes/` + nav when ready.
-- Tenant: platform admin may pass `tenant_id`; org admin is own-tenant (client + UI).
-- Treat `403 { must_change_password: true }` as force-change, not logout.
-- Brand + chrome match `web-e`: `MaraClawLogo`, `public/maraclaw-mark.svg`, warm OKLCH, `bg-card/70` sidebar, footer email + theme + Sign out.
-- Theme key `maraclaw-admin-theme`. Token key `maraclaw-admin-token` (never web-e's `maraclaw-theme` / `maraclaw-enduser-token`).
-- Verify with `npm run build` (`tsc -b`). No test runner.
-
-## ANTI-PATTERNS
-
-- Marketing pages or member chat here; admin UI in `web-e`.
-- REST handlers in Vite; `fetch` from components (add `src/lib/*-api.ts`).
-- Hardcoded API hosts; `VITE_API_BASE_URL=http://0.0.0.0:8000`.
-- Ignoring `must_change_password` after login.
-- Treating `VITE_AUTH_BYPASS` as implemented (README leftover; not in `.env.example` or code).
-- Sharing web-e storage keys.
-- Hiding Disable/Enable when `can_disable` is false (MaraClaw + OpenClaw).
-- Treating Users local departments as the provider directory (`org_sync`; web-e Directory shows that sync).
-
-## COMMANDS
+Run from `web-a/` (no root npm workspace):
 
 ```bash
-npm install
-npm run dev          # :5174, /api → engine
-npm run build        # tsc -b && vite build
-npm run lint         # oxlint
+npm ci
+npm run dev
+npm run lint
+npx tsc -b
+npm test
+npm run build
 docker build -t maraclaw-web-a .
 docker run --rm -p 8080:8080 maraclaw-web-a
 ```
 
-Prod image: Node **26.11.1** → nginx-unprivileged **8080**. Optional `--build-arg VITE_API_BASE_URL=...`. Container does **not** proxy `/api`.
+`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: 11 Node test files, not a browser runner.
+No npm e2e script exists; the three `tests/*.browser.mjs` scripts are standalone browser checks, outside `npm test` and CI.
+`../.github/workflows/frontend-ci.yml`: lint, `tsc -b`, tests, build, Docker build, then final-image `../deploy/smoke_frontend_image.sh`.
 
-## NOTES
+## DEVELOPMENT AND PRODUCTION
 
-- README structure/status is stale (still says feature screens are placeholders).
-- Unused deps: most `@radix-ui/*` plus `@tanstack/react-table` (no `src` imports).
-- `http` 401 clears storage but does **not** reset `AuthContext` — the next `refreshUser` / guard must catch it.
-- Reset emails: engine `public_base_url` must point at this app.
+- `vite.config.ts`: dev `:5174`; `/api` proxies to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. This is dev-only.
+- `Dockerfile` + `docker/nginx.conf`: Node 26.11.1 build, nginx-unprivileged static SPA on `:8080`, CSP and `/healthz`; no production `/api` proxy. Route API traffic at the edge.
+- `.env.example`: empty `VITE_API_BASE_URL` = same-origin; image override is `--build-arg VITE_API_BASE_URL=...`.
+- Reset emails: engine `public_base_url` must point at this admin app.

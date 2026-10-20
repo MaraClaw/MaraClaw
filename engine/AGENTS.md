@@ -1,150 +1,80 @@
-# PROJECT KNOWLEDGE BASE
+# Engine Platform Guide
 
-**Generated:** 2026-10-07
-**Commit:** f722496
-**Branch:** main
+**Generated:** 2026-10-20
+**Commit:** 3942af0
+**Branch:** 2026Oct
 
-> Monorepo router: `../AGENTS.md`. This file is package implementation truth.
+Monorepo router: `../AGENTS.md`. This guide owns engine-wide rules; nested guides own local contracts.
 
-## OVERVIEW
+FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, workspaces, tools, LLM orchestration, optional IM/identity connectors. Distribution version comes from `pyproject.toml`; runtime `APP_VERSION` reads `VERSION`. Keep them distinct.
 
-FastAPI backend for a multi-tenant digital-employee platform: Postgres via **pure psycopg3**, Redis Pub/Sub, agent workspaces, tool execution, LLM orchestration, optional IM/identity connectors. Distribution `maraclaw` **2.2.0** (`pyproject.toml`). Runtime `APP_VERSION` reads `VERSION` (**2.1.1**). Keep the two numbers distinct.
+## Navigation And Code Map
 
-## STRUCTURE
+| Concern / symbol | Location and contract |
+|---|---|
+| `app`, `lifespan` | `app/main.py` assembles middleware, flat `app/api/` routers, health/version; imports lifespan from `app/runtime/lifecycle.py`. Read `app/runtime/AGENTS.md`. `/api/health` is a pool ping (503 if down). |
+| `Settings`, `get_settings` | `app/config.py`, `.env.example`: case-sensitive settings, JWT/Linkup/genesis env. |
+| `init_pool`, `ping_pool`, `connection_ctx`, `BaseDAO` | `app/db/pool.py`, `app/db/session.py`, `app/dao/base.py`: global pool, commit-on-success/nested join, CRUD + `app/records/` dataclass defaults/`from_row`, no ORM. `app/core/events.py` owns Redis events. |
+| Auth / authorization | `app/core/security.py`: JWT/bcrypt, `load_user_from_access_token`, `load_user_principal`; `app/core/permissions.py`: `check_agent_access(user, agent_id)`, no DB placeholder. |
+| Genesis / company creation | `app/services/platform_admin_seeder.py`: `ensure_platform_admin`; `app/services/tenant_provisioning.py`: `create_tenant_with_org_admin`. |
+| Additional admins / audit | `app/services/admin_provisioning.py`, `app/services/admin_audit.py`, `admin_audit_logs`; RBAC inventory: `docs/admin-apis.md`. |
+| Local departments | `app/api/departments.py`, `app/services/local_departments.py`, `app/dao/local_department_dao.py`: flat tenant directory, not provider departments or `org_sync`. See `app/api/AGENTS.md`. |
+| `logger` | `app/core/logging/`: queued process logger facade. |
+| Tools / `TOOL_HANDLERS` | Under `app/services/`: `agent_tool_exec/registry.py` (`@register`), `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/`; seed vs OpenAI catalogs. `read_webpage`, `search_x` (xAI); Linkup skills handle web search. |
+| LLM | `app/services/llm/`: `caller.py` orchestrates, `factory.py` builds registered protocol clients; shared types from `base.py` / `types.py`. |
+| Storage / sandbox / workers / channels | Under `app/services/`: mixed flat files + `storage_runtime/`, `sandbox/registry.py` (`get_sandbox_backend`), `trigger_runtime/`, `realtime_runtime/`, `channels/`, `linkup/`, `*_stream.py`, `*_gateway.py`; facades `storage.py`, `realtime.py`. |
+| Documents | `app/services/document_parser/`: inbound local anydoc (`firecrawl-anydoc==0.2.4`), isolated spawn; `app/services/document_conversion/`: outbound conversion. |
+| `get_org_sync_adapter` | `app/services/org_sync/factory.py`: sync adapters are separate from auth providers. |
+| Templates / scripts | `agent_template/` is copied workspace scaffold; `agent_templates/` is DB-seeded role catalog. `app/scripts/` holds bootstrap/one-offs; `scripts/` holds schema/freeze/lint helpers; `docs/` holds operations/refactoring. |
+| Tests | `tests/AGENTS.md`: root-level pytest, no shared `conftest.py`, local fakes/monkeypatch; most API tests call handlers directly, no live Postgres in CI. |
 
-```
-engine/
-├── app/                         # FastAPI package
-│   ├── api/                     # Flat routers mounted from main.py
-│   ├── core/                    # auth, permissions, events, logging/
-│   ├── db/                      # live psycopg pool/session/errors
-│   ├── dao/                     # parameterized SQL repositories
-│   ├── records/                 # dataclasses + from_row (not ORM)
-│   ├── schemas/                 # schemas.py grab-bag + agent_credential
-│   ├── scripts/                 # bootstrap_db + one-off modules
-│   └── services/                # mixed flat files + runtime packages (`document_parser/`, `document_conversion/`, …)
-├── scripts/                     # schema_baseline.sql + freeze/lint helpers
-├── docker/openclaw/             # OpenClaw guest-image helpers (not the API)
-├── Dockerfile.openclaw          # Node 26.11.1 bookworm guest image (arm64)
-├── build-openclaw-local-dockerfile.sh / publish-openclaw-local-dockerfile.sh
-├── start-from-docker.sh         # builds/runs maraclaw-engine:local
-├── agent_template/              # runtime workspace scaffold (copied)
-├── agent_templates/             # role catalog seeded into DB
-├── docs/                        # operational + refactoring packets
-└── tests/                       # root-level pytest; no shared conftest
-```
+## Engine-Wide Rules
 
-No `alembic/`, no `app/models/`.
+- Python >=3.14.8 (`.python-version`, image `python:3.14.8-slim-trixie`); Ruff `py314`, line 120, double quotes, LF. Pydantic v2: `model_config`, `Field(default_factory=...)`.
+- Env names are case-sensitive; `CORS_ORIGINS` is a JSON list, single-quoted in `.env`. New settings belong in `app/config.py` and `.env.example`.
+- New DB work uses DAOs + `app.db` only; multi-write handlers use `async with connection_ctx():` for one commit. No SQLAlchemy, `app/models/`, Alembic or `create_all`. `check_no_new_sqlalchemy.py` has an empty allowlist and forbids SQLAlchemy in `app/db/`.
+- Schema truth is `scripts/schema_baseline.sql`: fresh-only initialization, idempotent rerun, no upgrade patches. `pyproject.toml` still lists `asyncpg`; add no callers. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy.
+- Use `from app.core.logging import logger`; no direct `loguru` in app modules except bundled `skill_creator_files/` (`check_no_direct_loguru.py`). `logging.getLogger` is allowed only in `app/core/logging/intercept.py`.
+- Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates side effects only: every process mounts all routers. Self-prefixed `/api/...` routers must be included without `API_PREFIX`.
+- Do not grow `agent_tools.py`, `tool_seeder.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`. LLM `client.py` is retired: use owning modules. `app/services/agent_runtime/` is gone: do not recreate it or add a guide there.
+- No process-wide connector `start_all` / trigger loops from request handlers or before `init_pool`; existing single `start_client` after save is the exception. WhatsApp webhook is mounted; a proactive sender requires registration in `app/services/agent_tool_exec/channel_messaging`.
+- Schemas (`app/schemas/schemas.py`, `agent_credential`) must not expose secrets/hashes/cookies. Non-admins cannot set `allow_network` or tool proxy fields.
+- Sandbox guests use only `SANDBOX_*_PROXY`, never inherited process `HTTP_PROXY`; never put authenticated proxy URLs on bwrap `--setenv`.
+- Privileged work uses `get_current_user` (`must_change_password` gate); `get_authenticated_user` is only for `/auth/me` and password change. Never bypass force-change on WS/download paths.
+- Browser downloads use single-use `file_download_tickets`: Bearer `POST /api/agents/{id}/files/download-ticket`; `GET .../files/download` accepts Bearer or `ticket`, never query JWT. Redeem with `load_user_principal(fresh=True)`.
+- Chat WebSockets accept only single-use tickets from `POST /api/auth/chat-ticket`; authorize with `load_user_principal(fresh=True)`.
+- Genesis PA needs usable DB email + password hash; missing credentials seed/repair from `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars), otherwise fail closed. No email-only bootstrap or open-registration elevation. Genesis PA belongs to MaraClaw for default-agent seeding.
+- Companies + genesis OA: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `/api/tenants/self-create` is gone; platform settings expose only invitation/SSO-domain toggles.
+- Additional PA: genesis PA only (`POST /api/admin/platform-admins`); additional OA: genesis OA only (`POST /api/users/org-admins`, `PATCH /api/users/{id}/role`). Persist `users.is_genesis`, never infer from `created_at`; no demoting/reassigning/join-converting genesis rows.
+- Login ignores inactive memberships. OA deactivation leaves multi-tenant `identity.is_active` unchanged; PA deactivation flips it. End-user deactivation also stops agents/triggers/schedules.
+- Tenant deletion tombstones orphan identities for email reuse; `POST /api/tenants/{id}/genesis-org-admin` repairs a missing genesis OA.
+- Seed MaraClaw (`maraclaw`) and OpenClaw (`openclaw`, default for unmatched end-user registration); do not rename/reuse `default` slug. System orgs cannot be disabled; system/default-end-user orgs cannot be deleted.
+- Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users have at most one tenant; transfer needs password confirmation. Domain join/transfer needs verified email and `get_current_user` (active + force-change gate).
+- Reset/verify links use `app/services/frontend_origin.py` `resolve_frontend_base_url`: CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`; never an unlisted request host.
+- Bundled `skill_creator_files/`, `gogcli_skill_files/`, `clawsec_skill_files/` are not normal service code. ClawSec is AGPL-3.0; retain its existing `AGENTS.md`, never add descendant guides under its skill subtrees.
 
-## WHERE TO LOOK
-
-| Task | Location | Notes |
-|---|---|---|
-| Startup / routers | `app/main.py` | `lifespan`, `PROCESS_ROLE`, mounts, `/api/health` |
-| Settings | `app/config.py`, `.env.example` | Case-sensitive; sandbox proxy is `SANDBOX_*_PROXY` only; genesis `PLATFORM_ADMIN_*` |
-| Genesis platform admin | `app/services/platform_admin_seeder.py` | Env seed at bootstrap; fail-closed if empty DB |
-| Tenant + genesis org admin | `app/services/tenant_provisioning.py` | `POST /api/tenants/` and `POST /api/admin/companies` |
-| Local departments | `app/api/departments.py`, `services/local_departments.py` | Flat tenant directory. Not `org_sync`. Contract: `app/api/AGENTS.md` |
-| Additional admins / trail | `admin_provisioning.py`, `admin_audit.py` | Genesis-only mint; `admin_audit_logs` |
-| Admin APIs / RBAC inventory | `docs/admin-apis.md` | Platform vs org admin; genesis + `must_change_password` |
-| Auth deps | `app/core/security.py` | JWT, bcrypt, `get_current_user` / force-change gate |
-| Reset/verify email origin | `app/services/frontend_origin.py` | Allowlisted `Origin`/`Referer` else `PUBLIC_BASE_URL` |
-| Logging | `app/core/logging/` | `from app.core.logging import logger` - not loguru |
-| DB access | `app/db/`, `app/dao/`, `app/records/` | `connection_ctx` / DAOs |
-| Schema | `scripts/schema_baseline.sql`, `app/scripts/bootstrap_db.py` | Fresh-only source of truth; idempotent rerun, no upgrades |
-| API | `app/api/` | Most use `API_PREFIX`; several self-prefix |
-| Tools exec | `agent_tool_exec/`, `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/` | Seed vs OpenAI catalogs. `read_webpage` + `search_x` (xAI). Linkup skills for web search. Do not grow `agent_tools.py` |
-| Inbound office parse | `app/services/document_parser/` | Local `anydoc` (`firecrawl-anydoc==0.2.4`). Isolated spawn. Not `document_conversion/` |
-| LLM | `app/services/llm/` | `caller.py` orchestrates; `factory.py` constructs registered protocol clients; import shared types from `base.py` / `types.py` |
-| Storage / sandbox / triggers | `storage_runtime/`, `sandbox/`, `trigger_runtime/` | Facades: `storage.py`, `realtime.py` |
-| Connectors / channels | `channels/`, `*_stream.py`, `*_gateway.py` | Lifespan `start_all` after pool. WhatsApp webhook mounted; no proactive sender |
-| Templates | `agent_template/` vs `agent_templates/` | Scaffold vs DB catalog - not interchangeable |
-| Tests | `tests/` | Fakes + monkeypatch; no live Postgres in CI |
-| OpenClaw image | `Dockerfile.openclaw`, `docker/openclaw/` | Guest Node 26.11.1 / gogcli 0.45.0 / OpenClaw 2026.10.5; Hub publish is `publish-openclaw-local-dockerfile.sh` |
-
-## CODE MAP
-
-No `codegraph_*` or LSP in this harness. The Ref column is a 2026-08-23 label, not a fresh count. Line numbers checked 2026-10-07.
-
-| Symbol | Type | Location | Refs | Role |
-|---|---|---|---:|---|
-| `app` | FastAPI | `app/main.py:435` | broad | App, middleware, mounts, health/version |
-| `lifespan` | function | `app/main.py:205` | startup | Pool → seed → realtime/worker/connector |
-| `Settings` / `get_settings` | class/fn | `app/config.py:82` / `:231` | 61+ | Env contract (`PLATFORM_ADMIN_*`, JWT, Linkup, …) |
-| `ensure_platform_admin` | function | `app/services/platform_admin_seeder.py` | bootstrap | Genesis platform admin from env |
-| `create_tenant_with_org_admin` | function | `app/services/tenant_provisioning.py:91` | tenants/admin | Tenant + genesis `org_admin` |
-| `load_user_from_access_token` / `load_user_principal` | function | `app/core/security.py` | auth/files/chat tickets | Verified credential → user + identity; force-change gate |
-| `init_pool` / `ping_pool` | function | `app/db/pool.py` | startup/health | Process-global psycopg pool |
-| `connection_ctx` | cm | `app/db/session.py:26` | 130+ | Commit on success; join if nested |
-| `BaseDAO` | class | `app/dao/base.py` | 43 | CRUD + record dataclass defaults |
-| `check_agent_access` | function | `app/core/permissions.py:349` | 39 | `(user, agent_id)` - no DB placeholder |
-| `logger` | import | `app/core/logging` | 146 | Queued process logger |
-| `TOOL_HANDLERS` | registry | `app/services/agent_tool_exec/registry.py` | tools | `@register` dispatch |
-| `get_sandbox_backend` | function | `app/services/sandbox/registry.py` | tools | Backend factory |
-| `get_org_sync_adapter` | function | `app/services/org_sync/factory.py` | identity | Sync adapters ≠ auth providers |
-| `local_department_dao` | DAO | `app/dao/local_department_dao.py` | — | Local directory. Not provider departments |
-
-## CONVENTIONS
-
-- Start via `./start-from-docker.sh`. Requires **≥3.14.8** (`.python-version`, image `python:3.14.8-slim-trixie`). Ruff `py314`, line 120, double quotes, LF.
-- Env names are case-sensitive. `CORS_ORIGINS` is a JSON list; single-quote it in `.env`.
-- Genesis platform admin: startup loads usable credentials (email + password hash) from the genesis PA in the database. If they are missing, `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars) seed or repair them. If the env vars are also missing, bootstrap **fails closed**. Open registration never elevates to platform admin.
-- New DB work: DAOs + `app.db` only. Freeze: `scripts/check_no_new_sqlalchemy.py` (empty allowlist; `app/db/` forbidden).
-- Log with `from app.core.logging import logger`. Freeze: `scripts/check_no_direct_loguru.py` (exception: `skill_creator_files/`).
-- Pydantic v2: `model_config`, `Field(default_factory=...)`.
-- Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates **side effects only** - every process still mounts all routers.
-- Multi-write handlers should wrap `async with connection_ctx():` so DAO calls share one commit.
-- Auth: use `get_current_user` for privileged work (enforces `must_change_password`). Use `get_authenticated_user` only for `/auth/me` and password change. Browser file downloads use single-use `file_download_tickets` minted by `POST /api/agents/{id}/files/download-ticket` (Bearer); `GET .../files/download` accepts a Bearer header or `ticket` (never a query JWT) and redemption uses `load_user_principal(fresh=True)`. Chat WebSockets accept only single-use tickets issued by `POST /api/auth/chat-ticket`; ticket authorization uses `load_user_principal(fresh=True)`.
-- New companies: platform admin only via `POST /api/tenants/` or `POST /api/admin/companies` (`tenant_provisioning`). `POST /api/tenants/self-create` is gone; platform settings expose only invitation and SSO-domain toggles.
-- Additional platform admins: **genesis** platform admin only (`POST /api/admin/platform-admins`). Additional org admins: **genesis** org admin only (`POST /api/users/org-admins` or `PATCH /api/users/{id}/role`). Genesis is persisted on `users.is_genesis` (not recomputed from `created_at`). Genesis rows cannot be demoted, reassigned, or converted by join.
-- Login ignores inactive memberships. Deactivating an org admin does not flip `identity.is_active` (multi-tenant identities). Deactivating a platform admin does. Deactivating an end user also stops their agents/triggers/schedules.
-- Tenant delete tombstones orphaned identities so emails can be reused. `POST /api/tenants/{id}/genesis-org-admin` repairs a tenant that has no genesis OA.
-- Reset/verify email links use `frontend_origin.resolve_frontend_base_url` (CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`). Do not take an unlisted host from the request.
-
-## ANTI-PATTERNS (THIS PROJECT)
-
-- Do not add SQLAlchemy, `app/models/`, or Alembic. Current schema definitions go only in `schema_baseline.sql`; no upgrade patches.
-- Do not add `logging.getLogger` outside `app/core/logging/intercept.py`.
-- Do not import `loguru` in app modules. Do not grow `agent_tools.py`, `tool_seeder.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`. The LLM `client.py` facade is retired; use its owning modules.
-- Do not start process-wide connector/`start_all`/trigger loops from request handlers (one `start_client` after save is the existing exception). Do not start them before `init_pool`.
-- Do not inject sandbox guest proxy from process `HTTP_PROXY`. Do not put authenticated proxy URLs on bwrap `--setenv`.
-- Do not expose secrets/hashes/cookies in schemas. Do not let non-admins set `allow_network` / tool proxy fields.
-- Do not elevate `platform_admin` via open registration or email-only bootstrap. Do not skip the force-change gate on WS/file-download auth paths.
-- Do not treat `skill_creator_files/`, `gogcli_skill_files/`, `clawsec_skill_files/` as normal service code (AGPL-3.0 on ClawSec).
-- Do not add a WhatsApp proactive sender without registering it in `agent_tool_exec/channel_messaging`. The webhook router **is** mounted.
-
-## UNIQUE STYLES
-
-- Mixed services: flat legacy files + `storage_runtime` / `sandbox` / `trigger_runtime` / `realtime_runtime` / `llm` / `document_conversion` / `document_parser` / `channels` / `linkup` / `org_sync`.
-- Some routers self-prefix `/api/...` and are included **without** `API_PREFIX` - double-prefix is a real bug class.
-- Tests: no `conftest.py`; local fakes; most “API” tests call handlers directly. CI has no Postgres.
-- `agent_template/` ≠ `agent_templates/`.
-
-## COMMANDS
+## Commands (From `engine/`)
 
 ```bash
 ./start-from-docker.sh
-
 uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
 uv run --extra dev basedpyright --project pyrightconfig.json app
-uv run --extra dev ty check .
+uv run --extra dev ty check --force-exclude .
 uv run python scripts/check_no_new_sqlalchemy.py
 uv run python scripts/check_no_direct_loguru.py
-uv run pytest                          # no implicit coverage
-./scripts/test.sh                      # admin/auth/tenant branch coverage; fail-under=90
-uv run pytest --cov=app --cov-fail-under=0   # full-app report (~55% measured snapshot)
+uv run pytest                                  # no implicit coverage
+bash scripts/test.sh                          # scoped admin/auth/tenant branch gate: 90%
+uv run pytest --cov=app --cov-fail-under=0       # optional full-app report, not the scoped gate
 uv run python -m app.scripts.bootstrap_db
 ```
 
-## NOTES
+## Runtime And Images
 
-- Root `../.github/workflows/engine-ci.yml` runs ruff, basedpyright, ty, and `scripts/test.sh` with its explicit admin/auth/tenant branch-coverage scope, terminal report, and 90% gate. CI adds XML/HTML reports via `PYTEST_ADDOPTS`. No Docker/schema job. Local gates also include both freeze scripts; `scripts/lint.sh` skips freezes and runs `ty check --force-exclude`.
-- Backend `Dockerfile` bootstraps pinned `uv==0.13.1`, exports `uv.lock` with `uv export --locked --no-dev --no-emit-project`, and installs hashed runtime requirements into system Python with `uv pip install --system --require-hashes` (no optional extras). `.dockerignore` excludes secrets, local data, and caches recursively while preserving runtime/build inputs, including the anydoc fixture. `start-from-docker.sh` builds `maraclaw-engine:local`, container `maraclaw-engine`, forwards `.env` via `-e KEY`, not `--env-file`. It also mounts the host Docker socket plus a Linux `docker` CLI so python-on-whales can start OpenClaw agent containers, dual-mounts `DATA_DIR` so those bind-mounts resolve on the host, and creates `DOCKER_NETWORK` (`maraclaw_network`). Setuid bwrap (non-root) needs `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` plus `seccomp=unconfined`. Missing `NET_ADMIN`/`SYS_PTRACE` → `capset failed: Operation not permitted`.
-- `entrypoint.sh` runs bootstrap only for `PROCESS_ROLE` containing `all` or `bootstrap` (bash **case-sensitive**). Python `_role_enabled` lowercases. `PROCESS_ROLE=Bootstrap` seeds but skips Docker DDL. `ALLOW_MIGRATION_FAILURE` wraps **bootstrap_db**, not Alembic.
-- Most seed failures in lifespan are warnings. **Exception:** `ensure_platform_admin()` is fail-closed (raises) so greenfield installs cannot serve without a platform admin.
-- Platform admin seed runs **before** agent seeders. Genesis platform admin belongs to the **MaraClaw** system org so default agents can seed there. System orgs cannot be disabled.
-- Startup also ensures system orgs **MaraClaw** (`maraclaw`) and **OpenClaw** (`openclaw`, default for unmatched end-user registration). It does not rename or reuse a `default` slug. Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users may belong to only one tenant; members can transfer with a password confirmation. Domain join/transfer uses a **verified** email only. System and default-end-user orgs cannot be deleted. Join/transfer use `get_current_user` (active + password-change gate).
-- Health is a pool ping (503 if down). Image may setuid `bwrap` (`BWRAP_SETUID=1`); local sandbox uses `--unshare-user-try`.
-- `pyproject.toml` still lists `asyncpg`; live pool is psycopg3 - no new asyncpg callers. `app/services/agent_runtime/` is gone; do not recreate or add `AGENTS.md` there.
-- Node **26.11.1** on every image: guest `node:26.11.1-bookworm-slim`, sandbox `node:26.11.1-slim`, frontends `node:26.11.1-alpine`. Smoke expects host and guest `v26.11.1`. OpenClaw guest is **linux/arm64 only**. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy. ClawSec: `clawsec_skill_files/AGENTS.md` exists; do **not** add `AGENTS.md` under skill *subtrees* (AGPL).
+- `../.github/workflows/engine-ci.yml` runs Ruff, basedpyright, ty and `scripts/test.sh` with explicit scope/terminal report/90% gate; `PYTEST_ADDOPTS` adds XML/HTML. No Docker/schema job or DB service. Local gates include both freeze scripts; `scripts/lint.sh` skips them and uses `ty check --force-exclude`.
+- `Dockerfile`: pinned `uv==0.13.1`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
+- `start-from-docker.sh` builds `maraclaw-engine:local`, runs `maraclaw-engine`, forwards `.env` via `-e KEY` (not `--env-file`); mounts host Docker socket + Linux Docker CLI for python-on-whales/OpenClaw, dual-mounts `DATA_DIR` for host bind paths, creates `DOCKER_NETWORK` (default `maraclaw_network`).
+- Non-root setuid bwrap needs `SYS_ADMIN SETUID SETGID SYS_CHROOT SETPCAP NET_ADMIN SYS_PTRACE` + `seccomp=unconfined`; missing `NET_ADMIN`/`SYS_PTRACE` causes `capset failed: Operation not permitted`. Image uses `BWRAP_SETUID=1`; local sandbox uses `--unshare-user-try`.
+- `app/process_roles.py` normalizes roles lowercase in Python and `entrypoint.sh` before its case-sensitive predicate: `Bootstrap` DOES run `app.scripts.bootstrap_db`. Only `all`/`bootstrap` run schema bootstrap; failure aborts unless `ALLOW_MIGRATION_FAILURE=true` explicitly permits continuation (not Alembic).
+- Runtime bootstrap orders system orgs, fail-closed PA, optional tools/templates/skills, agents; PA precedes agent seeders. `SystemOrgSeedError` and every PA seed failure abort; optional seed blocks warn. Lifecycle/task/readiness ownership: `app/runtime/AGENTS.md`.
+- Node 26.11.1 across guest `node:26.11.1-bookworm-slim`, sandbox `node:26.11.1-slim`, frontends `node:26.11.1-alpine`; smoke requires host + guest `v26.11.1`. Guest is linux/arm64 only, gogcli 0.45.0 / OpenClaw 2026.10.5. Guest build: `Dockerfile.openclaw`, `docker/openclaw/`, `build-openclaw-local-dockerfile.sh`; Hub publish: `publish-openclaw-local-dockerfile.sh`.

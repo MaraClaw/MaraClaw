@@ -45,6 +45,7 @@ class _ChatMessageContent(TypedDict):
 class ChatMessageEntry(_ChatMessageContent):
     message_id: str
     entry_id: str
+    client_submission_id: NotRequired[str | None]
 
 
 def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
@@ -277,15 +278,16 @@ async def delete_session(
 ):
     """Delete a chat session and its messages. Owner, agent creator, or admin may delete others' sessions."""
     agent, _ = await check_agent_access(current_user, agent_id)
-    session = await chat_session_dao.get_for_agent(session_id, agent_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    async with connection_ctx():
+        session = await chat_session_dao.lock_for_agent(session_id, agent_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
-        raise HTTPException(status_code=403, detail="Not authorized")
+        if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
+            raise HTTPException(status_code=403, detail="Not authorized")
 
-    await chat_message_dao.delete_for_conversation(str(session_id))
-    _ = await chat_session_dao.delete(id=session_id)
+        await chat_message_dao.delete_for_conversation(str(session_id))
+        _ = await chat_session_dao.delete(id=session_id)
     return
 
 
@@ -386,6 +388,8 @@ async def get_session_messages(
                 "content": m.content,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
+            if m.role == "user":
+                message_entry["client_submission_id"] = str(m.client_submission_id) if m.client_submission_id else None
             if m.thinking not in (None, ""):
                 message_entry["thinking"] = m.thinking
             if sender_name not in (None, ""):

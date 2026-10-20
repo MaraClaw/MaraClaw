@@ -4,7 +4,7 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 
 ## Startup Path
 
-- `app.main.lifespan` starts `trigger_daemon.start_trigger_daemon()` only when `PROCESS_ROLE` includes `all` or `worker`.
+- `app.runtime.lifecycle.Runtime.start()` starts `trigger_daemon.start_trigger_daemon()` only when `PROCESS_ROLE` includes `all` or `worker`.
 - Do not move trigger scheduling into ordinary API processes. Duplicate workers increase scheduling pressure even though DB claiming mitigates execution duplication.
 - `trigger_daemon.py` owns the 15-second process loop and roughly every-fourth-tick heartbeat bridge.
 

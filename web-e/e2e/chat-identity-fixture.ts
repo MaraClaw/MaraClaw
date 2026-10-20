@@ -5,6 +5,8 @@ import { originalAgent, originalToken, originalUser, prepareWorkspace, replaceme
 
 export const firstSession = '387b65d4-6a8d-42f4-9677-12d4caaf6d31'
 export const secondSession = 'c47bd538-b299-41eb-b6eb-cf0c28f6bc46'
+export const firstMessage = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+export const secondMessage = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 export const chatPath = (session = firstSession, agent = originalAgent) => `/app/agents/${agent.id}/chat/${session}`
 export const message = (message_id: string, content: string, role = 'assistant'): ChatMessage => ({
   message_id, entry_id: message_id, role, content, created_at: '2030-01-01T00:00:00Z',
@@ -13,6 +15,7 @@ export const message = (message_id: string, content: string, role = 'assistant')
 export async function prepareChat(page: Page, initial: readonly ChatMessage[] = []) {
   await prepareWorkspace(page)
   let history = initial
+  let onboarded = originalAgent.onboarded_for_me
   let requests = 0
   let deferred: ReturnType<typeof Promise.withResolvers<void>> | undefined
   let delayedTicket: { readonly requested: ReturnType<typeof Promise.withResolvers<void>>; readonly response: ReturnType<typeof Promise.withResolvers<number>>; readonly finished: ReturnType<typeof Promise.withResolvers<void>> } | undefined
@@ -35,7 +38,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
   await page.route('**/api/agents/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     const agent = path.includes(replacementAgent.id) ? replacementAgent : originalAgent
-    if (path === `/api/agents/${agent.id}`) return route.fulfill({ json: agent })
+    if (path === `/api/agents/${agent.id}`) return route.fulfill({ json: { ...agent, onboarded_for_me: onboarded } })
     if (path.endsWith('/metrics')) return route.fulfill({ json: { status: agent.status, tasks: { total: 0, done: 0, pending: 0 } } })
     if (path.endsWith('/sessions')) return route.fulfill({ json: [firstSession, secondSession].map((id, index) => ({
       id, agent_id: agent.id, user_id: originalUser.id, title: `Identity thread ${index + 1}`,
@@ -73,6 +76,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       return { requested: gate.requested.promise, release: async (status = 200) => { gate.response.resolve(status); await gate.finished.promise } }
     },
     setHistory: (rows: readonly ChatMessage[]) => { history = rows },
+    setOnboarded: (value: boolean) => { onboarded = value },
     holdNextHistory: () => {
       const gate = Promise.withResolvers<void>()
       deferred = gate
@@ -89,4 +93,13 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
 
 export function complete(socket: WebSocketRoute, row: ChatMessage) {
   socket.send(JSON.stringify({ type: 'done', ...row }))
+}
+
+export function submitted(socket: { readonly sent: readonly string[] }, index = 0) {
+  return z.object({ client_submission_id: z.uuid(), content: z.string(), display_content: z.string().optional(),
+    file_name: z.string().optional(), model_id: z.string().optional() }).parse(JSON.parse(socket.sent[index] ?? 'null'))
+}
+
+export function accept(socket: { readonly route: WebSocketRoute; readonly session: string | null }, client_submission_id: string, message_id = firstMessage) {
+  socket.route.send(JSON.stringify({ type: 'turn_accepted', client_submission_id, message_id, session_id: socket.session }))
 }

@@ -1,24 +1,12 @@
-import { z } from 'zod'
 import { wsUrl } from '../api.ts'
 import { authSession } from '../auth-session.ts'
 import { issueChatTicket } from '../auth-api.ts'
 import { ApiError } from '../http.ts'
 import type { AuthSessionStore, SessionOwner } from '../auth-session.ts'
-
-export type ChatInbound = z.infer<typeof inboundSchema>
-export type ChatTurnRejection = z.infer<typeof turnRejectedSchema>
-
-export function isTurnRejected(event: ChatInbound): event is ChatTurnRejection {
-  return event.type === 'turn_rejected'
-}
-
-export type ChatOutbound = {
-  content?: string
-  display_content?: string
-  file_name?: string
-  model_id?: string
-  kind?: 'onboarding_trigger'
-}
+import { inboundSchema, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from './protocol.ts'
+import { createChatSubmissions, type ChatSubmissions } from './submissions.ts'
+export { isTurnAccepted, isTurnRejected } from './protocol.ts'
+export type { ChatInbound, ChatOutbound, ChatTurnAcceptance, ChatTurnRejection } from './protocol.ts'
 
 export type ChatSocket = {
   readonly readyState: number
@@ -56,29 +44,8 @@ type Handlers = {
   readonly sessionStore?: AuthSessionStore
   readonly transport?: ChatTransport
   readonly issueTicket?: typeof issueChatTicket
+  readonly submissions?: ChatSubmissions
 }
-
-const eventSchema = z.object({
-  type: z.string(), content: z.string().optional(), session_id: z.string().optional(),
-  message_id: z.string().optional(), entry_id: z.string().optional(),
-  name: z.string().optional(), status: z.string().optional(), result: z.string().optional(),
-  role: z.string().optional(), arguments: z.string().optional(), agent_id: z.string().optional(),
-  env: z.string().optional(), output: z.string().optional(),
-  live_preview: z.object({
-    env: z.string().optional(), screenshot_url: z.string().optional(), output: z.string().optional(),
-  }).optional(),
-})
-
-const turnRejectedSchema = eventSchema.extend({
-  type: z.literal('turn_rejected'),
-  reason: z.enum(['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed']),
-  content: z.string(),
-})
-
-const inboundSchema = z.union([
-  turnRejectedSchema,
-  eventSchema.refine((event) => event.type !== 'turn_rejected'),
-])
 
 export function connectAgentChat(
   agentId: string,
@@ -87,6 +54,7 @@ export function connectAgentChat(
 ): { send: (payload: ChatOutbound) => void; close: () => void } {
   const store = handlers.sessionStore ?? authSession
   const owner = handlers.owner ?? store.capture()
+  const submissions = handlers.submissions ?? createChatSubmissions(owner, agentId, sessionId)
   const transport: ChatTransport = handlers.transport ?? {
     connect: connectBrowserSocket, url: wsUrl,
     language: navigator.language || 'en',
@@ -100,7 +68,7 @@ export function connectAgentChat(
   let timer: ReturnType<typeof setTimeout> | undefined
   const pending: ChatOutbound[] = []
 
-  const current = () => !stopped && store.isCurrent(owner)
+  const current = () => !stopped && store.isCurrent(owner) && submissions.matches(owner, agentId, sessionId)
 
   function close() {
     if (stopped) return
@@ -117,7 +85,7 @@ export function connectAgentChat(
   }
 
   const unsubscribe = store.subscribe(() => {
-    if (!store.isCurrent(owner)) close()
+    if (!store.isCurrent(owner)) { submissions.retire(); close() }
   })
 
   function disconnected(code: number) {
@@ -149,9 +117,10 @@ export function connectAgentChat(
     let source: ChatSocket
     try {
       const ticket = await (handlers.issueTicket ?? issueChatTicket)({
-        agent_id: agentId, ...(sessionId === undefined ? {} : { session_id: sessionId }),
+        agent_id: agentId, ...(submissions.sessionId === undefined ? {} : { session_id: submissions.sessionId }),
       }, owner, controller.signal)
       if (!live()) return
+      submissions.resolve(ticket.session_id)
       const params = new URLSearchParams({ ticket: ticket.ticket, session_id: ticket.session_id, lang: transport.language })
       const url = transport.url(`/ws/chat/${agentId}?${params.toString()}`)
       if (!live()) return
@@ -173,6 +142,10 @@ export function connectAgentChat(
       attempt = 0
       if (opened) handlers.onReconnect?.()
       opened = true
+      for (const payload of submissions.pending()) {
+        if (!active() || source.readyState !== 1) break
+        source.send(JSON.stringify(payload))
+      }
       while (active() && pending.length && source.readyState === 1) {
         source.send(JSON.stringify(pending.shift()))
       }
@@ -188,7 +161,10 @@ export function connectAgentChat(
         return
       }
       const parsed = inboundSchema.safeParse(data)
-      handlers.onEvent(parsed.success ? parsed.data : { type: 'error', content: 'Malformed chat event' })
+      if (!parsed.success) { handlers.onEvent({ type: 'error', content: 'Malformed chat event' }); return }
+      if (isTurnAccepted(parsed.data) && !submissions.accept(parsed.data)) return
+      if (isTurnRejected(parsed.data) && parsed.data.client_submission_id !== undefined) submissions.reject(parsed.data.client_submission_id)
+      handlers.onEvent(parsed.data)
     }
     source.onclose = (event) => {
       if (!active()) return
@@ -201,11 +177,13 @@ export function connectAgentChat(
   return {
     send(payload) {
       if (!current()) { close(); return }
+      const envelope = payload.kind === 'onboarding_trigger' ? payload : submissions.submit(payload)
+      if (!envelope) return
       if (socket?.readyState === 1) {
-        socket.send(JSON.stringify(payload))
+        socket.send(JSON.stringify(envelope))
         return
       }
-      pending.push(payload)
+      if (envelope.kind === 'onboarding_trigger') pending.push(envelope)
     },
     close,
   }

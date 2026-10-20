@@ -1,4 +1,5 @@
 export type ChatMessage = {
+  readonly client_submission_id?: string | null
   readonly message_id?: string
   readonly entry_id?: string
   readonly role: string

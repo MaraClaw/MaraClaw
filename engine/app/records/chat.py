@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.json_types import datetime_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_from_row_opt
 
 
 @dataclass(slots=True)
@@ -62,6 +62,8 @@ class ChatMessageRecord:
     participant_id: UUID | None = None
     thinking: str | None = None
     created_at: datetime | None = None
+    client_submission_id: UUID | None = None
+    submission_fingerprint: str | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ChatMessageRecord:
@@ -75,4 +77,6 @@ class ChatMessageRecord:
             participant_id=uuid_from_row_opt(row.get("participant_id")),
             thinking=str_from_row(row["thinking"]) or None,
             created_at=datetime_from_row(row.get("created_at")),
+            client_submission_id=uuid_from_row_opt(row.get("client_submission_id")),
+            submission_fingerprint=str_from_row_opt(row.get("submission_fingerprint")),
         )

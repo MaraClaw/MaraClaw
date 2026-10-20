@@ -16,6 +16,8 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - Tenant-local departments belong in `local_departments.py` (multiple departments per end user). Do not add them to `org_sync/`. Set replacement validates every department before writing, locks via `acl_locks`, and transactionally bumps agent ACL versions for the union of old/new `scope_type=department` grants. Singular assignment delegates to replace-with-one or clear.
 - New tool execution handlers belong in `agent_tool_exec/` (`@register`). Seed rows go in `tool_definitions/` (composer `builtin.py`). OpenAI catalog shapes go in `agent_tools_definitions/` (package). Runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Page-read lives in `agent_tool_exec/web_read.py` (`read_webpage`). Web search/fetch/research/extract are official Linkup skills (`linkup_skill_files/` + `linkup_runtime.py` seeder); engine HTTP is `linkup/` key-ring/proxy — not a function-calling tool.
 
+- `tool_config.py` owns tenant-scoped tool settings (`tenant_settings`) and sensitive-field encryption/decryption/masking helpers. Distinct from `tool_runtime/tool_config.py`, which loads, merges, and caches per-agent runtime config.
+
 ## God Files
 
 - `agent_tools.py` is the primary no-more-growth file. Avoid adding unrelated tool families, conversion helpers, dispatch branches, or catalog tables there. Leftover names are `@register`ed in `agent_tool_exec/_agent_tool_exec_leftover.py`; `dispatcher.py` uses the registry, with MCP execution for unregistered names, not duplicate builtin branches.
@@ -27,9 +29,9 @@ This is the main business layer. It is intentionally mixed: flat service modules
 
 ## Startup And Seeders
 
-- Seeders are startup-path code and must be idempotent. `app.main.lifespan` can run them repeatedly.
+- Seeders are startup-path code and must be idempotent. `app.runtime.lifecycle.lifespan` can invoke `app.runtime.bootstrap.bootstrap` repeatedly when bootstrap is enabled; see `../runtime/AGENTS.md` for ownership.
 - Keep optional seed/bootstrap failures scoped and logged; do not make optional seeders bring down unrelated roles unless the caller explicitly requires that.
-- **Exception - genesis platform admin:** `platform_admin_seeder.ensure_platform_admin()` is **required** on bootstrap. It first requires usable genesis credentials in the database; only then falls back to `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`. Raises `PlatformAdminSeedError` when neither source is present. `app.main` re-raises (fail-closed). Do not demote this to warn-only.
+- **Exception - genesis platform admin:** `platform_admin_seeder.ensure_platform_admin()` is **required** on bootstrap. It first requires usable genesis credentials in the database; only then falls back to `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`. Raises `PlatformAdminSeedError` when neither source is present. `app.runtime.bootstrap` propagates every PA seed failure (fail-closed). Do not demote this to warn-only.
 - Platform admin rules: create path sets `must_change_password=True`; existing identity only elevates if env password verifies (never elevate by email alone; never re-enable a disabled identity; never overwrite password when genesis credentials already exist); genesis membership is the **MaraClaw** system org.
 - Agent seeders (`agent_seeder`) look up `first_by_role("platform_admin")` and run **after** platform admin seed.
 - New companies: `tenant_provisioning.create_tenant_with_org_admin` (slug + identity + `org_admin` + participant + `bind_org_member`). Used by `POST /api/tenants/` and `POST /api/admin/companies`. Duplicate admin email → `AdminEmailTakenError`. The genesis admin email host is claimed as the tenant's default email domain (`techadmin@marathon.vn` → `marathon.vn`). Domain already claimed → `DomainClaimedError`.

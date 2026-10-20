@@ -106,3 +106,7 @@ export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
   if (!user) return false
   return user.is_platform_admin === true || user.role === 'platform_admin'
 }
+
+export function canSendBroadcast(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && !isPlatformAdminUser(user)
+}

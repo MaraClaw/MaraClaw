@@ -12,10 +12,11 @@ from fastapi.testclient import TestClient
 from app.api import departments
 from app.core.security import get_current_user
 from app.db.errors import UniqueViolationError
+from app.records.identity import IdentityRecord
 from app.records.local_department import LocalDepartmentRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut
+from app.schemas.department import AssignmentOut, DepartmentMemberOut
 from app.services import local_departments
 
 
@@ -65,6 +66,13 @@ def directory(monkeypatch):
     async def list_for_tenant(tenant_id):
         return [row for row in department_rows.values() if row.tenant_id == tenant_id]
 
+    async def list_members(tenant_id, department_id):
+        return [
+            DepartmentMemberOut(membership_id=person.id, display_name=person.display_name)
+            for person in people.values()
+            if person.tenant_id == tenant_id and department_id in assignments.get(person.id, set())
+        ]
+
     async def create(*, obj_in):
         if any(row.name.lower() == obj_in["name"].lower() for row in department_rows.values()):
             raise UniqueViolationError()
@@ -97,6 +105,7 @@ def directory(monkeypatch):
     monkeypatch.setattr(local_departments.local_department_dao, "grant_agents_for_user", assigned_agents)
     monkeypatch.setattr(departments.local_department_dao, "list_assignments", list_assignments)
     monkeypatch.setattr(departments.local_department_dao, "list_for_tenant", list_for_tenant)
+    monkeypatch.setattr(departments.local_department_dao, "list_members", list_members)
     monkeypatch.setattr(departments.local_department_dao, "create", create)
     monkeypatch.setattr(departments.local_department_dao, "update", update)
     bumped = AsyncMock()
@@ -211,3 +220,36 @@ def test_duplicate_case_insensitive_department_maps_to_conflict(directory):
 def test_invalid_department_name_is_rejected_at_http_boundary(directory, name):
     client, actor, *_ = directory
     assert client.post(f"/api/departments?tenant_id={actor.tenant_id}", json={"name": name}).status_code == 422
+
+
+@pytest.mark.parametrize("role", ["member", "agent_admin", "org_admin"])
+@pytest.mark.parametrize("display_name", ["Roster Name", ""])
+def test_roster_is_minimal_own_tenant_and_read_only(directory, monkeypatch, role, display_name):
+    client, actor, subject, first, _, assignments, bumped, *rest = directory
+    actor.role = role
+    subject.display_name = display_name
+    subject.identity = IdentityRecord(id=uuid4(), username="private-login", email="private@example.test")
+    before = dict(rest[-1])
+    mutations = AsyncMock(side_effect=AssertionError("Roster reads must not mutate or resolve grants"))
+    for name in ("create", "update", "replace_assignments", "grant_agents_for_user", "list_assignments"):
+        monkeypatch.setattr(local_departments.local_department_dao, name, mutations)
+    for name in ("lock_tenants", "lock_user", "lock_agent"):
+        monkeypatch.setattr(local_departments, name, mutations)
+
+    response = client.get(f"/api/departments/{first.id}/members?tenant_id={uuid4()}")
+
+    assert response.status_code == 200
+    assert response.json() == {"members": [{"membership_id": str(subject.id), "display_name": display_name}]}
+    assert assignments == {subject.id: {first.id}}
+    assert rest[-1] == before
+    mutations.assert_not_awaited()
+    bumped.assert_not_awaited()
+
+
+def test_existing_empty_department_roster_is_an_empty_list(directory):
+    client, _, _, _, second, *_ = directory
+
+    response = client.get(f"/api/departments/{second.id}/members")
+
+    assert response.status_code == 200
+    assert response.json() == {"members": []}

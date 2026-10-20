@@ -142,9 +142,10 @@ async def _insert_prepared_message(
     sender_user_id: UUID | None,
     sender_agent_id: UUID | None,
     conversation_id: str | None,
+    deduplicate: bool = True,
 ) -> GatewayMessageRecord:
     agent, content = prepared.agent, prepared.content
-    pending = await gateway_message_dao.list_pending(agent.id) if sender_user_id is not None else ()
+    pending = await gateway_message_dao.list_pending(agent.id) if deduplicate and sender_user_id is not None else ()
     duplicate = next(
         (
             row
@@ -191,14 +192,19 @@ async def enqueue_prepared_openclaw_message(
     sender_user_id: UUID | None = None,
     sender_agent_id: UUID | None = None,
     conversation_id: str | None = None,
+    deduplicate: bool = True,
 ) -> GatewayMessageRecord:
     """Queue only; wake in a fresh context after the owning transaction commits.
 
-    Prepare before entering ``connection_ctx``. The row and caller's other writes
-    share that transaction; rollback drops the deferred wake.
+    The row and caller's other writes share the owning transaction;
+    rollback drops the deferred wake.
     """
     created = await _insert_prepared_message(
-        prepared, sender_user_id=sender_user_id, sender_agent_id=sender_agent_id, conversation_id=conversation_id
+        prepared,
+        sender_user_id=sender_user_id,
+        sender_agent_id=sender_agent_id,
+        conversation_id=conversation_id,
+        deduplicate=deduplicate,
     )
     _schedule_inbox_wake(prepared.agent, prepared.content, created.id)
     return created

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import assert_never
+from typing import Literal, assert_never
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -198,3 +198,59 @@ def test_rename_validates_resource_and_tenant_ids(directory, path):
     response = client.patch(f"/api/departments/{path}", json={"name": "Finance"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "case", ["platform_role", "platform_identity", "inactive", "inactive_identity", "tenantless", "unknown", "password"]
+)
+def test_roster_requires_active_non_platform_tenant_caller(
+    directory,
+    case: Literal[
+        "platform_role", "platform_identity", "inactive", "inactive_identity", "tenantless", "unknown", "password"
+    ],
+):
+    client, actor, _, first, *_ = directory
+    match case:
+        case "platform_role":
+            actor.role = "platform_admin"
+        case "platform_identity":
+            actor.identity = IdentityRecord(id=uuid4(), is_platform_admin=True)
+        case "inactive":
+            actor.is_active = False
+        case "inactive_identity":
+            actor.identity = IdentityRecord(id=uuid4(), is_active=False)
+        case "tenantless":
+            actor.tenant_id = None
+        case "unknown":
+            actor.role = "unknown"
+        case "password":
+            actor.identity = IdentityRecord(id=uuid4(), must_change_password=True)
+        case unexpected:
+            assert_never(unexpected)
+
+    response = client.get(f"/api/departments/{first.id}/members")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_roster_missing_and_foreign_departments_have_identical_not_found(directory, foreign):
+    client, _, _, first, *rest = directory
+    department_id = first.id if foreign else uuid4()
+    rest[-1][first.id] = replace(first, tenant_id=uuid4())
+
+    response = client.get(f"/api/departments/{department_id}/members")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Department not found"}
+
+
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_roster_validates_authentication_and_department_id(directory, authenticated):
+    client, *_ = directory
+    if not authenticated:
+        client.app.dependency_overrides.clear()
+
+    response = client.get("/api/departments/not-a-uuid/members")
+
+    assert response.status_code == (422 if authenticated else 401)

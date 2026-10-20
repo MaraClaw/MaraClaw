@@ -3,7 +3,26 @@ import { test } from 'node:test'
 import { connectAgentChat } from '../src/lib/chat/ws-client.ts'
 import type { ChatTicket } from '../src/lib/auth-api.ts'
 import { ApiError } from '../src/lib/http.ts'
-import { fixture } from './socket-fixture.ts'
+import { canonicalSession, fixture, submission } from './socket-fixture.ts'
+
+test('resolved canonical session is used to mint fresh tickets across effect recreation', async (t) => {
+  const f = fixture()
+  const { createChatSubmissions } = await import('../src/lib/chat/submissions.ts')
+  const submissions = createChatSubmissions(f.store.capture(), 'agent-a', undefined)
+  const requested: (string | undefined)[] = []
+  const handlers = { ...f.handlers, submissions, issueTicket: async (body: { readonly agent_id: string; readonly session_id?: string }) => {
+    requested.push(body.session_id)
+    return { ticket: `fresh-${requested.length}`, session_id: canonicalSession }
+  } }
+  const first = connectAgentChat('agent-a', undefined, handlers)
+  await Promise.resolve()
+  first.close()
+  const next = connectAgentChat('agent-a', undefined, handlers)
+  t.after(next.close)
+  await Promise.resolve()
+  assert.deepEqual(requested, [undefined, canonicalSession])
+  assert.deepEqual(f.urls.map((url) => new URL(url).searchParams.get('ticket')), ['fresh-1', 'fresh-2'])
+})
 
 for (const code of [4002, 1011, 1006]) {
   test(`close ${code} issues a fresh opaque ticket and uses the canonical session`, async (t) => {
@@ -16,8 +35,8 @@ for (const code of [4002, 1011, 1006]) {
     await Promise.resolve()
     assert.equal(f.urls.length, 2)
     assert.deepEqual(f.urls.map((url) => [...new URL(url).searchParams]), [
-      [['ticket', 'opaque-1'], ['session_id', 'canonical-thread'], ['lang', 'en']],
-      [['ticket', 'opaque-2'], ['session_id', 'canonical-thread'], ['lang', 'en']],
+      [['ticket', 'opaque-1'], ['session_id', canonicalSession], ['lang', 'en']],
+      [['ticket', 'opaque-2'], ['session_id', canonicalSession], ['lang', 'en']],
     ])
     conn.close()
   })
@@ -36,7 +55,7 @@ for (const boundary of ['dispose', 'logout', 'replacement', 'same-token replacem
           return pending.promise
         },
       })
-      conn.send({ content: 'discard me' })
+      conn.send(submission('discard me'))
       switch (boundary) {
         case 'dispose': conn.close(); break
         case 'logout': f.store.logout(f.store.capture()); break

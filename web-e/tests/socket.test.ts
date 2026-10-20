@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
-import { ControlledSocket, fixture } from './socket-fixture.ts'
+import { ControlledSocket, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
 
 test('queued sends flush in order when the current socket opens', async () => {
   // Given
   const f = fixture()
   const conn = f.connect()
-  conn.send({ content: 'first' })
-  conn.send({ content: 'second' })
+  conn.send(submission('first'))
+  conn.send(submission('second', secondSubmission))
   await Promise.resolve()
   // When
   f.socket().open()
   // Then
-  assert.deepEqual(f.socket().sent.map((data) => JSON.parse(data)), [{ content: 'first' }, { content: 'second' }])
+  assert.deepEqual(f.socket().sent.map((data) => JSON.parse(data)), [submission('first'), submission('second', secondSubmission)])
   conn.close()
 })
 
@@ -27,7 +27,7 @@ for (const replacement of ['token-b', 'token-a', null]) {
     const open = old.onopen
     const message = old.onmessage
     const close = old.onclose
-    conn.send({ content: 'queued' })
+    conn.send(submission('queued'))
     // When
     if (replacement) f.store.beginReplacement(f.store.capture(), replacement)
     else f.store.logout(f.store.capture())
@@ -37,7 +37,7 @@ for (const replacement of ['token-b', 'token-a', null]) {
     open?.()
     message?.({ data: '{"type":"chunk","content":"obsolete"}' })
     close?.({ code: 4001 })
-    conn.send({ content: 'late' })
+    conn.send(submission('late'))
     conn.close()
     conn.close()
     assert.deepEqual(old.sent, [])
@@ -62,7 +62,7 @@ test('reconnect timer is cleared and already queued callback is fenced when owne
   const conn = f.connect()
   await Promise.resolve()
   f.socket().end(1006)
-  conn.send({ content: 'reconnect-pending' })
+  conn.send(submission('reconnect-pending'))
   assert.ok(queued)
   // When
   f.store.beginReplacement(f.store.capture(), 'token-b')
@@ -82,14 +82,14 @@ test('transient disconnect reconnects with pending sends when the owner remains 
   await Promise.resolve()
   const old = f.socket()
   old.end(1006)
-  conn.send({ content: 'retry' })
+  conn.send(submission('retry'))
   // When
   t.mock.timers.tick(600)
   await Promise.resolve()
   f.socket().open()
   // Then
   assert.equal(f.sockets.length, 2)
-  assert.deepEqual(f.socket().sent.map((data) => JSON.parse(data)), [{ content: 'retry' }])
+  assert.deepEqual(f.socket().sent.map((data) => JSON.parse(data)), [submission('retry')])
   old.frame('{"type":"chunk","content":"old transport"}')
   old.end(4001)
   assert.deepEqual(f.events, [])
@@ -109,7 +109,7 @@ for (const code of [4001, 4003]) {
     })
     await Promise.resolve()
     const old = f.socket()
-    conn.send({ content: 'pending' })
+    conn.send(submission('pending'))
     // When
     old.end(code)
     // Then
@@ -119,7 +119,7 @@ for (const code of [4001, 4003]) {
     old.open()
     old.frame('{"type":"done","content":"late"}')
     old.end(code)
-    conn.send({ content: 'late' })
+    conn.send(submission('late'))
     t.mock.timers.tick(8000)
     assert.equal(f.sockets.length, 1)
     assert.deepEqual(old.sent, [])
@@ -149,7 +149,7 @@ test('explicit obsolete owner never creates a socket', () => {
   f.store.beginReplacement(owner, 'token-a')
   // When
   const conn = connectAgentChat('agent-a', undefined, { ...f.handlers, owner })
-  conn.send({ content: 'stale' })
+  conn.send(submission('stale'))
   // Then
   assert.equal(f.sockets.length, 0)
 })
@@ -168,7 +168,7 @@ test('ownership is captured before transport creation even when creation replace
   await Promise.resolve()
   // Then
   assert.equal(old.closes, 1)
-  conn.send({ content: 'stale' })
+  conn.send(submission('stale'))
   assert.deepEqual(old.sent, [])
 })
 
@@ -199,7 +199,7 @@ test('persisted identities survive decoding while legacy events remain valid', a
   conn.close()
 })
 
-test('only current reconnect opens notify and only unsent payloads flush', async (t) => {
+test('only current reconnect opens notify and all unacknowledged payloads replay', async (t) => {
   // Given
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
@@ -210,9 +210,9 @@ test('only current reconnect opens notify and only unsent payloads flush', async
   await Promise.resolve()
   const first = f.socket()
   first.open()
-  conn.send({ content: 'already sent' })
+  conn.send(submission('already sent'))
   first.end(1006)
-  conn.send({ content: 'unsent' })
+  conn.send(submission('unsent', secondSubmission))
   // When
   t.mock.timers.tick(600)
   await Promise.resolve()
@@ -223,12 +223,12 @@ test('only current reconnect opens notify and only unsent payloads flush', async
   current.open()
   // Then
   assert.equal(refreshes, 1)
-  assert.deepEqual(current.sent.map((data) => JSON.parse(data)), [{ content: 'unsent' }])
-  assert.deepEqual(first.sent.map((data) => JSON.parse(data)), [{ content: 'already sent' }])
+  assert.deepEqual(current.sent.map((data) => JSON.parse(data)), [submission('already sent'), submission('unsent', secondSubmission)])
+  assert.deepEqual(first.sent.map((data) => JSON.parse(data)), [submission('already sent')])
   conn.close()
 })
 
-for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed']) {
+for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed', 'invalid_submission_id', 'submission_conflict']) {
   test(`turn rejection ${reason} decodes without becoming a completion or closing the socket`, async (t) => {
     // Given
     const f = fixture()
@@ -236,7 +236,7 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
     t.after(() => conn.close())
     await Promise.resolve()
     f.socket().open()
-    const frame = { type: 'turn_rejected', reason, content: 'Message not accepted.' }
+    const frame = { type: 'turn_rejected', client_submission_id: firstSubmission, reason, content: 'Message not accepted.' }
     // When
     f.socket().frame(JSON.stringify(frame))
     // Then

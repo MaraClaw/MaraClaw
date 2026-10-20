@@ -4,6 +4,8 @@ Shared package for **chat / IM channel** integrations. Prefer this package for n
 
 ## Status
 
+This table covers transport-backed chat/IM channels only. `types.py` also registers `atlassian` and `agentbay` as `skill_only`, with `supports_inbound=False` and `supports_proactive=False`; they are intentionally omitted from the transport rows.
+
 | Channel | Inbound module (legacy or new) | Outbound tool routing | In this package |
 |---------|--------------------------------|----------------------|-----------------|
 | Feishu | `api/feishu.py`, `feishu_ws.py` | yes | types + inbound + `llm_bridge` + dedup. Event/file/cards still in `api/feishu.py` |

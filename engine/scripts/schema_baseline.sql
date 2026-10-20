@@ -767,17 +767,31 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	is_enabled BOOLEAN NOT NULL DEFAULT true, 
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
+	pending_due_at TIMESTAMP WITH TIME ZONE,
+	pending_instruction TEXT,
+	lease_token UUID,
+	lease_expires_at TIMESTAMP WITH TIME ZONE,
+	pending_started_at TIMESTAMP WITH TIME ZONE,
 	run_count INTEGER NOT NULL, 
 	created_by UUID NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE, 
-	FOREIGN KEY(created_by) REFERENCES users (id)
+	FOREIGN KEY(created_by) REFERENCES users (id),
+	CONSTRAINT ck_agent_schedules_pending_occurrence CHECK (
+		(pending_due_at IS NULL AND pending_instruction IS NULL AND lease_token IS NULL
+		 AND lease_expires_at IS NULL AND pending_started_at IS NULL)
+		OR (pending_due_at IS NOT NULL AND pending_instruction IS NOT NULL
+		 AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND is_enabled IS TRUE)
+	)
 );
 
 CREATE INDEX IF NOT EXISTS ix_agent_schedules_agent_id ON agent_schedules (agent_id);
 
 CREATE INDEX IF NOT EXISTS ix_agent_schedules_next_run_at ON agent_schedules (next_run_at);
+
+CREATE INDEX IF NOT EXISTS ix_agent_schedules_lease_expires_at ON agent_schedules (lease_expires_at)
+WHERE is_enabled IS TRUE AND pending_due_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_tools (
 	id UUID NOT NULL, 
@@ -913,8 +927,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	conversation_id VARCHAR(200) NOT NULL, 
 	participant_id UUID, 
 	thinking TEXT, 
+	client_submission_id UUID,
+	submission_fingerprint TEXT,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
+	CONSTRAINT ck_chat_submission_receipt CHECK (
+		(client_submission_id IS NULL AND submission_fingerprint IS NULL)
+		OR (client_submission_id IS NOT NULL AND submission_fingerprint IS NOT NULL
+			AND role = 'user' AND submission_fingerprint ~ '^v1:[0-9a-f]{64}$')
+	),
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
 	FOREIGN KEY(participant_id) REFERENCES participants (id)
@@ -927,6 +948,26 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created
 CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id);
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created ON chat_messages (conversation_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
+ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
+WHERE client_submission_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION protect_chat_submission_receipt() RETURNS trigger AS $$
+BEGIN
+	IF OLD.client_submission_id IS NOT NULL AND
+		ROW(NEW.id, NEW.user_id, NEW.agent_id, NEW.conversation_id, NEW.role,
+			NEW.client_submission_id, NEW.submission_fingerprint) IS DISTINCT FROM
+		ROW(OLD.id, OLD.user_id, OLD.agent_id, OLD.conversation_id, OLD.role,
+			OLD.client_submission_id, OLD.submission_fingerprint) THEN
+		RAISE EXCEPTION 'Chat submission receipt is immutable' USING ERRCODE = '23514';
+	END IF;
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER chat_submission_receipt_immutable
+BEFORE UPDATE ON chat_messages FOR EACH ROW EXECUTE FUNCTION protect_chat_submission_receipt();
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
 	id UUID NOT NULL, 
