@@ -48,7 +48,7 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
         await agent_schedule_dao.record_started(schedule_id, datetime.now(UTC))
 
         summary = f"Scheduled task failed: {instruction[:60]}"
-        detail: JsonObject = {"schedule_id": str(schedule_id), "instruction": instruction, "status": "failed"}
+        detail: JsonObject = {"schedule_id": str(schedule_id), "instruction": instruction, "status": "failure"}
         try:
             from app.services.agent_context import build_agent_context
             from app.services.llm import call_agent_llm_with_tools
@@ -68,7 +68,8 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
                 session_id=str(schedule_id),
             )
             summary = f"Scheduled task executed: {instruction[:60]}"
-            detail = {"schedule_id": str(schedule_id), "instruction": instruction, "reply": reply[:500]}
+            detail["reply"] = reply[:500]
+            detail["status"] = "success"
         except asyncio.CancelledError:
             summary = f"Scheduled task cancelled: {instruction[:60]}"
             detail["status"] = "cancelled"
