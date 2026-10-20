@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { appendCompletion, mergeServerHistory } from '../src/lib/chat/transcript.ts'
+import { acceptSubmission, appendCompletion, mergeServerHistory } from '../src/lib/chat/transcript.ts'
 import type { ChatLine } from '../src/lib/chat/transcript.ts'
 import { recoverRejectedTurn } from '../src/lib/chat/turn-rejection.ts'
+import { canonicalMessage, canonicalSession, firstSubmission, secondSubmission } from './socket-fixture.ts'
 
 const saved = (message_id: string, content = 'same', role = 'assistant'): ChatLine => ({
   message_id, entry_id: message_id, role, content,
@@ -61,19 +62,36 @@ test('latest history windows preserve older loaded user and projected parents in
   assert.deepEqual(disjoint.map((row) => row.entry_id), ['user', 'old:0', 'overlap', 'new', 'latest'])
 })
 
-test('pending user matching remains one-to-one and file-aware', () => {
+test('user reconciliation matches identity instead of equal text or file contents', () => {
   // Given
   const local: ChatLine[] = [
-    { role: 'user', content: 'question', pending: true },
-    { role: 'user', content: 'question', pending: true },
-    { role: 'user', content: 'upload', file_name: 'notes.txt', pending: true },
+    { role: 'user', content: 'question', client_submission_id: firstSubmission, pending: true },
+    { role: 'user', content: 'question', client_submission_id: secondSubmission, pending: true },
+    { role: 'user', content: 'upload', file_name: 'notes.txt', client_submission_id: 'file-id', pending: true },
   ]
   // When
   const result = mergeServerHistory([
-    saved('user', 'question', 'user'), saved('file', '[file:notes.txt] contents', 'user'),
+    { ...saved('user', 'question', 'user'), client_submission_id: firstSubmission },
+    { ...saved('file', 'notes.txt', 'user'), client_submission_id: 'file-id' },
   ], local)
   // Then
-  assert.deepEqual(result.filter((row) => row.pending), [{ role: 'user', content: 'question', pending: true }])
+  assert.deepEqual(result.filter((row) => row.pending), [local[1]])
+})
+
+test('receipt canonical identity reconciles legacy history without a submission ID', () => {
+  const local = acceptSubmission([{ role: 'user', content: 'question', client_submission_id: firstSubmission, pending: true }], {
+    type: 'turn_accepted', client_submission_id: firstSubmission, message_id: canonicalMessage, session_id: canonicalSession,
+  })
+  const result = mergeServerHistory([saved(canonicalMessage, 'question', 'user')], local)
+  assert.equal(result.length, 1)
+  assert.equal(result[0]?.pending, undefined)
+})
+
+test('legacy equal-text history never consumes an unacknowledged submission', () => {
+  const local: ChatLine = { role: 'user', content: 'question', client_submission_id: firstSubmission, pending: true }
+  const result = mergeServerHistory([saved('old-question', 'question', 'user')], [local])
+  assert.equal(result.length, 2)
+  assert.equal(result[1], local)
 })
 
 test('legacy completion fallback does not content-match a persisted UUID', () => {
@@ -88,25 +106,25 @@ test('legacy completion fallback does not content-match a persisted UUID', () =>
 test('history refresh does not resurrect a rejected turn or report a pending reply', () => {
   // Given
   const server = [saved('reply', 'Earlier reply')]
-  const local = mergeServerHistory(server, [{ role: 'user', content: 'Rejected question', pending: true }])
+  const local = mergeServerHistory(server, [{ role: 'user', content: 'Rejected question', client_submission_id: firstSubmission, pending: true }])
   const recovery = recoverRejectedTurn(local, {
-    type: 'turn_rejected', reason: 'enqueue_failed', content: 'Could not send the message.',
+    type: 'turn_rejected', reason: 'enqueue_failed', content: 'Could not send the message.', client_submission_id: firstSubmission,
   })
   // When
   const refreshed = mergeServerHistory(server, recovery.lines)
   // Then
-  assert.deepEqual(refreshed, mergeServerHistory(server, []))
-  assert.equal(refreshed.some((row) => row.pending) || refreshed.at(-1)?.role === 'user', false)
+  assert.equal(refreshed.at(-1)?.delivery, 'rejected')
+  assert.equal(refreshed.some((row) => row.pending), false)
 })
 
 test('history refresh still preserves unmatched pending lines for other turns after a rejection', () => {
   // Given
-  const older: ChatLine = { role: 'user', content: 'Other turn', pending: true }
-  const recovery = recoverRejectedTurn([older, { role: 'user', content: 'Rejected', pending: true }], {
-    type: 'turn_rejected', reason: 'agent_expired', content: 'Agent expired.',
+  const older: ChatLine = { role: 'user', content: 'Other turn', client_submission_id: secondSubmission, pending: true }
+  const recovery = recoverRejectedTurn([older, { role: 'user', content: 'Rejected', client_submission_id: firstSubmission, pending: true }], {
+    type: 'turn_rejected', reason: 'agent_expired', content: 'Agent expired.', client_submission_id: firstSubmission,
   })
   // When
   const refreshed = mergeServerHistory([], recovery.lines)
   // Then
-  assert.deepEqual(refreshed, [older])
+  assert.deepEqual(refreshed.filter((row) => row.pending), [older])
 })

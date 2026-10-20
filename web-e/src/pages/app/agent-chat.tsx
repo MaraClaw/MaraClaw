@@ -9,9 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { authSession } from '@/lib/auth-session'
 import type { SessionOwner } from '@/lib/auth-session'
-import { connectAgentChat, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
-import { appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
-import { recoverRejectedTurn, restoreComposerDraft } from '@/lib/chat/turn-rejection'
+import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
+import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
+import { createChatSubmissions, type ChatSubmissions } from '@/lib/chat/submissions'
+import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
@@ -44,7 +45,7 @@ function ThinkingStatus() {
   )
 }
 
-// allow: SIZE_OK — Existing route composition is kept intact for this ownership-only patch; its rendered view must not change.
+// allow: SIZE_OK — Existing route composition retains its view; scoped receipt state lives in lib/chat.
 export function AgentChatPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { sessionId } = useParams()
@@ -52,6 +53,7 @@ export function AgentChatPage() {
   const queryClient = useQueryClient()
   type MutationOrigin = {
     readonly owner: SessionOwner; readonly queryClient: typeof queryClient; readonly agentId: string
+    readonly scope: ChatSubmissions
   }
   const { token, user, owner } = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot)
   const [mountedOwner] = useState(() => owner)
@@ -67,13 +69,16 @@ export function AgentChatPage() {
   const [live, setLive] = useState('')
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
+  const [slow, setSlow] = useState(false)
+  const [retryVersion, setRetryVersion] = useState(0)
   const [socketReady, setSocketReady] = useState(0)
+  const [socketStopped, setSocketStopped] = useState(false)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
-  const queuedSendRef = useRef<Line | null>(null)
+  const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
   const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
   const threadRef = useRef<HTMLDivElement | null>(null)
@@ -102,8 +107,24 @@ export function AgentChatPage() {
   })
 
   const activeId = sessionId ?? sessionsQuery.data?.[0]?.id
+  const submissions = useMemo(() => createChatSubmissions(owner, agent.id, activeId), [owner, agent.id, activeId])
+  const submissionScopeRef = useRef(submissions)
   const activeSessionRef = useRef(activeId)
-  useLayoutEffect(() => { activeSessionRef.current = activeId }, [activeId])
+  useLayoutEffect(() => {
+    if (submissionScopeRef.current !== submissions) submissionScopeRef.current.retire()
+    submissionScopeRef.current = submissions
+    activeSessionRef.current = activeId
+    if (queuedSendRef.current?.sessionId !== activeId) queuedSendRef.current = null
+    const unsubscribe = authSession.subscribe(() => {
+      if (!authSession.isCurrent(owner)) submissions.retire()
+    })
+    return () => {
+      unsubscribe()
+      queueMicrotask(() => {
+        if (!mountedRef.current || submissionScopeRef.current !== submissions) submissions.retire()
+      })
+    }
+  }, [activeId, owner, submissions])
 
   const historyQuery = useQuery({
     queryKey: ['messages', agent.id, activeId],
@@ -118,6 +139,7 @@ export function AgentChatPage() {
     const switched = !firstLoad && historySessionRef.current !== activeId
     historySessionRef.current = activeId
     historyCountRef.current = historyQuery.data.length
+    submissions.reconcile(historyQuery.data)
     const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
     updateLines(next)
     if (switched) {
@@ -127,48 +149,48 @@ export function AgentChatPage() {
       setThinking('')
       setInfo(null)
       setBusy(false)
+      setSlow(false)
       return
     }
     if (!next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
       setThinking('')
-    } else if (!rejectedTurnRef.current && next.at(-1)?.role === 'user') {
+    } else if (!rejectedTurnRef.current && next.at(-1)?.role === 'user' && next.at(-1)?.delivery !== 'rejected') {
       setBusy(true)
     }
-  }, [historyQuery.data, activeId, owner, isCurrent, updateLines])
+  }, [historyQuery.data, activeId, owner, isCurrent, updateLines, submissions])
 
   useEffect(() => {
     if (!isCurrent() || !busy || !activeId) return
     const timer = window.setInterval(() => {
-      if (!isCurrent()) return
+      if (!isCurrent() || !submissions.active) return
       void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [busy, activeId, agent.id, queryClient, owner, isCurrent])
+  }, [busy, activeId, agent.id, queryClient, owner, isCurrent, submissions])
 
   useEffect(() => {
     if (!isCurrent() || !busy) return
     const timer = window.setTimeout(() => {
-      if (!isCurrent()) return
-      setBusy(false)
+      if (!isCurrent() || !submissions.active) return
+      setSlow(true)
       setThinking('')
-      setInfo('No reply yet. You can send again.')
     }, THINKING_TIMEOUT_MS)
     return () => window.clearTimeout(timer)
-  }, [busy, owner, isCurrent])
+  }, [busy, owner, isCurrent, submissions, retryVersion])
 
   useEffect(() => {
     if (!isCurrent()) return
     const queued = queuedSendRef.current
     const sendFn = sendRef.current
-    if (!queued || !sendFn || !activeId || historyQuery.isLoading) return
+    if (!queued || queued.sessionId !== activeId || !queued.line.submission || !sendFn || !activeId || historyQuery.isLoading) return
     queuedSendRef.current = null
-    updateLines((prev) => prev.includes(queued) ? prev : [...prev, queued])
+    updateLines((prev) => prev.includes(queued.line) ? prev : [...prev, queued.line])
     rejectedTurnRef.current = false
     setBusy(true)
     setInfo(null)
-    sendFn({ content: queued.content })
+    sendFn(queued.line.submission)
   }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady, owner, isCurrent, updateLines])
 
   useEffect(() => {
@@ -182,14 +204,22 @@ export function AgentChatPage() {
   useEffect(() => {
     if (!isCurrent() || !token || !activeId || historyQuery.isLoading) return
     let greeted = false
+    let active = true
+    const current = () => active && isCurrent() && submissions.active && activeSessionRef.current === activeId
     const conn = connectAgentChat(agent.id, activeId, {
-      owner,
+      owner, submissions,
       onReconnect() {
-        if (!isCurrent() || activeSessionRef.current !== activeId) return
+        if (!current()) return
         void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
       },
       onEvent(event: ChatInbound) {
-        if (!isCurrent() || activeSessionRef.current !== activeId) return
+        if (!current()) return
+        if (isTurnAccepted(event)) {
+          updateLines((previous) => acceptSubmission(previous, event))
+          setBusy(true)
+          setInfo(null)
+          return
+        }
         if (event.type === 'connected') {
           const sentKey = `maraclaw-onboarding-sent:${agent.id}`
           const alreadySent =
@@ -251,15 +281,17 @@ export function AgentChatPage() {
         }
         if (isTurnRejected(event)) {
           const recovery = recoverRejectedTurn(linesRef.current, event)
+          if (!recovery.matched) {
+            if (event.client_submission_id === undefined) setInfo(recovery.notice)
+            return
+          }
           updateLines(recovery.lines)
           rejectedTurnRef.current = true
-          setDraft((current) => restoreComposerDraft(current, recovery.restoredText))
           liveRef.current = ''
           setLive('')
           setThinking('')
           setInfo(null)
           setBusy(false)
-          toast.error(recovery.notice, { duration: Infinity })
           composerRef.current?.focus()
           return
         }
@@ -267,6 +299,7 @@ export function AgentChatPage() {
           setInfo(event.content ?? 'Chat error')
           setThinking('')
           setBusy(false)
+          if (submissions.pending().length) setSlow(true)
           return
         }
         if (event.type === 'done') {
@@ -295,10 +328,12 @@ export function AgentChatPage() {
         }
       },
       onClose(code) {
-        if (!isCurrent()) return
+        if (!current()) return
         if (code === 4001) toast.error('Session expired. Sign in again.')
         if (code === 4003) toast.error('This agent is expired or you cannot use it.')
         if (code === 4001 || code === 4003) {
+          if (sendRef.current === conn.send) sendRef.current = null
+          setSocketStopped(true)
           setBusy(false)
           setThinking('')
         }
@@ -307,18 +342,20 @@ export function AgentChatPage() {
     sendRef.current = conn.send
     queueMicrotask(() => {
       if (!isCurrent() || sendRef.current !== conn.send) return
+      setSocketStopped(false)
       setSocketReady((n) => isCurrent() ? n + 1 : n)
     })
     return () => {
+      active = false
       if (sendRef.current === conn.send) sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, token, owner, queryClient, historyQuery.isLoading, isCurrent, updateLines])
+  }, [agent.id, agent.onboarded_for_me, activeId, token, owner, queryClient, historyQuery.isLoading, isCurrent, updateLines, submissions])
 
   const newSession = useMutation({
     mutationFn: async (origin: MutationOrigin) => isCurrent(origin.owner) ? createSession(origin.agentId, 'New chat') : null,
     onSuccess(session, origin) {
-      if (!session || !isCurrent(origin.owner)) return
+      if (!session || !isCurrent(origin.owner) || !origin.scope.active) return
       void origin.queryClient.invalidateQueries({ queryKey: ['sessions', origin.agentId] })
       navigate(`/app/agents/${origin.agentId}/chat/${session.id}`)
     },
@@ -346,6 +383,9 @@ export function AgentChatPage() {
 
   const sessionList = sessionsQuery.data ?? []
   const visible = useMemo(() => lines, [lines])
+  const currentTurn = lines.findLast((line) => line.role === 'user' || line.role === 'assistant')
+  const accepted = currentTurn?.role === 'user' && (currentTurn.delivery === 'accepted'
+    || (currentTurn.fromHistory && Boolean(currentTurn.message_id)))
 
   async function send() {
     if (!isCurrent()) return
@@ -356,11 +396,14 @@ export function AgentChatPage() {
       toast.error('Sign in again to send.')
       return
     }
-    const pendingLine: Line = { role: 'user', content: text, composerText: draft, pending: true }
+    const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), content: text })
+    const pendingLine: Line = { role: 'user', content: text, composerText: draft, pending: true,
+      client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' }
+    setSlow(false)
     if (!activeId) {
       if (creatingSessionRef.current) return
       creatingSessionRef.current = true
-      queuedSendRef.current = pendingLine
+      queuedSendRef.current = { line: pendingLine }
       rejectedTurnRef.current = false
       setDraft('')
       setBusy(true)
@@ -368,17 +411,18 @@ export function AgentChatPage() {
       updateLines([pendingLine])
       try {
         const session = await createSession(agent.id, text.slice(0, 48) || 'New chat')
-        if (!isCurrent()) return
+        if (!isCurrent() || !submissions.active) return
+        queuedSendRef.current = { line: pendingLine, sessionId: session.id }
         void originClient.invalidateQueries({ queryKey: ['sessions', agent.id] })
         navigate(`/app/agents/${agent.id}/chat/${session.id}`)
       } catch (error) {
-        if (!isCurrent()) return
+        if (!isCurrent() || !submissions.active) return
         queuedSendRef.current = null
         setDraft(text)
         setBusy(false)
         toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not start a chat')
       } finally {
-        if (isCurrent()) creatingSessionRef.current = false
+        if (isCurrent() && submissions.active) creatingSessionRef.current = false
       }
       return
     }
@@ -391,7 +435,7 @@ export function AgentChatPage() {
     rejectedTurnRef.current = false
     setBusy(true)
     setInfo(null)
-    sendRef.current({ content: text })
+    sendRef.current(submission)
   }
 
   async function onFile(file: File) {
@@ -401,27 +445,40 @@ export function AgentChatPage() {
       toast.error('Chat is not connected yet. Try again in a moment.')
       return
     }
-    const sendFile = sendRef.current
+    setBusy(true)
+    setSlow(false)
     try {
       const uploaded = await uploadChatFile(file, agent.id)
-      if (!isCurrent() || sendRef.current !== sendFile) return
+      if (!isCurrent() || !submissions.active || !sendRef.current) return
       const extracted = uploaded.extracted_text || `[Uploaded ${uploaded.filename}]`
+      const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), content: extracted,
+        display_content: uploaded.filename, file_name: uploaded.filename })
       updateLines((prev) => isCurrent() ? [
         ...prev,
-        { role: 'user', content: extracted, file_name: uploaded.filename, pending: true },
+        { role: 'user', content: extracted, file_name: uploaded.filename, pending: true,
+          client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' },
       ] : prev)
       rejectedTurnRef.current = false
       setBusy(true)
       setInfo(null)
-      sendFile({
-        content: extracted,
-        display_content: uploaded.filename,
-        file_name: uploaded.filename,
-      })
+      sendRef.current(submission)
     } catch (error) {
-      if (!isCurrent()) return
+      if (!isCurrent() || !submissions.active) return
+      setBusy(false)
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Upload failed')
     }
+  }
+
+  function retry(line: Line) {
+    if (!isCurrent() || !submissions.active || !line.submission || line.delivery === 'accepted'
+      || line.retryable === false || !sendRef.current) return
+    updateLines((previous) => previous.map((row) => row === line ? { ...row, delivery: 'unknown', pending: true } : row))
+    rejectedTurnRef.current = false
+    setBusy(true)
+    setSlow(false)
+    setRetryVersion((version) => version + 1)
+    setInfo(null)
+    sendRef.current(line.submission)
   }
 
   return (
@@ -430,7 +487,7 @@ export function AgentChatPage() {
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">Sessions</p>
           <Button size="sm" variant="ghost" aria-label="New session" onClick={() => {
-            if (isCurrent()) newSession.mutate({ owner, queryClient, agentId: agent.id })
+            if (isCurrent()) newSession.mutate({ owner, queryClient, agentId: agent.id, scope: submissions })
           }}>
             <Plus className="size-3.5" />
           </Button>
@@ -444,7 +501,7 @@ export function AgentChatPage() {
                   onSubmit={(event) => {
                     event.preventDefault()
                     if (!isCurrent()) return
-                    rename.mutate({ owner, queryClient, agentId: agent.id, sessionId: session.id, title: renameTitle })
+                    rename.mutate({ owner, queryClient, agentId: agent.id, scope: submissions, sessionId: session.id, title: renameTitle })
                   }}
                 >
                   <input
@@ -483,7 +540,7 @@ export function AgentChatPage() {
                     className="px-1 text-[10px] text-muted-foreground"
                     onClick={() => {
                       if (!isCurrent()) return
-                      remove.mutate({ owner, queryClient, agentId: agent.id, sessionId: session.id, active: session.id === activeId })
+                      remove.mutate({ owner, queryClient, agentId: agent.id, scope: submissions, sessionId: session.id, active: session.id === activeId })
                     }}
                   >
                     Del
@@ -516,7 +573,7 @@ export function AgentChatPage() {
         >
           {visible.map((line, index) => (
             <article
-              key={line.entry_id ?? `${line.created_at ?? 'row'}-${index}`}
+              key={line.entry_id ?? line.client_submission_id ?? `${line.created_at ?? 'row'}-${index}`}
               className={cn(
                 'max-w-2xl rounded-2xl px-3.5 py-2.5 text-sm whitespace-pre-wrap',
                 line.role === 'user' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',
@@ -524,6 +581,14 @@ export function AgentChatPage() {
               )}
             >
               {line.role === 'assistant' ? <ChatMarkdown text={line.content} /> : line.content}
+              {line.delivery === 'rejected' || (line.delivery === 'unknown' && slow) ? (
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : 'Acceptance not confirmed.'}</p>
+                  {line.retryable !== false ? <Button type="button" size="sm" variant="outline" disabled={socketStopped} onClick={() => retry(line)}>
+                    Retry this message
+                  </Button> : null}
+                </div>
+              ) : null}
             </article>
           ))}
           {thinking ? <p className="text-xs text-muted-foreground italic">{thinking}</p> : null}
@@ -536,7 +601,13 @@ export function AgentChatPage() {
               <ChatMarkdown text={live} />
             </article>
           ) : null}
-          {busy && !live ? <ThinkingStatus /> : null}
+          {busy && !live && !slow ? <ThinkingStatus /> : null}
+          <p role="status" className="text-xs text-muted-foreground">
+            {busy && !live && slow && accepted
+              ? 'Accepted. The reply is taking longer than usual. No need to send again.'
+              : busy && !live && accepted ? 'Accepted. Waiting for a reply.'
+                : busy && !live && slow && !submissions.pending().length ? 'The reply is taking longer than usual.' : ''}
+          </p>
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
         </div>
         <form
@@ -565,7 +636,7 @@ export function AgentChatPage() {
               type="file"
               className="text-xs"
               aria-label="Attach a file"
-              disabled={busy}
+              disabled={busy || socketStopped}
               onChange={(event) => {
                 if (!isCurrent()) return
                 const file = event.target.files?.[0]
@@ -573,7 +644,7 @@ export function AgentChatPage() {
                 event.target.value = ''
               }}
             />
-            <Button type="submit" disabled={busy || !draft.trim()}>
+            <Button type="submit" disabled={busy || socketStopped || !draft.trim()}>
               {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" />}
               Send
             </Button>

@@ -1,15 +1,25 @@
 import type { ChatMessage } from './message.ts'
+import type { ChatSubmission, ChatTurnAcceptance } from './protocol.ts'
 
 export type ChatLine = ChatMessage & {
   readonly pending?: boolean
   readonly fromHistory?: true
   readonly composerText?: string
+  readonly submission?: ChatSubmission
+  readonly delivery?: 'unknown' | 'accepted' | 'rejected'
+  readonly retryable?: boolean
+  readonly rejectionNotice?: string
 }
 
 function sameUserLine(saved: ChatLine, pending: ChatLine): boolean {
   if (saved.role !== 'user') return false
-  if (saved.content === pending.content) return true
-  return Boolean(pending.file_name && saved.content.startsWith(`[file:${pending.file_name}]`))
+  return Boolean((saved.client_submission_id && saved.client_submission_id === pending.client_submission_id)
+    || (saved.message_id && saved.message_id === pending.message_id))
+}
+
+export function acceptSubmission(local: readonly ChatLine[], receipt: ChatTurnAcceptance): ChatLine[] {
+  return local.map((row) => row.role === 'user' && row.client_submission_id === receipt.client_submission_id
+    ? { ...row, message_id: receipt.message_id, pending: false, delivery: 'accepted' } : row)
 }
 
 export function mergeServerHistory(server: readonly ChatMessage[], local: readonly ChatLine[]): ChatLine[] {
@@ -27,10 +37,10 @@ export function mergeServerHistory(server: readonly ChatMessage[], local: readon
   const older: ChatLine[] = []
   const live: ChatLine[] = []
   for (const row of local) {
-    if (row.pending && row.role === 'user') {
+    if (row.role === 'user' && (row.client_submission_id || row.pending)) {
       const match = serverUsers.findIndex((saved, index) => !used.has(index) && sameUserLine(saved, row))
       if (match >= 0) used.add(match)
-      else pending.push(row)
+      else (row.fromHistory ? older : pending).push(row)
     } else if (row.message_id) {
       if (!parents.has(row.message_id)) (row.fromHistory ? older : live).push(row)
     } else if (!row.pending && (row.role === 'assistant' || row.role === 'tool') &&

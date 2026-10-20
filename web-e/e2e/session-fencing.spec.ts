@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { chatPath, complete, firstSession, message, prepareChat, secondSession } from './chat-identity-fixture'
+import { accept, chatPath, complete, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 
 import {
   deferCreation, delayedAgent, originalAgent, originalToken, prepareWorkspace, replacementAgent,
@@ -169,7 +169,7 @@ test('authoritative inline entries replace a whole live parent and reject its la
   await expect(page.getByText(whole.content, { exact: true })).toHaveCount(0)
 })
 
-test('reconnect fetches missed history without dropping older parents or replaying sent user payloads', async ({ page }) => {
+test('reconnect fetches missed history without dropping older parents or replaying accepted user payloads', async ({ page }) => {
   // Given
   const older = message('older-user', 'Older loaded question', 'user')
   const overlap = message('overlap', 'Loaded reply')
@@ -181,14 +181,16 @@ test('reconnect fetches missed history without dropping older parents or replayi
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).fill(sent.content)
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
   await expect.poll(() => socket.sent.length).toBe(1)
-  chat.setHistory([overlap, sent, missed])
+  const envelope = submitted(socket)
+  accept(socket, envelope.client_submission_id)
+  chat.setHistory([overlap, { ...sent, client_submission_id: envelope.client_submission_id }, missed])
   // When
   socket.route.close({ code: 1011 })
   const current = await chat.socket(1)
   // Then
   await expect(page.locator('article')).toHaveText([older.content, overlap.content, sent.content, missed.content])
   expect(current.sent).toEqual([])
-  expect(socket.sent.map((data) => JSON.parse(data))).toEqual([{ content: sent.content }])
+  expect(envelope.content).toBe(sent.content)
 })
 
 for (const boundary of ['session', 'owner'] as const) {
