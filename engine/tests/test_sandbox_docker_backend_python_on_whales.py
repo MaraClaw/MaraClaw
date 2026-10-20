@@ -1,4 +1,12 @@
-from typing import Any, cast
+import asyncio
+import threading
+import tracemalloc
+from collections.abc import Generator, Iterable, Iterator
+from contextlib import contextmanager
+from typing import Any, cast, override
+
+import pytest
+from anyio import CancelScope, current_time
 
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local import docker_backend as docker_backend_module
@@ -25,7 +33,9 @@ class FakeImageApi:
 
 
 class FakeContainerApi:
-    def __init__(self, wait_result=0, wait_error: Exception | None = None, remove_error: Exception | None = None):
+    def __init__(
+        self, wait_result: int = 0, wait_error: Exception | None = None, remove_error: Exception | None = None
+    ):
         self.wait_result = wait_result
         self.wait_error = wait_error
         self.remove_error = remove_error
@@ -33,13 +43,13 @@ class FakeContainerApi:
         self.logs_calls = []
         self.remove_calls = []
 
-    def wait(self, container: FakeContainer):
+    def wait(self, container: FakeContainer) -> int:
         self.wait_calls.append(container)
         if self.wait_error is not None:
             raise self.wait_error
         return self.wait_result
 
-    def logs(self, container: FakeContainer, stream: bool = False):
+    def logs(self, container: FakeContainer, stream: bool = False) -> Iterable[tuple[str, bytes]]:
         self.logs_calls.append((container, stream))
         return [("stdout", b"stdout text"), ("stderr", b"stderr text")]
 
@@ -53,7 +63,7 @@ class FakeDockerClient:
     def __init__(
         self,
         image_exists: bool = True,
-        wait_result=0,
+        wait_result: int = 0,
         wait_error: Exception | None = None,
         remove_error: Exception | None = None,
         run_error: Exception | None = None,
@@ -284,3 +294,138 @@ async def test_health_check_uses_info_and_returns_false_for_unhealthy_client():
 
     # Then
     assert healthy is False
+
+
+class StreamingContainerApi(FakeContainerApi):
+    def __init__(self, chunks: Iterable[tuple[str, bytes]], *, blocked_stage: str = "") -> None:
+        super().__init__()
+        self.chunks = chunks
+        self.blocked_stage = blocked_stage
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.worker_finished = threading.Event()
+        self.consumed = 0
+        self.log_thread: int | None = None
+
+    @override
+    def wait(self, container: FakeContainer) -> int:
+        if self.blocked_stage == "wait":
+            self.started.set()
+            try:
+                assert self.release.wait(timeout=5)
+            finally:
+                self.worker_finished.set()
+        return super().wait(container)
+
+    @override
+    def logs(self, container: FakeContainer, stream: bool = False) -> Iterator[tuple[str, bytes]]:
+        self.logs_calls.append((container, stream))
+        self.log_thread = threading.get_ident()
+        try:
+            for chunk in self.chunks:
+                self.consumed += 1
+                yield chunk
+            if self.blocked_stage == "logs":
+                self.started.set()
+                assert self.release.wait(timeout=5)
+        finally:
+            self.worker_finished.set()
+
+    @override
+    def remove(self, container: FakeContainer, force: bool = True) -> None:
+        super().remove(container, force)
+        self.release.set()
+
+
+@pytest.mark.parametrize(
+    ("stdout_limit", "stderr_limit", "expected_stdout", "expected_stderr"),
+    [(0, 0, "", ""), (3, 1, "A\ufffd", "\ufffd"), (7, 4, "A\u20acBCD", "\u00e9\ufffd!")],
+)
+async def test_execute_retains_interleaved_raw_byte_prefixes(
+    stdout_limit: int, stderr_limit: int, expected_stdout: str, expected_stderr: str
+) -> None:
+    # Given: interleaved chunks split code points, include invalid bytes, and exceed both budgets.
+    api = StreamingContainerApi(
+        iter((("stdout", b"A\xe2"), ("stderr", b"\xc3"), ("stdout", b"\x82\xacBCDE"), ("stderr", b"\xa9\xff!end")))
+    )
+    client = FakeDockerClient()
+    client.container = api
+    backend = make_backend(client, max_stdout_bytes=stdout_limit, max_stderr_bytes=stderr_limit)
+    # When
+    result = await backend.execute("pass", "python")
+    # Then: the finite synchronous iterator is exhausted off-loop, even with zero retained bytes.
+    assert result.success
+    assert (result.stdout, result.stderr) == (expected_stdout, expected_stderr)
+    assert api.consumed == 4
+    assert api.log_thread != threading.get_ident()
+    assert api.remove_calls == [(client.created_container, True)]
+
+
+async def test_execute_large_interleaved_output_has_bounded_retention_and_display() -> None:
+    # Given: a lazy SDK iterator emits eight MiB on each stream.
+    def chunks() -> Iterator[tuple[str, bytes]]:
+        for _ in range(2048):
+            yield "stdout", b"s" * 4096
+            yield "stderr", b"e" * 4096
+
+    client = FakeDockerClient()
+    api = StreamingContainerApi(chunks())
+    client.container = api
+    backend = make_backend(client, max_stdout_bytes=12000, max_stderr_bytes=7000)
+    # When
+    tracemalloc.start()
+    try:
+        result = await backend.execute("pass", "python")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Then: application buffers stay small without early iterator termination or altered display clips.
+    assert result.success
+    assert (result.stdout, result.stderr) == ("s" * 10000, "e" * 5000)
+    assert api.consumed == 4096
+    assert peak < 2_000_000
+    assert api.remove_calls == [(client.created_container, True)]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("stage", ["wait", "logs"])
+async def test_execute_timeout_and_cancellation_remove_owned_container_while_worker_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool, stage: str
+) -> None:
+    # Given: either wait blocks, or log collection blocks after overflowing both budgets.
+    api = StreamingContainerApi((("stdout", b"s" * 4096), ("stderr", b"e" * 4096)), blocked_stage=stage)
+    client = FakeDockerClient()
+    client.container = api
+    backend = make_backend(client, max_stdout_bytes=3, max_stderr_bytes=2)
+    scopes: list[CancelScope] = []
+    fail_after = docker_backend_module.fail_after
+
+    @contextmanager
+    def controlled_deadline(delay: float) -> Generator[CancelScope]:
+        with fail_after(delay) as scope:
+            scopes.append(scope)
+            yield scope
+
+    monkeypatch.setattr(docker_backend_module, "fail_after", controlled_deadline)
+    # When: cancellation or the configured deadline interrupts an active synchronous SDK worker.
+    execution = asyncio.create_task(backend.execute("pass", "python", exec_timeout=30))
+    try:
+        assert await asyncio.to_thread(api.started.wait, 5)
+        if cancel:
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+        else:
+            scopes[0].deadline = current_time() - 1
+            result = await execution
+            assert not result.success
+            assert result.exit_code == 124
+            assert result.error == "Code execution timed out after 30s"
+        # Then: removal releases the worker; overflow cannot suppress timeout/cancellation cleanup.
+        assert api.remove_calls == [(client.created_container, True)]
+        assert await asyncio.to_thread(api.worker_finished.wait, 5)
+        assert api.consumed == (2 if stage == "logs" else 0)
+    finally:
+        api.release.set()
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
