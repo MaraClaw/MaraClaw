@@ -53,6 +53,39 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]
 
+    async def list_schedule_history(
+        self,
+        agent_id: UUID,
+        schedule_id: UUID,
+        *,
+        limit: int = 20,
+        before: tuple[datetime | None, UUID] | None = None,
+    ) -> list[AgentActivityLogRecord]:
+        params: dict[str, object] = {"agent_id": agent_id, "schedule_id": str(schedule_id), "limit": limit}
+        clauses = [
+            "agent_id = %(agent_id)s",
+            "action_type = 'schedule_run'",
+            "detail_json ->> 'schedule_id' = %(schedule_id)s",
+        ]
+        if before is not None:
+            created_at, log_id = before
+            params["before_id"] = log_id
+            if created_at is None:
+                clauses.append("(created_at IS NULL AND id < %(before_id)s)")
+            else:
+                params["before_created_at"] = created_at
+                clauses.append(
+                    "(created_at < %(before_created_at)s "
+                    "OR (created_at = %(before_created_at)s AND id < %(before_id)s) OR created_at IS NULL)"
+                )
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agent_activity_logs WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [AgentActivityLogRecord.from_row(row) for row in rows]
+
     async def tokens_by_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(
