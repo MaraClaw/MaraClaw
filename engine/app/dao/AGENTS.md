@@ -17,7 +17,7 @@ Pure-psycopg repositories returning `app.records` dataclasses.
 
 Most product tables (agents, chat, tools, skills, triggers, plaza, workspace, gogcli, `admin_audit_logs`, `web_search_events`, …). `dao/__init__.py` is the export list. Agent-scoped events stay in `audit_logs`; admin who/what/when/changes go in `admin_audit_logs`. `web_search_events` has **no FK** to tenants/agents — do not add it to `delete_cascade`.
 
-`local_department_dao` owns `local_departments` and `local_department_memberships` (PK `user_id, department_id`, multiple memberships). Replacement deletes and inserts the normalized set in one transaction; assignment listings retain one row per membership. Provider trees stay on `org_department_dao`. `has_agent_access` matches only `agents.access_mode = custom` and `agent_permissions.access_level = use`.
+`local_department_dao` owns `local_departments` and `local_department_memberships` (PK `user_id, department_id`, multiple memberships). Replacement deletes and inserts the normalized set in one transaction; assignment listings retain one row per membership. Provider organization sync and its department storage are retired. `has_agent_access` matches only `agents.access_mode = custom` and `agent_permissions.access_level = use`.
 
 No dedicated DAO: `okr_alignments`, `tenant_settings`, `agent_user_onboardings`, `daily_token_usage`.
 

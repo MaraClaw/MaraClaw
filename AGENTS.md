@@ -61,7 +61,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
-| Local department directory | `engine` | `app/api/departments.py`. Not org-sync departments. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
+| Local department directory | `engine` | `app/api/departments.py`. Tenant-local departments remain; provider organization sync is retired. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 | Compose / autoscaling / host startup | `deploy` | `deploy/AGENTS.md`, root `compose.yaml`, `start-docker-compose.sh` |
 | CI checks / image smoke | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml`, `deploy/smoke_frontend_image.sh` |

@@ -12,8 +12,8 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - New document conversion belongs in `document_conversion/`, not in `agent_tools.py`.
 - Inbound office-document parsing belongs in `document_parser/` (local `anydoc` / `firecrawl-anydoc`). Do not add format-specific extractors in `files.py` or `agent_tool_exec/document_reading.py`. `text_extractor.py` is gone — do not recreate it. Ordinary text decoding stays local. Do not route CSV/HTML/Markdown generation through anydoc.
 - New OKR behavior should use focused `okr_*.py` modules. Dashboard period math is `okr_periods.py` (UTC). HTTP models are `app/schemas/okr.py`. Do not grow `okr_reporting.py`. Gap/outreach still lives in `app/api/okr.py`.
-- New org-sync adapter/coordinator behavior belongs in `org_sync/`; use canonical exports from `org_sync/__init__.py` or import from the owning modules.
-- Tenant-local departments belong in `local_departments.py` (multiple departments per end user). Do not add them to `org_sync/`. Set replacement validates every department before writing, locks via `acl_locks`, and transactionally bumps agent ACL versions for the union of old/new `scope_type=department` grants. Singular assignment delegates to replace-with-one or clear.
+- Provider organization department/people sync and its adapter/coordinator package are retired. Shared `org_members` identity/contact/profile data and agent relationships remain; do not recreate the sync subsystem.
+- Tenant-local departments belong in `local_departments.py` (multiple departments per end user). Set replacement validates every department before writing, locks via `acl_locks`, and transactionally bumps agent ACL versions for the union of old/new `scope_type=department` grants. Singular assignment delegates to replace-with-one or clear.
 - New tool execution handlers belong in `agent_tool_exec/` (`@register`). Seed rows go in `tool_definitions/` (composer `builtin.py`). OpenAI catalog shapes go in `agent_tools_definitions/` (package). Runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Page-read lives in `agent_tool_exec/web_read.py` (`read_webpage`). Web search/fetch/research/extract are official Linkup skills (`linkup_skill_files/` + `linkup_runtime.py` seeder); engine HTTP is `linkup/` key-ring/proxy — not a function-calling tool.
 
 - `tool_config.py` owns tenant-scoped tool settings (`tenant_settings`) and sensitive-field encryption/decryption/masking helpers. Distinct from `tool_runtime/tool_config.py`, which loads, merges, and caches per-agent runtime config.
@@ -21,7 +21,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 ## God Files
 
 - `agent_tools.py` is the primary no-more-growth file. Avoid adding unrelated tool families, conversion helpers, dispatch branches, or catalog tables there. Leftover names are `@register`ed in `agent_tool_exec/_agent_tool_exec_leftover.py`; `dispatcher.py` uses the registry, with MCP execution for unregistered names, not duplicate builtin branches.
-- Keep provider logic in the focused LLM modules, not a recreated `llm/client.py` facade. `tool_seeder.py`, `agentbay_client.py`, `agent_seeder.py`, `feishu_service.py`, `okr_reporting.py`, and `auth_provider.py` are also large enough to prefer adjacent focused modules for new work. New org-sync adapters go in `org_sync/` and register in `org_sync/factory.py`.
+- Keep provider logic in the focused LLM modules, not a recreated `llm/client.py` facade. `tool_seeder.py`, `agentbay_client.py`, `agent_seeder.py`, `feishu_service.py`, `okr_reporting.py`, and `auth_provider.py` are also large enough to prefer adjacent focused modules for new work.
 - Other flat hotspots include `skill_seeder.py`, `resource_discovery.py`, `heartbeat.py`, `agent_context.py`, `workspace_collaboration.py`, `email_service.py`, `template_seeder.py`, `channel_user_service.py`, `sso_service.py`, `dingtalk_stream.py`, and `okr_scheduler.py`; extend them only when the change belongs to that exact domain.
 - `chat_persist.py` wraps post-LLM message/session/`last_active_at` writes in one `connection_ctx`. `agent_context_cache.py` is the short-TTL Redis cache for soul/memory/skills; invalidate on those workspace writes only. Sets carry `observed_ver` so a stale fill cannot win after invalidate.
 - `im_token_cache.py` shares Feishu/WeCom/DingTalk bearer tokens across workers. Keys hash public id **and** secret. DingTalk OAuth2 vs oapi use different provider prefixes. Drop on channel config rotate and WeCom 401. `channels/dedup.py` `*_shared` helpers add Redis SET NX on top of the process-local store.
@@ -47,7 +47,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - Connector managers start only under the `connector` role, from lifespan `start_all` **after** `init_pool`. Do not start process-wide loops from ordinary request handlers (one `start_client` after config save is the existing exception).
 - Preserve provider-specific identity semantics such as Feishu `user_id` vs `open_id`, WeCom `external_id` vs `unionid`, and SSO secret differences.
 - Slack and Teams are webhook/API integrations, not lifespan daemon managers.
-- Auth provider and org-sync registries are not identical. Org sync currently covers Feishu, DingTalk, WeCom, and Google Workspace; auth providers also include Microsoft Teams, Google, and GitHub. Read `org_sync/AGENTS.md` before changing sync behavior.
+- Auth providers, SSO, Google OAuth and IM channels remain supported independently of retired provider directory sync. Do not remove login, identity binding or channel behavior when changing shared organization members.
 
 ## Bundled Skill Files
 

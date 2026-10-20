@@ -167,7 +167,7 @@ quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 
 #### Local department memberships
 
-**Router:** `app/api/departments.py`. These tenant-local departments are separate from provider-synced organization departments. Org admins operate in their own tenant; platform admins must select `?tenant_id=UUID` for administration.
+**Router:** `app/api/departments.py`. Tenant-local departments remain supported; provider organization department/people sync is retired. Org admins operate in their own tenant; platform admins must select `?tenant_id=UUID` for administration.
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
@@ -186,7 +186,7 @@ Members may belong to multiple local departments. Department agent grants are th
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/org/users` | any auth; admins may pass `tenant_id` | Query: `tenant_id?` | Active users, display-name ordered |
-| `PATCH` | `/api/org/users/{user_id}` | admin (`get_current_admin`) | `UserUpdate`: `username?`, `email?`, `display_name?`, `avatar_url?`, `title?`, `primary_mobile?` | Uniqueness checks; syncs org-member contact |
+| `PATCH` | `/api/org/users/{user_id}` | admin (`get_current_admin`) | `UserUpdate`: `username?`, `email?`, `display_name?`, `avatar_url?`, `title?`, `primary_mobile?` | Uniqueness checks; updates shared org-member contact |
 
 ### B4. Enterprise suite - `/api/enterprise/*`
 
@@ -254,17 +254,15 @@ Default admin gate: `get_current_admin` unless noted.
 | `PUT` | `/api/enterprise/identity-providers/{provider_id}` | admin | `name?`, `is_active?`, `sso_login_enabled?`, `config?` | Syncs tenant SSO state |
 | `DELETE` | `/api/enterprise/identity-providers/{provider_id}` | admin | - | **204** |
 
-#### Org directory
+#### Provider organization sync (retired)
 
-| Method | Path | Roles | Request | Response / notes |
-|--------|------|-------|---------|------------------|
-| `GET` | `/api/enterprise/org/departments` | auth | Query: `tenant_id?`, `provider_id?` | Platform without tenant can browse globally |
-| `GET` | `/api/enterprise/org/members` | auth | Query: `department_id?`, `search?`, `tenant_id?`, `provider_id?` | Limit 100 |
-| `POST` | `/api/enterprise/org/sync` | admin | Query: `provider_id` required | Triggers identity org sync |
+Provider department and people sync is no longer available. The `/api/enterprise/org/*` directory/sync endpoints and public WeCom organization verification/callback endpoints are removed. This does not remove WeCom SSO or messaging channels.
 
-Public WeCom verification (no admin JWT):  
-`GET /api/enterprise/org/wecom-verify/{provider_id}`,  
-`GET /api/enterprise/org/wecom-callback/{token}`.
+The active people directory remains `GET /api/org/users`; tenant-local departments and memberships remain under `/api/departments` and `/api/users/{user_id}/departments`. Shared `org_members` identity/contact/profile data, transliteration fields and agent relationship references remain. Relationship responses retain `department_path` as an empty string.
+
+Fresh `scripts/schema_baseline.sql` initialization no longer creates `org_departments` or `org_members.department_id`, `department_path`, `synced_at`. This is a fresh-only source change: rerunning bootstrap does not remove existing database objects or data, and no upgrade patches are provided.
+
+**Existing-installation deployment gate:** Do not roll this change out onto a populated legacy schema without a separately approved transition/cleanup plan. Retained `org_departments` rows can block tenant deletion through their non-cascading tenant foreign key now that application cleanup no longer queries that table. Provider deletion can leave inert legacy department rows; the legacy table has no provider foreign key. No existing database cleanup is performed by this change.
 
 #### Invitations (admin **and** caller must have `tenant_id`)
 
@@ -276,13 +274,9 @@ Public WeCom verification (no admin JWT):
 | `GET` | `/api/enterprise/invitation-codes/export` | - | CSV download |
 | `DELETE` | `/api/enterprise/invitation-codes/{code_id}` | - | Soft-deactivate |
 
-### B5. Google Workspace admin helper
+### B5. Google Workspace directory authorization (retired)
 
-**Router:** `app/api/google_workspace.py`
-
-| Method | Path | Roles | Response / notes |
-|--------|------|-------|------------------|
-| `GET` | `/api/enterprise/identity-providers/{provider_id}/google-workspace-sync/authorize-url` | admin | Tenant ownership for non-platform. `{ authorization_url }` |
+The Google Workspace admin-sync authorization endpoint, stored sync authorization state and sync callback are removed with provider directory sync. Google Workspace SSO/login, Google OAuth, gogcli user authorization and Google Chat channel behavior remain supported independently; their authentication contracts are unchanged.
 
 ### B6. Enterprise knowledge base - `/api/enterprise/knowledge-base/*`
 
@@ -446,4 +440,5 @@ Protected routes need a JWT from `/api/auth/login` or registration.
 
 | Date | Note |
 |------|------|
+| 2026-10-20 | Retired provider organization department/people sync and its authorization/verification routes; retained local departments, shared members, SSO and channels. Schema changes are fresh-only, with no existing-data cleanup or upgrade patches. |
 | 2026-08-13 | Initial inventory from `engine/app/api` role gates and schemas |

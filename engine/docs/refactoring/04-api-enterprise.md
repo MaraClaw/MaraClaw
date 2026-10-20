@@ -1,5 +1,7 @@
 # 4. `app/api/enterprise.py`
 
+**Historical snapshot (2026-07-05):** provider organization directory/sync routes, the org-sync package and WeCom organization callbacks described below were retired on 2026-10-20. They are not supported APIs or implementation targets. SSO, invitations and local departments remain live; see `../admin-apis.md`.
+
 ## Snapshot
 
 | Field | Value |

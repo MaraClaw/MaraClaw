@@ -1,5 +1,7 @@
 # Top 10 Module Refactoring Packet
 
+**Historical provider-sync references:** this July 2026 packet predates retirement of provider organization department/people sync on 2026-10-20. Its org-sync packages, adapters and route proposals are not current extension points; use the active engine guides and `../admin-apis.md`.
+
 **Superseded for execution order:** `.omgb/plans/engine-top5-modularize-20260815.md` (2026-08-15). Metrics below are a 2026-07-05 snapshot (`agent_tools.py` was ~10k LOC then; it is now a facade). Keep these briefs as seam notes, not current line counts.
 
 Analyzed at commit `262e123` on branch `tencent-memory-feature` on 2026-07-05.

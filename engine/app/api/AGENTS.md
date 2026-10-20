@@ -17,7 +17,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - `GET/POST /departments`: `org_admin` is own-tenant; `platform_admin` must pass `tenant_id`. Duplicate name → 409. Create locks in the router and does not bump ACL.
 - `PUT /users/{id}/departments`: `local_departments.assign_departments`. `{department_ids: UUID[]}` replaces the full set, normalizes duplicates, and clears on `[]`; returns `{user_id, tenant_id, department_ids}` sorted by UUID. Invalid/foreign departments reject the entire set. End users only. Fresh actor/subject checks follow tenant-first locks; affected old/new agents are locked in UUID order and `aclver` is bumped in the same transaction.
 - `PUT /users/{id}/department`: singular compatibility route via `assign_department`; non-null replaces with one membership, null clears all. `GET /departments` still lists one assignment row per membership.
-- Not `org_sync`, and not `GET /enterprise/org/departments`.
+- Provider organization directory/sync routes are retired. `/api/org/users` and tenant-local departments remain; neither requires a provider department hierarchy.
 - `agents.py` stores `scope_type=department` at `access_level=use` only, and only for custom scope (other scopes with `department_ids` → 422). Saving private or company deletes every permission row, so those grants disappear. DB check: `ck_department_permission_use`. `GET /{agent_id}/permissions/departments` is managers-only.
 - `POST /agents/` accepts optional `department_ids` (default `[]`). Nonempty selections require custom sharing; validate every department against the resolved target tenant before writes. Creator `manage` and deduplicated department `use` grants share the agent creation transaction through `AgentPermissionDAO.create`.
 

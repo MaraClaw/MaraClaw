@@ -1,5 +1,7 @@
 # 10. `app/services/feishu_service.py`
 
+**Historical snapshot (2026-07-05):** the org-sync package used as an analogy below was retired with provider directory sync on 2026-10-20. Do not recreate it. Feishu auth and messaging remain live and separate from that retired subsystem.
+
 ## Snapshot
 
 | Field | Value |

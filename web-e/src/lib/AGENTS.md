@@ -21,8 +21,8 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
 | `plaza-api.ts` | `/api/plaza/*` |
 | `okr-api.ts` | `/api/okr/*` |
-| `directory-api.ts` | Provider directory: `/api/org/users`, `/api/enterprise/org/{members,departments}`. Not local departments. |
-| `local-departments-api.ts` | Own-tenant local summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from provider sync and agent grants. |
+| `directory-api.ts` | People directory: `/api/org/users`. Provider organization directory/sync is retired. Not local departments. |
+| `local-departments-api.ts` | Own-tenant local summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from the people directory and agent grants. |
 | `agent-departments-api.ts` | `GET /api/agents/:id/permissions/departments` for the permissions tab. |
 | `chat/ws-client.ts` | `connectAgentChat` issues a fresh bearer-authenticated `/api/auth/chat-ticket` per attempt, then `WS /ws/chat/{agentId}?ticket=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. No JWT in the socket URL. |
 | `utils.ts` | `cn()` |
@@ -57,7 +57,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 ## ANTI-PATTERNS
 
 - Adding a new domain into `workspace-api.ts` (Plaza/OKR/control/directory/agent-departments already split).
-- Using `directory-api.ts` for local department grants, or `agent-departments-api.ts` for the provider directory.
+- Using `directory-api.ts` for local department grants, or `agent-departments-api.ts` for the people directory.
 - `fetch()` in pages; wrapping chat WS in Query.
 - Using `apiUrl` for `fileTicketUrl`, caching/reusing ticket URLs, or fetching download bodies through `apiRequest` (native browser navigation follows S3 redirects).
 - Importing `motion.ts` from `/app`.

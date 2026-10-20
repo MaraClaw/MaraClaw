@@ -42,6 +42,6 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 ## Do not
 
 - Invent a second channel type string for the same product (use aliases in `types.py`).
-- Put Chat-specific OAuth for Workspace admin sync here - that lives in `google_workspace_*` / org_sync.
+- Put SSO/login OAuth in channel adapters. Provider directory admin sync is retired; Google Chat authentication and user gogcli OAuth remain separate live contracts.
 - Grow `agent_tools.py` with channel branches; use `agent_tool_exec` + this package.
 - Move LLM orchestration back into `api/feishu.py`. New IM callers should enqueue via `inbound.generate_channel_reply` / `run_text_turn`; replies arrive on `/gateway/report`.

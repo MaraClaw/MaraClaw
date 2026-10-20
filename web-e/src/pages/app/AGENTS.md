@@ -17,7 +17,7 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
-| `/app/directory` | `directory.tsx` | People/Synced/Departments icon rail; `?tab=` `?q=`. `local-departments-api` serves local name cards with org-admin inline rename; `directory-api` serves the separate provider-sync section |
+| `/app/directory` | `directory.tsx` | People/Departments icon rail; `?tab=` `?q=`. `local-departments-api` serves local name cards with org-admin inline rename; `directory-api` serves people from `/api/org/users`. Provider sync and the Synced view are retired |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
 | `/app/agents/new` | `agent-new.tsx` | workspace-api; Private defaults to `user`, Company-wide to `company`, Department to `custom` + one `department_ids` entry in the creation POST. Options use `local-departments-api`; creator manages, department members use. Always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
