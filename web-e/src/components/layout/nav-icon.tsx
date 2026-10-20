@@ -23,7 +23,6 @@ const ICON_NAMES = [
   'vault',
   'pages',
   'browser',
-  'synced',
   'departments',
 ] as const
 
