@@ -1,6 +1,6 @@
 # app/scripts
 
-One-off modules. Run from repo root: `uv run python -m app.scripts.bootstrap_db`.
+One-off modules. Run from `engine/`: `uv run python -m app.scripts.bootstrap_db`.
 
 ## Invocation
 
@@ -17,5 +17,5 @@ One-off modules. Run from repo root: `uv run python -m app.scripts.bootstrap_db`
 
 ## Avoid
 
-- Do not put daemons here; role-gated loops start from `app.main.lifespan`.
+- Do not put daemons here; role-gated loops start from `app.runtime.lifecycle.Runtime.start()`.
 - Do not mention `create_all` or model import lists - those paths are gone.
