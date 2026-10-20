@@ -87,7 +87,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[]))
-    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", department_access)
+    monkeypatch.setattr(permissions.org_department_dao, "has_agent_access", department_access)
     # A stale Redis allow must not override the fresh turn's database policy.
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value="use"))
     monkeypatch.setattr(handler, "_check_quotas", AsyncMock(return_value=True))

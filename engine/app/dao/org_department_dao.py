@@ -1,126 +1,108 @@
-"""DAO for org_departments"""
+"""Persistence and dynamic access joins for the org department directory."""
 
-from __future__ import annotations
-
-from collections.abc import Sequence
-from datetime import datetime
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import uuid_list_from_rows
+from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.org_department import OrgDepartmentRecord
-
-_COLUMNS = (
-    "id",
-    "external_id",
-    "provider_id",
-    "name",
-    "parent_id",
-    "path",
-    "member_count",
-    "status",
-    "tenant_id",
-    "synced_at",
-)
+from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentMemberOut
 
 
 @final
 class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
-    """DAO for organization department rows."""
-
-    table: ClassVar[str] = "org_departments"
-    columns: ClassVar[tuple[str, ...]] = _COLUMNS
+    table: ClassVar[str] = "local_departments"
+    columns: ClassVar[tuple[str, ...]] = ("id", "tenant_id", "name", "created_at")
     record_factory = staticmethod(OrgDepartmentRecord.from_row)
 
-    async def get_by_external(self, *, external_id: str, provider_id: UUID) -> OrgDepartmentRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_departments "
-                + "WHERE external_id = %(external_id)s AND provider_id = %(provider_id)s "
-                + "LIMIT 1",
-                {"external_id": external_id, "provider_id": provider_id},
-            )
-            return OrgDepartmentRecord.from_row(row) if row is not None else None
-
-    async def list_for_provider(self, provider_id: UUID) -> Sequence[OrgDepartmentRecord]:
+    async def list_for_tenant(self, tenant_id: UUID) -> list[OrgDepartmentRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM org_departments WHERE provider_id = %(provider_id)s",
-                {"provider_id": provider_id},
+                "SELECT id, tenant_id, name, created_at FROM local_departments "
+                "WHERE tenant_id = %(tenant)s ORDER BY lower(name), id",
+                {"tenant": tenant_id},
             )
             return [OrgDepartmentRecord.from_row(row) for row in rows]
 
-    async def list_active_counts(self, provider_id: UUID) -> Sequence[dict[str, Any]]:
-        async with self.session() as db:
-            return await db.fetchall(
-                "SELECT id, parent_id, member_count FROM org_departments "
-                + "WHERE provider_id = %(provider_id)s AND status = 'active'",
-                {"provider_id": provider_id},
-            )
-
-    async def mark_stale_deleted(self, *, provider_id: UUID, sync_start: datetime, now: datetime) -> None:
-        async with self.session() as db:
-            await db.execute(
-                "UPDATE org_departments SET status = 'deleted', synced_at = %(now)s "
-                + "WHERE provider_id = %(provider_id)s "
-                + "AND synced_at < %(sync_start)s AND status <> 'deleted'",
-                {"provider_id": provider_id, "sync_start": sync_start, "now": now},
-            )
-
-    async def set_member_count(self, department_id: UUID, member_count: int) -> None:
-        async with self.session() as db:
-            await db.execute(
-                "UPDATE org_departments SET member_count = %(member_count)s WHERE id = %(id)s",
-                {"id": department_id, "member_count": member_count},
-            )
-
-    async def set_path(self, department_id: UUID, path: str) -> None:
-        async with self.session() as db:
-            await db.execute(
-                "UPDATE org_departments SET path = %(path)s WHERE id = %(id)s",
-                {"id": department_id, "path": path},
-            )
-
-    async def list_active_with_provider(
-        self,
-        *,
-        tenant_id: UUID | None = None,
-        provider_id: UUID | None = None,
-    ) -> Sequence[dict[str, Any]]:
-        """Active departments joined with provider name/type for enterprise org UI."""
-        params: dict[str, Any] = {}
-        clauses = ["d.status = 'active'"]
-        if tenant_id is not None:
-            clauses.append("d.tenant_id = %(tenant_id)s")
-            params["tenant_id"] = tenant_id
-        if provider_id is not None:
-            clauses.append("d.provider_id = %(provider_id)s")
-            params["provider_id"] = provider_id
-        where = " AND ".join(clauses)
-        async with self.session() as db:
-            return await db.fetchall(
-                f"SELECT {self._select_list('d')}, "
-                + "p.name AS provider_name, p.provider_type AS provider_type "
-                + "FROM org_departments d "
-                + "LEFT JOIN identity_providers p ON p.id = d.provider_id "
-                + f"WHERE {where} ORDER BY d.name",
-                params or None,
-            )
-
-    async def subtree_ids(self, department_id: UUID) -> list[UUID]:
-        """Return department id plus all descendant ids (path prefix)."""
-        dept = await self.get(department_id)
-        if not dept:
-            return [department_id]
-        if not dept.path:
-            return [department_id]
+    async def list_assignments(self, tenant_id: UUID) -> list[AssignmentOut]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT id FROM org_departments WHERE id = %(id)s OR path LIKE %(prefix)s",
-                {"id": department_id, "prefix": f"{dept.path}/%"},
+                "SELECT user_id, tenant_id, department_id FROM local_department_memberships "
+                "WHERE tenant_id = %(tenant)s ORDER BY user_id, department_id",
+                {"tenant": tenant_id},
             )
-            return uuid_list_from_rows(rows) or [department_id]
+            return [AssignmentOut.model_validate(row) for row in rows]
+
+    async def list_members(self, tenant_id: UUID, department_id: UUID) -> list[DepartmentMemberOut]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT u.id AS membership_id, u.display_name FROM users u "
+                "JOIN local_department_memberships m ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
+                "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
+                "LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE d.id = %(department)s AND d.tenant_id = %(tenant)s "
+                "AND u.is_active IS TRUE AND u.role IN ('member', 'agent_admin') "
+                "AND (i.id IS NULL OR (i.is_active IS TRUE AND i.is_platform_admin IS FALSE)) "
+                "ORDER BY u.display_name, u.id",
+                {"tenant": tenant_id, "department": department_id},
+            )
+            return [DepartmentMemberOut.model_validate(row) for row in rows]
+
+    async def replace_assignments(self, assignment: AssignmentsOut) -> None:
+        async with self.session() as db:
+            await db.execute(
+                "DELETE FROM local_department_memberships WHERE user_id = %(user)s AND tenant_id = %(tenant)s",
+                {"user": assignment.user_id, "tenant": assignment.tenant_id},
+            )
+            if assignment.department_ids:
+                await db.execute(
+                    "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) "
+                    "SELECT %(user)s, %(tenant)s, department_id FROM unnest(%(departments)s::uuid[]) AS department_id",
+                    {
+                        "user": assignment.user_id,
+                        "tenant": assignment.tenant_id,
+                        "departments": assignment.department_ids,
+                    },
+                )
+
+    async def grant_agents_for_user(self, user_id: UUID) -> set[UUID]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT a.id FROM local_department_memberships m "
+                "JOIN agent_permissions p ON p.scope_type = 'department' AND p.scope_id = m.department_id "
+                "JOIN agents a ON a.id = p.agent_id AND a.tenant_id = m.tenant_id "
+                "WHERE m.user_id = %(user)s",
+                {"user": user_id},
+            )
+            return {uuid_from_row(row["id"]) for row in rows}
+
+    async def has_agent_access(self, user_id: UUID, agent_id: UUID) -> bool:
+        async with self.session() as db:
+            return bool(
+                await db.fetchval(
+                    "SELECT 1 FROM users u JOIN local_department_memberships m "
+                    "ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
+                    "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
+                    "JOIN agent_permissions p ON p.scope_type = 'department' AND p.scope_id = d.id "
+                    "AND p.access_level = 'use' JOIN agents a ON a.id = p.agent_id AND a.tenant_id = u.tenant_id "
+                    "WHERE u.id = %(user)s AND u.is_active IS TRUE AND a.id = %(agent)s "
+                    "AND a.access_mode = 'custom' LIMIT 1",
+                    {"user": user_id, "agent": agent_id},
+                )
+            )
+
+    async def accessible_user_ids(self, agent_id: UUID) -> set[UUID]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT u.id FROM users u JOIN local_department_memberships m "
+                "ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
+                "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
+                "JOIN agent_permissions p ON p.scope_type = 'department' AND p.scope_id = d.id "
+                "AND p.access_level = 'use' JOIN agents a ON a.id = p.agent_id AND a.tenant_id = u.tenant_id "
+                "WHERE a.id = %(agent)s AND a.access_mode = 'custom' AND u.is_active IS TRUE",
+                {"agent": agent_id},
+            )
+            return {uuid_from_row(row["id"]) for row in rows}
 
 
 org_department_dao = OrgDepartmentDAO()

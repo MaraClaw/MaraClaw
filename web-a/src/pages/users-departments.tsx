@@ -88,7 +88,7 @@ export function TenantUsers({
         <CardHeader>
           <CardTitle>Departments</CardTitle>
           <CardDescription>
-            Create local departments for this company, then assign members below. Each person can belong to multiple departments.
+            Create org departments for this company, then assign members below. Each person can belong to multiple departments.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

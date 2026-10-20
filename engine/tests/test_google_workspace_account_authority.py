@@ -63,7 +63,7 @@ async def test_sso_checks_fresh_account_after_real_resolution(
     monkeypatch.setattr(org_member_dao, "update_fields", update_member)
     monkeypatch.setattr(registration_service, "ensure_identity_provider", web_provider)
 
-    response = await callback(google_flow, "sso")
+    response = await callback(google_flow)
 
     if change == "active":
         assert "successful" in response.text

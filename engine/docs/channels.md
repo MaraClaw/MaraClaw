@@ -110,5 +110,5 @@ Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 | Surface | Purpose |
 |---------|---------|
 | Google Chat **channel** (this doc) | Bot HTTP app on MaraClaw |
-| `google_workspace` SSO / Directory | Identity sync, not Chat messaging |
+| `google_workspace` SSO | Login/identity binding, not Chat messaging; provider directory sync is retired |
 | gogcli `gog chat` skill | User OAuth CLI inside agent workspace |

@@ -141,7 +141,6 @@ combine-as-imports = true
 "app/services/agent_tool_exec/a2a_triggers.py" = ["S608"]
 "app/services/agent_tool_exec/trigger_helpers.py" = ["S608"]
 "app/services/onboarding.py" = ["S608"]
-"app/services/org_sync/departments.py" = ["S608"]
 "app/services/tool_config.py" = ["S608"]
 # Protocol methods/args must match third-party APIs (boto3, docx, pptx).
 "app/services/storage_runtime/s3.py" = ["N803"]

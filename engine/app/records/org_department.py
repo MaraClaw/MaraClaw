@@ -1,41 +1,23 @@
-"""Organization department records."""
-
-from __future__ import annotations
+"""Org department records for the tenant directory."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class OrgDepartmentRecord:
-    """Department from an identity provider org structure."""
-
     id: UUID
+    tenant_id: UUID
     name: str
-    external_id: str | None = None
-    provider_id: UUID | None = None
-    parent_id: UUID | None = None
-    path: str = ""
-    member_count: int = 0
-    status: str = "active"
-    tenant_id: UUID | None = None
-    synced_at: datetime | None = None
+    created_at: datetime
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> OrgDepartmentRecord:
-        return cls(
-            id=uuid_from_row(row["id"]),
-            name=str_from_row(row["name"]),
-            external_id=str_from_row(row["external_id"]) or None,
-            provider_id=uuid_from_row_opt(row.get("provider_id")),
-            parent_id=uuid_from_row_opt(row.get("parent_id")),
-            path=str_from_row(row.get("path")),
-            member_count=int_from_row(row.get("member_count")),
-            status=str_from_row(row.get("status"), "active") or "active",
-            tenant_id=uuid_from_row_opt(row.get("tenant_id")),
-            synced_at=datetime_from_row(row.get("synced_at")),
-        )
+        created_at = datetime_from_row(row["created_at"])
+        if created_at is None:
+            raise ValueError("Department created_at is required")
+        return cls(uuid_from_row(row["id"]), uuid_from_row(row["tenant_id"]), str_from_row(row["name"]), created_at)

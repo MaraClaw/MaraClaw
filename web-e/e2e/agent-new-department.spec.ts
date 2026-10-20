@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { localDepartment, prepareLocalDepartments } from './local-departments-fixture'
+import { orgDepartment, prepareOrgDepartments } from './org-departments-fixture'
 import {
   deferCreation, delayedAgent, replacementToken, replacementUser, tokenKey, writeFromOtherTab,
 } from './session-fencing-fixture'
@@ -24,7 +24,7 @@ async function chooseDepartment(page: Page) {
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
   await page.getByLabel('Visibility').selectOption('department')
   await expect(page.getByLabel('Department (required)')).toBeEnabled()
-  await page.getByLabel('Department (required)').selectOption(localDepartment.id)
+  await page.getByLabel('Department (required)').selectOption(orgDepartment.id)
 }
 
 for (const { label, name, valid } of [
@@ -36,7 +36,7 @@ for (const { label, name, valid } of [
   { label: '100 trimmed characters', name: ` ${'x'.repeat(100)} `, valid: true },
 ]) {
   test(`updates Create readiness for a name with ${label}`, async ({ page }) => {
-    await prepareLocalDepartments(page)
+    await prepareOrgDepartments(page)
     const writes = await captureWrites(page)
     await page.goto(newAgentPath)
     await page.getByLabel('Name', { exact: true }).fill(name)
@@ -61,7 +61,7 @@ for (const { label, name, valid } of [
 }
 
 test('updates Create readiness immediately at the optional role length boundary', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   await page.goto(newAgentPath)
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
   const create = page.getByRole('button', { name: 'Create', exact: true })
@@ -78,7 +78,7 @@ test('updates Create readiness immediately at the optional role length boundary'
 })
 
 test('requires a department again when a selection is cleared and only for department visibility', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   await chooseDepartment(page)
   const create = page.getByRole('button', { name: 'Create', exact: true })
   await expect(create).toBeEnabled()
@@ -93,13 +93,13 @@ test('requires a department again when a selection is cleared and only for depar
     await page.getByLabel('Visibility').selectOption('department')
     await expect(create).toBeDisabled()
   }
-  await page.getByLabel('Department (required)').selectOption(localDepartment.id)
+  await page.getByLabel('Department (required)').selectOption(orgDepartment.id)
   await expect(create).toBeEnabled()
 })
 
 for (const activation of ['option card', 'Space key'] as const) {
   test(`enables gogcli through the ${activation} and sends the checked value`, async ({ page }) => {
-    await prepareLocalDepartments(page)
+    await prepareOrgDepartments(page)
     const writes = await captureWrites(page)
     await page.goto(newAgentPath)
     await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
@@ -125,7 +125,7 @@ for (const activation of ['option card', 'Space key'] as const) {
 
 for (const visibility of ['default private', 'private', 'company'] as const) {
   test(`creates with ${visibility} scope and omits previously selected department grants`, async ({ page }) => {
-    const state = await prepareLocalDepartments(page)
+    const state = await prepareOrgDepartments(page)
     const writes = await captureWrites(page)
     await page.goto(newAgentPath)
     await expect(page.getByLabel('Visibility')).toHaveValue('private')
@@ -133,7 +133,7 @@ for (const visibility of ['default private', 'private', 'company'] as const) {
     await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
     if (visibility !== 'default private') {
       await page.getByLabel('Visibility').selectOption('department')
-      await page.getByLabel('Department (required)').selectOption(localDepartment.id)
+      await page.getByLabel('Department (required)').selectOption(orgDepartment.id)
       await page.getByLabel('Visibility').selectOption(visibility)
     }
 
@@ -149,7 +149,7 @@ for (const visibility of ['default private', 'private', 'company'] as const) {
 }
 
 test('creates one department grant atomically and prevents pending duplicate submissions', async ({ page }) => {
-  const state = await prepareLocalDepartments(page)
+  const state = await prepareOrgDepartments(page)
   const release = Promise.withResolvers<void>()
   const writes = await captureWrites(page, 200, release.promise)
   await chooseDepartment(page)
@@ -165,13 +165,13 @@ test('creates one department grant atomically and prevents pending duplicate sub
   await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(1)
   expect(writes).toEqual([{ method: 'POST', body: {
     name: delayedAgent.name, role_description: '', permission_scope_type: 'custom',
-    department_ids: [localDepartment.id], permission_access_level: 'use', gogcli_enabled: false,
+    department_ids: [orgDepartment.id], permission_access_level: 'use', gogcli_enabled: false,
   } }])
   expect(state.privilegedRequests).toBe(0)
 })
 
 test('focuses and describes the required department without sending a creation request', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   const writes = await captureWrites(page)
   await page.goto(newAgentPath)
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
@@ -190,18 +190,18 @@ test('focuses and describes the required department without sending a creation r
 })
 
 test('keeps private and company creation available while department options load', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   const writes = await captureWrites(page)
   const release = Promise.withResolvers<void>()
   await page.route('**/api/departments/options', async (route) => {
     await release.promise
-    await route.fulfill({ json: { departments: [localDepartment] } })
+    await route.fulfill({ json: { departments: [orgDepartment] } })
   })
   await page.goto(newAgentPath)
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
   await page.getByLabel('Visibility').selectOption('department')
 
-  await expect(page.getByRole('status')).toContainText('Loading local departments')
+  await expect(page.getByRole('status')).toContainText('Loading org departments')
   await expect(page.getByLabel('Department (required)')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeDisabled()
   await page.locator('form').dispatchEvent('submit')
@@ -216,10 +216,10 @@ test('keeps private and company creation available while department options load
 })
 
 test('offers an explicit retry after option errors and recovers the selector', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   let recovered = false
   await page.route('**/api/departments/options', (route) => route.fulfill(recovered
-    ? { json: { departments: [localDepartment] } }
+    ? { json: { departments: [orgDepartment] } }
     : { status: 503, json: { detail: 'Options temporarily unavailable' } }))
   await page.goto(newAgentPath)
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
@@ -240,7 +240,7 @@ test('offers an explicit retry after option errors and recovers the selector', a
 })
 
 test('cleans up a successful department retry that never received focus without stealing focus', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   let retryStarted = false
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
@@ -248,7 +248,7 @@ test('cleans up a successful department retry that never received focus without 
     if (!retryStarted) return route.fulfill({ status: 503, json: { detail: 'Options temporarily unavailable' } })
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: { departments: [localDepartment] } })
+    await route.fulfill({ json: { departments: [orgDepartment] } })
   })
   await page.goto(newAgentPath)
   await page.getByLabel('Visibility').selectOption('department')
@@ -271,7 +271,7 @@ test('cleans up a successful department retry that never received focus without 
 
 for (const outcome of ['success', 'repeated failure', 'focus moved', 'visibility changed', 'session retired'] as const) {
   test(`keyboard department retry preserves focus ownership on ${outcome}`, async ({ page }) => {
-    await prepareLocalDepartments(page)
+    await prepareOrgDepartments(page)
     let retryStarted = false
     let retryRequests = 0
     let release = Promise.withResolvers<void>()
@@ -281,7 +281,7 @@ for (const outcome of ['success', 'repeated failure', 'focus moved', 'visibility
         await release.promise
       }
       await route.fulfill(retryStarted && outcome !== 'repeated failure'
-        ? { json: { departments: [localDepartment] } }
+        ? { json: { departments: [orgDepartment] } }
         : { status: 503, json: { detail: 'Options temporarily unavailable' } })
     })
     await page.goto(newAgentPath)
@@ -332,14 +332,14 @@ for (const outcome of ['success', 'repeated failure', 'focus moved', 'visibility
 }
 
 test('explains empty local departments and leaves company visibility usable', async ({ page }) => {
-  const state = await prepareLocalDepartments(page)
+  const state = await prepareOrgDepartments(page)
   state.departments = []
   await page.goto(newAgentPath)
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
 
   await page.getByLabel('Visibility').selectOption('department')
 
-  await expect(page.getByRole('status')).toContainText('No local departments yet')
+  await expect(page.getByRole('status')).toContainText('No org departments yet')
   await expect(page.locator('#department-admin-hint')).toBeVisible()
   await expect(page.getByLabel('Department (required)')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeDisabled()
@@ -349,7 +349,7 @@ test('explains empty local departments and leaves company visibility usable', as
 })
 
 test('preserves the department form and reports a rejected creation', async ({ page }) => {
-  await prepareLocalDepartments(page)
+  await prepareOrgDepartments(page)
   const writes = await captureWrites(page, 422)
   await chooseDepartment(page)
 
@@ -358,7 +358,7 @@ test('preserves the department form and reports a rejected creation', async ({ p
   await expect(page.locator('[data-sonner-toast][data-type="error"]')).toContainText('Selected department is no longer available')
   await expect(page).toHaveURL(newAgentPath)
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue(delayedAgent.name)
-  await expect(page.getByLabel('Department (required)')).toHaveValue(localDepartment.id)
+  await expect(page.getByLabel('Department (required)')).toHaveValue(orgDepartment.id)
   await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
   expect(writes.map((write) => write.method)).toEqual(['POST'])
 })
@@ -366,7 +366,7 @@ test('preserves the department form and reports a rejected creation', async ({ p
 for (const boundary of ['storage replacement', 'sign-out'] as const) {
   for (const outcome of ['success', 'error'] as const) {
     test(`retired department creation ${outcome} has no effects after ${boundary}`, async ({ page }) => {
-      await prepareLocalDepartments(page)
+      await prepareOrgDepartments(page)
       const creation = await deferCreation(page, outcome)
       await chooseDepartment(page)
       await page.getByRole('button', { name: 'Create', exact: true }).click()

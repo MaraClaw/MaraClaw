@@ -7,7 +7,6 @@ from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import (
-    int_from_row,
     str_from_row,
     str_from_row_opt,
     uuid_from_row,
@@ -29,13 +28,10 @@ _COLUMNS = (
     "email",
     "avatar_url",
     "title",
-    "department_id",
-    "department_path",
     "phone",
     "status",
     "tenant_id",
     "user_id",
-    "synced_at",
 )
 
 
@@ -163,66 +159,6 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
 
-    async def get_by_unionid(self, provider_id: UUID, unionid: str) -> OrgMemberRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE provider_id = %(provider_id)s AND unionid = %(unionid)s LIMIT 1",
-                {"provider_id": provider_id, "unionid": unionid},
-            )
-            return OrgMemberRecord.from_row(row) if row is not None else None
-
-    async def find_by_external_or_open_id(
-        self,
-        *,
-        provider_id: UUID,
-        external_id: str | None,
-        open_id: str | None,
-        require_unionid_compatible: bool = False,
-        unionid: str | None = None,
-    ) -> OrgMemberRecord | None:
-        """Fallback lookup when unionid is missing or shell records need attachment."""
-        if external_id in (None, "") and open_id in (None, ""):
-            return None
-        params: dict[str, Any] = {"provider_id": provider_id}
-        or_parts: list[str] = []
-        if external_id not in (None, ""):
-            or_parts.append("external_id = %(external_id)s")
-            params["external_id"] = external_id
-        if open_id not in (None, ""):
-            or_parts.append("open_id = %(open_id)s")
-            params["open_id"] = open_id
-        unionid_sql = ""
-        if require_unionid_compatible and unionid not in (None, ""):
-            unionid_sql = " AND (unionid IS NULL OR unionid = '' OR unionid = %(unionid)s)"
-            params["unionid"] = unionid
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_members "
-                + f"WHERE provider_id = %(provider_id)s AND ({' OR '.join(or_parts)})"
-                + f"{unionid_sql} LIMIT 1",
-                params,
-            )
-            return OrgMemberRecord.from_row(row) if row is not None else None
-
-    async def get_by_provider_and_open_id(self, provider_id: UUID, open_id: str) -> OrgMemberRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE provider_id = %(provider_id)s AND open_id = %(open_id)s LIMIT 1",
-                {"provider_id": provider_id, "open_id": open_id},
-            )
-            return OrgMemberRecord.from_row(row) if row is not None else None
-
-    async def get_by_provider_and_external_id(self, provider_id: UUID, external_id: str) -> OrgMemberRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE provider_id = %(provider_id)s AND external_id = %(external_id)s LIMIT 1",
-                {"provider_id": provider_id, "external_id": external_id},
-            )
-            return OrgMemberRecord.from_row(row) if row is not None else None
-
     async def find_active_by_any_ids(
         self,
         *,
@@ -233,7 +169,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
     ) -> OrgMemberRecord | None:
         """Find active member matching any of the provided identity fields.
 
-        Prefers rows already linked to a platform user, then oldest synced.
+        Prefers rows already linked to a platform user, then the lowest member ID.
         """
         or_parts: list[str] = []
         params: dict[str, Any] = {"provider_id": provider_id}
@@ -253,7 +189,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
                 f"SELECT {self._select_list()} FROM org_members "
                 + "WHERE provider_id = %(provider_id)s AND status = 'active' "
                 + f"AND ({' OR '.join(or_parts)}) "
-                + "ORDER BY (user_id IS NOT NULL) DESC, synced_at ASC NULLS LAST "
+                + "ORDER BY (user_id IS NOT NULL) DESC, id ASC "
                 + "LIMIT 1",
                 params,
             )
@@ -328,7 +264,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             )
 
     async def unbind_user_from_tenant(self, user_id: UUID, tenant_id: UUID) -> None:
-        """Drop directory links when a member leaves this organization."""
+        """Drop identity links when a member leaves this organization."""
         async with self.session() as db:
             await db.execute(
                 "UPDATE org_members SET user_id = NULL " + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s",
@@ -344,38 +280,15 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
 
-    async def count_active(
-        self,
-        *,
-        tenant_id: UUID | None = None,
-        provider_id: UUID | None = None,
-    ) -> int:
-        params: dict[str, Any] = {}
-        clauses = ["status = 'active'"]
-        if tenant_id is not None:
-            clauses.append("tenant_id = %(tenant_id)s")
-            params["tenant_id"] = tenant_id
-        if provider_id is not None:
-            clauses.append("provider_id = %(provider_id)s")
-            params["provider_id"] = provider_id
-        where = " AND ".join(clauses)
-        async with self.session() as db:
-            value = await db.fetchval(
-                f"SELECT COUNT(*) FROM org_members WHERE {where}",
-                params or None,
-            )
-            return int_from_row(value)
-
     async def list_active_filtered(
         self,
         *,
         tenant_id: UUID | None = None,
         provider_id: UUID | None = None,
-        department_ids: Sequence[UUID] | None = None,
         search: str | None = None,
         limit: int = 100,
     ) -> list[tuple[OrgMemberRecord, str | None, str | None]]:
-        """Active members with provider join for enterprise org member list."""
+        """Search active identities with provider labels for contacts and OKR owners."""
         params: dict[str, Any] = {"limit": limit}
         clauses = ["m.status = 'active'"]
         if tenant_id is not None:
@@ -384,9 +297,6 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         if provider_id is not None:
             clauses.append("m.provider_id = %(provider_id)s")
             params["provider_id"] = provider_id
-        if department_ids is not None:
-            clauses.append("m.department_id = ANY(%(department_ids)s)")
-            params["department_ids"] = list(department_ids)
         if search not in (None, ""):
             params["search"] = f"%{search}%"
             clauses.append(

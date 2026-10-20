@@ -12,7 +12,7 @@ One-off modules. Run from `engine/`: `uv run python -m app.scripts.bootstrap_db`
 - `bootstrap_db.py` applies only `scripts/schema_baseline.sql` to fresh databases.
 - Re-runs rely on idempotent `IF NOT EXISTS` SQL. Missing baseline and SQL errors are fatal; the pool is closed in `finally`.
 - This **is** the schema runner. There is no Alembic.
-- All current definitions, including force-change and local departments, live only in the baseline. There is no upgrade path or historical backfill.
+- All current definitions, including force-change and org departments, live only in the baseline. There is no upgrade path or historical backfill.
 - Dirty databases are unsupported; duplicate identity memberships must fail unique-index creation, not skip it.
 
 ## Avoid

@@ -1,5 +1,7 @@
 # 8. `app/api/auth.py`
 
+**Historical snapshot (2026-07-05):** org-sync coverage references below predate provider directory retirement on 2026-10-20. They do not describe current sync support or tests. Login, SSO and user OAuth remain supported; use the active engine/API guides for their contracts.
+
 ## Snapshot
 
 | Field | Value |

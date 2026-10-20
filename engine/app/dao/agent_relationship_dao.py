@@ -100,8 +100,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "m.provider_id AS m_provider_id, m.email AS m_email, "
                 + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
                 + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title, m.department_id AS m_department_id, "
-                + "m.department_path AS m_department_path "
+                + "m.title AS m_title "
                 + "FROM agent_relationships r "
                 + "JOIN org_members m ON m.id = r.member_id "
                 + "WHERE r.agent_id = %(agent_id)s AND m.status = 'active' "
@@ -133,8 +132,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "m.provider_id AS m_provider_id, m.email AS m_email, "
                 + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
                 + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title, m.department_id AS m_department_id, "
-                + "m.department_path AS m_department_path "
+                + "m.title AS m_title "
                 + "FROM agent_relationships r "
                 + "JOIN org_members m ON m.id = r.member_id "
                 + f"WHERE r.agent_id = %(agent_id)s{status_sql}",
@@ -156,8 +154,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 + "m.provider_id AS m_provider_id, m.email AS m_email, "
                 + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
                 + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title, m.department_id AS m_department_id, "
-                + "m.department_path AS m_department_path, "
+                + "m.title AS m_title, "
                 + "p.name AS provider_name, p.provider_type AS provider_type "
                 + "FROM agent_relationships r "
                 + "LEFT JOIN org_members m ON m.id = r.member_id "
@@ -202,8 +199,6 @@ def _relationship_with_member(row: Mapping[str, object], *, include_provider: bo
             user_id=uuid_from_row_opt(row.get("m_user_id")),
             avatar_url=str_from_row(row.get("m_avatar_url")) or None,
             title=str_from_row(row.get("m_title")) or "",
-            department_id=uuid_from_row_opt(row.get("m_department_id")),
-            department_path=str_from_row(row.get("m_department_path")) or "",
         )
     provider_name = row.get("provider_name") if include_provider else None
     provider_type = row.get("provider_type") if include_provider else None

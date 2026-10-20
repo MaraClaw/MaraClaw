@@ -18,7 +18,7 @@ from app.core.security import get_current_user
 from app.dao import agent_dao, agent_permission_dao, agent_template_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.gateway_message_dao import gateway_message_dao
-from app.dao.local_department_dao import local_department_dao
+from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.skill_dao import skill_dao
@@ -369,7 +369,7 @@ async def create_agent(
     if department_ids and data.permission_scope_type != "custom":
         raise HTTPException(status_code=422, detail="Department grants require custom sharing")
     if department_ids:
-        departments = await local_department_dao.get_many(list(department_ids))
+        departments = await org_department_dao.get_many(list(department_ids))
         if len(departments) != len(department_ids) or any(
             department.tenant_id != target_tenant_id for department in departments
         ):
@@ -542,7 +542,7 @@ async def get_agent_permissions(
     access_mode = agent.access_mode or "company"
 
     department_ids = {p.scope_id for p in perms if p.scope_type == "department" and p.scope_id}
-    departments = await local_department_dao.get_many(list(department_ids)) if department_ids else []
+    departments = await org_department_dao.get_many(list(department_ids)) if department_ids else []
     department_access = [
         {"id": str(d.id), "name": d.name, "access_level": "use"} for d in departments if d.tenant_id == agent.tenant_id
     ]
@@ -683,7 +683,7 @@ async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermi
             }
         else:
             department_ids = set(supplied_departments)
-        departments = await local_department_dao.get_many(list(department_ids)) if department_ids else []
+        departments = await org_department_dao.get_many(list(department_ids)) if department_ids else []
         if len(departments) != len(department_ids) or any(d.tenant_id != agent.tenant_id for d in departments):
             raise HTTPException(422, "Invalid department for this organization")
         direct_ids = set(scope_ids) | {uid for item in user_access if (uid := item.id or item.user_id) is not None}
@@ -779,7 +779,7 @@ async def get_agent_permission_departments(
     agent, level = await check_agent_access(current_user, agent_id)
     if level != "manage":
         raise HTTPException(403, "Only manager can list sharing departments")
-    departments = await local_department_dao.list_for_tenant(agent.tenant_id) if agent.tenant_id else []
+    departments = await org_department_dao.list_for_tenant(agent.tenant_id) if agent.tenant_id else []
     return {"departments": [{"id": str(d.id), "name": d.name} for d in departments]}
 
 

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.records.identity import IdentityRecord
-from app.services import local_departments
+from app.services import org_departments
 from test_department_api import directory as directory
 
 
@@ -103,9 +103,9 @@ def test_plural_rechecks_actor_under_tenant_and_user_locks(
             assert_never(unexpected)
     calls = AsyncMock()
     calls.load.return_value = fresh_actor
-    monkeypatch.setattr(local_departments, "lock_tenants", calls.tenants)
-    monkeypatch.setattr(local_departments, "lock_user", calls.user)
-    monkeypatch.setattr(local_departments.user_dao, "get_with_identity", calls.load)
+    monkeypatch.setattr(org_departments, "lock_tenants", calls.tenants)
+    monkeypatch.setattr(org_departments, "lock_user", calls.user)
+    monkeypatch.setattr(org_departments.user_dao, "get_with_identity", calls.load)
 
     response = client.put(f"/api/users/{subject.id}/departments", json={"department_ids": [str(second.id)]})
 
@@ -124,7 +124,7 @@ def test_plural_checks_subject_again_after_lock(directory, monkeypatch, case, st
         if case == "missing"
         else replace(subject, **({"tenant_id": uuid4()} if case == "foreign" else {"role": "org_admin"}))
     )
-    monkeypatch.setattr(local_departments.user_dao, "get", AsyncMock(side_effect=[subject, current]))
+    monkeypatch.setattr(org_departments.user_dao, "get", AsyncMock(side_effect=[subject, current]))
 
     response = client.put(f"/api/users/{subject.id}/departments", json={"department_ids": [str(second.id)]})
 

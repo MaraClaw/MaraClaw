@@ -1,17 +1,17 @@
 import { expect, test } from '@playwright/test'
 
-import { directoryPath, localDepartment, localMembers, prepareLocalDepartments, siblingDepartment } from './local-departments-fixture'
+import { directoryPath, orgDepartment, orgMembers, prepareOrgDepartments, siblingDepartment } from './org-departments-fixture'
 import {
   originalToken, replacementCompany, replacementToken, switchFromSettings, tokenKey, writeFromOtherTab,
 } from './session-fencing-fixture'
 
-const rosterPath = `/api/departments/${localDepartment.id}/members`
+const rosterPath = `/api/departments/${orgDepartment.id}/members`
 const siblingRosterPath = `/api/departments/${siblingDepartment.id}/members`
 
-export function registerLocalDepartmentRosterTests() {
+export function registerOrgDepartmentRosterTests() {
   test('keyboard disclosure lazily loads only its own roster and preserves duplicate and unnamed members privately', async ({ page }) => {
     // Given
-    const state = await prepareLocalDepartments(page)
+    const state = await prepareOrgDepartments(page)
     const consoleErrors: string[] = []
     page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
     await page.goto(directoryPath)
@@ -42,16 +42,16 @@ export function registerLocalDepartmentRosterTests() {
     expect(consoleErrors).toEqual([])
   })
 
-  test('one loading roster leaves its sibling empty state and provider departments independent', async ({ page }) => {
+  test('one loading roster leaves its sibling empty state independent', async ({ page }) => {
     // Given
-    const state = await prepareLocalDepartments(page)
+    const state = await prepareOrgDepartments(page)
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     await page.route(`**${rosterPath}`, async (route) => {
       state.rosterRequests.push(rosterPath)
       requested.resolve()
       await release.promise
-      await route.fulfill({ json: { members: localMembers } })
+      await route.fulfill({ json: { members: orgMembers } })
     })
     await page.goto(directoryPath)
     // When
@@ -65,7 +65,6 @@ export function registerLocalDepartmentRosterTests() {
       const sibling = page.getByRole('region', { name: `${siblingDepartment.name} members`, exact: true })
       await expect(sibling.getByRole('status')).toHaveText('No members in this department yet.')
       await expect(roster.getByRole('status')).toHaveText('Loading members...')
-      await expect(page.getByRole('region', { name: 'Provider-synced departments' })).toContainText('12 synced members')
       expect(state.rosterRequests).toEqual([rosterPath, siblingRosterPath])
     } finally {
       release.resolve()
@@ -75,7 +74,7 @@ export function registerLocalDepartmentRosterTests() {
 
   test('roster errors retry in place without disturbing sibling members or org-admin rename focus', async ({ page }) => {
     // Given
-    const state = await prepareLocalDepartments(page, 'org_admin')
+    const state = await prepareOrgDepartments(page, 'org_admin')
     await page.route(`**${siblingRosterPath}`, (route) => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }))
     await page.goto(directoryPath)
     await page.getByRole('button', { name: 'Show members for Engineering', exact: true }).click()
@@ -105,7 +104,7 @@ export function registerLocalDepartmentRosterTests() {
   for (const status of [200, 401, 503]) {
     test(`same-token workspace replacement fences a held roster ${status} and resets its disclosure`, async ({ page }) => {
       // Given
-      await prepareLocalDepartments(page, 'member', originalToken)
+      await prepareOrgDepartments(page, 'member', originalToken)
       const requested = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()
       const handled = Promise.withResolvers<void>()
@@ -114,11 +113,11 @@ export function registerLocalDepartmentRosterTests() {
       await page.route(`**${rosterPath}`, async (route) => {
         expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
         requests.push(replaced ? 'replacement' : 'original')
-        if (replaced) return route.fulfill({ json: { members: [{ ...localMembers[0], display_name: 'Replacement member' }] } })
+        if (replaced) return route.fulfill({ json: { members: [{ ...orgMembers[0], display_name: 'Replacement member' }] } })
         requested.resolve()
         await release.promise
         await route.fulfill({ status, json: status === 200
-          ? { members: [{ ...localMembers[0], display_name: 'Obsolete member' }] }
+          ? { members: [{ ...orgMembers[0], display_name: 'Obsolete member' }] }
           : { detail: 'Retired roster owner' } })
         handled.resolve()
       })
@@ -157,13 +156,13 @@ export function registerLocalDepartmentRosterTests() {
 
   test('cross-tab replacement cancels a mounted roster and ignores its late unauthorized result', async ({ page }) => {
     // Given
-    await prepareLocalDepartments(page)
+    await prepareOrgDepartments(page)
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     const handled = Promise.withResolvers<void>()
     await page.route(`**${rosterPath}`, async (route) => {
       if (route.request().headers().authorization === `Bearer ${replacementToken}`) {
-        return route.fulfill({ json: { members: [{ ...localMembers[0], display_name: 'Cross-tab member' }] } })
+        return route.fulfill({ json: { members: [{ ...orgMembers[0], display_name: 'Cross-tab member' }] } })
       }
       requested.resolve()
       await release.promise

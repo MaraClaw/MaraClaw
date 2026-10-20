@@ -6,10 +6,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import { listLocalDepartmentMembers, localDepartmentNameSchema, renameLocalDepartment, type LocalDepartment } from '@/lib/local-departments-api'
+import { listOrgDepartmentMembers, orgDepartmentNameSchema, renameOrgDepartment, type OrgDepartment } from '@/lib/org-departments-api'
 
-export function LocalDepartmentCard({ department, canEdit }: {
-  readonly department: LocalDepartment
+export function OrgDepartmentCard({ department, canEdit }: {
+  readonly department: OrgDepartment
   readonly canEdit: boolean
 }) {
   const scope = useWorkspaceSession()
@@ -25,7 +25,7 @@ export function LocalDepartmentCard({ department, canEdit }: {
   const [expanded, setExpanded] = useState(false)
   const roster = useQuery({
     queryKey: ['local-department-members', department.id],
-    queryFn: ({ signal }) => listLocalDepartmentMembers(department.id, signal),
+    queryFn: ({ signal }) => listOrgDepartmentMembers(department.id, signal),
     enabled: expanded,
   })
 
@@ -55,9 +55,9 @@ export function LocalDepartmentCard({ department, canEdit }: {
   }
 
   const rename = useMutation({
-    mutationFn: (nextName: Parameters<typeof renameLocalDepartment>[1]) => renameLocalDepartment(department.id, nextName),
+    mutationFn: (nextName: Parameters<typeof renameOrgDepartment>[1]) => renameOrgDepartment(department.id, nextName),
     onSuccess: (updated) => {
-      scope.client.setQueryData<readonly LocalDepartment[]>(['local-departments'], (current) =>
+      scope.client.setQueryData<readonly OrgDepartment[]>(['local-departments'], (current) =>
         current?.map((item) => item.id === updated.id ? { id: updated.id, name: updated.name } : item),
       )
       closeEditor()
@@ -101,7 +101,7 @@ export function LocalDepartmentCard({ department, canEdit }: {
               event.preventDefault()
               if (!scope.isCurrent()) return
               if (rename.isPending || !canEdit) return
-              const parsed = localDepartmentNameSchema.safeParse(name)
+              const parsed = orgDepartmentNameSchema.safeParse(name)
               setSaveError('')
               if (!parsed.success) {
                 setFieldError(parsed.error.issues[0]?.message ?? 'Enter a department name.')

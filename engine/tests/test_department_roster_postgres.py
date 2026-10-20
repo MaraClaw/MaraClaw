@@ -12,11 +12,11 @@ from psycopg import sql
 
 from app.api import departments
 from app.core.security import get_current_user
-from app.dao.local_department_dao import local_department_dao
+from app.dao.org_department_dao import org_department_dao
 from app.db.connection import DbConnection
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
-from app.services import local_departments
+from app.services import org_departments
 from test_bootstrap_postgres import schema_db as schema_db
 
 
@@ -53,7 +53,7 @@ async def roster_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch)
     async def session() -> AsyncGenerator[DbConnection]:
         yield schema_db
 
-    monkeypatch.setattr(local_department_dao, "session", session)
+    monkeypatch.setattr(org_department_dao, "session", session)
     return RosterStore(schema_db, tenant, department, membership, identity)
 
 
@@ -200,8 +200,8 @@ async def test_roster_reads_do_not_resolve_grants_or_bump_acl(
     store = roster_store
     forbidden = AsyncMock(side_effect=AssertionError("Roster must not change access or assignments"))
     for name in ("replace_assignments", "grant_agents_for_user"):
-        monkeypatch.setattr(local_department_dao, name, forbidden)
-    monkeypatch.setattr(local_departments, "bump_agent_acl_version", forbidden)
+        monkeypatch.setattr(org_department_dao, name, forbidden)
+    monkeypatch.setattr(org_departments, "bump_agent_acl_version", forbidden)
 
     response = await read_roster(store, store.department_id)
 

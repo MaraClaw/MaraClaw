@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.acl_locks import lock_tenants, lock_user
 from app.core.security import get_current_user, raise_if_password_change_required
-from app.dao.local_department_dao import local_department_dao
+from app.dao.org_department_dao import org_department_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
@@ -24,7 +24,7 @@ from app.schemas.department import (
     DepartmentOut,
     DepartmentsOut,
 )
-from app.services.local_departments import (
+from app.services.org_departments import (
     admin_tenant,
     assign_department,
     assign_departments,
@@ -39,7 +39,7 @@ router = APIRouter(tags=["departments"])
 async def list_department_options(current_user: UserRecord = Depends(get_current_user)) -> DepartmentOptionsOut:
     if current_user.tenant_id is None:
         return DepartmentOptionsOut(departments=[])
-    departments = await local_department_dao.list_for_tenant(current_user.tenant_id)
+    departments = await org_department_dao.list_for_tenant(current_user.tenant_id)
     return DepartmentOptionsOut(departments=[DepartmentOptionOut(id=row.id, name=row.name) for row in departments])
 
 
@@ -50,10 +50,10 @@ async def list_departments(
     tenant = admin_tenant(current_user, tenant_id)
     if await tenant_dao.get(tenant) is None:
         raise HTTPException(404, "Organization not found")
-    departments = await local_department_dao.list_for_tenant(tenant)
+    departments = await org_department_dao.list_for_tenant(tenant)
     return DepartmentsOut(
         departments=[DepartmentOut.model_validate(row) for row in departments],
-        assignments=await local_department_dao.list_assignments(tenant),
+        assignments=await org_department_dao.list_assignments(tenant),
     )
 
 
@@ -73,7 +73,7 @@ async def create_department(
             admin_tenant(actor, tenant)
             if await tenant_dao.get(tenant) is None:
                 raise HTTPException(404, "Organization not found")
-            row = await local_department_dao.create(obj_in={"tenant_id": tenant, "name": data.name})
+            row = await org_department_dao.create(obj_in={"tenant_id": tenant, "name": data.name})
             return DepartmentOut.model_validate(row)
     except UniqueViolationError as exc:
         raise HTTPException(409, "Department name already exists") from exc

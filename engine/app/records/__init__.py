@@ -16,7 +16,6 @@ from app.records.linkup_api_key import LinkupApiKeyRecord, LinkupAsyncJobRecord
 from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.org import OrgMemberRecord
-from app.records.org_department import OrgDepartmentRecord
 from app.records.participant import ParticipantRecord
 from app.records.plaza import PlazaCommentRecord, PlazaLikeRecord, PlazaPostRecord
 from app.records.published_page import PublishedPageRecord
@@ -55,7 +54,6 @@ __all__ = [
     "LLMModelRecord",
     "LinkupApiKeyRecord",
     "LinkupAsyncJobRecord",
-    "OrgDepartmentRecord",
     "OrgMemberRecord",
     "ParticipantRecord",
     "PlazaCommentRecord",

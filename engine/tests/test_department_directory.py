@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.records.identity import IdentityRecord
-from app.services import local_departments
+from app.services import org_departments
 from test_department_api import directory as directory
 
 
@@ -153,7 +153,7 @@ def test_rename_rechecks_fresh_actor_before_mutation(directory, monkeypatch, cas
         case unexpected:
             assert_never(unexpected)
     loader = AsyncMock(return_value=fresh_actor)
-    monkeypatch.setattr(local_departments.user_dao, "get_with_identity", loader)
+    monkeypatch.setattr(org_departments.user_dao, "get_with_identity", loader)
 
     response = client.patch(f"/api/departments/{first.id}", json={"name": "Denied"})
 
@@ -167,9 +167,9 @@ def test_rename_rechecks_fresh_actor_before_mutation(directory, monkeypatch, cas
 def test_rename_locks_tenants_and_actor_before_fresh_authorization(directory, monkeypatch):
     client, actor, _, first, *_ = directory
     calls = AsyncMock()
-    monkeypatch.setattr(local_departments, "lock_tenants", calls.lock_tenants)
-    monkeypatch.setattr(local_departments, "lock_user", calls.lock_user)
-    monkeypatch.setattr(local_departments.user_dao, "get_with_identity", calls.load_actor)
+    monkeypatch.setattr(org_departments, "lock_tenants", calls.lock_tenants)
+    monkeypatch.setattr(org_departments, "lock_user", calls.lock_user)
+    monkeypatch.setattr(org_departments.user_dao, "get_with_identity", calls.load_actor)
     calls.load_actor.return_value = actor
 
     response = client.patch(f"/api/departments/{first.id}?tenant_id={actor.tenant_id}", json={"name": "Finance"})

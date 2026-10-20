@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api import agents
 from app.records.agent import AgentPermissionRecord, AgentRecord
-from app.records.local_department import LocalDepartmentRecord
+from app.records.org_department import OrgDepartmentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate
 from app.services import onboarding
@@ -20,7 +20,7 @@ from app.services import onboarding
 @dataclass(slots=True)
 class CreationStore:
     actor: UserRecord
-    departments: dict[UUID, LocalDepartmentRecord]
+    departments: dict[UUID, OrgDepartmentRecord]
     agent_rows: list[AgentRecord] = field(default_factory=list)
     participants: list[dict[str, object]] = field(default_factory=list)
     grants: list[AgentPermissionRecord] = field(default_factory=list)
@@ -51,7 +51,7 @@ class CreationStore:
         finally:
             self.in_transaction = False
 
-    async def get_departments(self, ids: Sequence[UUID]) -> list[LocalDepartmentRecord]:
+    async def get_departments(self, ids: Sequence[UUID]) -> list[OrgDepartmentRecord]:
         self.lookups.append(list(ids))
         return [self.departments[department_id] for department_id in ids if department_id in self.departments]
 
@@ -83,7 +83,7 @@ class CreationStore:
 @pytest.fixture
 async def creation(monkeypatch):
     tenant_id = uuid4()
-    department = LocalDepartmentRecord(uuid4(), tenant_id, "Sales", datetime.now(UTC))
+    department = OrgDepartmentRecord(uuid4(), tenant_id, "Sales", datetime.now(UTC))
     mint_key = Mock(return_value=("test-key", "test-hash"))
     write_key = Mock()
     relationships = AsyncMock()
@@ -103,7 +103,7 @@ async def creation(monkeypatch):
     monkeypatch.setattr(agents.agent_dao, "update", store.update_agent)
     monkeypatch.setattr(agents.participant_dao, "create", store.create_participant)
     monkeypatch.setattr(agents.agent_permission_dao, "create", store.create_grant)
-    monkeypatch.setattr(agents.local_department_dao, "get_many", store.get_departments)
+    monkeypatch.setattr(agents.org_department_dao, "get_many", store.get_departments)
     monkeypatch.setattr(agents.tenant_dao, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(agents, "check_agent_creation_quota", AsyncMock())
     monkeypatch.setattr(agents, "assert_models_in_tenant_pool", AsyncMock())

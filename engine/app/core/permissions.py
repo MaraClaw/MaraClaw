@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 
 from app.core import access_cache
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
-from app.dao.local_department_dao import local_department_dao
+from app.dao.org_department_dao import org_department_dao
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
@@ -132,7 +132,7 @@ async def _compute_access_level(user: _UserLike, agent: _AgentLike) -> str | Non
         direct = _access_from_permissions(user, agent, permissions)
         if direct is not None:
             return direct
-        if agent.access_mode == "custom" and await local_department_dao.has_agent_access(user.id, agent.id):
+        if agent.access_mode == "custom" and await org_department_dao.has_agent_access(user.id, agent.id):
             return "use"
         return None
     return early
@@ -195,7 +195,7 @@ async def get_agent_accessible_user_ids(agent: AgentRecord) -> set[uuid.UUID]:
 
     if access_mode == "custom":
         ids.update(await agent_permission_dao.list_user_scope_ids(agent.id))
-        ids.update(await local_department_dao.accessible_user_ids(agent.id))
+        ids.update(await org_department_dao.accessible_user_ids(agent.id))
         if (tenant_id := _agent_tenant_id(agent)) is not None:
             ids.update(await user_dao.list_active_admin_ids_for_tenant(tenant_id))
 

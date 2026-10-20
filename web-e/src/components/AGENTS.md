@@ -16,7 +16,7 @@ Parent: [web-e/AGENTS.md](../../AGENTS.md). Shared components span landing, auth
 | `layout/` | Workspace/agent rails, gates, marketing header/footer: [layout/AGENTS.md](./layout/AGENTS.md). |
 | `sections/` | Landing blocks and local copy arrays: [sections/AGENTS.md](./sections/AGENTS.md). Read its role/channel truth before copy changes. |
 | `ui/` | Hand-maintained shadcn-style primitives; [ui/AGENTS.md](./ui/AGENTS.md) owns variants, native Select behavior, and Radix conventions. Config: `web-e/components.json`. |
-| Directory and grants | `directory-people.tsx`, `local-departments.tsx`, `local-department-card.tsx`, `agent-department-access.tsx`; behavior: [workspace guide](../pages/app/AGENTS.md), I/O: [lib guide](../lib/AGENTS.md). |
+| Directory and grants | `directory-people.tsx`, `org-departments.tsx`, `org-department-card.tsx`, `agent-department-access.tsx`; behavior: [workspace guide](../pages/app/AGENTS.md), I/O: [lib guide](../lib/AGENTS.md). |
 | OKR helpers | `okr-reports.tsx` provides reports and key-result UI; permissions/API contracts stay with workspace and lib guides. |
 | Motion and theme | `motion.tsx` exports Reveal/Stagger/StaggerItem; `theme-toggle.tsx` consumes `useTheme`. |
 

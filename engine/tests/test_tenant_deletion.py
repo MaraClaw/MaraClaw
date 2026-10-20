@@ -125,6 +125,25 @@ def test_delete_cascade_sql_is_static() -> None:
     assert "f'DELETE" not in source
 
 
+def test_tenant_deletion_respects_shared_member_foreign_keys_without_provider_departments() -> None:
+    # Given
+    statements = list(TENANT_DELETE_CLEANUP_SQL)
+    # When
+    positions = [
+        next(index for index, sql in enumerate(statements) if sql.startswith(prefix))
+        for prefix in (
+            "DELETE FROM agent_relationships ",
+            "DELETE FROM org_members ",
+            "DELETE FROM identity_providers ",
+            "DELETE FROM users ",
+            "DELETE FROM tenants ",
+        )
+    ]
+    # Then
+    assert positions == sorted(positions)
+    assert all("org_departments" not in statement for statement in statements)
+
+
 @pytest.mark.asyncio
 async def test_deletion_preview_binds_tenant_id_in_one_read_only_query(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given

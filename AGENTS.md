@@ -21,7 +21,7 @@ Three independently configured packages: FastAPI `engine/` plus two Vite apps, w
 |-----------|------|----------|-------|--------|
 | **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.8 | Mature |
 | **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, Take Control) |
-| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (local departments), models, Linkup keys + search analytics |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, Linkup keys + search analytics |
 
 **Rule:** one concern → one package. No admin screens in `web-e`, no marketing in `web-a`, no HTML marketing in `engine`.
 
@@ -61,7 +61,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
-| Local department directory | `engine` | `app/api/departments.py`. Not org-sync departments. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
+| Org department directory | `engine` | `app/api/departments.py`. Org departments remain; provider organization sync is retired. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
 | CORS / API base URL | engine config + consuming app | Root `.env.example` |
 | Compose / autoscaling / host startup | `deploy` | `deploy/AGENTS.md`, root `compose.yaml`, `start-docker-compose.sh` |
 | CI checks / image smoke | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml`, `deploy/smoke_frontend_image.sh` |
@@ -89,7 +89,7 @@ cd engine && uv run --extra dev pytest
 
 **`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, local departments), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 

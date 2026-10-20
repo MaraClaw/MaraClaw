@@ -57,7 +57,7 @@ export function AgentDepartmentAccess({
     <fieldset ref={fieldsetRef} tabIndex={-1} className="min-w-0 space-y-3">
       <legend className="text-sm font-semibold">Departments</legend>
       <p id="agent-departments-description" className="text-sm text-muted-foreground">
-        Company admins manage these local departments separately from the provider directory. Members can use this
+        Company admins manage these org departments and their membership in the admin console. Members can use this
         agent, not manage it, and membership changes apply automatically. Only selected departments are included, not
         their parent or child departments.
       </p>
@@ -102,7 +102,7 @@ export function AgentDepartmentAccess({
             : departments.isError
               ? 'Unable to load departments. Your selections are unchanged.'
               : departments.data?.length === 0
-                ? 'No local departments yet. Ask a company admin to create one.'
+                ? 'No org departments yet. Ask a company admin to create one.'
                 : available.length === 0
                   ? 'All available departments are selected.'
                   : ''}

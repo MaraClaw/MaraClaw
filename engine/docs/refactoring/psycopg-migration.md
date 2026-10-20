@@ -1,5 +1,7 @@
 # Psycopg migration notes
 
+**Historical rollout record:** dual-stack and org-sync paths below describe earlier implementation stages, not current policy. SQLAlchemy/Alembic and provider organization department/people sync are retired. Current schema policy is fresh-only `scripts/schema_baseline.sql`, with no upgrade patches or automatic existing-data cleanup; see `../../AGENTS.md` and `../admin-apis.md`.
+
 Program plan: `.omgb/plans/psycopg-db-migration-20260812.md`.
 
 ## Phase 0/1 (landed)
