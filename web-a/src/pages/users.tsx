@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
@@ -16,23 +17,22 @@ import {
   asAdminUser,
   isEndUserRole,
   listPlatformAdmins,
-  listUsers,
   setOrgAdminActive,
   setPlatformAdminActive,
   setUserActive,
   type AdminUser,
 } from '@/lib/users-api'
 import { TenantUsers } from '@/pages/users-departments'
+import { resetUsersPagination, useUsersPagination } from '@/pages/users-pagination'
 
 export function UsersPage() {
-  const { user } = useAuth()
+  const { user, owner } = useAuth()
   const queryClient = useQueryClient()
   const platformAdmin = isPlatformAdminUser(user)
   const genesis = isGenesisAdmin(user)
   const [params, setParams] = useSearchParams()
   const search = params.get('q') ?? ''
   const companyId = params.get('company') ?? ''
-  const tenantId = platformAdmin ? companyId : user?.tenant_id
   const filterId = useId()
 
   const updateListState = useCallback((patch: { q?: string; company?: string }, replace = true) => {
@@ -59,11 +59,15 @@ export function UsersPage() {
     enabled: platformAdmin,
   })
 
+  const tenantId = platformAdmin
+    ? companies.data?.find((company) => company.id === companyId)?.id ?? null
+    : user?.tenant_id ?? null
+
   useEffect(() => {
-    if (!platformAdmin || companyId || !companies.data?.length) return
+    if (!platformAdmin || tenantId || !companies.data?.length) return
     const own = companies.data.find((company) => company.id === user?.tenant_id)
     updateListState({ company: own?.id ?? companies.data[0].id })
-  }, [platformAdmin, companyId, companies.data, user?.tenant_id, updateListState])
+  }, [platformAdmin, tenantId, companies.data, user?.tenant_id, updateListState])
 
   useEffect(() => {
     const stored = sessionStorage.getItem('web-a:users-scroll')
@@ -73,11 +77,7 @@ export function UsersPage() {
     }
   }, [])
 
-  const users = useQuery({
-    queryKey: ['admin-users', tenantId],
-    queryFn: ({ signal }) => listUsers(platformAdmin ? companyId || undefined : undefined, signal),
-    enabled: !platformAdmin || Boolean(companyId),
-  })
+  const users = useUsersPagination({ tenantId, search, generation: owner.generation })
 
   const platformAdmins = useQuery({
     queryKey: ['admin-platform-admins'],
@@ -90,10 +90,7 @@ export function UsersPage() {
     [platformAdmins.data],
   )
 
-  const visibleCompany = useMemo(
-    () => [...filterUsers(users.data ?? [], search)].sort((a, b) => Number(isEndUserRole(a.role)) - Number(isEndUserRole(b.role))),
-    [users.data, search],
-  )
+  const visibleCompany = users.data?.pages.flatMap((page) => page.items) ?? []
   const visiblePlatform = useMemo(() => filterUsers(platformRows, search), [platformRows, search])
 
   function canToggle(row: AdminUser): boolean {
@@ -121,9 +118,9 @@ export function UsersPage() {
       }
       return setUserActive(row.id, isActive)
     },
-    onSuccess: (updated) => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-users'] })
-      void queryClient.invalidateQueries({ queryKey: ['admin-platform-admins'] })
+    onSuccess: (updated, { row }) => {
+      if (row.tenant_id) void resetUsersPagination(queryClient, row.tenant_id)
+      if (row.role === 'platform_admin') void queryClient.invalidateQueries({ queryKey: ['admin-platform-admins'] })
       void queryClient.invalidateQueries({ queryKey: ['admin-companies'] })
       toast.success(updated.is_active ? `Activated ${updated.display_name || updated.email}` : `Deactivated ${updated.display_name || updated.email}`)
     },
@@ -171,7 +168,7 @@ export function UsersPage() {
               type="search"
               value={search}
               onChange={(event) => updateListState({ q: event.target.value })}
-              placeholder="Name or email"
+              placeholder="Name, email, or username"
               className="pl-10"
             />
           </span>
@@ -232,12 +229,13 @@ export function UsersPage() {
             <p className="mt-1 text-sm text-muted-foreground">People in the selected company.</p>
           </div>
         ) : null}
-        {users.isLoading ? <p className="text-sm text-muted-foreground">Loading users…</p> : null}
+        {users.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading users…</p> : null}
         {users.error ? (
-          <p className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-destructive">
             {users.error instanceof ApiError ? users.error.message : 'Failed to load users'}
           </p>
         ) : null}
+        {users.error ? <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void (users.isFetchNextPageError ? users.fetchNextPage() : users.refetch())}>Retry users</Button> : null}
 
         {!users.isLoading && !users.error && tenantId && visibleCompany.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -255,6 +253,10 @@ export function UsersPage() {
             onToggle={(row) => toggle.mutate({ row, isActive: !row.is_active })}
           />
         ) : null}
+        {users.hasNextPage ? (
+          <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void users.fetchNextPage({ cancelRefetch: false })}>Load more users</Button>
+        ) : null}
+        {users.isSuccess && !users.hasNextPage && visibleCompany.length > 0 ? <p role="status" className="text-sm text-muted-foreground">All matching users loaded.</p> : null}
       </div>
     </div>
   )
