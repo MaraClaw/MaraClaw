@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { PersonCard, PersonCardList } from '@/components/directory-people'
-import { LocalDepartments } from '@/components/local-departments'
+import { OrgDepartments } from '@/components/org-departments'
 import { Input } from '@/components/ui/input'
 import { listOrgUsers } from '@/lib/directory-api'
 
@@ -62,7 +62,7 @@ export function DirectoryPage() {
           <div>
             <h1 className="font-display text-2xl font-semibold">Directory</h1>
             <p className="text-sm text-muted-foreground">
-              People and local departments in this company.
+              People and org departments in this company.
             </p>
           </div>
           {tab !== 'departments' ? (
@@ -109,7 +109,7 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'departments' ? <LocalDepartments /> : null}
+      {tab === 'departments' ? <OrgDepartments /> : null}
         </div>
     </div>
   )

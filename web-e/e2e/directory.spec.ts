@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import type { DirectoryUser } from '../src/lib/directory-api'
-import { directoryPath, localDepartment, prepareLocalDepartments } from './local-departments-fixture'
+import { directoryPath, orgDepartment, prepareOrgDepartments } from './org-departments-fixture'
 
 const people = [
   { id: 'dana', display_name: 'Dana Woods', username: 'dana.woods', email: 'dana@example.test', title: 'Product engineer', role: 'org_admin' },
@@ -9,7 +9,7 @@ const people = [
 ] satisfies readonly DirectoryUser[]
 
 async function prepareDirectory(page: Page) {
-  const state = await prepareLocalDepartments(page, 'org_admin')
+  const state = await prepareOrgDepartments(page, 'org_admin')
   const retiredRequests: string[] = []
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
@@ -30,7 +30,7 @@ for (const entry of [
     await page.goto(entry.path)
 
     if (entry.tab === 'Departments') {
-      await expect(page.getByRole('heading', { name: localDepartment.name, exact: true })).toBeVisible()
+      await expect(page.getByRole('heading', { name: orgDepartment.name, exact: true })).toBeVisible()
     } else {
       await expect(page.getByText('Dana Woods', { exact: true })).toBeVisible()
       await expect(page.getByRole('searchbox', { name: 'Search directory' })).toHaveValue(entry.query)
@@ -95,7 +95,7 @@ for (const width of [390, 1440]) {
         await expect(page.getByRole('button', { name: 'Edit name for Product engineering', exact: true })).toBeFocused()
         await expect(page.getByRole('region', { name: 'Product engineering members', exact: true }).getByRole('listitem')).toHaveCount(4)
         expect(state.patches).toEqual([{ name: 'Product engineering' }])
-        expect(state.rosterRequests).toEqual([`/api/departments/${localDepartment.id}/members`])
+        expect(state.rosterRequests).toEqual([`/api/departments/${orgDepartment.id}/members`])
         await page.screenshot({ path: testInfo.outputPath('local-renamed.png'), fullPage: true })
         await page.getByRole('button', { name: 'People', exact: true }).click()
         await expect(page.getByRole('searchbox', { name: 'Search directory' })).toHaveValue('engineer')

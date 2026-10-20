@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { ApiError, formatApiDetail } from '@/lib/http'
-import { listLocalDepartments } from '@/lib/local-departments-api'
+import { listOrgDepartments } from '@/lib/org-departments-api'
 import { createAgent, listTemplates } from '@/lib/workspace-api'
 
 const schema = z.object({
@@ -52,7 +52,7 @@ export function AgentNewPage() {
   const readiness = schema.safeParse(formValues)
   const departments = useQuery({
     queryKey: ['local-departments'],
-    queryFn: ({ signal }) => listLocalDepartments(signal),
+    queryFn: ({ signal }) => listOrgDepartments(signal),
     enabled: visibility === 'department',
   })
   const departmentUnavailable = departments.isPending || departments.isError || departments.data?.length === 0
@@ -175,11 +175,11 @@ export function AgentNewPage() {
             </p>
             <p id="department-status" role="status" className="text-sm text-muted-foreground">
               {departments.isPending
-                ? 'Loading local departments...'
+                ? 'Loading org departments...'
                 : departments.isError
-                  ? 'Unable to load local departments. Try again or choose another visibility.'
+                  ? 'Unable to load org departments. Try again or choose another visibility.'
                   : departments.data?.length === 0
-                    ? 'No local departments yet. Ask a company admin to create one, or choose another visibility.'
+                    ? 'No org departments yet. Ask a company admin to create one, or choose another visibility.'
                     : ''}
             </p>
             {departments.isError || retryButton ? (
@@ -201,7 +201,7 @@ export function AgentNewPage() {
                 Retry departments
               </Button>
             ) : null}
-            <p id="department-admin-hint" className="text-sm text-muted-foreground">Company admins manage local departments and membership.</p>
+            <p id="department-admin-hint" className="text-sm text-muted-foreground">Company admins manage org departments and membership.</p>
             {departmentError ? <p id="department-error" className="text-sm text-destructive">{departmentError}</p> : null}
           </div>
         ) : null}

@@ -14,26 +14,26 @@ const renamedDepartmentSchema = departmentSchema.extend({
   created_at: z.string(),
 }).readonly()
 
-export const localDepartmentNameSchema = z.string().trim()
+export const orgDepartmentNameSchema = z.string().trim()
   .min(1, 'Enter a department name.')
   .max(100, 'Use 100 characters or fewer.')
-  .brand<'LocalDepartmentName'>()
+  .brand<'OrgDepartmentName'>()
 
-export type LocalDepartment = Readonly<z.infer<typeof departmentSchema>>
-export type LocalDepartmentMember = z.infer<typeof departmentMemberSchema>
-type LocalDepartmentName = z.infer<typeof localDepartmentNameSchema>
+export type OrgDepartment = Readonly<z.infer<typeof departmentSchema>>
+export type OrgDepartmentMember = z.infer<typeof departmentMemberSchema>
+type OrgDepartmentName = z.infer<typeof orgDepartmentNameSchema>
 
-export async function listLocalDepartments(signal: AbortSignal): Promise<readonly LocalDepartment[]> {
+export async function listOrgDepartments(signal: AbortSignal): Promise<readonly OrgDepartment[]> {
   const response = await apiRequest<unknown>('/api/departments/options', { signal })
   return optionsSchema.parse(response).departments
 }
 
-export async function listLocalDepartmentMembers(departmentId: string, signal: AbortSignal): Promise<readonly LocalDepartmentMember[]> {
+export async function listOrgDepartmentMembers(departmentId: string, signal: AbortSignal): Promise<readonly OrgDepartmentMember[]> {
   const response = await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}/members`, { signal })
   return membersSchema.parse(response).members
 }
 
-export async function renameLocalDepartment(departmentId: string, name: LocalDepartmentName) {
+export async function renameOrgDepartment(departmentId: string, name: OrgDepartmentName) {
   const response = await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}`, {
     method: 'PATCH', body: { name },
   })
