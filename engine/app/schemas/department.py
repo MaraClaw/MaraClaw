@@ -33,6 +33,17 @@ class DepartmentOptionsOut(BaseModel):
     departments: list[DepartmentOptionOut]
 
 
+class DepartmentMemberOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    membership_id: UUID
+    display_name: str
+
+
+class DepartmentMembersOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    members: list[DepartmentMemberOut]
+
+
 class DepartmentAssignment(BaseModel):
     department_id: UUID | None
 

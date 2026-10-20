@@ -18,12 +18,19 @@ from app.schemas.department import (
     DepartmentAssignment,
     DepartmentAssignments,
     DepartmentCreate,
+    DepartmentMembersOut,
     DepartmentOptionOut,
     DepartmentOptionsOut,
     DepartmentOut,
     DepartmentsOut,
 )
-from app.services.local_departments import admin_tenant, assign_department, assign_departments, rename_department
+from app.services.local_departments import (
+    admin_tenant,
+    assign_department,
+    assign_departments,
+    list_department_members,
+    rename_department,
+)
 
 router = APIRouter(tags=["departments"])
 
@@ -80,6 +87,13 @@ async def update_department(
     current_user: UserRecord = Depends(get_current_user),
 ) -> DepartmentOut:
     return await rename_department(current_user, department_id, data, tenant_id)
+
+
+@router.get("/departments/{department_id}/members", response_model=DepartmentMembersOut)
+async def get_department_members(
+    department_id: UUID, current_user: UserRecord = Depends(get_current_user)
+) -> DepartmentMembersOut:
+    return await list_department_members(current_user, department_id)
 
 
 @router.put("/users/{user_id}/department", response_model=AssignmentOut)
