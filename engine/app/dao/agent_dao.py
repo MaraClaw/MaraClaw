@@ -498,6 +498,17 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return int_from_row(value)
 
+    async def count_active_for_creators(self, creator_ids: Sequence[UUID]) -> dict[UUID, int]:
+        if not creator_ids:
+            return {}
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT creator_id, COUNT(*) AS count FROM agents "
+                "WHERE creator_id = ANY(%(creator_ids)s) AND is_expired IS FALSE GROUP BY creator_id",
+                {"creator_ids": list(creator_ids)},
+            )
+            return {uuid_from_row(row["creator_id"]): int_from_row(row["count"]) for row in rows}
+
     async def is_hidden_from_plaza(self, agent_id: UUID) -> bool:
         """True when agent is system or not company-public (excluded from plaza feed)."""
         async with self.session() as db:
