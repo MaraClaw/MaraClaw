@@ -1,9 +1,12 @@
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from tests.test_background_llm import background_case, tool_response
 
 from app.services.llm import caller
+from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.llm.types import LLMResponse
 from app.services.trigger_runtime.executions import ExecutionLeaseLostError
 from test_finish_protocol import FakeStreamClient, _async_return, _model
@@ -145,6 +148,52 @@ async def test_primary_session_checks_guard_after_read_before_mutation(monkeypat
         assert await service.ensure_primary_platform_session(uuid4(), uuid4()) is row
     # Then only the default, unguarded call mutates the session.
     assert writes == ([] if guarded else [True])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["provider", "tool"])
+@pytest.mark.parametrize("fails", [False, True], ids=["returns", "raises"])
+async def test_background_revocation_during_await_stops_effects(monkeypatch, phase, fails):
+    state = background_case(monkeypatch, [tool_response(2)], fallback=True)
+    entered, release = asyncio.Event(), asyncio.Event()
+    if phase == "provider":
+        state.client.paused = True
+        state.client.pause_at = 2
+        entered, release = state.client.entered, state.client.release
+        state.client.responses = [
+            LLMResponse(content="continue", usage={"total_tokens": 17}),
+            RuntimeError("503 unavailable") if fails else tool_response(2),
+        ]
+    else:
+
+        async def execute(*_args, **_kwargs):
+            state.executed.append("dummy")
+            entered.set()
+            await release.wait()
+            if fails:
+                raise RuntimeError("503 tool failed")
+            return "result"
+
+        monkeypatch.setattr(caller, "execute_tool", execute)
+
+    def classify(_error):
+        pytest.fail("Ownership loss must not reach provider classification")
+
+    monkeypatch.setattr(caller, "classify_error", classify)
+    task = asyncio.create_task(
+        caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=state.guard)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    state.guard.database_held = False
+    assert state.guard.held
+    release.set()
+    with pytest.raises(ScheduleLeaseLostError, match="expired"):
+        await task
+    assert state.executed == (["dummy"] if phase == "tool" else [])
+    assert state.usage == []
+    assert state.created == ["fake-model"]
+    assert len(state.client.messages_seen) == (2 if phase == "provider" else 1)
+    assert state.client.closed
 
 
 @pytest.mark.asyncio
