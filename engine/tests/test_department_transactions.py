@@ -6,12 +6,12 @@ import pytest
 from psycopg import AsyncConnection
 from psycopg.errors import ForeignKeyViolation
 
-from app.dao.local_department_dao import LocalDepartmentDAO
+from app.dao.org_department_dao import OrgDepartmentDAO
 from app.db import session
 from app.db.connection import DbConnection
 from app.db.errors import ForeignKeyViolationError
 from app.schemas.department import AssignmentsOut
-from app.services import local_departments
+from app.services import org_departments
 from test_department_api import directory as directory
 
 
@@ -27,7 +27,7 @@ async def test_membership_dao_replaces_normalized_rows_in_one_transaction(clear)
     )
 
     async with session.transaction(db):
-        await LocalDepartmentDAO().replace_assignments(assignment)
+        await OrgDepartmentDAO().replace_assignments(assignment)
         raw.commit.assert_not_awaited()
 
     calls = cursor.execute.await_args_list
@@ -58,7 +58,7 @@ async def test_membership_insert_failure_rolls_back_delete():
 
     with pytest.raises(ForeignKeyViolationError):
         async with session.transaction(db):
-            await LocalDepartmentDAO().replace_assignments(assignment)
+            await OrgDepartmentDAO().replace_assignments(assignment)
 
     assert cursor.execute.await_count == 2
     raw.commit.assert_not_awaited()
@@ -91,14 +91,14 @@ def test_membership_and_sorted_union_acl_updates_share_transaction(directory, mo
         if failure:
             raise RuntimeError("ACL update failed")
 
-    monkeypatch.setattr(local_departments, "connection_ctx", transaction)
-    monkeypatch.setattr(local_departments, "lock_agent", lock_agent)
-    monkeypatch.setattr(local_departments, "bump_agent_acl_version", bump_agent)
+    monkeypatch.setattr(org_departments, "connection_ctx", transaction)
+    monkeypatch.setattr(org_departments, "lock_agent", lock_agent)
+    monkeypatch.setattr(org_departments, "bump_agent_acl_version", bump_agent)
     monkeypatch.setattr(
-        local_departments.local_department_dao, "replace_assignments", LocalDepartmentDAO().replace_assignments
+        org_departments.org_department_dao, "replace_assignments", OrgDepartmentDAO().replace_assignments
     )
     monkeypatch.setattr(
-        local_departments.local_department_dao,
+        org_departments.org_department_dao,
         "grant_agents_for_user",
         AsyncMock(side_effect=[{old_agent, shared_agent}, {shared_agent, new_agent}]),
     )

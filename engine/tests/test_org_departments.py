@@ -1,4 +1,4 @@
-"""Local department boundaries and dynamic access regressions."""
+"""Org department boundaries and dynamic access regressions."""
 
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.core import access_cache, permissions
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.user import UserRecord
-from app.services.local_departments import admin_tenant
+from app.services.org_departments import admin_tenant
 
 
 def test_bootstrap_resolves_engine_baseline():
@@ -29,7 +29,7 @@ def test_department_name_is_trimmed_and_nonempty():
 
 @pytest.mark.asyncio
 async def test_department_grant_is_dynamic_use(monkeypatch):
-    from app.dao.local_department_dao import local_department_dao
+    from app.dao.org_department_dao import org_department_dao
 
     tenant = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant)
@@ -37,13 +37,13 @@ async def test_department_grant_is_dynamic_use(monkeypatch):
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[]))
-    monkeypatch.setattr(local_department_dao, "has_agent_access", AsyncMock(return_value=True))
+    monkeypatch.setattr(org_department_dao, "has_agent_access", AsyncMock(return_value=True))
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value=None))
     monkeypatch.setattr(access_cache, "set_cached_level", AsyncMock())
     access_cache.clear_request_memo()
     assert (await permissions.check_agent_access(user, agent.id))[1] == "use"
     access_cache.clear_request_memo()
-    monkeypatch.setattr(local_department_dao, "has_agent_access", AsyncMock(return_value=False))
+    monkeypatch.setattr(org_department_dao, "has_agent_access", AsyncMock(return_value=False))
     with pytest.raises(HTTPException) as error:
         await permissions.check_agent_access(user, agent.id)
     assert error.value.status_code == 403
@@ -88,7 +88,7 @@ async def test_direct_manage_beats_department_use(monkeypatch):
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[grant]))
-    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", AsyncMock(return_value=True))
+    monkeypatch.setattr(permissions.org_department_dao, "has_agent_access", AsyncMock(return_value=True))
     access_cache.clear_request_memo()
     assert (await permissions.check_agent_access(user, agent.id, fresh=True))[1] == "manage"
 
@@ -110,5 +110,5 @@ async def test_accessible_relationship_users_filter_inactive_and_foreign_ids(mon
     monkeypatch.setattr(
         permissions.agent_permission_dao, "list_user_scope_ids", AsyncMock(return_value=[direct, inactive, foreign])
     )
-    monkeypatch.setattr(permissions.local_department_dao, "accessible_user_ids", AsyncMock(return_value={department}))
+    monkeypatch.setattr(permissions.org_department_dao, "accessible_user_ids", AsyncMock(return_value={department}))
     assert await permissions.get_agent_accessible_user_ids(agent) == {creator, direct, department, admin}

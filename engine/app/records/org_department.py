@@ -1,4 +1,4 @@
-"""Tenant-local department rows, independent from provider directories."""
+"""Org department records for the tenant directory."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -9,14 +9,14 @@ from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row
 
 
 @dataclass(frozen=True, slots=True)
-class LocalDepartmentRecord:
+class OrgDepartmentRecord:
     id: UUID
     tenant_id: UUID
     name: str
     created_at: datetime
 
     @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> LocalDepartmentRecord:
+    def from_row(cls, row: Mapping[str, object]) -> OrgDepartmentRecord:
         created_at = datetime_from_row(row["created_at"])
         if created_at is None:
             raise ValueError("Department created_at is required")

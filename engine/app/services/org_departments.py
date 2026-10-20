@@ -1,4 +1,4 @@
-"""Local directory administration, isolated from identity-provider sync."""
+"""Org department directory administration and membership assignment."""
 
 from uuid import UUID
 
@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.core.access_cache import bump_agent_acl_version
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.security import raise_if_password_change_required
-from app.dao.local_department_dao import local_department_dao
+from app.dao.org_department_dao import org_department_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
@@ -39,10 +39,10 @@ async def list_department_members(actor: UserRecord, department_id: UUID) -> Dep
     ):
         raise HTTPException(403, "Organization membership required")
     raise_if_password_change_required(actor)
-    department = await local_department_dao.get(department_id)
+    department = await org_department_dao.get(department_id)
     if department is None or department.tenant_id != actor.tenant_id:
         raise HTTPException(404, "Department not found")
-    return DepartmentMembersOut(members=await local_department_dao.list_members(actor.tenant_id, department_id))
+    return DepartmentMembersOut(members=await org_department_dao.list_members(actor.tenant_id, department_id))
 
 
 async def rename_department(
@@ -60,10 +60,10 @@ async def rename_department(
             admin_tenant(fresh_actor, tenant)
             if await tenant_dao.get(tenant) is None:
                 raise HTTPException(404, "Organization not found")
-            department = await local_department_dao.get(department_id)
+            department = await org_department_dao.get(department_id)
             if department is None or department.tenant_id != tenant:
                 raise HTTPException(404, "Department not found")
-            updated = await local_department_dao.update(db_obj=department, obj_in={"name": data.name})
+            updated = await org_department_dao.update(db_obj=department, obj_in={"name": data.name})
             return DepartmentOut.model_validate(updated)
     except UniqueViolationError as exc:
         raise HTTPException(409, "Department name already exists") from exc
@@ -103,14 +103,14 @@ async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> A
             raise HTTPException(403, "User belongs to another organization")
         if subject.role not in END_USER_ROLES:
             raise HTTPException(422, "Only end users may have departments")
-        departments = await local_department_dao.get_many(assignment.department_ids)
+        departments = await org_department_dao.get_many(assignment.department_ids)
         if len(departments) != len(assignment.department_ids) or any(
             department.tenant_id != assignment.tenant_id for department in departments
         ):
             raise HTTPException(422, "Invalid department for this organization")
-        affected = await local_department_dao.grant_agents_for_user(subject.id)
-        await local_department_dao.replace_assignments(assignment)
-        affected.update(await local_department_dao.grant_agents_for_user(subject.id))
+        affected = await org_department_dao.grant_agents_for_user(subject.id)
+        await org_department_dao.replace_assignments(assignment)
+        affected.update(await org_department_dao.grant_agents_for_user(subject.id))
         for agent_id in sorted(affected):
             await lock_agent(db, agent_id, assignment.tenant_id)
             await bump_agent_acl_version(agent_id)

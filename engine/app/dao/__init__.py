@@ -29,6 +29,7 @@ from app.dao.okr_dao import (
 )
 from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.onboarding_dao import user_tenant_onboarding_dao
+from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
@@ -76,13 +77,13 @@ __all__ = [
     "linkup_api_key_dao",
     "linkup_async_job_dao",
     "llm_model_dao",
-    "local_department_dao",
     "member_daily_report_dao",
     "notification_dao",
     "okr_key_result_dao",
     "okr_objective_dao",
     "okr_progress_log_dao",
     "okr_settings_dao",
+    "org_department_dao",
     "org_member_dao",
     "participant_dao",
     "plaza_comment_dao",
@@ -106,4 +107,3 @@ __all__ = [
     "workspace_edit_lock_dao",
     "workspace_file_revision_dao",
 ]
-from app.dao.local_department_dao import local_department_dao

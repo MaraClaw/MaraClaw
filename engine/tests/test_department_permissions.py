@@ -11,7 +11,7 @@ from app.api import agents
 from app.core import access_cache, permissions
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.identity import IdentityRecord
-from app.records.local_department import LocalDepartmentRecord
+from app.records.org_department import OrgDepartmentRecord
 from app.records.user import UserRecord
 
 
@@ -20,7 +20,7 @@ def directory(monkeypatch):
     tenant = uuid4()
     owner = UserRecord(id=uuid4(), tenant_id=tenant)
     agent = AgentRecord(id=uuid4(), name="Sales", creator_id=owner.id, tenant_id=tenant, access_mode="custom")
-    department = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant, name="Sales", created_at=datetime.now(UTC))
+    department = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant, name="Sales", created_at=datetime.now(UTC))
     grants = [AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type="department", scope_id=department.id)]
 
     async def list_grants(_id):
@@ -49,7 +49,7 @@ def directory(monkeypatch):
     monkeypatch.setattr(agents.agent_permission_dao, "list_for_agent", list_grants)
     monkeypatch.setattr(agents.agent_permission_dao, "create", create_grant)
     monkeypatch.setattr(agents.agent_permission_dao, "delete_for_agent", delete_grants)
-    monkeypatch.setattr(agents.local_department_dao, "get_many", get_departments)
+    monkeypatch.setattr(agents.org_department_dao, "get_many", get_departments)
     monkeypatch.setattr(agents.user_dao, "get_many", get_users)
     monkeypatch.setattr(agents.user_dao, "get_many_with_identity", AsyncMock(return_value={owner.id: owner}))
     monkeypatch.setattr(agents, "_get_active_admin_users", AsyncMock(return_value=[]))
@@ -152,7 +152,7 @@ async def test_department_candidates_are_agent_tenant_scoped(directory, monkeypa
     async def for_tenant(tenant_id: UUID):
         return [department] if tenant_id == department.tenant_id else []
 
-    monkeypatch.setattr(agents.local_department_dao, "list_for_tenant", for_tenant)
+    monkeypatch.setattr(agents.org_department_dao, "list_for_tenant", for_tenant)
     assert await agents.get_agent_permission_departments(agent.id, owner) == {
         "departments": [{"id": str(department.id), "name": "Sales"}]
     }
@@ -173,7 +173,7 @@ async def test_multiple_department_grants_preserve_use_only_and_direct_manage(di
         )
     before = list(grants)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=member))
-    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", AsyncMock(return_value=True))
+    monkeypatch.setattr(permissions.org_department_dao, "has_agent_access", AsyncMock(return_value=True))
 
     _, level = await permissions.check_agent_access(member, agent.id, fresh=True)
 
@@ -183,7 +183,7 @@ async def test_multiple_department_grants_preserve_use_only_and_direct_manage(di
 
 @pytest.mark.asyncio
 async def test_membership_join_deduplicates_relationship_directory(monkeypatch):
-    from app.dao.local_department_dao import LocalDepartmentDAO
+    from app.dao.org_department_dao import OrgDepartmentDAO
 
     member = uuid4()
     db = AsyncMock()
@@ -193,7 +193,7 @@ async def test_membership_join_deduplicates_relationship_directory(monkeypatch):
     async def transaction():
         yield db
 
-    dao = LocalDepartmentDAO()
+    dao = OrgDepartmentDAO()
     monkeypatch.setattr(dao, "session", transaction)
 
     result = await dao.accessible_user_ids(uuid4())

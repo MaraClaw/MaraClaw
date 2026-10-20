@@ -1,28 +1,28 @@
-"""Persistence and dynamic access joins for the local department directory."""
+"""Persistence and dynamic access joins for the org department directory."""
 
 from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
-from app.records.local_department import LocalDepartmentRecord
+from app.records.org_department import OrgDepartmentRecord
 from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentMemberOut
 
 
 @final
-class LocalDepartmentDAO(BaseDAO[LocalDepartmentRecord]):
+class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
     table: ClassVar[str] = "local_departments"
     columns: ClassVar[tuple[str, ...]] = ("id", "tenant_id", "name", "created_at")
-    record_factory = staticmethod(LocalDepartmentRecord.from_row)
+    record_factory = staticmethod(OrgDepartmentRecord.from_row)
 
-    async def list_for_tenant(self, tenant_id: UUID) -> list[LocalDepartmentRecord]:
+    async def list_for_tenant(self, tenant_id: UUID) -> list[OrgDepartmentRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id, tenant_id, name, created_at FROM local_departments "
                 "WHERE tenant_id = %(tenant)s ORDER BY lower(name), id",
                 {"tenant": tenant_id},
             )
-            return [LocalDepartmentRecord.from_row(row) for row in rows]
+            return [OrgDepartmentRecord.from_row(row) for row in rows]
 
     async def list_assignments(self, tenant_id: UUID) -> list[AssignmentOut]:
         async with self.session() as db:
@@ -105,4 +105,4 @@ class LocalDepartmentDAO(BaseDAO[LocalDepartmentRecord]):
             return {uuid_from_row(row["id"]) for row in rows}
 
 
-local_department_dao = LocalDepartmentDAO()
+org_department_dao = OrgDepartmentDAO()

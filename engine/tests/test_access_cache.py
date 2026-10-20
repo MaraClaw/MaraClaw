@@ -282,7 +282,7 @@ async def test_denied_access_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> N
     async def has_department_access(_user_id, _agent_id):
         return False
 
-    monkeypatch.setattr(permissions.local_department_dao, "has_agent_access", has_department_access)
+    monkeypatch.setattr(permissions.org_department_dao, "has_agent_access", has_department_access)
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)

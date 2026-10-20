@@ -13,11 +13,11 @@ from app.api import departments
 from app.core.security import get_current_user
 from app.db.errors import UniqueViolationError
 from app.records.identity import IdentityRecord
-from app.records.local_department import LocalDepartmentRecord
+from app.records.org_department import OrgDepartmentRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.department import AssignmentOut, DepartmentMemberOut
-from app.services import local_departments
+from app.services import org_departments
 
 
 @asynccontextmanager
@@ -30,8 +30,8 @@ def directory(monkeypatch):
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
     actor = UserRecord(id=uuid4(), tenant_id=tenant.id, role="org_admin")
     subject = UserRecord(id=uuid4(), tenant_id=tenant.id)
-    first = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Sales", created_at=datetime.now(UTC))
-    second = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Support", created_at=datetime.now(UTC))
+    first = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Sales", created_at=datetime.now(UTC))
+    second = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Support", created_at=datetime.now(UTC))
     people = {actor.id: actor, subject.id: subject}
     department_rows = {first.id: first, second.id: second}
     assignments = {subject.id: {first.id}}
@@ -76,7 +76,7 @@ def directory(monkeypatch):
     async def create(*, obj_in):
         if any(row.name.lower() == obj_in["name"].lower() for row in department_rows.values()):
             raise UniqueViolationError()
-        row = LocalDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name=obj_in["name"], created_at=datetime.now(UTC))
+        row = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name=obj_in["name"], created_at=datetime.now(UTC))
         department_rows[row.id] = row
         return row
 
@@ -91,25 +91,25 @@ def directory(monkeypatch):
         return row
 
     monkeypatch.setattr(departments, "connection_ctx", transaction)
-    monkeypatch.setattr(local_departments, "connection_ctx", transaction)
-    for module in (departments, local_departments):
+    monkeypatch.setattr(org_departments, "connection_ctx", transaction)
+    for module in (departments, org_departments):
         monkeypatch.setattr(module, "lock_tenants", AsyncMock())
         monkeypatch.setattr(module, "lock_user", AsyncMock())
-    monkeypatch.setattr(local_departments, "lock_agent", AsyncMock())
-    monkeypatch.setattr(local_departments.user_dao, "get", get_user)
-    monkeypatch.setattr(local_departments.user_dao, "get_with_identity", get_user)
+    monkeypatch.setattr(org_departments, "lock_agent", AsyncMock())
+    monkeypatch.setattr(org_departments.user_dao, "get", get_user)
+    monkeypatch.setattr(org_departments.user_dao, "get_with_identity", get_user)
     monkeypatch.setattr(departments.tenant_dao, "get", AsyncMock(return_value=tenant))
-    monkeypatch.setattr(local_departments.local_department_dao, "get", get_department)
-    monkeypatch.setattr(local_departments.local_department_dao, "get_many", get_departments)
-    monkeypatch.setattr(local_departments.local_department_dao, "replace_assignments", replace_assignments)
-    monkeypatch.setattr(local_departments.local_department_dao, "grant_agents_for_user", assigned_agents)
-    monkeypatch.setattr(departments.local_department_dao, "list_assignments", list_assignments)
-    monkeypatch.setattr(departments.local_department_dao, "list_for_tenant", list_for_tenant)
-    monkeypatch.setattr(departments.local_department_dao, "list_members", list_members)
-    monkeypatch.setattr(departments.local_department_dao, "create", create)
-    monkeypatch.setattr(departments.local_department_dao, "update", update)
+    monkeypatch.setattr(org_departments.org_department_dao, "get", get_department)
+    monkeypatch.setattr(org_departments.org_department_dao, "get_many", get_departments)
+    monkeypatch.setattr(org_departments.org_department_dao, "replace_assignments", replace_assignments)
+    monkeypatch.setattr(org_departments.org_department_dao, "grant_agents_for_user", assigned_agents)
+    monkeypatch.setattr(departments.org_department_dao, "list_assignments", list_assignments)
+    monkeypatch.setattr(departments.org_department_dao, "list_for_tenant", list_for_tenant)
+    monkeypatch.setattr(departments.org_department_dao, "list_members", list_members)
+    monkeypatch.setattr(departments.org_department_dao, "create", create)
+    monkeypatch.setattr(departments.org_department_dao, "update", update)
     bumped = AsyncMock()
-    monkeypatch.setattr(local_departments, "bump_agent_acl_version", bumped)
+    monkeypatch.setattr(org_departments, "bump_agent_acl_version", bumped)
     app = FastAPI()
     app.include_router(departments.router, prefix="/api")
     app.dependency_overrides[get_current_user] = lambda: actor
@@ -232,9 +232,9 @@ def test_roster_is_minimal_own_tenant_and_read_only(directory, monkeypatch, role
     before = dict(rest[-1])
     mutations = AsyncMock(side_effect=AssertionError("Roster reads must not mutate or resolve grants"))
     for name in ("create", "update", "replace_assignments", "grant_agents_for_user", "list_assignments"):
-        monkeypatch.setattr(local_departments.local_department_dao, name, mutations)
+        monkeypatch.setattr(org_departments.org_department_dao, name, mutations)
     for name in ("lock_tenants", "lock_user", "lock_agent"):
-        monkeypatch.setattr(local_departments, name, mutations)
+        monkeypatch.setattr(org_departments, name, mutations)
 
     response = client.get(f"/api/departments/{first.id}/members?tenant_id={uuid4()}")
 
