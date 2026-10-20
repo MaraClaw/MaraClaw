@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 from app.api import dingtalk, feishu, google_workspace, wecom
 from app.core import security
-from app.core.json_types import JsonObject
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.user_dao import user_dao
@@ -23,10 +22,9 @@ from app.services.auth_provider import (
     AuthProviderPayload,
     BaseAuthProvider,
     ExternalUserInfo,
-    GoogleWorkspaceAuthProvider,
 )
 from app.services.auth_registry import auth_provider_registry
-from app.services.google_workspace_oauth import sign_google_sso_state, sign_google_sync_state
+from app.services.google_workspace_oauth import sign_google_sso_state
 
 PROVIDERS = ("dingtalk", "wecom", "feishu", "google_workspace")
 SECRET = "provider-secret-sentinel"
@@ -385,42 +383,3 @@ def test_google_tampered_signed_state_stops_before_lookup(client: TestClient, fl
     assert "failed" in html.lower()
     assert flow.lookups == []
     assert flow.exchanges == []
-
-
-@pytest.mark.parametrize("provider_type", ["google_workspace"])
-def test_google_admin_sync_does_not_require_scan_session(
-    client: TestClient, flow: CallbackFlow, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Given: valid signed admin authorization, independently of a completed scan session.
-    flow.row.status = "completed"
-    flow.user.role = "org_admin"
-    flow.provider.config["client_secret"] = "configured-client-secret"
-    updates: list[JsonObject] = []
-
-    async def profile(_self: GoogleWorkspaceAuthProvider, _access_token: str) -> AuthProviderPayload:
-        return {"email": "admin@example.test"}
-
-    async def probe(_access_token: str, _customer_id: str) -> None:
-        return None
-
-    async def update_provider(*, db_obj: IdentityProviderRecord, obj_in: JsonObject) -> IdentityProviderRecord:
-        updates.append(obj_in)
-        return db_obj
-
-    monkeypatch.setattr(GoogleWorkspaceAuthProvider, "fetch_openid_profile", profile)
-    monkeypatch.setattr(google_workspace, "probe_google_directory", probe)
-    monkeypatch.setattr(identity_provider_dao, "update", update_provider)
-    state = sign_google_sync_state(flow.provider.id, flow.user.id, flow.user.tenant_id)
-    # When: the unified mounted Google callback receives admin state.
-    _, html = callback(client, flow, state)
-    # Then: admin credentials are saved without touching or redeeming the scan session.
-    assert "google-workspace-sync-authorized" in html
-    assert len(updates) == 1
-    assert SECRET not in str(updates)
-    config = updates[0]["config"]
-    assert isinstance(config, dict)
-    encrypted = config["google_admin_refresh_token_encrypted"]
-    assert isinstance(encrypted, str)
-    assert security.decrypt_data(encrypted, google_workspace.settings.SECRET_KEY) == SECRET
-    assert flow.row.status == "completed"
-    assert flow.writes == []

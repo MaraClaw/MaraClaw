@@ -9,7 +9,6 @@ from app.services.auth_provider import FeishuAuthProvider
 from app.services.auth_registry import AuthProviderRegistry
 from app.services.google_workspace_oauth import (
     GOOGLE_SSO_STATE_KIND,
-    GOOGLE_SYNC_STATE_KIND,
     parse_google_oauth_state,
     sign_google_oauth_state,
     sign_google_sso_state,
@@ -154,15 +153,6 @@ def test_google_workspace_sso_state_includes_provider_id():
     parsed = parse_google_oauth_state(state)
 
     assert parsed == (GOOGLE_SSO_STATE_KIND, (sid, provider_id))
-
-
-def test_google_workspace_sync_state_still_parses_single_uuid():
-    provider_id = uuid.uuid4()
-
-    state = sign_google_oauth_state(GOOGLE_SYNC_STATE_KIND, provider_id)
-    parsed = parse_google_oauth_state(state)
-
-    assert parsed == (GOOGLE_SYNC_STATE_KIND, (provider_id,))
 
 
 def test_google_workspace_legacy_sso_state_still_parses():

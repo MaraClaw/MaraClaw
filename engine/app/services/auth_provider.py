@@ -632,13 +632,6 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
     GOOGLE_OAUTH_ENDPOINT: ClassVar[str] = "https://oauth2.googleapis.com/token"
     GOOGLE_USER_INFO_URL: ClassVar[str] = "https://openidconnect.googleapis.com/v1/userinfo"
     GOOGLE_SSO_SCOPE: ClassVar[str] = "openid email profile"
-    GOOGLE_ADMIN_SCOPES: ClassVar[tuple[str, ...]] = (
-        "openid",
-        "email",
-        "profile",
-        "https://www.googleapis.com/auth/admin.directory.user.readonly",
-        "https://www.googleapis.com/auth/admin.directory.orgunit.readonly",
-    )
 
     def __init__(self, provider: IdentityProviderRecord | None = None, config: JsonObject | None = None):
         super().__init__(provider, config)
@@ -648,19 +641,9 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
             "sso_scope", self._config_string("scope") or self.GOOGLE_SSO_SCOPE
         )
 
-    def _build_authorization_url(
-        self,
-        redirect_uri: str,
-        state: str,
-        *,
-        scopes: str | list[str] | tuple[str, ...] | None = None,
-        access_type: str = "online",
-        prompt: str = "select_account",
-    ) -> str:
-
-        scope_value = scopes or self.scope
-        if isinstance(scope_value, (list, tuple)):
-            scope_value = " ".join(scope_value)
+    @override
+    async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
+        scope_value = " ".join(self.scope) if isinstance(self.scope, list) else self.scope
 
         self.config["redirect_uri"] = redirect_uri
         params = (
@@ -669,30 +652,11 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
             + "&response_type=code"
             + f"&scope={quote(scope_value)}"
             + f"&state={quote(state or '')}"
-            + f"&access_type={quote(access_type)}"
+            + "&access_type=online"
             + "&include_granted_scopes=true"
-            + f"&prompt={quote(prompt)}"
+            + "&prompt=select_account"
         )
         return f"{self.GOOGLE_AUTHORIZE_URL}?{params}"
-
-    @override
-    async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
-        return self._build_authorization_url(
-            redirect_uri,
-            state,
-            scopes=self.scope,
-            access_type="online",
-            prompt="select_account",
-        )
-
-    async def get_admin_authorization_url(self, redirect_uri: str, state: str) -> str:
-        return self._build_authorization_url(
-            redirect_uri,
-            state,
-            scopes=self.GOOGLE_ADMIN_SCOPES,
-            access_type="offline",
-            prompt="consent",
-        )
 
     @override
     async def exchange_code_for_token(self, code: str, redirect_uri: str | None = None) -> AuthProviderPayload:
@@ -705,21 +669,6 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
                     "client_secret": self.client_secret,
                     "grant_type": "authorization_code",
                     "redirect_uri": redirect_uri or self._config_string("redirect_uri"),
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            _ = resp.raise_for_status()
-            return _payload_from_response(resp)
-
-    async def refresh_access_token(self, refresh_token: str) -> AuthProviderPayload:
-        async with httpx.AsyncClient(timeout=15, proxy=GOOGLE_HTTP_PROXY) as client:
-            resp = await client.post(
-                self.GOOGLE_OAUTH_ENDPOINT,
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )

@@ -106,8 +106,7 @@ async def test_invitation_missing_base_reports_clear_error_before_creating_codes
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flow", ["sync", "sso", "authorize"])
-async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url_actor, flow):
+async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url_actor):
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example")
     provider = IdentityProviderRecord(
         id=uuid4(),
@@ -118,25 +117,15 @@ async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url
     )
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(google_workspace, "get_google_provider", AsyncMock(return_value=provider))
-    monkeypatch.setattr(google_workspace, "load_google_sync_actor", AsyncMock(return_value=url_actor))
     monkeypatch.setattr(google_workspace_oauth.tenant_dao, "get", AsyncMock(return_value=tenant))
     exchange = AsyncMock()
     monkeypatch.setattr(google_workspace.GoogleWorkspaceAuthProvider, "exchange_code_for_token", exchange)
-    state = google_workspace_oauth.sign_google_sync_state(provider.id, url_actor.id, url_actor.tenant_id)
-    if flow == "sso":
-        scan = SimpleNamespace(
-            status="pending", tenant_id=tenant.id, expires_at=datetime.now(UTC) + timedelta(minutes=5)
-        )
-        monkeypatch.setattr(sso_scan_session_dao, "get", AsyncMock(return_value=scan))
-        state = google_workspace_oauth.sign_google_sso_state(uuid4(), provider.id)
-    path = (
-        f"/api/enterprise/identity-providers/{provider.id}/google-workspace-sync/authorize-url"
-        if flow == "authorize"
-        else "/api/auth/google_workspace/callback"
-    )
+    scan = SimpleNamespace(status="pending", tenant_id=tenant.id, expires_at=datetime.now(UTC) + timedelta(minutes=5))
+    monkeypatch.setattr(sso_scan_session_dao, "get", AsyncMock(return_value=scan))
+    state = google_workspace_oauth.sign_google_sso_state(uuid4(), provider.id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.example") as client:
-        response = await client.get(path, params={"code": "code", "state": state})
+        response = await client.get("/api/auth/google_workspace/callback", params={"code": "code", "state": state})
 
     assert response.status_code == 503
     assert "PUBLIC_BASE_URL" in response.json()["detail"]
