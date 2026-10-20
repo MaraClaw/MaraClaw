@@ -20,6 +20,8 @@ class SandboxConfigOverrides(TypedDict, total=False):
     allow_unsafe_fallback_when_bwrap_missing: bool
     default_timeout: int
     max_timeout: int
+    max_stdout_bytes: int
+    max_stderr_bytes: int
     http_proxy: str
     https_proxy: str
     no_proxy: str
@@ -58,6 +60,8 @@ class SandboxConfig(BaseModel):
     # Common options
     default_timeout: int = Field(default=30, ge=1, le=3600)
     max_timeout: int = Field(default=60, ge=1, le=3600)
+    max_stdout_bytes: int = Field(default=1_000_000, ge=0, strict=True)
+    max_stderr_bytes: int = Field(default=500_000, ge=0, strict=True)
 
     # Proxy options (explicit sandbox config only; not inherited from process env)
     http_proxy: str | None = None
@@ -170,6 +174,12 @@ class SandboxConfig(BaseModel):
                 fallback_config.default_timeout if fallback_config else 30,
             ),
             max_timeout=get_value(config.get("max_timeout"), fallback_config.max_timeout if fallback_config else 60),
+            max_stdout_bytes=get_value(
+                config.get("max_stdout_bytes"), fallback_config.max_stdout_bytes if fallback_config else 1_000_000
+            ),
+            max_stderr_bytes=get_value(
+                config.get("max_stderr_bytes"), fallback_config.max_stderr_bytes if fallback_config else 500_000
+            ),
             http_proxy=get_value(
                 config.get("http_proxy"),
                 fallback_config.http_proxy if fallback_config else None,
