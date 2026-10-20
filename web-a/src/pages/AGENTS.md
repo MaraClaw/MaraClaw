@@ -17,7 +17,7 @@ Each page owns Query/mutations + layout. Extract a component only when reused.
 | Settings | `settings.tsx` | Sign out and theme. |
 | Companies | `companies.tsx` | Debounced server `?q=`. 403 + `tenant_id` → `getTenant` fallback. |
 | Company domains | `company-detail.tsx` | Loads full `listCompanies()` then `.find`. |
-| Users | `users.tsx`, `user-detail.tsx`, `users-departments.tsx`, `users-department-queries.ts` | URL `?q=` `?company=`. Client-side filter. Scroll key `web-a:users-scroll`. Local departments are this screen, not a route. End users only. |
+| Users | `users.tsx`, `user-detail.tsx`, `users-departments.tsx`, `users-department-queries.ts` | URL `?q=` `?company=`. Client-side filter. Scroll key `web-a:users-scroll`. Org departments are this screen, not a route. End users only. |
 | Models | `llm-models.tsx` | Org + platform admin. PA uses `?company=`. Writes `/api/enterprise/llm-models`. Set primary (`/set-default`), secondary (`/set-secondary`), and fallback (`/set-fallback`). Connect Grok or ChatGPT subscription starts/polls device-code (no token fields). |
 | Search keys | `search-engine.tsx` | Keys/Analytics icon rail. `?tab=analytics` mounts analytics. Leaving the tab drops `tab`/`company`/`range`. |
 | Analytics | `search-engine-analytics.tsx` | Not a route. `?company=` `?range=`. Dual system+scoped summary is intentional. |

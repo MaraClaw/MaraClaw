@@ -41,7 +41,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - Engine I/O goes through `src/lib/http.ts`, never page-level fetch. Add a focused `lib/*-api.ts` for new domains rather than growing `workspace-api.ts`.
 - Chat attempts mint fresh HTTP-authenticated single-use tickets; JWTs stay in headers, never socket/file URLs. File previews/downloads mint per action/mount; redemption URLs stay relative/same-origin. Detailed lifetimes and stale-preview rules: lib guide.
 - No member admin screens or `/api/admin/*`; no LLM provider/model names, pickers, key or subscription controls. Org admins manage these in `web-a` `/models`, including Grok/ChatGPT subscriptions; members inherit the company pool.
-- Directory retains People and tenant-local Departments; provider organization sync and the Synced view are retired. Keep local summaries separate from custom-list agent department grants. Grants are `use`, not `manage`; local creation/membership stays in web-a Users. Member rename/permission rules: workspace and lib guides.
+- Directory retains People and Org Departments; provider organization sync and the Synced view are retired. Keep org department summaries separate from custom-list agent department grants. Grants are `use`, not `manage`; department creation/membership stays in web-a Users. Member rename/permission rules: workspace and lib guides.
 - Landing features 12 of 22 engine role templates. Channel claims must follow engine truth, not badge copy; sections guide records incomplete WhatsApp/Discord/Atlassian support and absent Email/Google Workspace channel types.
 - Static assets live in `public/`; no `src/assets/`. `public/icons.svg` is unused; workspace rails use `public/nav-icons/`.
 

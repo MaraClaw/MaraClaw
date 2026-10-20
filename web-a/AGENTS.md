@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains, Users + local departments, Models, Linkup keys + search analytics. `/tools` remains a placeholder.
+Live: auth, force-change, companies + claimed domains, Users + org departments, Models, Linkup keys + search analytics. `/tools` remains a placeholder.
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -43,7 +43,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - HTTP belongs in `src/lib/*-api.ts`, not raw `fetch` in pages/components or REST handlers in Vite.
 - Public `VITE_*` only; never ship `PLATFORM_ADMIN_*`. No hardcoded API hosts or `VITE_API_BASE_URL=http://0.0.0.0:8000`.
 - Keep Disable/Enable visible when `can_disable` is false (MaraClaw + OpenClaw).
-- Users manages tenant-local departments and memberships. Provider organization sync is retired; `web-e` Directory retains People and local Departments, without a Synced view.
+- Users manages org departments and memberships. Provider organization sync is retired; `web-e` Directory retains People and Org Departments, without a Synced view.
 - `VITE_AUTH_BYPASS` is not implemented. README structure/status and bypass claims are not authoritative.
 
 ## COMMANDS AND CHECKS
