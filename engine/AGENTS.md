@@ -18,7 +18,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 | Auth / authorization | `app/core/security.py`: JWT/bcrypt, `load_user_from_access_token`, `load_user_principal`; `app/core/permissions.py`: `check_agent_access(user, agent_id)`, no DB placeholder. |
 | Genesis / company creation | `app/services/platform_admin_seeder.py`: `ensure_platform_admin`; `app/services/tenant_provisioning.py`: `create_tenant_with_org_admin`. |
 | Additional admins / audit | `app/services/admin_provisioning.py`, `app/services/admin_audit.py`, `admin_audit_logs`; RBAC inventory: `docs/admin-apis.md`. |
-| Local departments | `app/api/departments.py`, `app/services/local_departments.py`, `app/dao/local_department_dao.py`: flat tenant directory. Provider organization sync is retired. See `app/api/AGENTS.md`. |
+| Org departments | `app/api/departments.py`, `app/services/org_departments.py`, `app/dao/org_department_dao.py`: flat, manually managed tenant directory. Provider organization sync is retired. See `app/api/AGENTS.md`. |
 | `logger` | `app/core/logging/`: queued process logger facade. |
 | Tools / `TOOL_HANDLERS` | Under `app/services/`: `agent_tool_exec/registry.py` (`@register`), `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/`; seed vs OpenAI catalogs. `read_webpage`, `search_x` (xAI); Linkup skills handle web search. |
 | LLM | `app/services/llm/`: `caller.py` orchestrates, `factory.py` builds registered protocol clients; shared types from `base.py` / `types.py`. |
@@ -34,7 +34,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 - Env names are case-sensitive; `CORS_ORIGINS` is a JSON list, single-quoted in `.env`. New settings belong in `app/config.py` and `.env.example`.
 - New DB work uses DAOs + `app.db` only; multi-write handlers use `async with connection_ctx():` for one commit. No SQLAlchemy, `app/models/`, Alembic or `create_all`. `check_no_new_sqlalchemy.py` has an empty allowlist and forbids SQLAlchemy in `app/db/`.
 - Schema truth is `scripts/schema_baseline.sql`: fresh-only initialization, idempotent rerun, no upgrade patches. `pyproject.toml` still lists `asyncpg`; add no callers. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy.
-- Fresh schemas omit `org_departments` and `org_members.department_id`, `department_path`, `synced_at`; shared members, relationships and local departments remain. This source change does not remove existing database objects or data, and has no upgrade patch.
+- Fresh schemas omit `org_departments` and `org_members.department_id`, `department_path`, `synced_at`; shared members, relationships and org departments remain. This source change does not remove existing database objects or data, and has no upgrade patch.
 - Use `from app.core.logging import logger`; no direct `loguru` in app modules except bundled `skill_creator_files/` (`check_no_direct_loguru.py`). `logging.getLogger` is allowed only in `app/core/logging/intercept.py`.
 - Routes orchestrate; reusable logic goes in services. `PROCESS_ROLE` gates side effects only: every process mounts all routers. Self-prefixed `/api/...` routers must be included without `API_PREFIX`.
 - Do not grow `agent_tools.py`, `tool_seeder.py`, `feishu_service.py`, `auth_provider.py`, `agent_seeder.py`, `okr_reporting.py`, `agentbay_client.py`. LLM `client.py` is retired: use owning modules. `app/services/agent_runtime/` is gone: do not recreate it or add a guide there.
