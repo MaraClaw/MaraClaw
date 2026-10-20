@@ -42,7 +42,7 @@ export function registerLocalDepartmentRosterTests() {
     expect(consoleErrors).toEqual([])
   })
 
-  test('one loading roster leaves its sibling empty state and provider departments independent', async ({ page }) => {
+  test('one loading roster leaves its sibling empty state independent', async ({ page }) => {
     // Given
     const state = await prepareLocalDepartments(page)
     const requested = Promise.withResolvers<void>()
@@ -65,7 +65,6 @@ export function registerLocalDepartmentRosterTests() {
       const sibling = page.getByRole('region', { name: `${siblingDepartment.name} members`, exact: true })
       await expect(sibling.getByRole('status')).toHaveText('No members in this department yet.')
       await expect(roster.getByRole('status')).toHaveText('Loading members...')
-      await expect(page.getByRole('region', { name: 'Provider-synced departments' })).toContainText('12 synced members')
       expect(state.rosterRequests).toEqual([rosterPath, siblingRosterPath])
     } finally {
       release.resolve()

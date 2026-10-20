@@ -5,7 +5,7 @@ import { registerLocalDepartmentRosterTests } from './local-department-rosters-c
 import { originalCompany } from './session-fencing-fixture'
 
 for (const role of ['member', 'agent_admin']) {
-  test(`${role} sees readonly local cards separately from provider departments`, async ({ page }) => {
+  test(`${role} sees readonly local department cards`, async ({ page }) => {
     // Given
     const state = await prepareLocalDepartments(page, role)
     // When
@@ -14,12 +14,6 @@ for (const role of ['member', 'agent_admin']) {
     const local = page.getByRole('region', { name: 'Local departments', exact: true })
     await expect(local.getByRole('heading', { name: localDepartment.name })).toBeVisible()
     await expect(local.getByRole('button', { name: /^Edit name/ })).toHaveCount(0)
-    await expect(local).not.toContainText('synced members')
-    const synced = page.getByRole('region', { name: 'Provider-synced departments' })
-    await expect(synced).toContainText('Synced operations')
-    await expect(synced).toContainText('Company / Operations')
-    await expect(synced).toContainText('12 synced members')
-    await expect(synced).toContainText('7')
     expect(state.privilegedRequests).toBe(0)
   })
 }
@@ -171,7 +165,7 @@ test('pending rename prevents duplicate submissions until the response arrives',
   await expect(page.getByRole('button', { name: 'Edit name for Engineering', exact: true })).toBeFocused()
 })
 
-test('local loading and failed requests leave provider results intact and can retry to empty', async ({ page }) => {
+test('failed local department requests can retry to empty after loading', async ({ page }) => {
   // Given
   const state = await prepareLocalDepartments(page)
   state.departments = []
@@ -183,7 +177,6 @@ test('local loading and failed requests leave provider results intact and can re
   await page.goto(directoryPath)
   const local = page.getByRole('region', { name: 'Local departments', exact: true })
   await expect(local.getByRole('status')).toHaveText('Loading local departments...')
-  await expect(page.getByRole('region', { name: 'Provider-synced departments' })).toContainText('Synced operations')
   release.resolve()
   await expect(local.getByRole('status')).toContainText('Unable to load local departments')
   await page.unroute('**/api/departments/options')

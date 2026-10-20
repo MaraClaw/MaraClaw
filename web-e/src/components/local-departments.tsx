@@ -17,7 +17,7 @@ export function LocalDepartments() {
     <section aria-labelledby="local-departments-heading" className="space-y-4">
       <div className="space-y-1">
         <h2 id="local-departments-heading" className="font-display text-lg font-semibold">Local departments</h2>
-        <p className="text-sm text-muted-foreground">Departments managed in this company, separate from provider sync.</p>
+        <p className="text-sm text-muted-foreground">Departments managed in this company.</p>
       </div>
       {departments.isError ? (
         <div className="space-y-3">

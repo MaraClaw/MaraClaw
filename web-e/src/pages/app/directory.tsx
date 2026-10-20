@@ -1,26 +1,22 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { Loader2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
-import { Badge } from '@/components/ui/badge'
 import { PersonCard, PersonCardList } from '@/components/directory-people'
 import { LocalDepartments } from '@/components/local-departments'
 import { Input } from '@/components/ui/input'
-import { listOrgDepartments, listOrgMembers, listOrgUsers } from '@/lib/directory-api'
-import { ApiError } from '@/lib/http'
+import { listOrgUsers } from '@/lib/directory-api'
 
 const tabs = [
   { id: 'people', label: 'People', icon: 'people' },
-  { id: 'synced', label: 'Synced', icon: 'synced' },
   { id: 'departments', label: 'Departments', icon: 'departments' },
 ] as const satisfies readonly SectionRailItem[]
 
 type DirectoryTab = (typeof tabs)[number]['id']
 
 function isDirectoryTab(value: string | null): value is DirectoryTab {
-  return value === 'people' || value === 'synced' || value === 'departments'
+  return value === 'people' || value === 'departments'
 }
 
 export function DirectoryPage() {
@@ -46,8 +42,6 @@ export function DirectoryPage() {
     setSearchParams(copy, { replace: true })
   }
   const users = useQuery({ queryKey: ['directory', 'users'], queryFn: listOrgUsers })
-  const members = useQuery({ queryKey: ['directory', 'members', search], queryFn: () => listOrgMembers(search) })
-  const departments = useQuery({ queryKey: ['directory', 'departments'], queryFn: listOrgDepartments })
 
   const filteredUsers = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -68,7 +62,7 @@ export function DirectoryPage() {
           <div>
             <h1 className="font-display text-2xl font-semibold">Directory</h1>
             <p className="text-sm text-muted-foreground">
-              People in this company and members synced from IM providers.
+              People and local departments in this company.
             </p>
           </div>
           {tab !== 'departments' ? (
@@ -115,62 +109,7 @@ export function DirectoryPage() {
         </PersonCardList>
       ) : null}
 
-      {tab === 'synced' ? (
-        <PersonCardList
-          loading={members.isLoading}
-          error={members.error}
-          count={(members.data ?? []).length}
-          empty={
-            query
-              ? `No synced members match “${query}”.`
-              : 'No synced org members. Connect Feishu, WeCom, or DingTalk first.'
-          }
-          errorFallback="Unable to load synced members"
-        >
-          {(members.data ?? []).map((member) => (
-            <PersonCard
-              key={member.id}
-              name={member.name}
-              avatarUrl={member.avatar_url}
-              description={member.email}
-              badge={member.provider_name ?? member.provider_type ?? 'Synced'}
-              detail={joinDetail(member.title, member.department_path)}
-            />
-          ))}
-        </PersonCardList>
-      ) : null}
-
-      {tab === 'departments' ? (
-        <div className="space-y-8">
-          <LocalDepartments />
-          <section aria-labelledby="synced-departments-heading" className="space-y-2">
-            <h2 id="synced-departments-heading" className="font-display text-lg font-semibold">Provider-synced departments</h2>
-          {departments.isLoading ? (
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          ) : null}
-          {departments.error ? (
-            <p className="text-sm text-destructive">
-              {departments.error instanceof ApiError ? departments.error.message : 'Unable to load departments'}
-            </p>
-          ) : (
-            <>
-          <p className="text-xs text-muted-foreground">{departments.data?.total_member ?? 0} synced members</p>
-          <ul className="space-y-2">
-            {(departments.data?.items ?? []).map((dept) => (
-              <li key={dept.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium">{dept.name}</p>
-                  <p className="text-xs text-muted-foreground">{dept.path}</p>
-                </div>
-                <Badge variant="soft">{dept.member_count ?? 0}</Badge>
-              </li>
-            ))}
-          </ul>
-            </>
-          )}
-          </section>
-        </div>
-      ) : null}
+      {tab === 'departments' ? <LocalDepartments /> : null}
         </div>
     </div>
   )
@@ -190,10 +129,4 @@ function contactLine(email?: string | null, username?: string | null): string | 
     return all.indexOf(value) === index
   })
   return parts.length ? parts.join(' · ') : undefined
-}
-
-function joinDetail(...values: Array<string | null | undefined>): string | undefined {
-  const parts = values.filter((value): value is string => Boolean(value))
-  const unique = parts.filter((value, index) => parts.indexOf(value) === index)
-  return unique.length ? unique.join(' · ') : undefined
 }

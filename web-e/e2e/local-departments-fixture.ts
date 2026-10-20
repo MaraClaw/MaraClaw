@@ -35,14 +35,7 @@ export async function prepareLocalDepartments(page: Page, role = 'member', switc
         await route.fulfill({ json: { ...originalUser, role } })
         return
       case '/api/org/users':
-      case '/api/enterprise/org/members':
         await route.fulfill({ json: [] })
-        return
-      case '/api/enterprise/org/departments':
-        await route.fulfill({ json: {
-          items: [{ id: 'provider-dept', name: 'Synced operations', path: 'Company / Operations', member_count: 7 }],
-          total_member: 12,
-        } })
         return
       case '/api/departments':
         state.privilegedRequests++
