@@ -13,6 +13,7 @@ from functools import partial
 from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
+from app.records.schedule import AgentScheduleRecord
 from app.services.schedule_time import next_local_run
 from app.services.scheduler_tasks import schedule_execution
 
@@ -83,6 +84,91 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
         logger.exception(f"Schedule {schedule_id} execution error: {e}")
 
 
+async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
+    """Run the claimed occurrence snapshot, leaving interrupted work recoverable."""
+    new_trace_id()
+    from app.core.permissions import is_agent_expired
+    from app.dao.activity_log_dao import agent_activity_log_dao
+    from app.dao.agent_dao import agent_dao
+    from app.dao.schedule_dao import agent_schedule_dao
+    from app.services.agent_context import build_agent_context
+    from app.services.llm import call_agent_llm_with_tools
+    from app.services.llm.background_guard import ScheduleLeaseLostError
+    from app.services.schedule_lease import ScheduleLeaseHold, in_fresh_schedule_context
+
+    token, instruction, due_at = schedule.lease_token, schedule.pending_instruction, schedule.pending_due_at
+    if token is None or instruction is None or due_at is None:
+        raise ValueError("Periodic execution requires a claimed schedule occurrence")
+    detail: JsonObject = {
+        "schedule_id": str(schedule.id),
+        "instruction": instruction,
+        "due_at": due_at.isoformat(),
+        "status": "skipped",
+    }
+    summary = f"Scheduled task skipped: {instruction[:60]}"
+    try:
+        async with ScheduleLeaseHold(schedule.id, token) as hold:
+            agent = await agent_dao.get(schedule.agent_id)
+            await hold.confirm()
+            if agent is not None and agent.status == "running" and not is_agent_expired(agent):
+                started = await in_fresh_schedule_context(
+                    agent_schedule_dao.start_occurrence(schedule.id, token, datetime.now(UTC))
+                )
+                if not started:
+                    raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before start")
+                await hold.confirm()
+                summary = f"Scheduled task failed: {instruction[:60]}"
+                detail["status"] = "failure"
+                try:
+                    static_prompt, dynamic_prompt = await build_agent_context(
+                        schedule.agent_id, agent.name, agent.role_description or ""
+                    )
+                    await hold.confirm()
+                    outcome = await call_agent_llm_with_tools(
+                        agent_id=schedule.agent_id,
+                        system_prompt=f"{static_prompt}\n\n{dynamic_prompt}",
+                        user_prompt=f"[Scheduled task] {instruction}",
+                        max_rounds=50,
+                        session_id=str(schedule.id),
+                        guard=hold,
+                    )
+                    await hold.confirm()
+                    detail["status"] = outcome.status
+                    detail["reply"] = outcome.content[:500]
+                    if outcome.status == "success":
+                        summary = f"Scheduled task executed: {instruction[:60]}"
+                except ScheduleLeaseLostError:
+                    raise
+                except Exception as exc:
+                    await hold.confirm()
+                    detail["error"] = str(exc)[:500]
+                    logger.bind(schedule_id=str(schedule.id)).exception("Periodic schedule execution failed")
+            await hold.confirm()
+
+        async def finish() -> None:
+            hold.ensure_held()
+            async with connection_ctx():
+                if not await agent_schedule_dao.finish_occurrence(schedule.id, token, datetime.now(UTC)):
+                    raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before finish")
+                hold.ensure_held()
+                _ = await agent_activity_log_dao.create(
+                    obj_in={
+                        "agent_id": schedule.agent_id,
+                        "action_type": "schedule_run",
+                        "summary": summary,
+                        "detail_json": detail,
+                        "related_id": None,
+                    }
+                )
+                hold.ensure_held()
+
+        await in_fresh_schedule_context(finish())
+    except ScheduleLeaseLostError as exc:
+        logger.bind(schedule_id=str(schedule.id)).info("Periodic schedule stopped after lease loss: {}", exc)
+    except Exception:
+        logger.bind(schedule_id=str(schedule.id)).exception("Periodic schedule execution error")
+
+
 async def _tick() -> None:
     """One scheduler tick: find and execute due schedules."""
     new_trace_id()
@@ -95,7 +181,7 @@ async def _tick() -> None:
         async with connection_ctx():
             due_schedules = await agent_schedule_dao.claim_due(now, compute_next_run)
             for sched in due_schedules:
-                schedule_execution(partial(_execute_schedule, sched.id, sched.agent_id, sched.instruction))
+                schedule_execution(partial(_execute_periodic_schedule, sched))
 
         # Audit writes swallow errors, so they must not share the claim transaction.
         if due_schedules:
@@ -107,7 +193,7 @@ async def _tick() -> None:
                 {
                     "schedule_id": str(sched.id),
                     "name": sched.name,
-                    "instruction": sched.instruction[:100],
+                    "instruction": (sched.pending_instruction or "")[:100],
                     "next_run": str(sched.next_run_at),
                 },
                 agent_id=sched.agent_id,

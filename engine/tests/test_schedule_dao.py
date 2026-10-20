@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Iterator, Mapping
-from contextlib import asynccontextmanager
-from dataclasses import asdict, replace
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
+from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 
@@ -15,109 +14,7 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.db import session as session_module
 from app.db.pool import reset_pool_for_tests
 from app.records.schedule import AgentScheduleRecord
-
-NOW = datetime(2026, 10, 15, 12, tzinfo=UTC)
-NEXT = NOW + timedelta(days=1)
-
-
-class _Cursor:
-    def __init__(self, raw: _Raw) -> None:
-        self.raw = raw
-        self.rows: list[dict[str, object]] = []
-
-    async def __aenter__(self) -> _Cursor:
-        return self
-
-    async def __aexit__(self, *_args: object) -> None:
-        return None
-
-    async def execute(self, query: str, params: Mapping[str, object]) -> None:
-        sql = " ".join(query.split())
-        self.raw.executed.append((sql, params))
-        pool = self.raw.pool
-        if sql.startswith("SELECT"):
-            assert "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s FOR UPDATE SKIP LOCKED" in sql
-            assert params == {"now": NOW}
-            self.rows = []
-            for row in pool.rows.values():
-                if (
-                    row.is_enabled
-                    and row.next_run_at is not None
-                    and row.next_run_at <= NOW
-                    and row.id not in pool.locked
-                ):
-                    pool.locked.add(row.id)
-                    self.raw.locked.add(row.id)
-                    self.rows.append(asdict(row))
-            if pool.pause_first and len(pool.connections) == 1:
-                pool.selected.set()
-                await pool.release.wait()
-            return
-        schedule_id = params["id"]
-        assert isinstance(schedule_id, UUID)
-        row = pool.rows[schedule_id]
-        if "COALESCE" in sql:
-            assert sql == (
-                "UPDATE agent_schedules SET run_count = COALESCE(run_count, 0) + 1, last_run_at = %(now)s "
-                "WHERE id = %(id)s"
-            )
-            assert params == {"id": schedule_id, "now": NOW}
-            count = (pool.counts.get(schedule_id, row.run_count) or 0) + 1
-            pool.counts[schedule_id] = count
-            pool.rows[schedule_id] = replace(row, run_count=count, last_run_at=NOW)
-        elif "is_enabled = FALSE" in sql:
-            assert sql == "UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL WHERE id = %(id)s"
-            assert params == {"id": schedule_id}
-            assert schedule_id in self.raw.locked
-            pool.rows[schedule_id] = replace(row, is_enabled=False, next_run_at=None)
-        else:
-            assert sql == "UPDATE agent_schedules SET next_run_at = %(next_run_at)s WHERE id = %(id)s"
-            assert params == {"id": schedule_id, "next_run_at": pool.next_run}
-            assert schedule_id in self.raw.locked
-            pool.rows[schedule_id] = replace(row, next_run_at=pool.next_run)
-
-    async def fetchall(self) -> list[dict[str, object]]:
-        return self.rows
-
-
-class _Raw:
-    """Mutable transaction state; locks are released only by commit or rollback."""
-
-    def __init__(self, pool: _Pool) -> None:
-        self.pool = pool
-        self.locked: set[UUID] = set()
-        self.executed: list[tuple[str, Mapping[str, object]]] = []
-        self.commits = 0
-
-    def cursor(self) -> _Cursor:
-        return _Cursor(self)
-
-    async def commit(self) -> None:
-        self.commits += 1
-        self.pool.locked.difference_update(self.locked)
-
-    async def rollback(self) -> None:
-        self.pool.locked.difference_update(self.locked)
-
-
-class _Pool:
-    """In-memory rows and lock ownership shared by competing fake raw connections."""
-
-    def __init__(self) -> None:
-        self.rows: dict[UUID, AgentScheduleRecord] = {}
-        self.counts: dict[UUID, int | None] = {}
-        self.locked: set[UUID] = set()
-        self.connections: list[_Raw] = []
-        self.next_run: datetime = NEXT
-        self.pause_first = False
-        self.selected = asyncio.Event()
-        self.release = asyncio.Event()
-
-    @asynccontextmanager
-    async def connection(self) -> AsyncGenerator[_Raw]:
-        raw = _Raw(self)
-        self.connections.append(raw)
-        yield raw
+from schedule_occurrence_persistence_fakes import NEXT as NEXT, NOW as NOW, _Pool as _Pool, _Raw as _Raw
 
 
 @pytest.fixture
@@ -159,9 +56,19 @@ async def test_claim_coalesces_downtime_without_counting_when_due(pool: _Pool) -
     claims = await agent_schedule_dao.claim_due(NOW, _next_run)
     repeated = await agent_schedule_dao.claim_due(NOW, _next_run)
     # Then the first claim commits its future slot without recording a started run.
-    assert claims == [replace(row, next_run_at=NEXT)]
+    assert len(claims) == 1
+    claim = claims[0]
+    assert claim == replace(
+        row,
+        next_run_at=NEXT,
+        pending_due_at=row.next_run_at,
+        pending_instruction=row.instruction,
+        lease_token=claim.lease_token,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    assert claim.lease_token is not None
     assert repeated == []
-    assert pool.rows[row.id] == replace(row, next_run_at=NEXT)
+    assert pool.rows[row.id] == claim
     assert [raw.commits for raw in pool.connections] == [1, 1]
 
 
@@ -223,7 +130,10 @@ async def test_claim_disables_invalid_cron_without_blocking_valid_rows(
         NOW, lambda cron, after, timezone: None if cron == "invalid" else _next_run(cron, after, timezone)
     )
     # Then the broken schedule is disabled, logged, and excluded without a count update.
-    assert claims == [replace(valid, next_run_at=NEXT)]
+    assert len(claims) == 1
+    assert claims[0].id == valid.id
+    assert claims[0].pending_due_at == valid.next_run_at
+    assert claims[0].next_run_at == NEXT
     assert pool.rows[invalid.id] == replace(invalid, is_enabled=False, next_run_at=None)
     assert len(warnings) == 1
 

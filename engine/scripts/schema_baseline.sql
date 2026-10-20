@@ -767,17 +767,31 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	is_enabled BOOLEAN NOT NULL DEFAULT true, 
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
+	pending_due_at TIMESTAMP WITH TIME ZONE,
+	pending_instruction TEXT,
+	lease_token UUID,
+	lease_expires_at TIMESTAMP WITH TIME ZONE,
+	pending_started_at TIMESTAMP WITH TIME ZONE,
 	run_count INTEGER NOT NULL, 
 	created_by UUID NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE, 
-	FOREIGN KEY(created_by) REFERENCES users (id)
+	FOREIGN KEY(created_by) REFERENCES users (id),
+	CONSTRAINT ck_agent_schedules_pending_occurrence CHECK (
+		(pending_due_at IS NULL AND pending_instruction IS NULL AND lease_token IS NULL
+		 AND lease_expires_at IS NULL AND pending_started_at IS NULL)
+		OR (pending_due_at IS NOT NULL AND pending_instruction IS NOT NULL
+		 AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND is_enabled IS TRUE)
+	)
 );
 
 CREATE INDEX IF NOT EXISTS ix_agent_schedules_agent_id ON agent_schedules (agent_id);
 
 CREATE INDEX IF NOT EXISTS ix_agent_schedules_next_run_at ON agent_schedules (next_run_at);
+
+CREATE INDEX IF NOT EXISTS ix_agent_schedules_lease_expires_at ON agent_schedules (lease_expires_at)
+WHERE is_enabled IS TRUE AND pending_due_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_tools (
 	id UUID NOT NULL, 

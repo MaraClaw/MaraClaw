@@ -2,12 +2,12 @@ import asyncio
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
-from uuid import UUID
 
 import pytest
 
 from app.dao.schedule_dao import agent_schedule_dao
 from app.db.connection import DbConnection
+from app.records.schedule import AgentScheduleRecord
 from app.services import scheduler, scheduler_tasks
 from app.services.schedule_time import ScheduleTimezoneError
 from test_schedule_dao import NOW, _Pool, _schedule, pool as pool
@@ -69,7 +69,11 @@ async def test_claim_advances_in_saved_timezone_without_replaying_missed_runs(po
     pool.rows[row.id] = row
     pool.next_run = datetime(2026, 10, 16, 5, tzinfo=UTC)
     claims = await agent_schedule_dao.claim_due(NOW, scheduler.compute_next_run)
-    assert claims == [replace(row, next_run_at=pool.next_run)]
+    assert len(claims) == 1
+    assert claims[0].next_run_at == pool.next_run
+    assert claims[0].pending_due_at == row.next_run_at
+    assert claims[0].pending_instruction == row.instruction
+    assert claims[0].timezone == row.timezone
     assert pool.rows[row.id].run_count == row.run_count
     assert pool.connections[0].commits == 1
 
@@ -92,13 +96,16 @@ async def test_tick_uses_saved_timezone_before_postcommit_dispatch(
     pool.next_run = datetime(2026, 10, 16, 5, tzinfo=UTC)
     completed = asyncio.Event()
 
-    async def execute(schedule_id: UUID, agent_id: UUID, instruction: str) -> None:
-        assert (schedule_id, agent_id, instruction) == (row.id, row.agent_id, row.instruction)
-        assert pool.rows[row.id] == replace(row, next_run_at=pool.next_run)
+    async def execute(schedule: AgentScheduleRecord) -> None:
+        assert (schedule.id, schedule.agent_id, schedule.pending_instruction) == (row.id, row.agent_id, row.instruction)
+        assert schedule == pool.rows[row.id]
+        assert pool.rows[row.id].next_run_at == pool.next_run
+        assert pool.rows[row.id].pending_due_at == row.next_run_at
+        assert pool.rows[row.id].pending_instruction == row.instruction
         assert pool.connections[0].commits == 1
         completed.set()
 
-    monkeypatch.setattr(scheduler, "_execute_schedule", execute)
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
     monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
     await scheduler._tick()
     await asyncio.wait_for(completed.wait(), timeout=1)
@@ -112,7 +119,7 @@ async def test_tick_reports_unknown_zone_without_dispatch_or_utc_fallback(
     pool.rows[row.id] = row
     execute = Mock()
     audit = AsyncMock()
-    monkeypatch.setattr(scheduler, "_execute_schedule", execute)
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
     monkeypatch.setattr("app.services.audit_logger.write_audit_log", audit)
     await scheduler._tick()
     execute.assert_not_called()
