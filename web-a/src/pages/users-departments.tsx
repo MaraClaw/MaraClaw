@@ -169,7 +169,7 @@ export function TenantUsers({
           const isSaving = savingAssignment?.tenantId === tenantId && savingAssignment.userId === row.id
           const departmentIds = isSaving ? savingAssignment.departmentIds : assignments.get(row.id) ?? []
           const error = assign.variables?.tenantId === tenantId && assign.variables.userId === row.id ? assign.error : null
-          const name = row.display_name || row.email || row.username || 'user'
+          const name = row.display_name || row.email || 'user'
           return (
             <UserCard
               key={row.id}

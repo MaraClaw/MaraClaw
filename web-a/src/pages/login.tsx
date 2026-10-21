@@ -14,7 +14,6 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { z } from 'zod'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -24,6 +23,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { loginSchema, type LoginFormValues } from '@/lib/login-schema'
 import { StaleSessionError } from '@/lib/session-policy'
 import {
   isMultiTenantResponse,
@@ -32,17 +32,6 @@ import {
   type TenantChoice,
 } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
-
-const loginSchema = z.object({
-  login_identifier: z
-    .string()
-    .trim()
-    .min(1, 'Enter your email, phone, or username')
-    .max(254, 'Identifier is too long'),
-  password: z.string().min(1, 'Enter your password').max(128, 'Password is too long'),
-})
-
-type LoginFormValues = z.infer<typeof loginSchema>
 
 const easeOut = [0.23, 1, 0.32, 1] as const
 
@@ -176,7 +165,7 @@ export function LoginPage() {
 
     try {
       const result = await login({
-        login_identifier: values.login_identifier.trim(),
+        login_identifier: values.login_identifier,
         password: values.password,
       })
       if (!isLoginCurrent(result)) return
@@ -485,7 +474,7 @@ export function LoginPage() {
                     aria-describedby={formError ? formErrorId : undefined}
                   >
                     <div className="space-y-2">
-                      <Label htmlFor={identifierId}>Email, phone, or username</Label>
+                      <Label htmlFor={identifierId}>Email</Label>
                       <div className="relative">
                         <Mail
                           className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -493,7 +482,7 @@ export function LoginPage() {
                         />
                         <Input
                           id={identifierId}
-                          type="text"
+                          type="email"
                           autoComplete="username"
                           inputMode="email"
                           spellCheck={false}

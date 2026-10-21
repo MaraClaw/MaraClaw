@@ -10,13 +10,13 @@ import { resetUsersPagination, usersPaginationOptions } from '../src/pages/users
 import { createFixture } from './helpers.ts'
 
 const row: AdminUser = {
-  id: 'member', username: 'handle', email: 'member@example.test', display_name: 'Member',
+  id: 'member', email: 'member@example.test', display_name: 'Member',
   role: 'member', is_active: false, is_genesis: false, tenant_id: 'alpha', agents_count: 3,
   created_at: '2026-10-20T00:00:00Z', source: 'local',
 }
 const scope = { tenantId: 'alpha', search: '', generation: 1 }
 
-test('paged users encode literal search and opaque cursor without changing public rows', async (t) => {
+test('paged users accept username-free rows and encode literal search and opaque cursor', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) =>
     Response.json({ items: [row], next_cursor: 'opaque/next +?=' }))

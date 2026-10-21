@@ -26,7 +26,7 @@ export function createFixture(token: string | null = 'token-a') {
 
 export function adminUser(id = 'admin-a'): UserOut {
   return {
-    id, identity_id: `identity-${id}`, username: id, email: `${id}@example.test`,
+    id, identity_id: `identity-${id}`, email: `${id}@example.test`,
     display_name: id, avatar_url: null, role: 'org_admin', is_platform_admin: false,
     tenant_id: `tenant-${id}`, title: null, primary_mobile: null,
     registration_source: null, is_active: true, email_verified: true,

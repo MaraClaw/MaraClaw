@@ -22,7 +22,7 @@ const company = (id, name, extra = {}) => ({
 })
 const initial = [company('alpha', 'Alpha Labs'), company('beta', 'Beta Works'), company('system', 'MaraClaw', { is_system: true }), company('default', 'OpenClaw', { is_default_end_user_org: true })]
 const admin = {
-  id: 'operator', identity_id: 'identity', username: 'operator', email: 'operator@example.test',
+  id: 'operator', identity_id: 'identity', email: 'operator@example.test',
   display_name: 'Operator', avatar_url: null, role: 'platform_admin', is_platform_admin: true,
   tenant_id: 'system', is_active: true, email_verified: true, must_change_password: false,
   created_at: '2026-10-20T00:00:00Z',
@@ -94,7 +94,7 @@ async function switchCompany(page) {
 
 async function replaceSameToken(page) {
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await page.getByLabel('Email, phone, or username').fill('operator@example.test')
+  await page.getByLabel('Email', { exact: true }).fill('operator@example.test')
   await page.getByLabel('Password', { exact: true }).fill('synthetic-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Preview deletion' })).toBeVisible()
