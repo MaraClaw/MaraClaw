@@ -113,8 +113,13 @@ container is role `worker,connector`. Instance IDs are generated per process.
 No long-running process runs migrations/seeds; migration failures are fatal.
 
 Cold-start replicas are **two each** for API, admin and member static servers.
-The starter preserves existing replica counts and installs/enables the persistent
-request-driven controller. See [autoscaling operations](AUTOSCALING.md) for policy,
+The first admitted startup adopts existing counts, including stopped replicas,
+and persists deployment-bound targets in private `replicas.json` before Compose
+startup. Later startups restore missing replicas to those targets, refuse excess
+before unsafe scale-down, and preserve authorized scaled counts despite defaults.
+The starter installs/enables the persistent request-driven controller only after
+readiness, pending proxy cleanup and checkpoint validation.
+See [autoscaling operations](AUTOSCALING.md) for policy,
 memory admission, safe retirement, maintenance and isolated Docker acceptance.
 
 All launcher invocations use `deploy.starter`, including no-flag Linux startup.
@@ -128,7 +133,10 @@ The controller lock is acquired only after shutdown and released before
 Compose must pass `up --wait --wait-timeout 240` before checkpointing. Recording
 requires successful bootstrap, the admitted routed counts and all serving roles
 running and healthy; readiness or recording failure preserves the prior checkpoint
-and never installs or starts the successor. Fix the cause before retrying; the
+and never installs or starts the successor. Direct recording also requires valid,
+settled durable replica authority and never adopts observed partial counts. Both
+direct autoscaler startup shortcuts acquire `controller.lock`; neither performs
+a supervisor handoff. Fix the cause before retrying; the
 verified predecessor may already have been stopped.
 
 ### Transition the shipped legacy controller
