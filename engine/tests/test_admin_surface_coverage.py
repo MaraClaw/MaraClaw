@@ -25,6 +25,7 @@ from app.records.audit import AdminAuditLogRecord
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.tenant import TenantRecord
 from app.schemas.company_admission import AdmissionTenant, RequestSummary
+from app.schemas.schemas import TokenResponse
 from app.services import admin_provisioning as provisioning
 from app.services.admin_audit import write_admin_audit
 from app.services.tenant_provisioning import AdminEmailTakenError
@@ -1342,6 +1343,8 @@ async def test_login_skips_inactive_memberships(monkeypatch):
             }
         ),
     )
+    assert isinstance(result, TokenResponse)
+    assert result.user is not None
     assert result.user.id == active.id
 
 
