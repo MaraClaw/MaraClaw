@@ -147,6 +147,13 @@ async def test_teams_authenticates_before_persist_dedup_or_dispatch(monkeypatch,
         AsyncMock(return_value=SimpleNamespace(id=AGENT_ID, display_name="Customer")),
     )
     monkeypatch.setattr(teams.channel_inbound, "open_channel_session", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        teams.channel_inbound,
+        "bind_channel_conversation",
+        AsyncMock(
+            return_value=SimpleNamespace(transcript_session=object(), reply_session=SimpleNamespace(id=AGENT_ID))
+        ),
+    )
     monkeypatch.setattr(teams.channel_inbound, "run_text_turn", dispatch)
     dispatch.return_value = "Answer"
     monkeypatch.setattr(teams, "_send_teams_message", AsyncMock())

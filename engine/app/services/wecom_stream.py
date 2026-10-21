@@ -447,7 +447,7 @@ async def _process_wecom_stream_message(
     from app.dao import agent_dao
     from app.dao.chat_dao import chat_message_dao, chat_session_dao
     from app.services.channel_session import find_or_create_channel_session
-    from app.services.channel_user_service import channel_user_service
+    from app.services.channels import inbound as channel_inbound
     from app.services.channels.inbound import routing_history_limit
     from app.services.channels.llm_bridge import _load_agent_and_model
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
@@ -461,10 +461,11 @@ async def _process_wecom_stream_message(
     normalized_chat_type = (chat_type or "single").strip().lower()
     conv_id = _build_wecom_conv_id(sender_id, chat_id, normalized_chat_type)
 
-    platform_user = await channel_user_service.resolve_channel_user(
+    platform_user = await channel_inbound.resolve_sender_user(
         agent=agent_obj,
         channel_type="wecom",
         external_user_id=sender_id,
+        is_group=normalized_chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
         extra_info={"display_name": f"WeCom {sender_id[:8]}"},
     )
     platform_user_id = platform_user.id
@@ -479,6 +480,10 @@ async def _process_wecom_stream_message(
         is_group=_is_group,
         group_name=f"WeCom Group {chat_id[:8]}" if _is_group else None,
     )
+    conversation = await channel_inbound.bind_channel_conversation(
+        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group
+    )
+    sess = conversation.transcript_session
     session_conv_id = str(sess.id)
 
     history_msgs = await chat_message_dao.list_recent(
@@ -488,18 +493,7 @@ async def _process_wecom_stream_message(
     )
     history = _conv(history_msgs)
 
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="user",
-        content=user_text,
-        conversation_id=session_conv_id,
-    )
-    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-    from app.services.channels import inbound as channel_inbound
 
     reply_text = await channel_inbound.generate_channel_reply(
         agent_id=agent_id,
@@ -507,6 +501,8 @@ async def _process_wecom_stream_message(
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        reply_session_id=conversation.reply_session.id,
+        user_message_content=user_text,
         agent_model=_agent_model,
         llm_model=_llm_model,
         fallback_model=_fallback_model,

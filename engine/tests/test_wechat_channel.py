@@ -3,6 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -30,10 +31,10 @@ class _HistoryMessage:
 
 
 class _ChannelSession:
-    __slots__ = ("id", "last_message_at")
+    __slots__: tuple[str, ...] = ("id", "last_message_at")
 
     def __init__(self, session_id: uuid.UUID) -> None:
-        self.id = session_id
+        self.id: uuid.UUID = session_id
         self.last_message_at: datetime | None = None
 
 
@@ -46,7 +47,7 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
     session_id = uuid.uuid4()
     events: list[str] = []
     captured_history: list[OpenAIMessage] = []
-    inserted: list[str] = []
+    captured_submission: dict[str, object] = {}
     channel_session = _ChannelSession(session_id)
     channel_user = _ChannelUser(user_id)
     history_rows = [
@@ -94,18 +95,6 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         events.append("list-recent")
         return history_rows
 
-    async def insert_message(**kwargs):
-        inserted.append(kwargs["role"])
-        events.append(f"insert:{kwargs['role']}")
-        return
-
-    async def session_update(*, db_obj, obj_in):
-        events.append("session-update")
-        return db_obj
-
-    async def session_get(_id: uuid.UUID):
-        return channel_session
-
     async def load_agent_and_model(
         requested_agent_id: uuid.UUID,
     ) -> tuple[_Agent, None, None]:
@@ -119,6 +108,8 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         history: list[OpenAIMessage],
         user_id: uuid.UUID,
         session_id: str,
+        reply_session_id: uuid.UUID,
+        user_message_content: str,
         agent_model: object = None,
         llm_model: object = None,
         fallback_model: object = None,
@@ -127,6 +118,7 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
 
         del agent_id, user_text, user_id, session_id, agent_model, llm_model, fallback_model
         captured_history.extend(history)
+        captured_submission.update(reply_session_id=reply_session_id, user_message_content=user_message_content)
         events.append("enqueue")
         return CHANNEL_REPLY_QUEUED
 
@@ -151,12 +143,14 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
         events.append("activity")
 
     monkeypatch.setattr(wechat_message_processor.agent_dao, "get", agent_get)
-    monkeypatch.setattr(wechat_message_processor.channel_user_service, "resolve_channel_user", resolve_channel_user)
+    monkeypatch.setattr(wechat_message_processor.channel_inbound, "resolve_sender_user", resolve_channel_user)
+    monkeypatch.setattr(
+        wechat_message_processor.channel_inbound,
+        "bind_channel_conversation",
+        AsyncMock(return_value=SimpleNamespace(transcript_session=channel_session, reply_session=channel_session)),
+    )
     monkeypatch.setattr(wechat_message_processor, "find_or_create_channel_session", find_channel_session)
     monkeypatch.setattr(wechat_message_processor.chat_message_dao, "list_recent", list_recent)
-    monkeypatch.setattr(wechat_message_processor.chat_message_dao, "insert_message", insert_message)
-    monkeypatch.setattr(wechat_message_processor.chat_session_dao, "update", session_update)
-    monkeypatch.setattr(wechat_message_processor.chat_session_dao, "get", session_get)
     monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember_context)
     monkeypatch.setattr(wechat_channel, "send_wechat_text_message", send_message)
     monkeypatch.setattr(llm_bridge, "_load_agent_and_model", load_agent_and_model)
@@ -199,13 +193,11 @@ async def test_process_wechat_message_converts_newest_first_tool_history_to_cano
     assert json.loads(arguments) == {"query": "status"}
     assert captured_history[2].get("tool_call_id") == "call_2"
     assert captured_history[2].get("content") == "found status"
-    assert inserted == ["user"]
+    assert captured_submission == {"reply_session_id": session_id, "user_message_content": "Please check."}
     assert events == [
         "agent-get",
         "remember-context",
         "list-recent",
-        "insert:user",
-        "session-update",
         "load-model",
         "enqueue",
     ]

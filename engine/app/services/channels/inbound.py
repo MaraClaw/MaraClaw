@@ -5,15 +5,18 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from app.core.json_types import JsonObject
 from app.core.row_memo import clear_entity_memo
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
+from app.services.channels.binding import bind_channel_conversation, persist_channel_user_message, resolve_bound_sender
 from app.services.chat_persist import persist_chat_message
 from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
@@ -51,9 +54,14 @@ async def resolve_sender_user(
     *,
     agent: AgentRecord,
     channel_type: str,
-    external_user_id: str,
-    extra_info: dict[str, Any] | None = None,
+    external_user_id: str | None,
+    extra_info: JsonObject | None = None,
+    is_group: bool = False,
 ) -> UserRecord:
+    if not is_group:
+        return await resolve_bound_sender(
+            agent=agent, channel_type=channel_type, external_user_id=external_user_id, extra_info=extra_info or {}
+        )
     return await channel_user_service.resolve_channel_user(
         agent=agent,
         channel_type=channel_type,
@@ -110,11 +118,10 @@ async def persist_user_message(
     agent: AgentRecord | None = None,
     touch_last_active: bool = False,
 ) -> None:
-    await persist_chat_message(
+    await persist_channel_user_message(
         agent_id=agent_id,
         user_id=user_id,
         conversation_id=str(session.id),
-        role="user",
         content=content,
         thinking=thinking,
         participant_id=participant_id,
@@ -154,6 +161,8 @@ async def generate_channel_reply(
     history: list[Any],
     user_id: uuid.UUID,
     session_id: str,
+    reply_session_id: uuid.UUID | None = None,
+    user_message_content: str | None = None,
     agent_model: AgentRecord | None = None,
     llm_model: LLMModelRecord | None = None,
     fallback_model: LLMModelRecord | None = None,
@@ -175,14 +184,23 @@ async def generate_channel_reply(
     if target is None:
         return "⚠️ Agent not found."
     prior = cast(list[OpenAIMessage], history[-ROUTING_HISTORY_LIMIT:]) if history else None
-    _ = await enqueue_openclaw_message(
-        agent=target,
-        content=user_text,
-        sender_user_id=user_id,
-        conversation_id=session_id,
-        history=prior,
-        await_wake=False,
-    )
+    async with optional_connection_ctx():
+        if user_message_content is not None:
+            await persist_channel_user_message(
+                agent_id=agent_id,
+                user_id=user_id,
+                conversation_id=session_id,
+                content=user_message_content,
+            )
+        _ = await enqueue_openclaw_message(
+            agent=target,
+            content=user_text,
+            sender_user_id=user_id,
+            conversation_id=session_id,
+            reply_session_id=reply_session_id,
+            history=prior,
+            await_wake=False,
+        )
     return CHANNEL_REPLY_QUEUED
 
 
@@ -193,6 +211,7 @@ async def run_text_turn(
     platform_user: UserRecord,
     session: ChatSessionRecord,
     user_text: str,
+    reply_session_id: uuid.UUID | None = None,
     llm_user_text: str | None = None,
     on_chunk: ChunkCallback | None = None,
     on_thinking: ThinkingCallback | None = None,
@@ -209,25 +228,23 @@ async def run_text_turn(
     ``generate_channel_reply`` receives prior turns only. The assistant
     reply is persisted later when the guest reports.
     """
+    if reply_session_id is None:
+        conversation = await bind_channel_conversation(agent=agent, platform_user=platform_user, reply_session=session)
+        session = conversation.transcript_session
+        reply_session_id = conversation.reply_session.id
     history = await load_history_for_session(
         agent_id=agent_id,
         session=session,
         context_window_size=agent.context_window_size,
     )
-    if persist_user:
-        await persist_user_message(
-            agent_id=agent_id,
-            user_id=platform_user.id,
-            session=session,
-            content=user_text,
-            agent=agent,
-        )
     reply_text = await generate_channel_reply(
         agent_id=agent_id,
         user_text=llm_user_text if llm_user_text is not None else user_text,
         history=history,
         user_id=platform_user.id,
         session_id=str(session.id),
+        reply_session_id=reply_session_id,
+        user_message_content=user_text if persist_user else None,
         agent_model=agent_model,
         llm_model=llm_model,
         fallback_model=fallback_model,
