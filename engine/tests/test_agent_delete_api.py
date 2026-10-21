@@ -1,5 +1,7 @@
 """Tests for agent delete cleanup path (pure-psycopg / DAO)."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
@@ -9,6 +11,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,7 +27,9 @@ from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services import agent_deletion_history, agent_stops
 from deletion_content_pg import seed_deletion_content
-from tenant_deletion_pg_fixtures import DeletionPostgres
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
 
 pytest_plugins = ("tenant_deletion_pg_fixtures",)
 

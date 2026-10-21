@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from app.db.session import connection_ctx
-from tenant_deletion_pg_fixtures import DeletionPostgres
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
 
 
 @dataclass(frozen=True, slots=True)

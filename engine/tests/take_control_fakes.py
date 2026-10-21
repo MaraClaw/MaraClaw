@@ -38,14 +38,14 @@ class SharedRedis:
             self.put(key, encoded, int(args[0]))
             return encoded
         if script == state._REGISTER:
-            if current:
+            if current is not None and current != "":
                 return current
             remote = state.RemoteSession.model_validate_json(str(args[0])).model_copy(update={"last_used": self.now})
             encoded = remote.model_dump_json()
             self.put(key, encoded, int(args[1]))
             return encoded
         if script == state._ACQUIRE:
-            if current:
+            if current is not None and current != "":
                 return current
             remote_value = self.values.get(keys[1])
             if remote_value is None:
@@ -64,7 +64,11 @@ class SharedRedis:
                 return ""
             registry = f"{key}:session:{lease.image_type}"
             remote_value = self.values.get(registry)
-            if not remote_value or state.RemoteSession.model_validate_json(remote_value).remote_id != lease.remote_id:
+            if (
+                remote_value is None
+                or remote_value == ""
+                or state.RemoteSession.model_validate_json(remote_value).remote_id != lease.remote_id
+            ):
                 return ""
             self.expires[key] = self.now + int(args[2])
             self.expires[registry] = self.now + int(args[3])

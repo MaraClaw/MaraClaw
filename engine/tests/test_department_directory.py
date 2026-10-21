@@ -136,7 +136,9 @@ def test_platform_admin_rename_requires_explicit_tenant(directory, selected):
 
 
 @pytest.mark.parametrize("case", ["missing", "inactive", "password", "demoted", "transferred"])
-def test_rename_rechecks_fresh_actor_before_mutation(directory, monkeypatch, case):
+def test_rename_rechecks_fresh_actor_before_mutation(
+    directory, monkeypatch, case: Literal["missing", "inactive", "password", "demoted", "transferred"]
+):
     client, actor, subject, first, _, assignments, bumped, *rest = directory
     fresh_actor = replace(actor)
     match case:

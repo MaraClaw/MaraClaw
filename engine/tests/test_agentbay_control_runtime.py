@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import override
 
 import anyio
 import pytest
@@ -21,6 +22,7 @@ class DesktopClient(agentbay_client.AgentBayClient):
         self._image_type: str | None = "linux_latest"
         self.drag_calls: list[tuple[int, int, int, int]] = []
 
+    @override
     async def computer_drag_mouse(
         self, from_x: int, from_y: int, to_x: int, to_y: int, button: str = "left"
     ) -> agentbay_client.AgentBayResponse:

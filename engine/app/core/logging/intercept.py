@@ -34,7 +34,7 @@ class InterceptHandler(logging.Handler):
             )
 
         exc: BaseException | None = None
-        if record.exc_info:
+        if record.exc_info is not None and record.exc_info is not False:
             exc_value = record.exc_info[1]
             if isinstance(exc_value, BaseException):
                 exc = exc_value

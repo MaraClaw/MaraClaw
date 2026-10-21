@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,7 +13,9 @@ from app.dao.tenant_dao import tenant_dao
 from app.db.session import bind_crud_connection, connection_ctx
 from app.records.user import UserRecord
 from deletion_content_pg import seed_deletion_content
-from tenant_deletion_pg_fixtures import DeletionPostgres
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
 
 pytest_plugins = ("tenant_deletion_pg_fixtures",)
 

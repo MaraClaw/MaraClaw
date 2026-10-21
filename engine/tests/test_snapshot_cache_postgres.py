@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,7 +17,9 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import bind_crud_connection, connection_ctx
 from app.records.user import UserRecord
-from tenant_deletion_pg_fixtures import DeletionPostgres
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
 
 pytest_plugins = ("tenant_deletion_pg_fixtures",)
 pytestmark = pytest.mark.parametrize("deletion_pg", ["warm"], indirect=True)

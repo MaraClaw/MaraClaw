@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -25,7 +25,7 @@ from app.services.llm.turn import ModelBundle
 @pytest.fixture(autouse=True)
 def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     @asynccontextmanager
-    async def connection() -> AsyncIterator[None]:
+    async def connection() -> AsyncGenerator[None]:
         yield None
 
     async def get_message(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
