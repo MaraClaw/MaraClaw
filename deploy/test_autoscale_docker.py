@@ -57,10 +57,47 @@ class DockerTests(unittest.TestCase):
         self.assertEqual(result, (24 * GIB, 0, 7 * GIB))
 
     def test_startup_when_daemon_is_eight_gib_refuses_default_stack(self) -> None:
-        with patch.object(self.docker, "containers", return_value=()), \
-                patch("deploy.autoscale_docker.run", return_value=str(8 * GIB)):
-            with self.assertRaisesRegex(ValueError, "admission refused"):
+        with patch.object(self.docker, "containers", return_value=()) as snapshot, \
+                patch("deploy.autoscale_docker.run", return_value=str(8 * GIB)) as command:
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
                 self.docker.startup(Policy())
+        snapshot.assert_called_once_with()
+        command.assert_called_once_with(["docker", "info", "--format", "{{.MemTotal}}"])
+        message = str(refused.exception)
+        for detail in ("daemon_capacity=8.000 GiB", "effective_capacity=8.000 GiB",
+                       "host_reserve=2.000 GiB", "required_stack=6.750 GiB",
+                       "external_reserve=2.000 GiB", "stack_budget=4.000 GiB",
+                       "shortfall=2.750 GiB", "Docker memory", "explicitly configured",
+                       "--development", "separate local development"):
+            self.assertIn(detail, message)
+
+    def test_startup_when_external_allocation_is_unknown_explains_hard_limit_remedy(self) -> None:
+        guest = replace(container(), project="guest", memory=0)
+        with patch.object(self.docker, "containers", return_value=(guest,)), \
+                patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)):
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
+                self.docker.startup(Policy())
+        message = str(refused.exception)
+        for detail in ("external_reserve=unknown", "unlimited external", "hard limits",
+                       "external_unlimited_gib", "shortfall=unknown"):
+            self.assertIn(detail, message)
+
+    def test_startup_when_known_external_limits_exceed_floor_reports_actual_reserve(self) -> None:
+        guest = replace(container(), project="guest", memory=3 * GIB)
+        with patch.object(self.docker, "containers", return_value=(guest,)), \
+                patch("deploy.autoscale_docker.run", return_value=str(11 * GIB)):
+            with self.assertRaises(ValueError) as refused:
+                self.docker.startup(Policy())
+        self.assertIn("external_reserve=3.000 GiB", str(refused.exception))
+        self.assertIn("shortfall=0.750 GiB", str(refused.exception))
+
+    def test_startup_when_one_byte_short_reports_exact_shortfall(self) -> None:
+        total = 43 * GIB // 4 - 1
+        with patch.object(self.docker, "containers", return_value=()), \
+                patch("deploy.autoscale_docker.run", return_value=str(total)):
+            with self.assertRaises(ValueError) as refused:
+                self.docker.startup(Policy())
+        self.assertIn("shortfall=0.000 GiB (1 bytes)", str(refused.exception))
 
     def test_startup_when_existing_counts_differ_preserves_stopped_members_not_oneoffs(self) -> None:
         members = tuple(replace(container(), identity=str(index) * 64, running=False) for index in (1, 2, 3))
@@ -80,8 +117,11 @@ class DockerTests(unittest.TestCase):
     def test_startup_when_capacity_is_capped_cannot_borrow_daemon_memory(self) -> None:
         with patch.object(self.docker, "containers", return_value=()), \
                 patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)):
-            with self.assertRaisesRegex(ValueError, "admission refused"):
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
                 self.docker.startup(Policy(capacity_gib=10))
+        self.assertIn("daemon_capacity=32.000 GiB", str(refused.exception))
+        self.assertIn("effective_capacity=10.000 GiB", str(refused.exception))
+        self.assertIn("shortfall=0.750 GiB", str(refused.exception))
 
     def test_startup_when_stopped_project_member_is_unlimited_refuses_start(self) -> None:
         members = (replace(container(), running=False, memory=0),)

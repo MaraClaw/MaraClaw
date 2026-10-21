@@ -11,7 +11,7 @@ import time
 
 from .autoscale_controller import Controller
 from .autoscale_docker import Docker
-from .autoscale_policy import Policy
+from .autoscale_policy import Policy, StartupMemoryError
 from .autoscale_proxy import Proxy
 from .autoscale_transport import ExecProxy
 
@@ -76,6 +76,9 @@ def main() -> int:
                     stop.wait(policy.sample_seconds)
             finally:
                 controller.retirement.cancel()
+    except StartupMemoryError as error:
+        logger.error("%s", error)
+        return 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, StopIteration, subprocess.TimeoutExpired):
         logger.error("controller_refused inspect_local_configuration=true")
         return 1

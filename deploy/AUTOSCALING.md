@@ -105,6 +105,33 @@ roles. On an 8-GiB daemon, the 2-GiB host reserve and 2-GiB external floor leave
 only a 4-GiB stack budget. Even the 6.75-GiB steady default cannot fit, so startup
 remains refused. Store removal does not reduce either reserve.
 
+### Troubleshoot Startup Memory Refusal
+
+Both launcher paths report the observed daemon/effective capacity, host reserve,
+required stack, external reserve, remaining stack budget and shortfall on stderr.
+Values include exact bytes; GiB values are rounded. These are the same snapshot
+and limits used for admission, not host physical/free memory or container RSS.
+For example, about 7.748 GiB allocated to Docker leaves about 3.748 GiB for the
+stack after the two 2-GiB reserves, below the 6.75-GiB production steady defaults.
+
+Increase Docker's allocated memory (Docker Desktop's resource settings on macOS),
+and check whether `capacity_gib` imposes a lower cap. Alternatively, plan maintenance
+to reduce explicitly configured memory limits or replica counts to fit the real
+workload; the starter preserves existing counts, including stopped replicas, and
+uses the larger existing/rendered limits. It does not silently shrink them.
+For a **separate local development setup**, explicitly select `--development` and
+follow [development isolation/setup](./DEVELOPMENT.md). There is no automatic
+fallback or adoption of production containers, and development keeps the reserves.
+
+`external_reserve=unknown` means a running external container has no hard memory
+limit and no explicit aggregate policy accounting. Set actual hard limits, or
+explicitly budget the aggregate unlimited allocation with `external_unlimited_gib`
+in the selected policy; this promise does not enforce those limits. More Docker
+memory alone does not clear an unknown allocation. The shortfall remains unknown
+until that allocation is accounted for. Do not lower reserves or fabricate/delete
+checkpoints to bypass refusal. Admission failure still prevents Compose startup,
+success recording and service installation; fix the budget before rerunning.
+
 After a successful starter deployment, `startup.sha256` records a digest of resolved
 Compose service hashes, built image IDs, the bootstrap container ID and the bound
 bootstrap script contents. An unchanged, healthy running deployment can then rerun

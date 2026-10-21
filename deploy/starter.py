@@ -8,7 +8,7 @@ import sys
 
 from deploy.autoscale_development import prepare
 from deploy.autoscale_docker import Docker, run
-from deploy.autoscale_policy import Policy
+from deploy.autoscale_policy import Policy, StartupMemoryError
 from deploy import starter_service
 from deploy.starter_host import execute, prerequisites, private_directory
 
@@ -90,9 +90,12 @@ def main() -> int:
             os.chdir(root)
             os.execv(command[0], command)
         return 0
+    except StartupMemoryError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, StopIteration,
             subprocess.SubprocessError) as error:
-        print(f"startup refused ({type(error).__name__}): {error}", file=sys.stderr)
+        print(f"startup refused ({type(error).__name__}): inspect local configuration and Docker", file=sys.stderr)
         return 1
 
 

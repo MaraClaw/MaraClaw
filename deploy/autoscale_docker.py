@@ -7,7 +7,7 @@ import re
 import subprocess
 from typing import NotRequired, TypedDict
 
-from deploy.autoscale_policy import GIB, POOLS, Policy, admit
+from deploy.autoscale_policy import GIB, POOLS, Policy, StartupMemoryError, admit
 from deploy.autoscale_development import validate
 
 
@@ -242,5 +242,5 @@ class Docker:
         if self.development is not None:
             required = max(required, steady + bootstrap)
         if not admit(total, required, external, policy):
-            raise ValueError("startup memory admission refused")
+            raise StartupMemoryError(total, required, external, policy)
         return counts
