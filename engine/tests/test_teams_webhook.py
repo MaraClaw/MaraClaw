@@ -1,6 +1,5 @@
 import json
 import time
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -12,7 +11,7 @@ from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 
 from app.api import teams
 from app.core.json_types import json_object_from, object_call
-from app.services.channels import teams_auth
+from app.services.channels import dedup, submissions, teams_auth
 
 SERVICE_URL = "https://smba.trafficmanager.net/amer/"
 
@@ -138,24 +137,9 @@ async def test_teams_authenticates_before_persist_dedup_or_dispatch(monkeypatch,
     monkeypatch.setattr(teams_auth, "_fetch_signing_keys", fetch_keys)
     monkeypatch.setattr(teams.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(teams.channel_config_dao, "update", update)
-    monkeypatch.setattr(teams.channel_dedup, "already_processed_shared", seen)
-    monkeypatch.setattr(teams.channel_dedup, "mark_processed_shared", mark)
-    monkeypatch.setattr(teams.channel_inbound, "load_agent", AsyncMock(return_value=SimpleNamespace(creator_id=None)))
-    monkeypatch.setattr(
-        teams.channel_inbound,
-        "resolve_sender_user",
-        AsyncMock(return_value=SimpleNamespace(id=AGENT_ID, display_name="Customer")),
-    )
-    monkeypatch.setattr(teams.channel_inbound, "open_channel_session", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        teams.channel_inbound,
-        "bind_channel_conversation",
-        AsyncMock(
-            return_value=SimpleNamespace(transcript_session=object(), reply_session=SimpleNamespace(id=AGENT_ID))
-        ),
-    )
-    monkeypatch.setattr(teams.channel_inbound, "run_text_turn", dispatch)
-    dispatch.return_value = "Answer"
+    monkeypatch.setattr(dedup, "already_processed_shared", seen)
+    monkeypatch.setattr(dedup, "mark_processed_shared", mark)
+    monkeypatch.setattr(submissions, "accept_channel_event", dispatch)
     monkeypatch.setattr(teams, "_send_teams_message", AsyncMock())
     monkeypatch.setattr(teams, "logger", logs)
     async with webhook_client(teams.router) as client:
@@ -165,7 +149,7 @@ async def test_teams_authenticates_before_persist_dedup_or_dispatch(monkeypatch,
         assert response.json() == {"ok": True}
         assert update.call_args.kwargs["obj_in"]["extra_config"]["service_url"] == SERVICE_URL
         dispatch.assert_awaited_once()
-        mark.assert_awaited_once_with("teams", "teams-event", cap=2000)
+        mark.assert_not_awaited()
     else:
         assert response.status_code == 401
         assert not update.called

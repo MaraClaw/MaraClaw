@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from starlette.requests import Request
 
-from app.api import background_tasks, google_chat as google_chat_api
+from app.api import google_chat as google_chat_api
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
 from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
 from app.services.channels.google_chat import (
@@ -286,10 +286,10 @@ def test_chat_issuer_constant():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
-async def test_webhook_acks_blocked_processing_and_marks_only_success(monkeypatch, fails):
+async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failure(monkeypatch, fails):
     # Given
     agent_id = uuid4()
-    config = SimpleNamespace(is_configured=True, verification_token="token")
+    config = SimpleNamespace(id=uuid4(), app_id="chat-app", is_configured=True, verification_token="token")
     monkeypatch.setattr(google_chat_api.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat_api.gchat, "audience_for_config", lambda _: "")
     monkeypatch.setattr(google_chat_api.gchat, "has_service_account", lambda _: True)
@@ -313,42 +313,34 @@ async def test_webhook_acks_blocked_processing_and_marks_only_success(monkeypatc
         ),
     )
     marked = AsyncMock()
-    monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
+    monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
     monkeypatch.setattr(google_chat_api.channel_dedup, "mark_processed_shared", marked)
-    started, release, observed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    started, release = asyncio.Event(), asyncio.Event()
     failure = RuntimeError("message processing failed")
-    logger = Mock()
-    logger.opt.return_value.error.side_effect = lambda _: observed.set()
-    monkeypatch.setattr(background_tasks, "logger", logger)
+    from app.services.channels import submissions
 
-    async def process(**kwargs):
+    async def accept(event):
+        assert message_name in event.event_key
         started.set()
         await release.wait()
         if fails:
             raise failure
 
-    async def mark_processed(*args):
-        observed.set()
-
-    marked.side_effect = mark_processed
-    monkeypatch.setattr(google_chat_api, "_process_message_event", process)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    schedule = AsyncMock()
+    monkeypatch.setattr(google_chat_api, "schedule_background_task", schedule)
     # When
+    operation = asyncio.create_task(google_chat_api.google_chat_event_webhook(agent_id, request))
     try:
-        result = await asyncio.wait_for(google_chat_api.google_chat_event_webhook(agent_id, request), 1)
         await asyncio.wait_for(started.wait(), 1)
-        # Then
-        assert result == {}
-        marked.assert_not_awaited()
-        assert not observed.is_set()
+        assert not operation.done()
     finally:
         release.set()
-        await asyncio.wait_for(observed.wait(), 1)
+    # Then
     if fails:
-        marked.assert_not_awaited()
-        logger.opt.assert_called_once_with(exception=failure)
-        logger.opt.return_value.error.assert_called_once_with(
-            "Background task failed: Google Chat process message event"
-        )
+        with pytest.raises(RuntimeError, match="message processing failed"):
+            await asyncio.wait_for(operation, 1)
     else:
-        marked.assert_awaited_once_with("google_chat", message_name)
-        logger.opt.assert_not_called()
+        assert await asyncio.wait_for(operation, 1) == {}
+    marked.assert_not_awaited()
+    schedule.assert_not_called()

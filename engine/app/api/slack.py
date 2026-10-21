@@ -173,9 +173,6 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     from app.services.channels import dedup as channel_dedup
 
-    if event_id and await channel_dedup.already_processed_shared("slack", event_id, cap=2000):
-        return {"ok": True}
-
     if ((bot_id := event.get("bot_id")) is not None and bot_id) or (
         (subtype := event.get("subtype")) is not None and subtype
     ):
@@ -194,6 +191,11 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
     slack_files = [json_object_from(item) for item in files_raw] if isinstance(files_raw, list) else []
 
     if not user_text and not slack_files:
+        return {"ok": True}
+
+    from app.services.channels.slack_submissions import accept_slack_event
+
+    if await accept_slack_event(config, body):
         return {"ok": True}
 
     channel_id = json_as_str_or(event.get("channel"))

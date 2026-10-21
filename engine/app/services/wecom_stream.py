@@ -9,7 +9,6 @@ import inspect
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC
 from typing import TypeIs, cast
 from unittest.mock import patch
 
@@ -255,6 +254,7 @@ class WeComStreamManager:
                         user_text=user_text,
                         chat_id=chat_id,
                         chat_type=chat_type,
+                        message_id=str(body.get("msgid") or body.get("msg_id") or ""),
                     )
 
                     # Reply via streaming
@@ -440,103 +440,29 @@ async def _process_wecom_stream_message(
     user_text: str,
     chat_id: str = "",
     chat_type: str = "single",
+    message_id: str = "",
 ) -> str:
-    """Process a WeCom message through the LLM pipeline and return the reply text."""
-    from datetime import datetime
+    from app.dao.channel_config_dao import channel_config_dao
+    from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-    from app.dao import agent_dao
-    from app.dao.chat_dao import chat_message_dao, chat_session_dao
-    from app.services.channel_session import find_or_create_channel_session
-    from app.services.channels import inbound as channel_inbound
-    from app.services.channels.inbound import routing_history_limit
-    from app.services.channels.llm_bridge import _load_agent_and_model
-    from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-    agent_obj = await agent_dao.get(agent_id)
-    if not agent_obj:
-        logger.warning(f"[WeCom Stream] Agent {agent_id} not found")
-        return "Agent not found"
-
-    ctx_size = routing_history_limit(agent_obj.context_window_size)
-    normalized_chat_type = (chat_type or "single").strip().lower()
-    conv_id = _build_wecom_conv_id(sender_id, chat_id, normalized_chat_type)
-
-    platform_user = await channel_inbound.resolve_sender_user(
-        agent=agent_obj,
-        channel_type="wecom",
-        external_user_id=sender_id,
-        is_group=normalized_chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
-        extra_info={"display_name": f"WeCom {sender_id[:8]}"},
+    if not message_id:
+        raise ValueError("WeCom message ID is required")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    if config is None:
+        raise RuntimeError("WeCom channel configuration unavailable")
+    await accept_channel_event(
+        ChannelEvent(
+            config_id=config.id,
+            agent_id=agent_id,
+            provider="wecom",
+            event_key=f"{config.app_id}:{chat_id}:{message_id}",
+            sender_id=sender_id,
+            conversation_id=_build_wecom_conv_id(sender_id, chat_id, chat_type),
+            text=user_text,
+            is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
+        )
     )
-    platform_user_id = platform_user.id
-
-    _is_group = normalized_chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id)
-    sess = await find_or_create_channel_session(
-        agent_id=agent_id,
-        user_id=agent_obj.creator_id if _is_group else platform_user_id,
-        external_conv_id=conv_id,
-        source_channel="wecom",
-        first_message_title=user_text,
-        is_group=_is_group,
-        group_name=f"WeCom Group {chat_id[:8]}" if _is_group else None,
-    )
-    conversation = await channel_inbound.bind_channel_conversation(
-        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group
-    )
-    sess = conversation.transcript_session
-    session_conv_id = str(sess.id)
-
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=ctx_size,
-    )
-    history = _conv(history_msgs)
-
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-    reply_text = await channel_inbound.generate_channel_reply(
-        agent_id=agent_id,
-        user_text=user_text,
-        history=history,
-        user_id=platform_user_id,
-        session_id=session_conv_id,
-        reply_session_id=conversation.reply_session.id,
-        user_message_content=user_text,
-        agent_model=_agent_model,
-        llm_model=_llm_model,
-        fallback_model=_fallback_model,
-    )
-    logger.info(f"[WeCom Stream] LLM reply: {reply_text[:100]}")
-    if channel_inbound.is_queued_channel_reply(reply_text):
-        return ""
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="assistant",
-        content=reply_text,
-        conversation_id=session_conv_id,
-    )
-    try:
-        import uuid as _uuid_ws
-
-        _sess_fresh = await chat_session_dao.get(_uuid_ws.UUID(session_conv_id))
-        if _sess_fresh:
-            _ = await chat_session_dao.update(db_obj=_sess_fresh, obj_in={"last_message_at": datetime.now(UTC)})
-    except ValueError, TypeError:
-        pass
-
-    from app.services.activity_logger import log_activity
-
-    await log_activity(
-        agent_id,
-        "chat_reply",
-        f"Replied to WeCom message: {reply_text[:80]}",
-        detail={"channel": "wecom", "user_text": user_text[:200], "reply": reply_text[:500]},
-    )
-
-    return reply_text
+    return ""
 
 
 wecom_stream_manager = WeComStreamManager()

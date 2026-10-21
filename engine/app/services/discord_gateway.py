@@ -14,16 +14,12 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
 from types import ModuleType
 from typing import Protocol, TypeIs
 
-from app.core.json_types import JsonObject, json_as_str_or, json_object_from
+from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.user_dao import user_dao
 from app.runtime.tasks import EventTasks, cancel_tasks
 
 
@@ -46,6 +42,7 @@ class _DiscordChannelLike(Protocol):
 
 
 class _DiscordMessageLike(Protocol):
+    id: int
     author: _DiscordAuthorLike
     guild: object | None
     mentions: Sequence[object]
@@ -233,100 +230,30 @@ class DiscordGatewayManager:
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
         try:
-            from app.services.channel_session import find_or_create_channel_session
-            from app.services.channels import inbound as channel_inbound
-            from app.services.channels.llm_bridge import _load_agent_and_model
-            from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
+            from app.dao.channel_config_dao import channel_config_dao
+            from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
             sender_id = str(message.author.id)
             channel_id = str(message.channel.id)
             conv_id = f"discord_dm_{sender_id}" if message.guild is None else f"discord_{channel_id}_{sender_id}"
 
-            agent_obj = await agent_dao.get(agent_id)
-            if not agent_obj:
-                return "Agent not found."
-            from app.services.channels.inbound import routing_history_limit
-
-            ctx_size = routing_history_limit(agent_obj.context_window_size)
-
-            _discord_display_name = message.author.display_name or message.author.name
-            _display = _discord_display_name or f"Discord User {sender_id[:8]}"
-            _extra_info: JsonObject = {"name": _display}
-
-            _platform_user = await channel_inbound.resolve_sender_user(
-                agent=agent_obj,
-                channel_type="discord",
-                external_user_id=sender_id,
-                is_group=message.guild is not None,
-                extra_info=_extra_info,
-            )
-
-            if (
-                _discord_display_name
-                and _platform_user.display_name
-                and _platform_user.display_name.startswith("Discord User ")
-                and _platform_user.display_name != _discord_display_name
-            ):
-                _platform_user = (
-                    await user_dao.update(db_obj=_platform_user, obj_in={"display_name": _discord_display_name})
-                    or _platform_user
-                )
-            platform_user_id = _platform_user.id
-
-            sess = await find_or_create_channel_session(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                external_conv_id=conv_id,
-                source_channel="discord",
-                first_message_title=user_text,
-                is_group=message.guild is not None,
-            )
-            conversation = await channel_inbound.bind_channel_conversation(
-                agent=agent_obj, platform_user=_platform_user, reply_session=sess, is_group=message.guild is not None
-            )
-            sess = conversation.transcript_session
-            session_conv_id = str(sess.id)
-
-            history_msgs = await chat_message_dao.list_recent(
-                agent_id=agent_id,
-                conversation_id=session_conv_id,
-                limit=ctx_size,
-            )
-            history = _conv(history_msgs)
-
-            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-            reply_text = await channel_inbound.generate_channel_reply(
-                agent_id=agent_id,
-                user_text=user_text,
-                history=history,
-                user_id=platform_user_id,
-                session_id=session_conv_id,
-                reply_session_id=conversation.reply_session.id,
-                user_message_content=user_text,
-                agent_model=_agent_model,
-                llm_model=_llm_model,
-                fallback_model=_fallback_model,
-            )
-            logger.info(f"[Discord GW] LLM reply for {agent_id}: {reply_text[:80]}")
-            if channel_inbound.is_queued_channel_reply(reply_text):
+            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+            if config is None:
                 return None
-
-            _ = await chat_message_dao.insert_message(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                role="assistant",
-                content=reply_text,
-                conversation_id=session_conv_id,
+            await accept_channel_event(
+                ChannelEvent(
+                    config_id=config.id,
+                    agent_id=agent_id,
+                    provider="discord",
+                    event_key=f"{channel_id}:{message.id}",
+                    sender_id=sender_id,
+                    conversation_id=conv_id,
+                    text=user_text,
+                    is_group=message.guild is not None,
+                    group_session_owner="sender",
+                )
             )
-            try:
-                fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-                if fresh:
-                    _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-            except ValueError, TypeError:
-                pass
-
-            return reply_text
+            return None
 
         except Exception as e:
             logger.exception(f"[Discord GW] Error handling message for {agent_id}: {e}")

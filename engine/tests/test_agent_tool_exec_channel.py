@@ -9,15 +9,12 @@ from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import get_platform_user_by_org_member
 
 
-def test_channel_contextvars_are_exported_from_channel_context_and_apis() -> None:
+def test_channel_contextvars_are_exported_from_channel_context() -> None:
     context = importlib.import_module("app.services.agent_tool_exec.channel_context")
 
     assert channel_context.channel_file_sender is context.channel_file_sender
     assert channel_context.channel_web_agent_id is context.channel_web_agent_id
     assert channel_context.channel_feishu_sender_open_id is context.channel_feishu_sender_open_id
-
-    teams_api = importlib.import_module("app.api.teams")
-    assert teams_api._cfs_s is context.channel_file_sender
 
 
 def test_channel_runtime_dependencies_import_from_owners() -> None:

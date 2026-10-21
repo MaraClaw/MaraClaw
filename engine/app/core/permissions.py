@@ -125,7 +125,7 @@ def _access_from_permissions(
     return None
 
 
-async def _compute_access_level(user: _UserLike, agent: _AgentLike) -> str | None:
+async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> str | None:
     early = _access_without_permissions(user, agent)
     if isinstance(early, _NeedPerms):
         permissions = await agent_permission_dao.list_for_agent(agent.id)
@@ -161,7 +161,7 @@ async def get_agent_access_level_for_user_id(
     current_agent = await agent_dao.get(agent.id)
     if current_agent is None:
         return None
-    level = await _compute_access_level(user, current_agent)
+    level = await compute_agent_access_level(user, current_agent)
     if level in {"manage", "use"}:
         await access_cache.set_cached_level(user, agent.id, level, observed_ver=observed_ver)
     return level
@@ -373,7 +373,7 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, *, fresh: boo
         access_cache.memo_set(user_id, agent_id, agent, cached)
         return agent, cached
 
-    level = await _compute_access_level(user, agent)
+    level = await compute_agent_access_level(user, agent)
     if level not in {"manage", "use"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
     _reject_expired_use(agent, level)

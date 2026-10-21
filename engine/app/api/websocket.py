@@ -118,34 +118,16 @@ class ConnectionManager:
         session_id: str,
         message: RealtimeMessage,
         user_id: str | None = None,
-    ):
-        """Send to sockets on ``session_id``, or the user's live sockets if none match."""
-        wanted = (session_id or "").strip().lower()
-        local = self._local_connections(agent_id)
-        session_hits = [(ws, sid, uid) for ws, sid, uid in local if (sid or "").strip().lower() == wanted]
-        if session_hits or is_shared_target(agent_id, wanted):
-            await realtime_router.route_message(
-                agent_id=agent_id,
-                message=message,
-                local_connections=session_hits,
-                session_id=wanted,
-            )
-            return
-        if user_id not in (None, ""):
-            logger.info(
-                "[WS] no socket for session {} agent={}; delivering to user {}",
-                session_id,
-                agent_id,
-                user_id,
-            )
-            await realtime_router.route_message(
-                agent_id=agent_id,
-                message=message,
-                local_connections=local,
-                user_id=user_id,
-            )
-            return
-        logger.warning("[WS] dropped live reply; no socket agent={} session={}", agent_id, session_id)
+    ) -> None:
+        """Send only to this session, optionally restricting private-session recipients by user."""
+        wanted = session_id.strip().lower()
+        await realtime_router.route_message(
+            agent_id=agent_id,
+            message=message,
+            local_connections=self._local_connections(agent_id),
+            session_id=wanted,
+            user_id=None if is_shared_target(agent_id, wanted) else user_id,
+        )
 
     async def send_to_user(self, agent_id: str, user_id: str, message: RealtimeMessage):
         """Send message to all live WebSocket sessions of a given platform user for an agent."""

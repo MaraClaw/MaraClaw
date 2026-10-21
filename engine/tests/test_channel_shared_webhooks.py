@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding
 from channel_shared_webhook_fixtures import (
-    ACK_ONLY,
     WEBHOOKS,
     context as context,
     invoke_webhook,
@@ -26,11 +25,9 @@ async def test_direct_webhook_binds_before_history_and_attachment_persistence(we
     # Then
     assert history.await_args.kwargs["conversation_id"] == str(shared.id)
     assert persist.await_args.kwargs["conversation_id"] == str(shared.id)
-    if webhook in ACK_ONLY:
-        enqueue.assert_not_awaited()
-    else:
-        assert enqueue.await_args.kwargs["conversation_id"] == str(shared.id)
-        assert enqueue.await_args.kwargs["reply_session_id"] == route.id
+    assert enqueue.await_args.kwargs["conversation_id"] == str(shared.id)
+    assert enqueue.await_args.kwargs["reply_session_id"] == route.id
+    assert enqueue.await_args.kwargs["deduplicate"] is False
 
 
 @pytest.mark.parametrize("webhook", [name for name in WEBHOOKS if name != "whatsapp"])

@@ -7,7 +7,40 @@ MaraClaw connects digital employees to external chat products through **agent-sc
 gateway) and optional proactive send via `send_channel_message`.
 
 Shared package: **`app/services/channels/`** (types, config CRUD, inbound helpers,
-dedupe, redaction, Google Chat transport).
+transactional submissions, redaction, Google Chat transport).
+
+## Inbound Acceptance
+
+Provider-native message/event IDs identify inbound submissions in
+`channel_event_receipts`, scoped by channel configuration and provider. Redis/local
+dedupe caches are not the acceptance authority. Receipts survive transcript deletion
+and remain for the lifetime of the channel configuration.
+
+`channels/submissions.py` rechecks configuration, sender identity, company status,
+and agent access before accepting or replaying an event. Matching accepted replays
+do not consume quota or require model availability again. New submissions enforce
+agent expiry and charge the actual sender's conversation quota.
+
+Receipt reservation, transcript persistence, quota charging, guest enqueue, and the
+originating IM reply intent commit together. A failed transaction leaves the event
+retryable. Distinct native event IDs remain distinct even when text is identical.
+Direct messages retain the shared agent transcript and provider-specific reply
+session; group conversations retain their separate session routing.
+
+WhatsApp validates the raw-body signature before processing, visits every message
+in a batch, and returns a retryable failure when acceptance fails. Earlier committed
+events replay safely when the provider redelivers the batch.
+
+WeCom text/KF webhook acknowledgments wait for acceptance. DingTalk stream callbacks
+await acceptance on the application loop before returning an SDK success acknowledgment;
+an unavailable loop or failed acceptance returns a retryable SDK error. Feishu WebSocket
+event frames likewise receive success only after acceptance, including multipart frames.
+Provider retry policies and connection lifetime still bound redelivery; these acknowledgments
+do not promise exactly-once external delivery.
+
+Replies are produced by OpenClaw and returned through `/gateway/report`, not by a
+second synchronous engine LLM turn. See [gateway report delivery](gateway-report-delivery.md)
+for durable chunk checkpoints, provider backoff, and delivery ambiguity limits.
 
 ## Canonical types
 
@@ -18,7 +51,7 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 | `feishu` | Feishu / Lark | stream + event webhook | `api/feishu.py` + `feishu_ws.py` (inbound via `channels.inbound`) |
 | `wecom` | WeCom | stream | `api/wecom.py`, `services/wecom_stream.py` |
 | `dingtalk` | DingTalk | stream | `api/dingtalk.py`, `services/dingtalk_stream.py` |
-| `slack` | Slack | Events API webhook | `api/slack.py` (config via `channels.config`, dedup shared) |
+| `slack` | Slack | Events API webhook | `api/slack.py` (durable native-event submissions) |
 | `discord` | Discord | gateway | `api/discord_bot.py`, `services/discord_gateway.py` |
 | `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (inbound via `channels.inbound`) |
 | `google_chat` | Google Chat | Chat app HTTP endpoint | `api/google_chat.py` (full shared package) |
@@ -30,17 +63,18 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 `app/services/channels/types.py`.
 
-## Deploy / upgrade
+## Fresh Installation
 
-1. Run bootstrap so enum labels exist on **existing** databases:
+1. Initialize a fresh database with the schema baseline:
 
    ```bash
    uv run python -m app.scripts.bootstrap_db
    ```
 
-   Patches add `google_chat` to `channel_type_enum` and `im_provider_enum`.
+   Bootstrap is fresh-only initialization, not an existing-database upgrade mechanism.
+   Changes to `scripts/schema_baseline.sql` do not migrate deployed schemas.
 
-2. Ensure `PROCESS_ROLE` includes `bootstrap` or `all` on first deploy after upgrade.
+2. Use the `bootstrap` or `all` process role for initial bootstrap, not API/worker/connector roles.
 3. Public HTTPS base URL must be correct (`platform_service.get_public_base_url`) so
    webhook-url helpers return reachable endpoints.
 
@@ -81,11 +115,14 @@ Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 
 - Bearer JWT verified with Chat system certs; **issuer must be**
   `chat@system.gserviceaccount.com`; audience = project number.
-- With **service account**: webhook returns `{}` quickly and delivers the LLM reply
-  asynchronously via Chat API (avoids Google’s ~30s sync limit).
-- Without service account: bounded sync LLM (25s timeout) with sync text response.
-- Attachments: not downloaded yet; bot replies with an explicit “not supported” notice.
-- Event dedupe is process-local (`channels.dedup`); multi-worker still may double-process.
+- Text messages with a native message name commit durable acceptance before the
+  webhook returns `{}`. OpenClaw executes the turn later; the report relay sends
+  the reply through Chat API, using a service account. Missing delivery credentials
+  remain retryable after repair; there is no synchronous LLM completion guarantee.
+- Native-event receipts, not process-local or Redis hints, prevent duplicate
+  acceptance across workers. Authorization is checked again on redelivery.
+- Attachments are not downloaded by this integration. Attachment-only events
+  retain the existing explicit unsupported-attachment response.
 
 ### Proactive send
 

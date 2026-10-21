@@ -17,6 +17,7 @@ from app.records.user import UserRecord
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import channel_user_service
 from app.services.channels.binding import bind_channel_conversation, persist_channel_user_message, resolve_bound_sender
+from app.services.channels.submissions import ChannelEvent, accept_channel_event
 from app.services.chat_persist import persist_chat_message
 from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
 from app.services.llm.utils import convert_chat_messages_to_llm_format
@@ -169,6 +170,7 @@ async def generate_channel_reply(
     on_chunk: ChunkCallback | None = None,
     on_thinking: ThinkingCallback | None = None,
     on_tool_call: ToolCallback | None = None,
+    native_event: ChannelEvent | None = None,
 ) -> str:
     """Queue the inbound turn for the OpenClaw guest. Reply arrives via gateway report."""
     from typing import cast
@@ -177,6 +179,9 @@ async def generate_channel_reply(
     from app.services.llm.types import OpenAIMessage
     from app.services.openclaw_routing import enqueue_openclaw_message
 
+    if native_event is not None:
+        await accept_channel_event(native_event, content=user_text, saved_content=user_message_content)
+        return CHANNEL_REPLY_QUEUED
     del llm_model, fallback_model, on_chunk, on_thinking, on_tool_call
     target = agent_model
     if target is None:
@@ -221,6 +226,7 @@ async def run_text_turn(
     fallback_model: LLMModelRecord | None = None,
     persist_user: bool = True,
     touch_last_active_on_reply: bool = True,
+    native_event: ChannelEvent | None = None,
 ) -> str:
     """Load history → persist user (optional) → enqueue for the OpenClaw guest.
 
@@ -228,6 +234,9 @@ async def run_text_turn(
     ``generate_channel_reply`` receives prior turns only. The assistant
     reply is persisted later when the guest reports.
     """
+    if native_event is not None:
+        await accept_channel_event(native_event, content=llm_user_text or user_text, saved_content=user_text)
+        return CHANNEL_REPLY_QUEUED
     if reply_session_id is None:
         conversation = await bind_channel_conversation(agent=agent, platform_user=platform_user, reply_session=session)
         session = conversation.transcript_session

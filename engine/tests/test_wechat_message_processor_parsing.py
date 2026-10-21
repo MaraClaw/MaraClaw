@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
-from typing import Never
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.core.json_types import JsonObject
+from app.records.channel_config import ChannelConfigRecord
 from app.services import wechat_channel, wechat_message_processor
-from app.services.channels import llm_bridge
+from app.services.channels import submissions
 
 
-def _channel_config(extra_config: JsonObject) -> SimpleNamespace:
-    return SimpleNamespace(agent_id=uuid.uuid4(), channel_type="wechat", extra_config=extra_config)
+def _channel_config(extra_config: JsonObject) -> ChannelConfigRecord:
+    return ChannelConfigRecord(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        channel_type="wechat",
+        app_id="wechat-bot",
+        extra_config=extra_config,
+    )
 
 
 def _valid_message() -> JsonObject:
     return {
+        "message_id": "message-1",
         "from_user_id": "wechat-user",
         "context_token": "context-token",
         "item_list": [{"type": 1, "text_item": {"text": "message"}}],
@@ -88,21 +95,17 @@ def test_parse_wechat_delivery_config_defaults_malformed_optional_values() -> No
 async def test_process_wechat_message_returns_before_database_for_malformed_boundary_values(
     monkeypatch: pytest.MonkeyPatch,
     raw_message: JsonObject,
-    config: SimpleNamespace,
+    config: ChannelConfigRecord,
 ) -> None:
-    llm_calls: list[None] = []
+    replay = AsyncMock(return_value=False)
+    accept = AsyncMock()
+    remember = AsyncMock()
+    monkeypatch.setattr(submissions, "is_channel_event_replay", replay)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember)
 
-    async def unexpected_agent_get(_agent_id: uuid.UUID):
-        raise AssertionError("database access")
+    await wechat_message_processor.process_wechat_message(config.agent_id, raw_message, config)
 
-    async def unexpected_llm_call(*_args: Never, **_kwargs: Never) -> str:
-        llm_calls.append(None)
-        raise AssertionError("LLM access")
-
-    monkeypatch.setattr(wechat_message_processor.agent_dao, "get", unexpected_agent_get)
-    monkeypatch.setattr(llm_bridge, "_call_llm_with_config", unexpected_llm_call)
-    monkeypatch.setattr("app.services.channels.inbound.generate_channel_reply", unexpected_llm_call)
-
-    await wechat_message_processor.process_wechat_message(uuid.uuid4(), raw_message, config)
-
-    assert not llm_calls
+    replay.assert_not_called()
+    accept.assert_not_called()
+    remember.assert_not_called()

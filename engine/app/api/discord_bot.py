@@ -1,9 +1,9 @@
 """Discord Bot Channel API routes (slash command interactions)."""
 
+import json
 import os
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,19 +17,13 @@ from app.core.json_types import (
     json_as_str_or,
     json_loads_object,
     json_object_from,
-    mapping_from_row,
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["discord"])
 
@@ -256,7 +250,6 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
     # Type 2: APPLICATION_COMMAND (slash command)
     if interaction_type == 2:
         data_obj = json_object_from(body.get("data"))
-        command_name = json_as_str_or(data_obj.get("name"))
         options_raw = data_obj.get("options")
         user_text = ""
         for raw_opt in options_raw if isinstance(options_raw, list) else []:
@@ -268,7 +261,6 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
         if not user_text:
             return {"type": 4, "data": {"content": "⚠️ Please provide a message. Usage: `/ask message:<your question>`"}}
 
-        interaction_token = json_as_str_or(body.get("token"))
         member_user = json_object_from(json_object_from(body.get("member")).get("user"))
         user_obj = json_object_from(body.get("user"))
         sender_id = json_as_str(member_user.get("id")) or json_as_str_or(user_obj.get("id"))
@@ -276,112 +268,24 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
         _is_group_discord = bool(body.get("guild_id"))
         conv_id = f"discord_{channel_id}" if channel_id else f"discord_dm_{sender_id}"
 
-        logger.info(f"[Discord] /{command_name} from {sender_id}: {user_text[:80]}")
+        native_id = json_as_str_or(body.get("id"))
+        if not native_id:
+            raise HTTPException(status_code=400, detail="Discord interaction ID is required")
+        from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-        async def handle_in_background():
-            from app.services.channels.llm_bridge import _load_agent_and_model
-            from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-            agent_obj = await agent_dao.get(agent_id)
-            if not agent_obj:
-                logger.warning(f"[Discord] Agent {agent_id} not found")
-                return
-            creator_id = agent_obj.creator_id
-            from app.services.channels.inbound import routing_history_limit
-
-            ctx_size = routing_history_limit(agent_obj.context_window_size)
-
-            _discord_username = json_as_str(member_user.get("username")) or json_as_str_or(user_obj.get("username"))
-            _display = _discord_username or f"Discord User {sender_id[:8]}"
-            _extra_info = mapping_from_row({"name": _display})
-
-            _platform_user = await channel_inbound.resolve_sender_user(
-                agent=agent_obj,
-                channel_type="discord",
-                external_user_id=sender_id,
+        await accept_channel_event(
+            ChannelEvent(
+                config_id=config.id,
+                agent_id=agent_id,
+                provider="discord",
+                event_key=json.dumps([config.app_id, channel_id, native_id], separators=(",", ":")),
+                sender_id=sender_id,
+                conversation_id=conv_id,
+                text=user_text,
+                kind="application_command",
                 is_group=_is_group_discord,
-                extra_info=_extra_info,
             )
-
-            if (
-                _discord_username
-                and _platform_user.display_name
-                and _platform_user.display_name.startswith("Discord User ")
-                and _platform_user.display_name != _discord_username
-            ):
-                _platform_user = (
-                    await user_dao.update(db_obj=_platform_user, obj_in={"display_name": _discord_username})
-                    or _platform_user
-                )
-            platform_user_id = _platform_user.id
-
-            sess = await find_or_create_channel_session(
-                agent_id=agent_id,
-                user_id=creator_id if _is_group_discord else platform_user_id,
-                external_conv_id=conv_id,
-                source_channel="discord",
-                first_message_title=user_text,
-                is_group=_is_group_discord,
-                group_name=f"Discord Channel {channel_id[:8]}" if _is_group_discord else None,
-            )
-            conversation = await channel_inbound.bind_channel_conversation(
-                agent=agent_obj, platform_user=_platform_user, reply_session=sess, is_group=_is_group_discord
-            )
-            sess = conversation.transcript_session
-            session_conv_id = str(sess.id)
-
-            history_msgs = await chat_message_dao.list_recent(
-                agent_id=agent_id,
-                conversation_id=session_conv_id,
-                limit=ctx_size,
-            )
-            history = _conv(history_msgs)
-
-            _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-            cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
-            _bot_token_bg = cfg.app_secret if cfg else ""
-            _app_id_bg = cfg.app_id if cfg else ""
-
-            reply_text = await channel_inbound.generate_channel_reply(
-                agent_id=agent_id,
-                user_text=user_text,
-                history=history,
-                user_id=platform_user_id,
-                session_id=session_conv_id,
-                reply_session_id=conversation.reply_session.id,
-                user_message_content=user_text,
-                agent_model=_agent_model,
-                llm_model=_llm_model,
-                fallback_model=_fallback_model,
-            )
-            logger.info(f"[Discord] LLM reply: {reply_text[:80]}")
-            if channel_inbound.is_queued_channel_reply(reply_text):
-                return
-
-            _ = await chat_message_dao.insert_message(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                role="assistant",
-                content=reply_text,
-                conversation_id=session_conv_id,
-            )
-            try:
-                fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-                if fresh:
-                    _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-            except ValueError, TypeError:
-                pass
-
-            if _bot_token_bg not in (None, "") and interaction_token and _app_id_bg not in (None, ""):
-                try:
-                    await _send_discord_followup(_app_id_bg, _bot_token_bg, interaction_token, reply_text)
-                except Exception as e:
-                    logger.error(f"[Discord] Failed to send follow-up: {e}")
-
-        from app.api.background_tasks import schedule_background_task
-
-        schedule_background_task(handle_in_background(), "handle Discord interaction")
+        )
         return {"type": 5}
 
     return {"type": 1}

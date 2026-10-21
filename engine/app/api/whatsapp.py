@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import uuid
-from datetime import UTC, datetime
 from typing import TypedDict
 
 import httpx
@@ -22,14 +22,10 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["whatsapp"])
 
@@ -239,6 +235,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
     except ValueError, UnicodeError:
         return Response(status_code=401)
     entries = payload.get("entry")
+    failed = False
     for entry_raw in entries if isinstance(entries, list) else []:
         entry = json_object_from(entry_raw)
         changes = entry.get("changes")
@@ -246,104 +243,51 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
             change = json_object_from(change_raw)
             value = json_object_from(change.get("value"))
             messages = value.get("messages")
-            contacts = value.get("contacts")
-            contact_name = ""
-            contact_items = contacts if isinstance(contacts, list) else []
             message_items = messages if isinstance(messages, list) else []
-            if contact_items:
-                profile = json_object_from(json_object_from(contact_items[0]).get("profile"))
-                contact_name = json_as_str_or(profile.get("name")).strip()
 
             for message_raw in message_items:
                 message = json_object_from(message_raw)
                 message_id = json_as_str_or(message.get("id")).strip()
-                from app.services.channels import dedup as channel_dedup
-
-                if message_id and await channel_dedup.already_processed_shared("whatsapp", message_id):
-                    continue
-                if message_id:
-                    await channel_dedup.mark_processed_shared("whatsapp", message_id)
-
                 user_text = _extract_message_text(message)
                 sender_phone = json_as_str_or(message.get("from")).strip()
                 if not user_text or not sender_phone:
                     continue
 
-                from app.services.channels.inbound import routing_history_limit
-                from app.services.channels.llm_bridge import _load_agent_and_model
-                from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-                agent_obj = await agent_dao.get(agent_id)
-                if not agent_obj:
+                if not message_id:
+                    failed = True
                     continue
+                from fastapi import HTTPException
 
-                platform_user = await channel_inbound.resolve_sender_user(
-                    agent=agent_obj,
-                    channel_type="whatsapp",
-                    external_user_id=sender_phone,
-                    extra_info={"name": contact_name or f"WhatsApp User {sender_phone[-6:]}"},
+                from app.services.channel_user_service import ChannelUserResolutionError
+                from app.services.channels.submissions import (
+                    ChannelEvent,
+                    ChannelEventConflictError,
+                    accept_channel_event,
                 )
-                platform_user_id = platform_user.id
-                conv_id = f"whatsapp_{sender_phone}"
-                sess = await find_or_create_channel_session(
+                from app.services.quota_guard import AgentExpired, QuotaExceeded
+
+                metadata = json_object_from(value.get("metadata"))
+                account = json_as_str_or(metadata.get("phone_number_id")) or config.app_id or ""
+                native = ChannelEvent(
+                    config_id=config.id,
                     agent_id=agent_id,
-                    user_id=platform_user_id,
-                    external_conv_id=conv_id,
-                    source_channel="whatsapp",
-                    first_message_title=user_text,
+                    provider="whatsapp",
+                    event_key=json.dumps([account, message_id], separators=(",", ":")),
+                    sender_id=sender_phone,
+                    conversation_id=f"whatsapp_{sender_phone}",
+                    text=user_text,
+                    kind=json_as_str_or(message.get("type"), "text"),
                 )
-                conversation = await channel_inbound.bind_channel_conversation(
-                    agent=agent_obj, platform_user=platform_user, reply_session=sess
-                )
-                sess = conversation.transcript_session
-                session_conv_id = str(sess.id)
-                history_msgs = await chat_message_dao.list_recent(
-                    agent_id=agent_id,
-                    conversation_id=session_conv_id,
-                    limit=routing_history_limit(agent_obj.context_window_size),
-                )
-                history = _conv(history_msgs)
-
-                _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
                 try:
-                    reply_text = await channel_inbound.generate_channel_reply(
-                        agent_id=agent_id,
-                        user_text=user_text,
-                        history=history,
-                        user_id=platform_user_id,
-                        session_id=session_conv_id,
-                        reply_session_id=conversation.reply_session.id,
-                        user_message_content=user_text,
-                        agent_model=_agent_model,
-                        llm_model=_llm_model,
-                        fallback_model=_fallback_model,
-                    )
-                except Exception as exc:
-                    logger.exception(f"[WhatsApp] LLM failed for agent {agent_id}: {exc}")
-                    reply_text = "Sorry, I encountered an error processing your message."
+                    await accept_channel_event(native)
+                except ChannelUserResolutionError, AgentExpired, QuotaExceeded:
+                    continue
+                except HTTPException as exc:
+                    failed = failed or exc.status_code >= 500
+                except ChannelEventConflictError:
+                    failed = True
+                except Exception:
+                    failed = True
+                    logger.exception("[WhatsApp] Inbound acceptance failed for agent %s", agent_id)
 
-                if channel_inbound.is_queued_channel_reply(reply_text):
-                    return {"ok": True}
-
-                try:
-                    await _send_whatsapp_messages(config, sender_phone, reply_text)
-                    _ = await chat_message_dao.insert_message(
-                        agent_id=agent_id,
-                        user_id=platform_user_id,
-                        role="assistant",
-                        content=reply_text,
-                        conversation_id=session_conv_id,
-                    )
-                    try:
-                        fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-                        if fresh:
-                            _ = await chat_session_dao.update(
-                                db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)}
-                            )
-                    except ValueError, TypeError:
-                        pass
-                except Exception as exc:
-                    logger.exception(f"[WhatsApp] Send failed for agent {agent_id}: {exc}")
-
-    return {"ok": True}
+    return Response(status_code=503) if failed else {"ok": True}

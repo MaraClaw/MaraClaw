@@ -3,9 +3,8 @@
 Provides Config CRUD and message handling for DingTalk bots using Stream mode.
 """
 
+import json
 import uuid
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,13 +13,10 @@ from fastapi.responses import HTMLResponse
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channels import inbound as channel_inbound
+from app.services.channels.submissions import ChannelEvent, accept_channel_event
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 
 router = APIRouter(tags=["dingtalk"])
@@ -150,236 +146,36 @@ async def process_dingtalk_message(
     saved_file_paths: list[str] | None = None,
     sender_nick: str = "",
     message_id: str = "",
+    native_event: ChannelEvent | None = None,
 ):
-    """Process an incoming DingTalk bot message and reply via session webhook."""
     import re as _re_dt
 
-    import httpx
-
-    from app.services.channels.llm_bridge import _load_agent_and_model
-    from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-    _ = sender_nick
+    _ = sender_nick, session_webhook
     sender_staff_id = (sender_staff_id or "").strip()
-
-    agent_obj = await agent_dao.get(agent_id)
-    if not agent_obj:
-        logger.warning(f"[DingTalk] Agent {agent_id} not found")
-        return
-    if not sender_staff_id:
-        logger.warning("[DingTalk] Skip message attribution because sender_staff_id is empty")
-        return
-
-    ctx_size = channel_inbound.routing_history_limit(agent_obj.context_window_size)
-    conv_id = f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
-
-    platform_user = await channel_inbound.resolve_sender_user(
-        agent=agent_obj,
-        channel_type="dingtalk",
-        external_user_id=sender_staff_id,
-        is_group=conversation_type == "2",
-        extra_info={},
-    )
-    platform_user_id = platform_user.id
-
-    sess = await find_or_create_channel_session(
+    if not message_id and native_event is None:
+        raise HTTPException(status_code=400, detail="DingTalk message ID is required")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+    if config is None:
+        raise HTTPException(status_code=404, detail="DingTalk not configured")
+    native = native_event or ChannelEvent(
+        config_id=config.id,
         agent_id=agent_id,
-        user_id=platform_user_id,
-        external_conv_id=conv_id,
-        source_channel="dingtalk",
-        first_message_title=user_text,
+        provider="dingtalk",
+        event_key=json.dumps([config.app_id, conversation_id, message_id], separators=(",", ":")),
+        sender_id=sender_staff_id,
+        conversation_id=(
+            f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
+        ),
+        text=user_text,
         is_group=conversation_type == "2",
     )
-    conversation = await channel_inbound.bind_channel_conversation(
-        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=conversation_type == "2"
-    )
-    sess = conversation.transcript_session
-    session_conv_id = str(sess.id)
-
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=ctx_size,
-    )
-    history = _conv(history_msgs)
-
-    _clean_text = _re_dt.sub(
-        r"\[image_data:data:image/[^;]+;base64,[A-Za-z0-9+/=]+\]",
-        "",
-        user_text,
-    ).strip()
-    if saved_file_paths is not None and saved_file_paths:
-        _file_prefixes = "\n".join(f"[file:{Path(p).name}]" for p in saved_file_paths)
-        saved_content = f"{_file_prefixes}\n{_clean_text}".strip() if _clean_text else _file_prefixes
-    else:
-        saved_content = _clean_text or user_text
-
-    _dt_cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
-    _dt_app_key = _dt_cfg.app_id if _dt_cfg else None
-    _dt_app_secret = _dt_cfg.app_secret if _dt_cfg else None
-
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-    _agent_name = agent_obj.name
-
-    llm_user_text = user_text
-    if image_base64_list is not None and image_base64_list:
-        image_markers = "\n".join(f"[image_data:{uri}]" for uri in image_base64_list)
-        llm_user_text = f"{user_text}\n{image_markers}" if user_text else image_markers
-
-    from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs
-    from app.services.dingtalk_stream import (
-        _send_dingtalk_media_message,
-        _upload_dingtalk_media,
-    )
-
-    _cfs_token = None
-    if _dt_app_key not in (None, "") and _dt_app_secret not in (None, ""):
-        _dt_target_id = conversation_id if conversation_type == "2" else sender_staff_id
-        _dt_conv_type = conversation_type
-
-        async def _dingtalk_file_sender(file_path: Path, msg: str = "") -> None:
-            """Send a file/image/video via DingTalk proactive message API."""
-            _fp = file_path
-            _ext = _fp.suffix.lower()
-
-            if _ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"):
-                _media_type = "image"
-            elif _ext in (".mp4", ".mov", ".avi", ".mkv"):
-                _media_type = "video"
-            elif _ext in (".mp3", ".wav", ".ogg", ".amr", ".m4a"):
-                _media_type = "voice"
-            else:
-                _media_type = "file"
-
-            _mid = await _upload_dingtalk_media(_dt_app_key, _dt_app_secret, str(file_path), _media_type)
-
-            if _mid not in (None, ""):
-                _ok = await _send_dingtalk_media_message(
-                    _dt_app_key,
-                    _dt_app_secret,
-                    _dt_target_id,
-                    _mid,
-                    _media_type,
-                    _dt_conv_type,
-                    filename=_fp.name,
-                )
-                if _ok:
-                    if msg:
-                        try:
-                            async with httpx.AsyncClient(timeout=10) as _cl:
-                                _ = await _cl.post(
-                                    session_webhook,
-                                    json={
-                                        "msgtype": "text",
-                                        "text": {"content": msg},
-                                    },
-                                )
-                        except Exception as accompanying_text_error:
-                            logger.warning(
-                                f"[DingTalk] Failed to send accompanying file text: {accompanying_text_error}"
-                            )
-                    return
-
-            _fallback_parts = []
-            if msg:
-                _fallback_parts.append(msg)
-            _fallback_parts.append(f"[File: {_fp.name}]")
-            try:
-                async with httpx.AsyncClient(timeout=10) as _cl:
-                    _ = await _cl.post(
-                        session_webhook,
-                        json={
-                            "msgtype": "text",
-                            "text": {"content": "\n\n".join(_fallback_parts)},
-                        },
-                    )
-            except Exception as _fb_err:
-                logger.error(f"[DingTalk] Fallback file text also failed: {_fb_err}")
-
-        _cfs_token = _cfs.set(_dingtalk_file_sender)
-
-    try:
-        reply_text = await channel_inbound.generate_channel_reply(
-            agent_id=agent_id,
-            user_text=llm_user_text,
-            history=history,
-            user_id=platform_user_id,
-            session_id=session_conv_id,
-            reply_session_id=conversation.reply_session.id,
-            user_message_content=saved_content,
-            agent_model=_agent_model,
-            llm_model=_llm_model,
-            fallback_model=_fallback_model,
-        )
-    finally:
-        if _cfs_token is not None:
-            _cfs.reset(_cfs_token)
-        if message_id and _dt_app_key not in (None, "") and _dt_app_secret not in (None, ""):
-            try:
-                from app.services.dingtalk_reaction import recall_thinking_reaction
-
-                await recall_thinking_reaction(
-                    _dt_app_key,
-                    _dt_app_secret,
-                    message_id,
-                    conversation_id,
-                )
-            except Exception as _recall_err:
-                logger.warning(f"[DingTalk] Failed to recall thinking reaction: {_recall_err}")
-
-    has_media = bool(image_base64_list or saved_file_paths)
-    logger.info(f"[DingTalk] LLM reply ({'media' if has_media else 'text'} input): {reply_text[:100]}")
-    if channel_inbound.is_queued_channel_reply(reply_text):
-        return
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            _ = await client.post(
-                session_webhook,
-                json={
-                    "msgtype": "markdown",
-                    "markdown": {
-                        "title": _agent_name or "AI Reply",
-                        "text": reply_text,
-                    },
-                },
-            )
-    except Exception as e:
-        logger.error(f"[DingTalk] Failed to reply via webhook: {e}")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                _ = await client.post(
-                    session_webhook,
-                    json={
-                        "msgtype": "text",
-                        "text": {"content": reply_text},
-                    },
-                )
-        except Exception as e2:
-            logger.error(f"[DingTalk] Fallback text reply also failed: {e2}")
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="assistant",
-        content=reply_text,
-        conversation_id=session_conv_id,
-    )
-    try:
-        fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-        if fresh:
-            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-    except ValueError, TypeError:
-        pass
-
-    from app.services.activity_logger import log_activity
-
-    await log_activity(
-        agent_id,
-        "chat_reply",
-        f"Replied to DingTalk message: {reply_text[:80]}",
-        detail={"channel": "dingtalk", "user_text": user_text[:200], "reply": reply_text[:500]},
-    )
+    saved = _re_dt.sub(r"\[image_data:data:image/[^;]+;base64,[A-Za-z0-9+/=]+\]", "", user_text).strip()
+    if saved_file_paths is not None and len(saved_file_paths) > 0:
+        saved = "\n".join([*(f"[file:{path}]" for path in saved_file_paths), saved]).strip()
+    enriched = user_text
+    if image_base64_list is not None and len(image_base64_list) > 0:
+        enriched += "\n" + "\n".join(f"[image_data:{uri}]" for uri in image_base64_list)
+    await accept_channel_event(native, content=enriched, saved_content=saved)
 
 
 # ─── OAuth Callback (SSO) ──────────────────────────────

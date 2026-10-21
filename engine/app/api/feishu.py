@@ -528,14 +528,17 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
     # Deduplicate - Feishu retries on slow responses.
     # Mark only after successful handling so retries work on crash.
     event_id = json_as_str_or(header.get("event_id"), "")
-    if event_id and await channel_dedup.already_processed_shared("feishu", event_id, cap=2000):
-        return {"code": 0, "msg": "already processed"}
-
     # ── Phase 1: Load config + agent/model for LLM (pure-psycopg DAOs) ──
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     if not config:
         return {"code": 1, "msg": "Channel not found"}
+    from app.services.channels.feishu_submissions import accept_feishu_event
+
+    if json_as_str_or(header.get("event_type")) == "im.message.receive_v1" and await accept_feishu_event(
+        config, _json_object(body.get("event"))
+    ):
+        return {"code": 0, "msg": "ok"}
+    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     app_id = config.app_id
     app_secret = config.app_secret
     if app_id in (None, "") or app_secret in (None, ""):
@@ -1246,6 +1249,18 @@ async def _handle_feishu_file(
     msg_type = json_as_str_or(message.get("message_type"), "file")
     message_id = json_as_str_or(message.get("message_id"), "")
     content = json_loads_object(json_as_str_or(message.get("content"), "{}"))
+
+    if message_id:
+        from app.services.channels.feishu_submissions import accept_feishu_event
+
+        await accept_feishu_event(
+            config,
+            {
+                "message": message,
+                "sender": {"sender_id": {"open_id": sender_open_id, "user_id": sender_user_id_from_event}},
+            },
+        )
+        return
 
     # Extract file key and name
     if msg_type == "image":

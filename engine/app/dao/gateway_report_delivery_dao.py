@@ -4,12 +4,15 @@ from datetime import datetime, timedelta
 from typing import ClassVar, final
 from uuid import UUID, uuid4
 
+from psycopg.types.json import Jsonb
+
 from app.dao.base import BaseDAO
 from app.records.gateway_report_delivery import (
     DestinationKind,
     GatewayReportDeliveryRecord,
     TerminalReason,
 )
+from app.records.outbound_plan import OutboundPlan
 
 _COLUMNS = (
     "id",
@@ -24,10 +27,13 @@ _COLUMNS = (
     "delivered_at",
     "terminal_reason",
     "terminal_at",
+    "im_plan",
+    "next_chunk",
 )
 _FENCE = """
     id = %(id)s AND claim_token = %(claim_token)s
     AND delivered_at IS NULL AND terminal_at IS NULL AND lease_expires_at > %(now)s
+    AND lease_expires_at > clock_timestamp()
 """
 
 
@@ -125,8 +131,40 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
             row = await db.fetchone(
                 f"""UPDATE {self.table} SET delivered_at = %(now)s,
                     claim_token = NULL, lease_expires_at = NULL
-                    WHERE {_FENCE} RETURNING id""",
+                    WHERE {_FENCE}
+                      AND (im_plan IS NULL OR next_chunk = jsonb_array_length(im_plan->'chunks')) RETURNING id""",
                 {"id": claim.id, "claim_token": claim.claim_token, "now": now},
+            )
+        return row is not None
+
+    async def initialize_plan(self, claim: GatewayReportDeliveryRecord, plan: OutboundPlan, *, now: datetime) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""UPDATE {self.table} SET im_plan = %(plan)s
+                    WHERE {_FENCE} AND destination_kind = 'im' AND im_plan IS NULL AND next_chunk = 0
+                    RETURNING id""",
+                {
+                    "id": claim.id,
+                    "claim_token": claim.claim_token,
+                    "plan": Jsonb(plan.model_dump(mode="json")),
+                    "now": now,
+                },
+            )
+        return row is not None
+
+    async def checkpoint_chunk(self, claim: GatewayReportDeliveryRecord, *, now: datetime) -> bool:
+        """Advance exactly one ordinal; final progress and delivery acknowledgement are one write."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""UPDATE {self.table}
+                    SET next_chunk = next_chunk + 1,
+                        delivered_at = CASE WHEN next_chunk + 1 = jsonb_array_length(im_plan->'chunks')
+                                            THEN %(now)s ELSE NULL END,
+                        available_at = %(now)s, claim_token = NULL, lease_expires_at = NULL
+                    WHERE {_FENCE} AND next_chunk = %(ordinal)s
+                      AND im_plan IS NOT NULL AND next_chunk < jsonb_array_length(im_plan->'chunks')
+                    RETURNING id""",
+                {"id": claim.id, "claim_token": claim.claim_token, "ordinal": claim.next_chunk, "now": now},
             )
         return row is not None
 
