@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import TypeAdapter
 
 from app.api import agents as agents_api
 from app.records.org import OrgMemberRecord
+from app.schemas.collaboration_response_agents import PermissionCandidatesResponse
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,8 @@ async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(mon
         current_user=current_user,
     )
 
+    assert "users" in result
+    result = TypeAdapter(PermissionCandidatesResponse).validate_python(result)
     assert len(result["users"]) == 2
     assert result["users"][0]["name"] == "Member One"
     assert result["users"][0]["username"] == "Member One"
