@@ -3,20 +3,58 @@ import contextlib
 import http.client
 import json
 import os
-from pathlib import Path
+import re
 import secrets
 import ssl
+import stat
 import subprocess
 import tempfile
 import time
 import uuid
+from pathlib import Path
+from typing import TypedDict
 
-from deploy.autoscale_docker import Docker, run
+from deploy.autoscale_docker import Docker, environment, run
 from deploy.autoscale_policy import GIB, POOLS, Policy, admit
 from deploy.autoscale_transport import ExecProxy
 
-
 ROOT = Path(__file__).resolve().parents[1]
+APPLICATION_SERVICES = {"engine", "background", "bootstrap", "web-a", "web-e", "ingress"}
+
+
+class StoreURLs(TypedDict):
+    DATABASE_URL: str
+    REDIS_URL: str
+
+
+def external_stores(path: Path) -> StoreURLs:
+    """Read only literal, single-line URLs; never expand shell variables or load operator defaults."""
+    values: dict[str, str] = {}
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), encoding="utf-8") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise ValueError("external env file must be a protected regular file owned by the current user (mode 0600)")
+        for line in source.read().split("\n"):
+            entry = re.fullmatch(r"\s*(?:export\s+)?(DATABASE_URL|REDIS_URL)\s*=\s*(.*?)\s*", line)
+            if entry is None:
+                continue
+            name, raw = entry.groups()
+            if name in values:
+                raise ValueError("duplicate external store URL assignment")
+            value = re.split(r"\s+#", " " + raw, maxsplit=1)[0].strip()
+            if raw[:1] in ("'", '"'):
+                quote = raw[0]
+                quoted = re.fullmatch(rf"{quote}((?:\\.|[^{quote}\\])*){quote}\s*(?:#.*)?", raw)
+                if quoted is None:
+                    raise ValueError("external store URLs require closed, single-line dotenv quoting")
+                value = quoted[1].replace("\\'", "'") if quote == "'" else re.sub(
+                    r'\\([\\"$nrt])', lambda match: {"n": "\n", "r": "\r", "t": "\t"}.get(match[1], match[1]), quoted[1])
+            if not value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
+                raise ValueError("external store URLs must be nonempty single-line values")
+            values[name] = value
+    if set(values) != {"DATABASE_URL", "REDIS_URL"}:
+        raise ValueError("external env file must explicitly supply nonempty DATABASE_URL and REDIS_URL")
+    return StoreURLs(DATABASE_URL=values["DATABASE_URL"], REDIS_URL=values["REDIS_URL"])
 
 
 def request(port: int, host: str, path: str = "/") -> tuple[int, bytes]:
@@ -39,7 +77,7 @@ def authenticate(port: int, password: str) -> None:
                            {"Host": "engine.local", "Content-Type": "application/json"})
             response = client.getresponse()
             body = response.read()
-            assert response.status == expected, ("auth", response.status, body[:300])
+            assert response.status == expected, ("auth", response.status)
             if expected == 200:
                 assert json.loads(body)["access_token"]
 
@@ -103,7 +141,7 @@ def independent_growth(docker: Docker, proxy: ExecProxy, port: int) -> list[str]
     return events
 
 
-def exercise(directory: Path) -> dict[str, object]:
+def exercise(directory: Path, stores: StoreURLs) -> dict[str, object]:
     project = "maraclaw-dev-qa-" + uuid.uuid4().hex[:10]
     state = directory / "state"
     data = directory / "data"
@@ -111,36 +149,36 @@ def exercise(directory: Path) -> dict[str, object]:
     key, certificate, pem = (directory / name for name in ("key.pem", "cert.pem", "tls.pem"))
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                     "-subj", "/CN=engine.local", "-keyout", str(key), "-out", str(certificate)],
-                   capture_output=True, check=True, timeout=30)
+                   env=environment(), capture_output=True, check=True, timeout=30)
     pem.write_bytes(key.read_bytes() + certificate.read_bytes())
     password = secrets.token_hex(20)
     values = {"SECRET_KEY": secrets.token_hex(32), "JWT_SECRET_KEY": secrets.token_hex(32),
-        "POSTGRES_PASSWORD": password, "POSTGRES_PASSWORD_URLENCODED": password,
-        "REDIS_PASSWORD": password, "REDIS_PASSWORD_URLENCODED": password,
+        **stores,
         "PLATFORM_ADMIN_EMAIL": "qa@example.test", "PLATFORM_ADMIN_PASSWORD": password,
         "API_DOMAIN": "engine.local", "ADMIN_DOMAIN": "admin.local", "MEMBER_DOMAIN": "member.local",
         "DATA_DIR": str(data), "TLS_PEM_PATH": str(pem), "HTTP_PORT": "127.0.0.1:", "HTTPS_PORT": "127.0.0.1:",
         "DOCKER_NETWORK": project + "_guest"}
     env_file = directory / "synthetic.env"
-    env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()))
+    env_file.touch(mode=0o600)
+    env_file.write_text("\n".join(f"{key}=" + json.dumps(value, ensure_ascii=False).replace("$", "$$") for key, value in values.items()))
     os.environ["MARACLAW_ENV_FILE"] = str(env_file)
     override = directory / "isolated.yaml"
     override.write_text(f"name: {project}\nservices:\n" + "".join(
         f"  {name}:\n    env_file: !reset []\n" for name in ("engine", "background", "bootstrap")))
     arguments = [str(ROOT / "start-docker-compose.sh"), "--development", "--no-build", "--no-install",
                  "--env-file", str(env_file), "--compose-file", str(override), "--state-dir", str(state)]
-    cleanup = ["docker", "compose", "--project-directory", str(ROOT), "--env-file", str(env_file),
+    cleanup = ["docker", "compose", "--project-name", project, "--project-directory", str(ROOT), "--env-file", str(env_file),
                "-f", str(ROOT / "compose.yaml"), "-f", str(ROOT / "deploy/compose.macos.yaml"), "-f", str(override)]
+    model = json.loads(run(cleanup + ["config", "--format", "json", "--no-env-resolution"]))
+    if set(model["services"]) != APPLICATION_SERVICES:
+        raise ValueError("acceptance requires application-only Compose services; external stores must not be provisioned")
     process: subprocess.Popen[str] | None = None
     try:
         with (directory / "startup.log").open("w+") as output:
-            process = subprocess.Popen([*arguments, "--foreground"], stdout=output, stderr=output, text=True)
+            process = subprocess.Popen([*arguments, "--foreground"], env=environment(), stdout=output, stderr=output, text=True)
             deadline = time.monotonic() + 300
             while not (state / "startup.sha256").exists():
                 if process.poll() is not None or time.monotonic() > deadline:
-                    output.flush()
-                    print((directory / "startup.log").read_text())
-                    print(run(cleanup + ["logs", "--tail", "30"]))
                     raise RuntimeError("foreground startup failed")
                 time.sleep(1)
             os.environ["MARACLAW_ENV_FILE"] = str(env_file)
@@ -162,7 +200,7 @@ def exercise(directory: Path) -> dict[str, object]:
             assert process.wait(timeout=180) == 0
             before = (state / "development.json").read_bytes(), (state / "startup.sha256").read_bytes()
             identities = {item.identity for item in docker.containers() if item.project == project}
-            subprocess.run(arguments, check=True, timeout=300)
+            subprocess.run(arguments, env=environment(), stdout=output, stderr=output, check=True, timeout=300)
             assert before == ((state / "development.json").read_bytes(), (state / "startup.sha256").read_bytes())
             assert identities == {item.identity for item in docker.containers() if item.project == project}
             records = inspect_health(docker)
@@ -179,22 +217,30 @@ def exercise(directory: Path) -> dict[str, object]:
         if process is not None and process.poll() is None:
             process.terminate()
             process.wait(timeout=180)
-        run(cleanup + ["down", "--volumes", "--remove-orphans", "--timeout", "60"], 120)
+        run(cleanup + ["down", "--volumes", "--timeout", "60"], 120)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Disposable real macOS development qualification; no host service installation")
+    parser = argparse.ArgumentParser(description="Real macOS qualification against caller-owned disposable external stores; no store provisioning")
     parser.add_argument("--run", action="store_true", required=True)
+    parser.add_argument("--external-env-file", type=Path, required=True, help="protected dotenv file with literal DATABASE_URL and REDIS_URL; no expansion")
+    parser.add_argument("--confirm-disposable-stores", action="store_true", required=True,
+                        help="confirm a dedicated disposable PostgreSQL database AND Redis instance: bootstrap/auth/application mutate both")
     parser.add_argument("--receipt", type=Path, required=True)
     arguments = parser.parse_args()
+    try:
+        stores = external_stores(arguments.external_env_file)
+    except (OSError, UnicodeError, ValueError):
+        parser.error("supply a readable, current-user-owned mode-0600 file with nonempty, literal single-line DATABASE_URL and REDIS_URL")
     if os.uname().sysname != "Darwin":
         raise ValueError("this qualification exercises the macOS launcher")
     from deploy.starter_host import prerequisites
     prerequisites(True)
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="maraclaw-development-qa-") as temporary:
-        receipt = exercise(Path(temporary).resolve())
-    receipt["cleanup"] = "owned Compose containers, networks, volumes, controller and temporary data removed"
+        receipt = exercise(Path(temporary).resolve(), stores)
+    receipt["cleanup"] = "uniquely owned application Compose resources, controller and temporary files removed"
+    receipt["external_stores"] = {"ownership": "caller", "preserved": True, "disposable_acknowledged": True}
     arguments.receipt.write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))
 

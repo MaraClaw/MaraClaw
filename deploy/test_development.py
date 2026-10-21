@@ -50,8 +50,9 @@ class DevelopmentTests(unittest.TestCase):
                 patch("deploy.autoscale_docker.run", return_value=str(int(7.748 * GIB))):
             self.assertEqual(docker.startup(Policy()), {"engine": 1, "web-a": 1, "web-e": 1})
         self.assertEqual(sum(spec.memory for name, spec in docker.services.items() if name != "bootstrap"),
-                         int(2.75 * GIB))
+                         int(1.875 * GIB))
         self.assertEqual(docker.services["bootstrap"].memory, int(.75 * GIB))
+        self.assertEqual(set(docker.services), {"engine", "background", "bootstrap", "web-a", "web-e", "ingress"})
 
     def test_production_valued_explicit_override_is_not_reduced(self) -> None:
         with self.env.open("a") as stream:
@@ -60,8 +61,19 @@ class DevelopmentTests(unittest.TestCase):
         self.assertEqual((docker.services["engine"].memory, docker.services["engine"].replicas), (2 * GIB, 2))
 
     def test_production_subprocesses_do_not_inherit_shell_resource_defaults(self) -> None:
-        with patch.dict(os.environ, {"ENGINE_MEMORY": "64m", "API_REPLICAS": "16", "SECRET_KEY": "private"}):
-            self.assertFalse({"ENGINE_MEMORY", "API_REPLICAS", "SECRET_KEY"} & environment().keys())
+        overrides = {"ENGINE_MEMORY": "64m", "API_REPLICAS": "16", "SECRET_KEY": "private",
+                     "DATABASE_URL": "postgresql://shell/wrong", "REDIS_URL": "redis://shell/3"}
+        with patch.dict(os.environ, overrides):
+            self.assertFalse(overrides.keys() & environment().keys())
+
+    def test_runtime_and_development_compose_keep_env_file_urls_despite_shell_conflicts(self) -> None:
+        from deploy.autoscale_docker import run
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://shell/wrong", "REDIS_URL": "redis://shell/3"}):
+            for docker in (Docker(ROOT, self.files), self.docker()):
+                model = json.loads(run(docker.compose + ["config", "--format", "json", "--no-env-resolution"]))
+                for name in ("engine", "background", "bootstrap"):
+                    for key in ("DATABASE_URL", "REDIS_URL"):
+                        self.assertEqual(model["services"][name]["environment"][key], self.values[key])
 
     def test_environment_override_is_persisted_and_changed_value_refused(self) -> None:
         with patch.dict(os.environ, {"ENGINE_MEMORY": "1536m", "API_REPLICAS": "3", "ENGINE_CPUS": ".75"}):
@@ -222,7 +234,7 @@ class DevelopmentTests(unittest.TestCase):
     def test_bootstrap_overlap_and_unknown_external_allocations_cannot_be_bypassed(self) -> None:
         docker = self.docker()
         with patch.object(docker, "containers", return_value=()), \
-                patch("deploy.autoscale_docker.run", return_value=str(int(7.4 * GIB))), \
+                patch("deploy.autoscale_docker.run", return_value=str(int(6.625 * GIB) - 1)), \
                 self.assertRaisesRegex(ValueError, "admission refused"):
             docker.startup(Policy())
         guest = replace(container(), project="other", memory=0)
@@ -230,6 +242,13 @@ class DevelopmentTests(unittest.TestCase):
                 patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)), \
                 self.assertRaisesRegex(ValueError, "admission refused"):
             docker.startup(Policy())
+
+    def test_bootstrap_overlap_fits_at_exact_admission_boundary(self) -> None:
+        docker = self.docker()
+        self.assertEqual(sum(spec.memory for spec in docker.services.values()), int(2.625 * GIB))
+        with patch.object(docker, "containers", return_value=()), \
+                patch("deploy.autoscale_docker.run", return_value=str(int(6.625 * GIB))):
+            self.assertEqual(docker.startup(Policy()), {"engine": 1, "web-a": 1, "web-e": 1})
 
     def test_socket_volume_is_project_named_and_shared_only_with_background(self) -> None:
         docker = self.docker()

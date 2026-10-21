@@ -108,11 +108,11 @@ class StarterTests(unittest.TestCase):
         self.assertFalse(any("enable" in arguments or "--record-startup" in arguments
                              for _name, arguments in self.events()))
 
-    def test_starter_when_bootstrap_script_changes_on_sixteen_gib_refuses_overlap_without_enabling(self) -> None:
+    def test_starter_when_bootstrap_script_changes_on_eleven_gib_refuses_overlap_without_enabling(self) -> None:
         first = self.execute()
         self.assertEqual(first.returncode, 0, first.stderr)
         (self.root / "events.jsonl").unlink()
-        self.fixture["memory"] = 16 * GIB
+        self.fixture["memory"] = 11 * GIB
         with (self.root / "deploy/bootstrap.py").open("a") as source:
             source.write("\nprint('changed bootstrap fixture')\n")
         result = self.execute()

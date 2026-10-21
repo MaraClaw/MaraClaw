@@ -4,11 +4,13 @@ Production remains the Linux/systemd deployment in [README.md](./README.md).
 `./start-docker-compose.sh` without flags on Linux retains that path and its
 production limits. Development is explicit: `--development` selects a persisted,
 smaller resource profile, not a promise that any amount of RAM will work.
+Both development and production use externally provisioned PostgreSQL and Redis.
+The launcher does not create, migrate or manage either store.
 
 ## Prepare And Run
 
-Use Python 3.14+, Docker Compose 2.24+ and a local Linux Docker daemon. On macOS,
-start Docker Desktop and run as your normal user, without sudo. The launcher
+Use Python 3.14+, Docker Compose 2.24+ and a rootful local Linux Docker daemon.
+On macOS, start Docker Desktop and run as your normal user, without sudo. The launcher
 resolves the effective Docker context (including `DOCKER_CONTEXT` precedence over
 `DOCKER_HOST`), accepts only an absolute local Unix endpoint, and pins that endpoint
 and the absolute Docker executable for startup and supervision. Remote TCP/SSH
@@ -16,6 +18,7 @@ endpoints are rejected. Darwin requires neither systemd nor GNU `timeout`.
 
 1. Copy `deploy/.env.development.example` to `deploy/.env.development`, mode 0600.
    Fill every blank with independent local secrets, the genesis admin identity,
+   complete `DATABASE_URL` and `REDIS_URL` values for existing development stores,
    an absolute Docker-shared `DATA_DIR`, and an absolute combined TLS key/cert PEM.
    Create the data directory first. The three distinct `.local` names must resolve
    to loopback and be covered by your certificate. Trust local certificates only
@@ -29,8 +32,22 @@ endpoints are rejected. Darwin requires neither systemd nor GNU `timeout`.
 ./start-docker-compose.sh --development --foreground
 ```
 
+Both canonical store URLs must be in the selected mode-0600 env file. Ambient
+exported shell secrets are deliberately filtered so startup and persistent
+supervision see the same configuration; shell exports alone are not sufficient.
+Use container-reachable store hosts, not `localhost` or `127.0.0.1`. Percent-encode
+only each username/password component, not the whole URL, and single-quote dotenv
+values containing literal `$` to prevent interpolation. TLS is supported through
+the clients' URL schemes/options, including PostgreSQL SSL parameters and
+`rediss://`; validate certificate trust, hostname checks and store access from the
+containers before launch. Follow the [URL contract](./README.md#external-store-connection-urls).
+Keep development stores separate from production data.
+
 The launcher builds, admits capacity, starts and waits for Compose readiness,
 records the successful bootstrap checkpoint, then supervises in this terminal.
+One-shot bootstrap must complete schema/runtime/genesis setup before
+engine/background start. Serving readiness uses `/api/ready`; `/api/health`
+remains a database-only diagnostic.
 Ctrl-C stops the controller safely; it does not destroy application data or stop
 the stack. `--no-install` instead starts and records, then exits without a
 controller. Neither mode stops, installs or modifies LaunchAgents/systemd units.
@@ -53,35 +70,37 @@ explicit memory, CPU or replica overrides there, or export resource variables on
 the initial invocation. Even an explicit value equal to a production default is
 preserved. Do not copy the production example's resource defaults unless those
 larger allocations are intended. Explicit extra Compose overrides are applied
-last. Unset initial resource settings select these qualified development caps:
+last. Unset initial resource settings select these development caps:
 
 | Service | Per-container Memory | Fresh Count |
 |---|---:|---:|
 | API (`engine`) | 768 MiB | 1 |
 | Background | 768 MiB | 1 |
-| PostgreSQL | 768 MiB | 1 |
 | Bootstrap | 768 MiB | one-shot |
-| Redis | 128 MiB | 1 |
 | Admin web | 128 MiB | 1 |
 | Member web | 128 MiB | 1 |
 | Ingress | 128 MiB | 1 |
 
-CPU defaults are unchanged. The steady singleton hard-limit sum is **2.75 GiB**;
-startup conservatively admits **3.5 GiB**, including bootstrap overlap. An extra
-API replica raises steady limits to **3.5 GiB**. Independent growth shares the
+CPU defaults are unchanged. The steady singleton hard-limit sum is **1.875 GiB**;
+startup conservatively admits **2.625 GiB**, including bootstrap overlap. An extra
+API replica raises steady limits to **2.625 GiB**. Independent growth shares the
 same actual remaining budget; it is not three simultaneous guaranteed maxima.
 
 Admission still reserves `max(2 GiB, 15% of daemon capacity)` for the host and at
 least 2 GiB for guests/external containers. Actual known external limits replace
 that floor when larger. Unknown unlimited external allocations fail closed
 unless explicitly accounted by the existing policy. Capacity overrides may only
-lower real daemon capacity. No reserve is reduced for development. On the
-qualified **7.748-GiB** Docker Desktop daemon, the stack budget was **3.748 GiB**
-with no running external containers. That fits startup and one additional API,
-not arbitrary growth. Smaller daemons or larger overrides can correctly refuse.
+lower real daemon capacity. No reserve is reduced for development. For example,
+a **7.748-GiB** Docker Desktop daemon has a **3.748-GiB** stack budget when running
+external allocations do not exceed the 2-GiB floor. The 2.625-GiB startup overlap
+and the 2.625-GiB steady sum with one extra API each fit that budget; growth still
+depends on the full current allocation. This is budget arithmetic, not a new
+runtime qualification. Stores on the same daemon count as external containers;
+off-host stores need their own capacity planning. Smaller daemons or larger
+overrides can correctly refuse.
 Hard limits are admission bounds, not measurements of available RAM; monitor
 pressure, swap and workloads. Heavier migrations, connectors, guests or traffic
-may require higher limits than this local qualification.
+may require higher limits than these development defaults.
 
 The state defaults to `~/Library/Application Support/MaraClaw/autoscaler` on
 macOS and the existing ingress socket bind on Linux. Use a dedicated, user-owned
@@ -92,8 +111,9 @@ then repeated caller overrides. All rendering, hashes, startup checks, recording
 runtime and growth reuse that order. Original shell resource overrides survive
 later invocations and LaunchAgent restarts without needing to re-export them.
 Missing or changed effective state, changed input files, endpoint, order, selected
-env file or contradictory new overrides cause refusal. Do not edit or fabricate
-the checkpoint or effective file to bypass admission. For configuration changes,
+env file (including store URLs) or contradictory new overrides cause refusal.
+Do not edit or fabricate the checkpoint or effective file to bypass admission.
+For configuration changes,
 stop the controller and plan a new isolated project/state or deliberate migration
 with backups; never delete effective state underneath a running stack.
 The controller revalidates effective inputs on every tick and again before each
@@ -136,41 +156,69 @@ Before manual maintenance, `launchctl bootout
 "gui/$(id -u)/com.maraclaw.autoscaler"` and wait for shutdown. Rerun the starter
 after maintenance. The no-flag production Linux systemd contract is unchanged.
 
-LaunchAgent generation/loading is tested only with temporary homes and a stub
-`launchctl`. No real user LaunchAgent or systemd unit was installed during this
-work. Actual login/reboot recovery remains a target-host check.
+The recorded LaunchAgent generation/loading tests used temporary homes and a stub
+`launchctl`; they did not install a real user LaunchAgent or systemd unit. Actual
+login/reboot recovery remains a target-host check.
 
 ## Reproducible Disposable Qualification
 
-From the repository root on macOS, with the engine, web, PostgreSQL, Redis and
-HAProxy images already cached:
+From the repository root on macOS, with the engine, web and HAProxy images already
+cached, prepare a separate protected mode-0600 file at
+`/private/disposable-stores.env`. It must contain **only** the canonical
+`DATABASE_URL` and `REDIS_URL` keys, with complete URLs to an already-provisioned,
+dedicated disposable PostgreSQL **database** and Redis **instance**. A separate
+Redis logical database on a shared instance is not sufficient isolation. Both
+stores must be reachable from the test containers, with compatible versions,
+working TLS settings where used and the required access.
+
+The explicit confirmation acknowledges that bootstrap mutates the supplied
+database and the full stack can write Redis state. Never supply production or
+reused stores. The caller provisions, backs up if needed, and cleans up the
+external stores after success or failure; the driver does not own them.
 
 ```sh
-export TMPDIR=/var/folders/fm/dhwbb9lj4yn1dkrn1qncq8sh0000gn/T/opencode
-MARACLAW_STARTER_TEST=1 python3 -B -m unittest discover -s deploy -p 'test_*.py'
+(
+qa_tmp=$(mktemp -d /tmp/mara-qa.XXXXXX) || exit 1
+trap 'rm -rf -- "$qa_tmp"' EXIT
+export TMPDIR="$qa_tmp" NODE_COMPILE_CACHE="$qa_tmp" BUN_RUNTIME_TRANSPILER_CACHE_PATH="$qa_tmp"
+env -u MARACLAW_STARTER_TEST python3 -B -m unittest discover -s deploy -p 'test_*.py'
 pyright --project deploy/pyrightconfig.json --pythonversion 3.14
 shellcheck start-docker-compose.sh
-python3 -m deploy.acceptance_development --run --receipt deploy/DEVELOPMENT-QA.json
+)
+```
+
+Use a short temporary path because the unit fixtures create Unix sockets with
+platform path-length limits. The subshell removes only its generated directory.
+Run the Docker-backed checks separately when their prerequisites are available:
+
+```sh
+python3 -m deploy.acceptance_development --run --external-env-file /private/disposable-stores.env --confirm-disposable-stores --receipt /tmp/receipt.json
 python3 -m deploy.acceptance_autoscale --run
 ```
 
-Use your own existing private temporary parent when reproducing elsewhere.
 The full-stack driver owns a unique project, temporary private state/data/TLS,
-synthetic credentials, ephemeral loopback ports and guest network. It explicitly
-removes service-level `env_file` references, never reads operator `deploy/.env`,
-and uses foreground/no-install startup. Its `finally` removes owned containers,
-networks, volumes, controller and temporary files, including on ordinary failure.
-It never installs a host service or mutates another deployment.
+synthetic application credentials, ephemeral loopback ports and guest network. It
+reads the supplied external-store file for the two URLs, never operator
+`deploy/.env`, and uses foreground/no-install startup. Its `finally` removes owned
+application containers, networks, volumes, controller and temporary files,
+including on ordinary failure. It never installs a host service. That cleanup
+does not remove the supplied external stores or undo their mutations.
 
-[DEVELOPMENT-QA.json](./DEVELOPMENT-QA.json) records real full-stack qualification:
-bootstrap exit 0; API/background readiness; HTTPS API and both frontends; rejected
+All former QA receipt JSON files, including
+[DEVELOPMENT-QA.json](./DEVELOPMENT-QA.json), remain historical managed-store
+evidence. They do **not** qualify the new external-store topology; don't overwrite
+them with a new run. The linked receipt recorded bootstrap exit 0;
+API/background readiness; HTTPS API and both frontends; rejected
 bad and accepted valid genesis login; foreground exec transport and clean stop;
 unchanged rerun preserving all IDs, effective bytes and checkpoint; independent
-engine/admin/member 1 -> 2 -> 1; and zero OOM/restarts at the stated caps.
+engine/admin/member 1 -> 2 -> 1; and zero OOM/restarts at the recorded managed-store
+caps.
 The separate streaming acceptance on 2026-10-19, project
 `maraclaw-accept-3eacd9fa73`, passed two 1/1/1 -> 4/4/4 -> 1/1/1 cycles, routed
 current replica IDs, preserved an active stream while excluding new requests on
 an existing client keepalive, and reused cleared slots. One unavailable initial
 sample conservatively suspended/rebaselined before both cycles passed. Both
-drivers cleaned their owned resources. This does not qualify arbitrary LLM/guest
-workloads, application WebSocket migration, image rebuilds or OS login recovery.
+drivers cleaned their then-owned resources. Those results do not qualify the
+current external-store deployment, arbitrary LLM/guest workloads, application
+WebSocket migration, image rebuilds or OS login recovery. A new acceptance run
+requires the explicit disposable-store inputs above; no new run is claimed here.
