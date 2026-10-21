@@ -7,9 +7,10 @@ import base64
 import os
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -19,10 +20,10 @@ from app.core.json_types import (
     json_as_str_or,
     json_object_from,
     json_object_from_response,
-    mapping_from_row,
 )
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
+from app.services.service_contracts import WeChatContextEntry
 
 if TYPE_CHECKING:
     from app.services.wechat_message_processor import WeChatMessageItem
@@ -130,19 +131,20 @@ async def send_wechat_text_message(
 
 
 def update_wechat_context_cache(
-    extra_config: dict[str, Any] | None,
+    extra_config: Mapping[str, object] | None,
     *,
     from_user_id: str,
     context_token: str,
     conv_id: str,
-) -> dict[str, Any]:
+) -> JsonObject:
     extra = json_object_from(extra_config)
     cache = json_object_from(extra.get(WECHAT_CONTEXT_CACHE_KEY))
-    cache[from_user_id] = {
+    entry: WeChatContextEntry = {
         "context_token": context_token,
         "conv_id": conv_id,
         "updated_at": datetime.now(UTC).isoformat(),
     }
+    cache[from_user_id] = {**entry}
     if len(cache) > WECHAT_CONTEXT_CACHE_LIMIT:
         ordered = sorted(
             cache.items(),
@@ -151,17 +153,17 @@ def update_wechat_context_cache(
         )
         cache = json_object_from(dict(ordered[:WECHAT_CONTEXT_CACHE_LIMIT]))
     extra[WECHAT_CONTEXT_CACHE_KEY] = cache
-    return mapping_from_row(extra)
+    return extra
 
 
 def get_wechat_context_entry(
-    extra_config: dict[str, Any] | None,
+    extra_config: Mapping[str, object] | None,
     *,
     from_user_id: str,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     cache = json_object_from(json_object_from(extra_config).get(WECHAT_CONTEXT_CACHE_KEY))
     entry = cache.get(from_user_id)
-    return mapping_from_row(entry) if isinstance(entry, dict) else None
+    return entry if isinstance(entry, dict) else None
 
 
 async def remember_wechat_context(

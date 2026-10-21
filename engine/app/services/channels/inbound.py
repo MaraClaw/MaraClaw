@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from app.core.json_types import JsonObject
 from app.core.row_memo import clear_entity_memo
@@ -20,6 +19,7 @@ from app.services.channels.binding import bind_channel_conversation, persist_cha
 from app.services.channels.submissions import ChannelEvent, accept_channel_event
 from app.services.chat_persist import persist_chat_message
 from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
+from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
@@ -97,7 +97,7 @@ async def load_history_for_session(
     agent_id: uuid.UUID,
     session: ChatSessionRecord,
     context_window_size: int | None,
-) -> list[Any]:
+) -> list[OpenAIMessage]:
     """Load prior turns for a session (does not include the current user message)."""
     limit = routing_history_limit(context_window_size)
     history_msgs = await chat_message_dao.list_recent(
@@ -159,7 +159,7 @@ async def generate_channel_reply(
     *,
     agent_id: uuid.UUID,
     user_text: str,
-    history: list[Any],
+    history: list[OpenAIMessage],
     user_id: uuid.UUID,
     session_id: str,
     reply_session_id: uuid.UUID | None = None,
@@ -173,10 +173,7 @@ async def generate_channel_reply(
     native_event: ChannelEvent | None = None,
 ) -> str:
     """Queue the inbound turn for the OpenClaw guest. Reply arrives via gateway report."""
-    from typing import cast
-
     from app.dao.agent_dao import agent_dao
-    from app.services.llm.types import OpenAIMessage
     from app.services.openclaw_routing import enqueue_openclaw_message
 
     if native_event is not None:
@@ -188,7 +185,7 @@ async def generate_channel_reply(
         target = await agent_dao.get(agent_id)
     if target is None:
         return "⚠️ Agent not found."
-    prior = cast(list[OpenAIMessage], history[-ROUTING_HISTORY_LIMIT:]) if history else None
+    prior = history[-ROUTING_HISTORY_LIMIT:] if history else None
     async with optional_connection_ctx():
         if user_message_content is not None:
             await persist_channel_user_message(
