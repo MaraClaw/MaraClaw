@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from typing import Any, NotRequired, TypedDict
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonValue
 from app.core.logging import logger
-from app.dao import agent_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.channel_config import ChannelConfigRecord
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channels import inbound as channel_inbound
 
 
 class WeChatTextItem(TypedDict):
@@ -25,6 +20,7 @@ class WeChatMessageItem(TypedDict):
 
 
 class WeChatInboundMessage(TypedDict):
+    message_id: str
     from_user_id: str
     session_id: str
     context_token: str | None
@@ -72,6 +68,7 @@ def _parse_wechat_message(raw_message: JsonValue) -> WeChatInboundMessage | None
     if not isinstance(raw_items, list):
         return None
     return {
+        "message_id": str(raw_message.get("message_id") or ""),
         "from_user_id": from_user_id,
         "session_id": _nonempty_string(raw_message.get("session_id")) or from_user_id,
         "context_token": _nonempty_string(raw_message.get("context_token")),
@@ -94,17 +91,12 @@ def _parse_wechat_delivery_config(
     }
 
 
-async def process_wechat_message(
-    agent_id: uuid.UUID, raw_message: JsonValue, config: ChannelConfigRecord | object
-) -> None:
-    from app.services.activity_logger import log_activity
-    from app.services.channels.llm_bridge import _load_agent_and_model
-    from app.services.llm.utils import convert_chat_messages_to_llm_format
+async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, config: ChannelConfigRecord) -> None:
+    from app.services.channels.submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
     from app.services.wechat_channel import (
         WECHAT_ILINK_BASE_URL,
         _extract_wechat_text,
         remember_wechat_context,
-        send_wechat_text_message,
     )
 
     message = _parse_wechat_message(raw_message)
@@ -124,93 +116,23 @@ async def process_wechat_message(
     if delivery_config is None:
         return
 
-    agent_obj = await agent_dao.get(agent_id)
-    if not agent_obj:
-        return
-
-    extra_info: JsonObject = {
-        "name": f"WeChat User {from_user_id[:8]}",
-        "external_id": from_user_id,
-    }
-    platform_user = await channel_inbound.resolve_sender_user(
-        agent=agent_obj,
-        channel_type="wechat",
-        external_user_id=from_user_id,
-        extra_info=extra_info,
-    )
-    platform_user_id = platform_user.id
-    conv_id = f"wechat_{message['session_id']}"
-
-    sess = await find_or_create_channel_session(
+    if not message["message_id"]:
+        raise ValueError("WeChat message ID is required")
+    native = ChannelEvent(
+        config_id=config.id,
         agent_id=agent_id,
-        user_id=platform_user_id,
-        external_conv_id=conv_id,
-        source_channel="wechat",
-        first_message_title=user_text,
+        provider="wechat",
+        event_key=f"{config.app_id}:{message['session_id']}:{message['message_id']}",
+        sender_id=from_user_id,
+        conversation_id=f"wechat_{message['session_id']}",
+        text=user_text,
     )
-    conversation = await channel_inbound.bind_channel_conversation(
-        agent=agent_obj, platform_user=platform_user, reply_session=sess
-    )
-    sess = conversation.transcript_session
-    session_conv_id = str(sess.id)
+    if await is_channel_event_replay(native):
+        return
     await remember_wechat_context(
         agent_id=agent_id,
         from_user_id=from_user_id,
         context_token=context_token,
-        conv_id=conv_id,
+        conv_id=native.conversation_id,
     )
-
-    from app.services.channels.inbound import routing_history_limit
-
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=routing_history_limit(agent_obj.context_window_size),
-    )
-    history = convert_chat_messages_to_llm_format(history_msgs)
-
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-    reply_text = await channel_inbound.generate_channel_reply(
-        agent_id=agent_id,
-        user_text=user_text,
-        history=history,
-        user_id=platform_user_id,
-        session_id=session_conv_id,
-        reply_session_id=conversation.reply_session.id,
-        user_message_content=user_text,
-        agent_model=_agent_model,
-        llm_model=_llm_model,
-        fallback_model=_fallback_model,
-    )
-    if channel_inbound.is_queued_channel_reply(reply_text):
-        return
-    await send_wechat_text_message(
-        token=delivery_config["token"],
-        base_url=delivery_config["base_url"],
-        to_user_id=from_user_id,
-        context_token=context_token,
-        text=reply_text,
-        route_tag=delivery_config["route_tag"],
-    )
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="assistant",
-        content=reply_text,
-        conversation_id=session_conv_id,
-    )
-    try:
-        fresh_session = await chat_session_dao.get(uuid.UUID(session_conv_id))
-        if fresh_session:
-            _ = await chat_session_dao.update(db_obj=fresh_session, obj_in={"last_message_at": datetime.now(UTC)})
-    except ValueError, TypeError:
-        pass
-
-    await log_activity(
-        agent_id,
-        "chat_reply",
-        f"Replied to WeChat message: {reply_text[:80]}",
-        detail={"channel": "wechat", "user_text": user_text[:200], "reply": reply_text[:500]},
-    )
+    await accept_channel_event(native)
