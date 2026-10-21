@@ -15,8 +15,8 @@ cluster scheduler and does not make the host, ingress, database or Redis HA.
 
 Prepare `deploy/.env`, data and TLS paths as in [deployment guide](./README.md), then explicitly
 run `sudo ./start-docker-compose.sh`. The script validates prerequisites/config,
-stops the controller, builds images, admits startup memory, preserves existing routed replica
-counts (including stopped containers), starts Compose and installs/enables
+stops the controller, builds images, admits startup memory, preserves authorized routed replica
+targets, starts Compose and installs/enables
 `maraclaw-autoscaler.service`. Fresh counts remain two each. Background, bootstrap,
 and ingress remain singletons. Bootstrap remains one-shot and must complete
 schema/runtime/genesis setup before engine/background start. External stores must
@@ -139,15 +139,35 @@ on a 16-GiB host without reserving a completed bootstrap as active. The starter
 explicitly excludes bootstrap and dependency traversal on that verified no-change
 path; ordinary `compose up` would restart even a successful completed bootstrap.
 Autoscaled routed counts are preserved and do not invalidate the checkpoint.
-The recorder itself enforces successful bootstrap and running/healthy serving
-roles, including direct `python3 -m deploy.autoscale --record-startup` use. Within
-a launcher it requires exactly the admitted routed counts. A direct recorder
-uses the current owned routed counts within the selected policy, allowing prior
-autoscaling, but rejects absent pools, stopped/unhealthy members and non-singleton
-background/ingress. Foreign-project and one-off containers cannot fill a missing
-role. Failed validation never replaces an existing checkpoint. Direct recording
-does not perform a supervisor handoff: stop the controller and serialize manual
-maintenance before using it; never use it to bypass admission.
+The recorder itself enforces successful bootstrap and exact authorized running/healthy
+serving counts, including direct `python3 -m deploy.autoscale --record-startup`
+use in a new process. It never infers intent from remaining containers or current
+Compose defaults. Foreign-project and one-off containers cannot fill a missing
+role; background/ingress must remain singletons. Failed validation preserves the
+previous checkpoint's bytes and modification time.
+
+`replicas.json` is versioned, private durable count authority, separate from the
+count-independent `startup.sha256` fingerprint. It binds the canonical checkout,
+project, state directory, local Unix Docker endpoint, selected env path and ordered
+Compose paths, not image IDs or configuration hashes. Only the first successful
+startup memory admission may adopt observed counts (including stopped members),
+using configured defaults for absent pools. It publishes authority before Compose
+startup. Later startup restores shortages to those targets and refuses excess
+before Compose could select scale-down victims. Failed Compose startup retains
+the admitted targets. Invalid/foreign authority is never silently readopted.
+
+Growth publishes its memory-admitted higher target before Compose and retains it
+on failure. The controller suspends scaling when observed counts disagree with
+authority; use the canonical starter to repair shortages. Authorized counts of one
+or three remain valid even when Compose defaults are two. Missing, malformed,
+foreign or unresolved authority makes direct recording refuse. Do not fabricate,
+edit or delete authority to adopt accidental losses or bypass admission.
+
+Both `--check-startup` and `--record-startup` acquire `controller.lock` before
+admission/recording and refuse a busy lock. Neither performs a supervisor handoff:
+stop the controller and serialize manual maintenance before using them. Pending
+retirement cleanup belongs to canonical startup after Compose readiness and before
+checkpointing or successor installation; direct recording cannot bypass it.
 
 A missing checkpoint, changed image/config/script, failed bootstrap or incomplete
 running topology retains bootstrap-overlap admission. This includes adopting this
@@ -191,8 +211,24 @@ prevents maintenance exit from briefly routing to a stale address; fresh checks
 must establish eligibility. DNS/health checks can reuse the cleared slot.
 Timeouts restore eligibility without removing the replica. Missing/malformed stats,
 counter resets or changed ingress generation clear demand history and prohibit
-removal. A private exclusive lock serializes controllers. Pending-operation recovery
-only restores slot eligibility; it never resumes an unverified removal.
+removal. A private exclusive lock serializes controllers.
+
+Retirement counts and phases live in the same atomically replaced, file- and
+directory-fsynced `replicas.json`. `draining` retains target N; cancellation restores
+slot eligibility without decrementing it. After the final quiet/topology checks,
+`removing` is durably authorized before stop/rm. Generic cancellation or shutdown
+cannot erase that evidence. Recovery **never resumes stop/rm**: if the full victim
+ID still exists, even stopped, retain N and restore the slot; if absent, atomically
+commit N-1 with phase `releasing`. Repeated recovery cannot decrement twice.
+`releasing` retries idempotent proxy cleanup and then clears only the operation,
+retaining counts. Unknown phases or failed inventory preserve evidence and refuse.
+
+Startup reconciles accounting without requiring working ingress, restores Compose
+readiness, then performs proxy cleanup before recording success or installing the
+successor. A cleanup failure preserves evidence/checkpoint and prevents successor
+installation. The shipped older `pending.json` is only slot-release evidence,
+never count authority or a validation bypass; canonical admission must establish
+authority before its cleanup. Preserve both files during recovery.
 
 Pause before **all** manual scaling, upgrades, limit changes or ingress replacement:
 
