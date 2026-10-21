@@ -165,7 +165,7 @@ docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
 [tool.pyright]
-include = ["app"]
+include = ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"]
 extraPaths = ["."]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
@@ -175,7 +175,7 @@ reportUnannotatedClassAttribute = "error"
 reportAny = "error"
 
 [tool.basedpyright]
-include = ["app"]
+include = ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"]
 extraPaths = ["."]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
@@ -196,10 +196,12 @@ error-on-warning = false
 [tool.ty.src]
 include = [
     "app",
+    "scripts",
     "tests",
     "check_agentbay_config.py",
     "remove_old_tool.py",
     "seed.py",
+    "test_sandbox_config.py",
     "update_schema.py",
 ]
 exclude = [

@@ -60,7 +60,7 @@ jobs:
         run: uv sync --locked --extra dev
       - name: basedpyright
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
-        run: uv run --extra dev basedpyright --project pyrightconfig.json app
+        run: uv run --extra dev basedpyright --project pyrightconfig.json
       - name: ty
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run --extra dev ty check --force-exclude .

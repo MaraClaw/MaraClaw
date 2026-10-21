@@ -8,5 +8,5 @@ cd "$(dirname "$0")/.."
 
 uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
-uv run --extra dev basedpyright --project pyrightconfig.json app
+uv run --extra dev basedpyright --project pyrightconfig.json
 uv run --extra dev ty check --force-exclude .
