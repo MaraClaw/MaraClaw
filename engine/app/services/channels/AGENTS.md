@@ -25,9 +25,10 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 | `types.py` | Canonical `channel_type` registry, aliases, outbound keys |
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
 | `inbound.py` | Shared session / history / persist / enqueue helpers |
+| `submissions.py` | Durable native-event acceptance: fresh authorization, receipt replay, atomic sender quota/transcript/gateway/reply intent |
 | `outbound.py` | Deliver a guest `/gateway/report` back to the originating IM thread |
 | `llm_bridge.py` | `_load_agent_and_model` plus engine LLM helpers for trigger/heartbeat only |
-| `dedup.py` | Process-local + Redis (`already_processed_shared` / `mark_processed_shared`) webhook event dedupe |
+| `dedup.py` | Legacy process-local + Redis hints; never an authority for native-event acceptance or replay |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
 | `google_chat.py` | Verify JWT (iss+aud), parse events, chunked Chat API send |
 
