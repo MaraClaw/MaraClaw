@@ -15,8 +15,8 @@ cluster scheduler and does not make the host, ingress, database or Redis HA.
 
 Prepare `deploy/.env`, data and TLS paths as in [deployment guide](./README.md), then explicitly
 run `sudo ./start-docker-compose.sh`. The script validates prerequisites/config,
-stops the controller, builds images, admits startup memory, preserves existing routed replica
-counts (including stopped containers), starts Compose and installs/enables
+stops the controller, builds images, admits startup memory, preserves authorized routed replica
+targets, starts Compose and installs/enables
 `maraclaw-autoscaler.service`. Fresh counts remain two each. Background, bootstrap,
 and ingress remain singletons. Bootstrap remains one-shot and must complete
 schema/runtime/genesis setup before engine/background start. External stores must
@@ -105,6 +105,33 @@ roles. On an 8-GiB daemon, the 2-GiB host reserve and 2-GiB external floor leave
 only a 4-GiB stack budget. Even the 6.75-GiB steady default cannot fit, so startup
 remains refused. Store removal does not reduce either reserve.
 
+### Troubleshoot Startup Memory Refusal
+
+The canonical launcher reports the observed daemon/effective capacity, host reserve,
+required stack, external reserve, remaining stack budget and shortfall on stderr.
+Values include exact bytes; GiB values are rounded. These are the same snapshot
+and limits used for admission, not host physical/free memory or container RSS.
+For example, about 7.748 GiB allocated to Docker leaves about 3.748 GiB for the
+stack after the two 2-GiB reserves, below the 6.75-GiB production steady defaults.
+
+Increase Docker's allocated memory (Docker Desktop's resource settings on macOS),
+and check whether `capacity_gib` imposes a lower cap. Alternatively, plan maintenance
+to reduce explicitly configured memory limits or replica counts to fit the real
+workload; the starter preserves existing counts, including stopped replicas, and
+uses the larger existing/rendered limits. It does not silently shrink them.
+For a **separate local development setup**, explicitly select `--development` and
+follow [development isolation/setup](./DEVELOPMENT.md). There is no automatic
+fallback or adoption of production containers, and development keeps the reserves.
+
+`external_reserve=unknown` means a running external container has no hard memory
+limit and no explicit aggregate policy accounting. Set actual hard limits, or
+explicitly budget the aggregate unlimited allocation with `external_unlimited_gib`
+in the selected policy; this promise does not enforce those limits. More Docker
+memory alone does not clear an unknown allocation. The shortfall remains unknown
+until that allocation is accounted for. Do not lower reserves or fabricate/delete
+checkpoints to bypass refusal. Admission failure still prevents Compose startup,
+success recording and service installation; fix the budget before rerunning.
+
 After a successful starter deployment, `startup.sha256` records a digest of resolved
 Compose service hashes, built image IDs, the bootstrap container ID and the bound
 bootstrap script contents. An unchanged, healthy running deployment can then rerun
@@ -112,6 +139,35 @@ on a 16-GiB host without reserving a completed bootstrap as active. The starter
 explicitly excludes bootstrap and dependency traversal on that verified no-change
 path; ordinary `compose up` would restart even a successful completed bootstrap.
 Autoscaled routed counts are preserved and do not invalidate the checkpoint.
+The recorder itself enforces successful bootstrap and exact authorized running/healthy
+serving counts, including direct `python3 -m deploy.autoscale --record-startup`
+use in a new process. It never infers intent from remaining containers or current
+Compose defaults. Foreign-project and one-off containers cannot fill a missing
+role; background/ingress must remain singletons. Failed validation preserves the
+previous checkpoint's bytes and modification time.
+
+`replicas.json` is versioned, private durable count authority, separate from the
+count-independent `startup.sha256` fingerprint. It binds the canonical checkout,
+project, state directory, local Unix Docker endpoint, selected env path and ordered
+Compose paths, not image IDs or configuration hashes. Only the first successful
+startup memory admission may adopt observed counts (including stopped members),
+using configured defaults for absent pools. It publishes authority before Compose
+startup. Later startup restores shortages to those targets and refuses excess
+before Compose could select scale-down victims. Failed Compose startup retains
+the admitted targets. Invalid/foreign authority is never silently readopted.
+
+Growth publishes its memory-admitted higher target before Compose and retains it
+on failure. The controller suspends scaling when observed counts disagree with
+authority; use the canonical starter to repair shortages. Authorized counts of one
+or three remain valid even when Compose defaults are two. Missing, malformed,
+foreign or unresolved authority makes direct recording refuse. Do not fabricate,
+edit or delete authority to adopt accidental losses or bypass admission.
+
+Both `--check-startup` and `--record-startup` acquire `controller.lock` before
+admission/recording and refuse a busy lock. Neither performs a supervisor handoff:
+stop the controller and serialize manual maintenance before using them. Pending
+retirement cleanup belongs to canonical startup after Compose readiness and before
+checkpointing or successor installation; direct recording cannot bypass it.
 
 A missing checkpoint, changed image/config/script, failed bootstrap or incomplete
 running topology retains bootstrap-overlap admission. This includes adopting this
@@ -155,8 +211,24 @@ prevents maintenance exit from briefly routing to a stale address; fresh checks
 must establish eligibility. DNS/health checks can reuse the cleared slot.
 Timeouts restore eligibility without removing the replica. Missing/malformed stats,
 counter resets or changed ingress generation clear demand history and prohibit
-removal. A private exclusive lock serializes controllers. Pending-operation recovery
-only restores slot eligibility; it never resumes an unverified removal.
+removal. A private exclusive lock serializes controllers.
+
+Retirement counts and phases live in the same atomically replaced, file- and
+directory-fsynced `replicas.json`. `draining` retains target N; cancellation restores
+slot eligibility without decrementing it. After the final quiet/topology checks,
+`removing` is durably authorized before stop/rm. Generic cancellation or shutdown
+cannot erase that evidence. Recovery **never resumes stop/rm**: if the full victim
+ID still exists, even stopped, retain N and restore the slot; if absent, atomically
+commit N-1 with phase `releasing`. Repeated recovery cannot decrement twice.
+`releasing` retries idempotent proxy cleanup and then clears only the operation,
+retaining counts. Unknown phases or failed inventory preserve evidence and refuse.
+
+Startup reconciles accounting without requiring working ingress, restores Compose
+readiness, then performs proxy cleanup before recording success or installing the
+successor. A cleanup failure preserves evidence/checkpoint and prevents successor
+installation. The shipped older `pending.json` is only slot-release evidence,
+never count authority or a validation bypass; canonical admission must establish
+authority before its cleanup. Preserve both files during recovery.
 
 Pause before **all** manual scaling, upgrades, limit changes or ingress replacement:
 

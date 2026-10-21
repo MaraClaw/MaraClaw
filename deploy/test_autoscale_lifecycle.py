@@ -6,6 +6,7 @@ import unittest
 from deploy.autoscale_docker import Container
 from deploy.autoscale_lifecycle import Retirement, topology
 from deploy.autoscale_proxy import Row, Snapshot
+from deploy.autoscale_state import Authority, Binding, ReplicaState
 
 
 def fixtures() -> tuple[tuple[Container, ...], Snapshot]:
@@ -31,9 +32,16 @@ class ProxyProbe:
 
 
 class DockerProbe:
-    def __init__(self, containers: tuple[Container, ...]):
+    def __init__(self, containers: tuple[Container, ...], directory: Path):
         self.current = containers
         self.removed: list[str] = []
+        self.authority = ReplicaState(Binding("/repo", "test", str(directory), "unix:///fixture/docker.sock",
+                                             "/input.env", ("/compose.yaml",)))
+        self.authority.save(Authority({"engine": 2, "web-a": 1, "web-e": 1}))
+        self.current += tuple(replace(containers[0], service=name) for name in ("web-a", "web-e"))
+
+    def validate_files(self) -> None:
+        pass
 
     def containers(self) -> tuple[Container, ...]:
         return self.current
@@ -43,6 +51,7 @@ class DockerProbe:
 
     def remove(self, identity: str) -> None:
         self.removed.append(identity)
+        self.current = tuple(item for item in self.current if item.identity != identity)
 
 
 class RetirementTests(unittest.TestCase):
@@ -51,7 +60,7 @@ class RetirementTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.containers, self.snapshot = fixtures()
         self.proxy = ProxyProbe()
-        self.docker = DockerProbe(self.containers)
+        self.docker = DockerProbe(self.containers, Path(self.directory.name))
         self.retirement = Retirement(Path(self.directory.name), self.proxy, self.docker)
 
     def maintaining(self, sessions: int = 0) -> Snapshot:

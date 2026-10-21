@@ -24,7 +24,13 @@ async def test_teardown_isolates_container_and_archive_errors_per_agent(monkeypa
         return tmp_path
 
     monkeypatch.setattr(
-        agent_stops, "agent_manager", SimpleNamespace(remove_container=remove, archive_agent_files=archive)
+        agent_stops,
+        "agent_manager",
+        SimpleNamespace(
+            remove_container=remove,
+            archive_agent_files=archive,
+            _agent_dir=lambda agent_id: tmp_path / str(agent_id),
+        ),
     )
     await agent_stops.teardown_deleted_agents(
         [

@@ -8,8 +8,10 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
+    StorageReadLimitExceededError,
     WriteCondition,
 )
+from app.services.storage_runtime.bounded import BoundedReader
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.storage_runtime.s3 import S3StorageBackend
@@ -47,6 +49,15 @@ class MemoryStorageBackend(StorageBackend):
         if key not in self.files:
             raise FileNotFoundError(key)
         return self.files[key]
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        if key not in self.files:
+            raise FileNotFoundError(key)
+        data = self.files[key][: max_bytes + 1]
+        if len(data) > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, len(data))
+        return data
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -184,7 +195,8 @@ async def test_fallback_create_only_creates_new_key_in_primary():
     assert legacy.files == {}
 
 
-async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing():
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing(bounded):
     class DisappearingPrimary(MemoryStorageBackend):
         attempts = 0
 
@@ -198,7 +210,144 @@ async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing
     primary = DisappearingPrimary()
     storage = FallbackStorageBackend(primary, MemoryStorageBackend({"report.txt": b"old"}))
 
+    operation = storage.read_bytes_bounded("report.txt", 8) if bounded else storage.read_bytes("report.txt")
     with pytest.raises(StorageConditionalRaceError):
-        await storage.read_bytes("report.txt")
+        await operation
 
     assert primary.attempts == 3
+
+
+@pytest.mark.parametrize("winner_size", [3, 200_000])
+@pytest.mark.parametrize("winner_timing", ["present", "during_promotion"])
+async def test_bounded_fallback_applies_limit_to_primary_winner_without_hidden_reads(
+    tmp_path, monkeypatch, winner_size, winner_timing
+):
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes("report.bin", b"old")
+    original_read = legacy.read_bytes_bounded
+    reads: list[str] = []
+
+    async def raced_read(key: str, max_bytes: int) -> bytes:
+        reads.append(key)
+        data = await original_read(key, max_bytes)
+        await primary.write_bytes(key, b"w" * winner_size)
+        return data
+
+    async def forbidden(*_args):
+        pytest.fail("bounded promotion must not use ordinary reads, stat or version lookup")
+
+    if winner_timing == "present":
+        await primary.write_bytes("report.bin", b"w" * winner_size)
+    monkeypatch.setattr(legacy, "read_bytes_bounded", raced_read)
+    for backend in (primary, legacy):
+        for operation in ("read_bytes", "get_version", "stat"):
+            monkeypatch.setattr(backend, operation, forbidden)
+    storage = FallbackStorageBackend(primary, legacy)
+
+    if winner_size > 8:
+        with pytest.raises(StorageReadLimitExceededError) as raised:
+            await storage.read_bytes_bounded("report.bin", 8)
+        assert raised.value.size_bytes == 9
+    else:
+        assert await storage.read_bytes_bounded("report.bin", 8) == b"w" * winner_size
+
+    assert reads == ([] if winner_timing == "present" else ["report.bin"])
+    assert (tmp_path / "primary/report.bin").stat().st_size == winner_size
+    assert (tmp_path / "legacy/report.bin").read_bytes() == b"old"
+
+
+async def test_bounded_fallback_promotes_real_file_without_metadata_reread(tmp_path, monkeypatch):
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes("report.bin", b"document")
+
+    async def forbidden(*_args):
+        pytest.fail("bounded promotion must not trigger a full read/hash")
+
+    for backend in (primary, legacy):
+        for operation in ("read_bytes", "get_version", "stat"):
+            monkeypatch.setattr(backend, operation, forbidden)
+
+    assert await FallbackStorageBackend(primary, legacy).read_bytes_bounded("report.bin", 8) == b"document"
+
+    assert (tmp_path / "primary/report.bin").read_bytes() == b"document"
+    assert (tmp_path / "legacy/report.bin").read_bytes() == b"document"
+
+
+async def test_bounded_fallback_never_promotes_oversized_legacy(tmp_path, monkeypatch):
+    from app.services.storage_runtime import local
+
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes("report.bin", b"x" * 200_000)
+    original = local.read_bounded
+    consumed = 0
+
+    class Reader:
+        def __init__(self, stream: BoundedReader):
+            self.stream = stream
+
+        def read(self, size: int) -> bytes:
+            nonlocal consumed
+            chunk = self.stream.read(size)
+            consumed += len(chunk)
+            return chunk
+
+    def observe(stream, max_bytes):
+        return original(Reader(stream), max_bytes)
+
+    monkeypatch.setattr(local, "read_bounded", observe)
+
+    with pytest.raises(StorageReadLimitExceededError):
+        await FallbackStorageBackend(primary, legacy).read_bytes_bounded("report.bin", 8)
+
+    assert consumed == 9
+    assert not (tmp_path / "primary").exists()
+    assert (tmp_path / "legacy/report.bin").stat().st_size == 200_000
+
+
+async def test_bounded_fallback_primary_wins_when_legacy_overflows_during_upload(tmp_path, monkeypatch):
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes("report.bin", b"x" * 200_000)
+    original = legacy.read_bytes_bounded
+
+    async def raced_read(key: str, max_bytes: int) -> bytes:
+        try:
+            return await original(key, max_bytes)
+        finally:
+            await primary.write_bytes(key, b"winner")
+
+    monkeypatch.setattr(legacy, "read_bytes_bounded", raced_read)
+
+    assert await FallbackStorageBackend(primary, legacy).read_bytes_bounded("report.bin", 8) == b"winner"
+
+    assert (tmp_path / "primary/report.bin").read_bytes() == b"winner"
+    assert (tmp_path / "legacy/report.bin").stat().st_size == 200_000
+
+
+@pytest.mark.parametrize("winner_size", [3, 200_000])
+async def test_bounded_fallback_primary_wins_when_legacy_is_missing_during_upload(tmp_path, monkeypatch, winner_size):
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    original = legacy.read_bytes_bounded
+
+    async def raced_read(key: str, max_bytes: int) -> bytes:
+        try:
+            return await original(key, max_bytes)
+        finally:
+            await primary.write_bytes(key, b"w" * winner_size)
+
+    monkeypatch.setattr(legacy, "read_bytes_bounded", raced_read)
+    storage = FallbackStorageBackend(primary, legacy)
+
+    if winner_size > 8:
+        with pytest.raises(StorageReadLimitExceededError) as raised:
+            await storage.read_bytes_bounded("report.bin", 8)
+        assert raised.value.size_bytes == 9
+    else:
+        assert await storage.read_bytes_bounded("report.bin", 8) == b"w" * winner_size
+
+    assert not (tmp_path / "legacy").exists()
+    assert (tmp_path / "primary/report.bin").stat().st_size == winner_size

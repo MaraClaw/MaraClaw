@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Protocol, TypeIs, override
+from typing import override
 
+import anyio
 from botocore.exceptions import ClientError
 
 from app.core.json_types import json_as_int
@@ -17,15 +19,8 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.s3_connection import S3ObjectIdentity
 from app.services.storage_runtime.s3_create import S3CreateBackend
+from app.services.storage_runtime.s3_read import read_object
 from app.services.storage_runtime.utils import normalize_storage_key
-
-
-class _ReadableBody(Protocol):
-    def read(self) -> bytes: ...
-
-
-def _is_readable_body(value: object) -> TypeIs[_ReadableBody]:
-    return callable(getattr(value, "read", None))
 
 
 def _mapping_items(value: object) -> list[Mapping[str, object]]:
@@ -106,15 +101,14 @@ class S3StorageBackend(S3CreateBackend):
     @override
     async def read_bytes(self, key: str) -> bytes:
         client = self._client_or_raise()
-        response = await asyncio.to_thread(
-            client.get_object,
-            Bucket=self.bucket,
-            Key=self._object_key(key),
-        )
-        body = response["Body"]
-        if not _is_readable_body(body):
-            raise TypeError("S3 get_object response is missing a readable Body")
-        return await asyncio.to_thread(body.read)
+        get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
+        return await anyio.to_thread.run_sync(read_object, get_object, None, abandon_on_cancel=True)
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        client = self._client_or_raise()
+        get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
+        return await anyio.to_thread.run_sync(read_object, get_object, max_bytes, abandon_on_cancel=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

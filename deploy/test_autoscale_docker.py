@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from deploy.autoscale_docker import Container, Docker
 from deploy.autoscale_policy import GIB, Policy
 from deploy.test_resources import DEFAULTS
+from deploy.autoscale_state import Authority
 
 
 def model() -> str:
@@ -23,8 +25,13 @@ def container(service: str = "engine") -> Container:
 
 class DockerTests(unittest.TestCase):
     def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        endpoint = patch.dict(os.environ, {"DOCKER_HOST": "unix:///fixture/docker.sock"})
+        endpoint.start()
+        self.addCleanup(endpoint.stop)
         with patch("deploy.autoscale_docker.run", return_value=model()):
-            self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")))
+            self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")), Path(temporary.name))
 
     def test_growth_when_admitted_uses_only_target_without_recreation(self) -> None:
         with patch("deploy.autoscale_docker.run") as command:
@@ -57,10 +64,47 @@ class DockerTests(unittest.TestCase):
         self.assertEqual(result, (24 * GIB, 0, 7 * GIB))
 
     def test_startup_when_daemon_is_eight_gib_refuses_default_stack(self) -> None:
-        with patch.object(self.docker, "containers", return_value=()), \
-                patch("deploy.autoscale_docker.run", return_value=str(8 * GIB)):
-            with self.assertRaisesRegex(ValueError, "admission refused"):
+        with patch.object(self.docker, "containers", return_value=()) as snapshot, \
+                patch("deploy.autoscale_docker.run", return_value=str(8 * GIB)) as command:
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
                 self.docker.startup(Policy())
+        snapshot.assert_called_once_with()
+        command.assert_called_once_with(["docker", "info", "--format", "{{.MemTotal}}"])
+        message = str(refused.exception)
+        for detail in ("daemon_capacity=8.000 GiB", "effective_capacity=8.000 GiB",
+                       "host_reserve=2.000 GiB", "required_stack=6.750 GiB",
+                       "external_reserve=2.000 GiB", "stack_budget=4.000 GiB",
+                       "shortfall=2.750 GiB", "Docker memory", "explicitly configured",
+                       "--development", "separate local development"):
+            self.assertIn(detail, message)
+
+    def test_startup_when_external_allocation_is_unknown_explains_hard_limit_remedy(self) -> None:
+        guest = replace(container(), project="guest", memory=0)
+        with patch.object(self.docker, "containers", return_value=(guest,)), \
+                patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)):
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
+                self.docker.startup(Policy())
+        message = str(refused.exception)
+        for detail in ("external_reserve=unknown", "unlimited external", "hard limits",
+                       "external_unlimited_gib", "shortfall=unknown"):
+            self.assertIn(detail, message)
+
+    def test_startup_when_known_external_limits_exceed_floor_reports_actual_reserve(self) -> None:
+        guest = replace(container(), project="guest", memory=3 * GIB)
+        with patch.object(self.docker, "containers", return_value=(guest,)), \
+                patch("deploy.autoscale_docker.run", return_value=str(11 * GIB)):
+            with self.assertRaises(ValueError) as refused:
+                self.docker.startup(Policy())
+        self.assertIn("external_reserve=3.000 GiB", str(refused.exception))
+        self.assertIn("shortfall=0.750 GiB", str(refused.exception))
+
+    def test_startup_when_one_byte_short_reports_exact_shortfall(self) -> None:
+        total = 43 * GIB // 4 - 1
+        with patch.object(self.docker, "containers", return_value=()), \
+                patch("deploy.autoscale_docker.run", return_value=str(total)):
+            with self.assertRaises(ValueError) as refused:
+                self.docker.startup(Policy())
+        self.assertIn("shortfall=0.000 GiB (1 bytes)", str(refused.exception))
 
     def test_startup_when_existing_counts_differ_preserves_stopped_members_not_oneoffs(self) -> None:
         members = tuple(replace(container(), identity=str(index) * 64, running=False) for index in (1, 2, 3))
@@ -80,8 +124,11 @@ class DockerTests(unittest.TestCase):
     def test_startup_when_capacity_is_capped_cannot_borrow_daemon_memory(self) -> None:
         with patch.object(self.docker, "containers", return_value=()), \
                 patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)):
-            with self.assertRaisesRegex(ValueError, "admission refused"):
+            with self.assertRaisesRegex(ValueError, "admission refused") as refused:
                 self.docker.startup(Policy(capacity_gib=10))
+        self.assertIn("daemon_capacity=32.000 GiB", str(refused.exception))
+        self.assertIn("effective_capacity=10.000 GiB", str(refused.exception))
+        self.assertIn("shortfall=0.750 GiB", str(refused.exception))
 
     def test_startup_when_stopped_project_member_is_unlimited_refuses_start(self) -> None:
         members = (replace(container(), running=False, memory=0),)
@@ -93,6 +140,9 @@ class DockerTests(unittest.TestCase):
 
 class BootstrapRerunTests(unittest.TestCase):
     def setUp(self) -> None:
+        endpoint = patch.dict(os.environ, {"DOCKER_HOST": "unix:///fixture/docker.sock"})
+        endpoint.start()
+        self.addCleanup(endpoint.stop)
         with patch("deploy.autoscale_docker.run", return_value=model()):
             self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")))
         services = [(name, limits.memory) for name, limits in DEFAULTS.items()
@@ -117,6 +167,8 @@ class BootstrapRerunTests(unittest.TestCase):
         inspection.start()
         self.addCleanup(commands.stop)
         self.addCleanup(inspection.stop)
+        with patch.object(self.docker, "memory", return_value=(16 * GIB, int(6.75 * GIB), 0)):
+            self.docker.startup(Policy())
         self.docker.remember_startup()
 
     def command(self, arguments: list[str], timeout: int = 30) -> str:
@@ -133,6 +185,8 @@ class BootstrapRerunTests(unittest.TestCase):
 
     def test_startup_when_autoscaling_changed_routed_counts_preserves_them_without_bootstrap(self) -> None:
         member = next(item for item in self.members if item.service == "web-a")
+        authority = self.docker.authority.load()
+        self.docker.authority.save(Authority(authority.counts | {"web-a": 3}))
         self.members += (replace(member, identity="f" * 64),)
         self.assertEqual(self.docker.startup(Policy())["web-a"], 3)
         self.assertTrue(self.docker.startup_reusable)
@@ -164,3 +218,57 @@ class BootstrapRerunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "bootstrap has not completed"):
             self.docker.remember_startup()
         self.assertFalse((self.docker.state_dir / "startup.sha256").exists())
+
+    def test_record_when_serving_roles_are_incomplete_preserves_previous_checkpoint(self) -> None:
+        original = self.members
+        checkpoint = self.docker.state_dir / "startup.sha256"
+        previous = checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns
+        for service in ("engine", "background", "web-a", "web-e", "ingress"):
+            for defect in ("missing", "stopped", "unhealthy", "extra"):
+                with self.subTest(service=service, defect=defect):
+                    self.members = original
+                    self.docker.startup(Policy())
+                    member = next(item for item in original if item.service == service)
+                    if defect == "missing":
+                        self.members = tuple(item for item in original if item != member)
+                    if defect == "stopped":
+                        self.members = tuple(replace(item, running=False) if item == member else item for item in original)
+                    if defect == "unhealthy":
+                        self.members = tuple(replace(item, healthy=False) if item == member else item for item in original)
+                    if defect == "extra":
+                        self.members += (replace(member, identity="f" * 64),)
+                    with self.assertRaises(ValueError):
+                        self.docker.remember_startup()
+                    self.assertEqual((checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns), previous)
+
+    def test_direct_record_when_pool_is_missing_refuses_even_with_oneoff_or_foreign_members(self) -> None:
+        self.members = tuple(item for item in self.members if item.service != "web-a")
+        self.members += (replace(container("web-a"), oneoff=True), replace(container("web-a"), project="foreign"))
+        with self.assertRaises(ValueError):
+            self.docker.remember_startup()
+
+    def test_direct_record_when_previously_scaled_counts_are_healthy_preserves_them(self) -> None:
+        original = self.members
+        for service in ("engine", "web-a", "web-e"):
+            for count in (1, 3):
+                with self.subTest(service=service, count=count):
+                    member = next(item for item in original if item.service == service)
+                    self.members = tuple(item for item in original if item != member) if count == 1 else (
+                        *original, replace(member, identity="f" * 64))
+                    self.docker.authority.save(Authority({"engine": 2, "web-a": 2, "web-e": 2} | {service: count}))
+                    self.docker.remember_startup()
+                    self.assertEqual(len(self.docker.owned(self.members, service)), count)
+
+    def test_direct_record_when_any_serving_member_is_stopped_or_unhealthy_preserves_checkpoint(self) -> None:
+        original = self.members
+        checkpoint = self.docker.state_dir / "startup.sha256"
+        previous = checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns
+        for service in ("engine", "background", "web-a", "web-e", "ingress"):
+            for unhealthy in (False, True):
+                with self.subTest(service=service, unhealthy=unhealthy):
+                    self.members = tuple(replace(item, healthy=False) if unhealthy and item.service == service
+                                         else replace(item, running=False) if item.service == service else item
+                                         for item in original)
+                    with self.assertRaises(ValueError):
+                        self.docker.remember_startup()
+                    self.assertEqual((checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns), previous)

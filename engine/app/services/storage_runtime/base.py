@@ -62,6 +62,13 @@ class StorageConditionalRaceError(RuntimeError):
         super().__init__(f"Conditional storage race persisted after {attempts} attempts: {key}")
 
 
+class StorageReadLimitExceededError(ValueError):
+    def __init__(self, max_bytes: int, size_bytes: int):
+        self.max_bytes: int = max_bytes
+        self.size_bytes: int = size_bytes
+        super().__init__(f"Storage read exceeds {max_bytes} bytes (observed {size_bytes})")
+
+
 class StorageBackend:
     async def exists(self, key: str) -> bool:
         raise NotImplementedError
@@ -76,6 +83,16 @@ class StorageBackend:
         raise NotImplementedError
 
     async def read_bytes(self, key: str) -> bytes:
+        raise NotImplementedError
+
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        """Read at most max_bytes, consuming only one additional byte to detect overflow.
+
+        Raise StorageReadLimitExceededError on actual-byte overflow and FileNotFoundError
+        for an absent key. Implementations must not first hash, promote, or fully
+        read the object. A cancelled worker retains ownership of its resources
+        until its bounded blocking operation finishes and closes them.
+        """
         raise NotImplementedError
 
     async def read_text(self, key: str, encoding: str = "utf-8", errors: str = "replace") -> str:

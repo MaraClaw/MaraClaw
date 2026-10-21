@@ -15,7 +15,7 @@ import uuid
 
 from deploy.acceptance_socket import start
 from deploy.autoscale_docker import Docker, run
-from deploy.autoscale_policy import POOLS
+from deploy.autoscale_policy import POOLS, Policy
 from deploy.autoscale_proxy import Proxy
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +83,9 @@ frontend test_http
     (directory / "empty.env").touch()
     (directory / "policy.toml").write_text("sample_seconds=1\nhigh_samples=2\nlow_samples=6\n"
         "cooldown_seconds=2\ndrain_seconds=15\nmaximum=4\nengine_rps=2\nweb_rps=2\n")
-    return Docker(directory, (directory / "empty.env", directory / "compose.json"))
+    state = directory / "controller"
+    state.mkdir(mode=0o700)
+    return Docker(directory, (directory / "empty.env", directory / "compose.json"), state)
 
 
 def semantics(proxy: Proxy, docker: Docker, port: int, host: str) -> None:
@@ -124,8 +126,7 @@ def semantics(proxy: Proxy, docker: Docker, port: int, host: str) -> None:
 
 def exercise(directory: Path, docker: Docker, domains: Mapping[str, str]) -> None:
     helper = run(docker.compose + ["ps", "-q", "helper"]).strip()
-    controller_dir = Path("controller")
-    controller_dir.mkdir()
+    controller_dir = docker.state_dir
     relay, worker = start(controller_dir / "admin.sock", helper)
     port = int(run(docker.compose + ["port", "ingress", "8080"]).strip().rsplit(":", 1)[1])
     command = [sys.executable, "-m", "deploy.autoscale", "--root", str(directory),
@@ -247,6 +248,7 @@ def main() -> None:
         docker = prepare(directory, domains)
         os.chdir(directory)
         try:
+            docker.startup(Policy.load(directory / "policy.toml"))
             result = subprocess.run(docker.compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
                 "--wait-timeout", "60"], capture_output=True, text=True, timeout=90, check=False)
             if result.returncode:

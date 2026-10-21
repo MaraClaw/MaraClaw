@@ -1,14 +1,16 @@
 import uuid
 from collections.abc import AsyncIterator
-from types import SimpleNamespace
+from pathlib import Path
 from typing import override
 
 import pytest
 from fastapi import HTTPException
 
 from app.api import files
+from app.records.agent import AgentRecord
+from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
-from app.services.storage_runtime.base import StorageBackend, StorageEntry, StorageVersion
+from app.services.storage_runtime.base import ConditionalWriteResult, StorageBackend, StorageEntry, StorageVersion
 
 
 class _FakeDb:
@@ -59,6 +61,15 @@ class PrefixOnlyStorage(StorageBackend):
         self.objects[key] = data
 
     @override
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        if key in self.objects:
+            return ConditionalWriteResult(ok=False, conflict=True)
+        self.objects[key] = data
+        return ConditionalWriteResult(ok=True)
+
+    @override
     async def delete(self, key: str) -> None:
         self.objects.pop(key, None)
 
@@ -100,12 +111,12 @@ async def unused_db_session() -> AsyncIterator[_FakeDb]:
         session.close()
 
 
-def make_user():
-    return SimpleNamespace(id=uuid.uuid4(), display_name="Storage User", role="member", tenant_id=None, is_active=True)
+def make_user() -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), display_name="Storage User", role="member", tenant_id=None, is_active=True)
 
 
-def make_agent(agent_id: uuid.UUID, creator_id: uuid.UUID):
-    return SimpleNamespace(id=agent_id, name="Storage Agent", creator_id=creator_id, primary_model_id=None)
+def make_agent(agent_id: uuid.UUID, creator_id: uuid.UUID) -> AgentRecord:
+    return AgentRecord(id=agent_id, name="Storage Agent", creator_id=creator_id)
 
 
 async def allow_access(user, agent_id: uuid.UUID):
@@ -154,20 +165,33 @@ async def test_read_file_rejects_database_backed_focus_file(monkeypatch, unused_
 
 
 @pytest.mark.asyncio
-async def test_agent_manager_does_not_reinitialize_s3_prefix_directory(
-    monkeypatch, tmp_path, unused_db_session: object
-):
+async def test_agent_manager_fills_missing_files_in_s3_prefix_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, unused_db_session: object
+) -> None:
     agent_id = uuid.uuid4()
     storage = PrefixOnlyStorage({f"{agent_id}/soul.md": b"existing"})
-    monkeypatch.setattr("app.services.agent_manager.get_storage_backend", lambda: storage)
-    monkeypatch.setattr("app.services.agent_manager.settings.STORAGE_LOCAL_ROOT", str(tmp_path))
+    template_dir = tmp_path / "template"
+    workspace_dir = template_dir / "workspace"
+    workspace_dir.mkdir(parents=True)
+    (template_dir / "soul.md").write_bytes(b"replacement")
+    (workspace_dir / "notes.txt").write_bytes(b"workspace fixture")
+    creator = make_user()
+
+    async def get_creator(_creator_id: uuid.UUID) -> UserRecord:
+        return creator
+
+    monkeypatch.setattr("app.services.agent_workspace.get_storage_backend", lambda: storage)
+    monkeypatch.setattr("app.services.agent_workspace.user_dao.get", get_creator)
+    monkeypatch.setattr("app.services.agent_manager.settings.STORAGE_LOCAL_ROOT", str(tmp_path / "local"))
+    monkeypatch.setattr("app.services.agent_manager.settings.AGENT_TEMPLATE_DIR", str(template_dir))
 
     manager = AgentManager()
-    agent = make_agent(agent_id, uuid.uuid4())
+    agent = make_agent(agent_id, creator.id)
 
     await manager.initialize_agent_files(agent=agent)
 
     assert storage.objects[f"{agent_id}/soul.md"] == b"existing"
+    assert storage.objects[f"{agent_id}/workspace/notes.txt"] == b"workspace fixture"
 
 
 @pytest.mark.asyncio

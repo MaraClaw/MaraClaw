@@ -1,13 +1,13 @@
-from dataclasses import asdict, dataclass
+from dataclasses import replace
 from collections.abc import Callable
 import json
-import os
 from pathlib import Path
-import re
 from typing import Protocol
 
 from deploy.autoscale_docker import Container
 from deploy.autoscale_proxy import Snapshot
+from deploy.autoscale_policy import POOLS
+from deploy.autoscale_state import Authority, Intent, Operation, ReplicaState, sync_directory
 
 
 class ProxyControl(Protocol):
@@ -16,6 +16,9 @@ class ProxyControl(Protocol):
 
 
 class ContainerControl(Protocol):
+    @property
+    def authority(self) -> ReplicaState: ...
+    def validate_files(self) -> None: ...
     def containers(self) -> tuple[Container, ...]: ...
     def owned(self, containers: tuple[Container, ...], service: str) -> tuple[Container, ...]: ...
     def remove(self, identity: str) -> None: ...
@@ -44,16 +47,6 @@ def topology(containers: tuple[Container, ...], snapshot: Snapshot,
     return mapping
 
 
-@dataclass(frozen=True, slots=True)
-class Intent:
-    identity: str
-    ip: str
-    service: str
-    pool: str
-    slot: str
-    generation: str
-
-
 class Retirement:
     def __init__(self, directory: Path, proxy: ProxyControl, docker: ContainerControl):
         self.path = directory / "pending.json"
@@ -66,28 +59,33 @@ class Retirement:
         self.minimum = 1
 
     def recover(self) -> None:
+        containers = self.docker.containers()
+        state = self.docker.authority
+        authority = state.reconcile({name: len(self.docker.owned(containers, name)) for name in POOLS},
+            {item.identity for name in POOLS for item in self.docker.owned(containers, name)})
+        if authority.operation is not None:
+            victim = authority.operation.victim
+            self.proxy.release(victim.pool, victim.slot)
+            state.save(Authority(authority.counts))
         if self.path.exists():
             intent = Intent(**json.loads(self.path.read_text(encoding="utf-8")))
-            if (intent.pool not in {"engine_pool", "admin_pool", "member_pool"}
-                    or not re.fullmatch(r"(?:engine|admin|member)(?:[1-9]|1[0-6])", intent.slot)):
-                raise ValueError("invalid pending operation")
+            intent.validate()
             self.proxy.release(intent.pool, intent.slot)
             self.path.unlink()
+            sync_directory(self.path.parent)
+        self.intent = None
+        self.quiet = 0
 
     def begin(self, candidate: Container, slot: tuple[str, str], snapshot: Snapshot, now: float) -> None:
         pool, name = slot
         intent = Intent(candidate.identity, candidate.ip, candidate.service, pool, name, snapshot.generation)
-        temporary = self.path.with_suffix(".tmp")
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(asdict(intent), stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(self.path)
-        descriptor = os.open(self.path.parent, os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        intent.validate()
+        state = self.docker.authority
+        authority = state.settled()
+        containers = self.docker.containers()
+        if any(len(self.docker.owned(containers, service)) != count for service, count in authority.counts.items()):
+            raise ValueError("replica counts disagree with authority")
+        state.save(replace(authority, operation=Operation("draining", intent)))
         self.intent = intent
         self.deadline = now + self.timeout
         self.quiet = 0
@@ -95,8 +93,14 @@ class Retirement:
 
     def cancel(self) -> None:
         if self.intent is not None:
+            state = self.docker.authority
+            authority = state.load()
+            operation = authority.operation
+            if operation is None or operation.phase != "draining" or operation.victim != self.intent:
+                return
+            state.save(replace(authority, operation=replace(operation, phase="releasing")))
             self.proxy.release(self.intent.pool, self.intent.slot)
-            self.path.unlink(missing_ok=True)
+            state.save(Authority(authority.counts))
             self.intent = None
             self.quiet = 0
 
@@ -104,6 +108,10 @@ class Retirement:
         intent = self.intent
         if intent is None:
             return False
+        state = self.docker.authority
+        authority = state.load()
+        if authority.operation != Operation("draining", intent):
+            raise ValueError("unresolved retirement cannot resume deletion")
         containers = self.docker.owned(self.docker.containers(), intent.service)
         mapping = topology(containers, snapshot, intent.pool, intent.identity)
         candidate = next((item for item in containers if item.identity == intent.identity), None)
@@ -128,6 +136,8 @@ class Retirement:
                 or not confirmed.rows[(intent.pool, intent.slot)].quiet):
             self.cancel()
             return False
+        self.docker.validate_files()
+        state.save(replace(authority, operation=Operation("removing", intent)))
         self.docker.remove(intent.identity)
-        self.cancel()
+        self.recover()
         return True

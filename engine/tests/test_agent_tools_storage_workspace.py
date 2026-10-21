@@ -23,6 +23,7 @@ from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
+    StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
 )
@@ -126,6 +127,15 @@ class MemoryStorageBackend(StorageBackend):
         return self.files[key]
 
     @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        if key not in self.files:
+            raise FileNotFoundError(key)
+        data = self.files[key][: max_bytes + 1]
+        if len(data) > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, len(data))
+        return data
+
+    @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.files[key] = data
         self.versions[key] = self.versions.get(key, 0) + 1
@@ -179,6 +189,74 @@ class MemoryStorageBackend(StorageBackend):
                 return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
         await self.write_bytes(key, data, content_type=content_type)
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+
+
+async def test_storage_document_without_enterprise_tenant_never_opens_storage(monkeypatch):
+    from app.services.agent_tool_exec import documents
+
+    def forbidden():
+        pytest.fail("tenant authorization must happen before storage access")
+
+    monkeypatch.setattr("app.services.storage.get_storage_backend", forbidden)
+
+    result = await documents._read_document_from_storage(uuid.uuid4(), "enterprise_info/report.docx")
+
+    assert result == "File not found: enterprise_info/report.docx"
+
+
+@pytest.mark.parametrize("source", ["workspace", "enterprise"])
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+async def test_storage_document_preserves_missing_and_directory_errors(monkeypatch, source, kind):
+    from app.services.agent_tool_exec import documents
+
+    agent_id = uuid.uuid4()
+    tenant_id = str(uuid.uuid4())
+    rel = "enterprise_info/report.docx" if source == "enterprise" else "workspace/report.docx"
+    key = f"enterprise_info_{tenant_id}/report.docx" if source == "enterprise" else f"{agent_id}/{rel}"
+    backend = MemoryStorageBackend({f"{key}/child": b"data"} if kind == "directory" else {})
+
+    async def forbidden(*_args):
+        pytest.fail("missing files and directories must not be read")
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", forbidden)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: backend)
+
+    result = await documents._read_document_from_storage(agent_id, rel, tenant_id=tenant_id)
+
+    expected = "Path is a directory, not a document" if kind == "directory" else "File not found"
+    assert result == f"{expected}: {rel}"
+
+
+async def test_storage_document_cancellation_during_bounded_read_never_starts_parser(monkeypatch):
+    from app.services.agent_tool_exec import document_reading, documents
+
+    agent_id = uuid.uuid4()
+    backend = MemoryStorageBackend({f"{agent_id}/workspace/report.docx": b"document"})
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def read(key: str, max_bytes: int) -> bytes:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return b"document"
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("a cancelled read must never launch the parser")
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", read)
+    monkeypatch.setattr(document_reading, "convert_document_isolated_async", forbidden)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: backend)
+    task = asyncio.create_task(documents._read_document_from_storage(agent_id, "workspace/report.docx"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert cancelled.is_set()
 
 
 @pytest.fixture

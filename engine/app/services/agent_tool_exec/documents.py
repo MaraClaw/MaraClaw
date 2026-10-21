@@ -44,6 +44,7 @@ async def _read_document_from_storage(
     from app.services import agent_tools
     from app.services.document_parser import MAX_INPUT_BYTES, DocumentTooLargeError, format_parse_failure
     from app.services.storage import get_storage_backend
+    from app.services.storage_runtime.base import StorageReadLimitExceededError
 
     storage_key, normalized, is_enterprise = agent_tools._tool_storage_key(agent_id, rel_path, tenant_id)
     if is_enterprise and tenant_id in (None, ""):
@@ -55,10 +56,9 @@ async def _read_document_from_storage(
     if not await storage.is_file(storage_key):
         return f"File not found: {rel_path}"
 
-    version = await storage.get_version(storage_key)
-    if version.size > MAX_INPUT_BYTES:
-        return format_parse_failure(DocumentTooLargeError("too large", size_bytes=version.size))
-
-    data = await storage.read_bytes(storage_key)
+    try:
+        data = await storage.read_bytes_bounded(storage_key, MAX_INPUT_BYTES)
+    except StorageReadLimitExceededError as exc:
+        return format_parse_failure(DocumentTooLargeError("too large", size_bytes=exc.size_bytes))
     filename = Path(normalized).name or Path(rel_path).name
     return await document_reading._read_document_from_bytes_async(data, filename, max_chars)

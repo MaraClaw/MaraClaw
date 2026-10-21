@@ -10,6 +10,7 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
+    StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
 )
@@ -52,6 +53,27 @@ class FallbackStorageBackend(StorageBackend):
     async def read_bytes(self, key: str) -> bytes:
         await self._promote_file(key)
         return await self.primary.read_bytes(key)
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        try:
+            return await self.primary.read_bytes_bounded(key, max_bytes)
+        except FileNotFoundError:
+            pass
+        try:
+            data = await self.fallback.read_bytes_bounded(key, max_bytes)
+        except (FileNotFoundError, StorageReadLimitExceededError) as legacy_error:
+            try:
+                return await self.primary.read_bytes_bounded(key, max_bytes)
+            except FileNotFoundError:
+                raise legacy_error from None
+        for _attempt in range(3):
+            await self.primary.create_bytes_if_absent(key, data)
+            try:
+                return await self.primary.read_bytes_bounded(key, max_bytes)
+            except FileNotFoundError:
+                pass
+        raise StorageConditionalRaceError(key, 3)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

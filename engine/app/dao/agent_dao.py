@@ -37,6 +37,7 @@ _AGENT_COLUMNS = (
     "api_key_hash",
     "openclaw_last_seen",
     "status",
+    "setup_pending",
     "container_id",
     "container_port",
     "primary_model_id",

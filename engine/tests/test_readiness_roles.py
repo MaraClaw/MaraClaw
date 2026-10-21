@@ -14,8 +14,11 @@ from app.services.wechat_channel import WeChatPollManager
 @pytest.mark.parametrize(
     "role", ["api", "worker", "connector", "api,connector", "worker,connector", "all", "bootstrap"]
 )
-async def test_actual_start_registers_required_role_evidence(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
-    from app.services import audit_logger, gateway_report_relay, scheduler, trigger_daemon
+@pytest.mark.parametrize("failed_worker", ["trigger_daemon", "agent_setup"])
+async def test_actual_start_registers_required_role_evidence(
+    monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
+) -> None:
+    from app.services import agent_setup, audit_logger, gateway_report_relay, scheduler, trigger_daemon
     from app.services.linkup import export
 
     runtime = lifecycle.Runtime()
@@ -56,6 +59,7 @@ async def test_actual_start_registers_required_role_evidence(monkeypatch: pytest
     monkeypatch.setattr(lifecycle, "shutdown_llm_clients", noop)
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
+    monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
@@ -70,6 +74,7 @@ async def test_actual_start_registers_required_role_evidence(monkeypatch: pytest
         await runtime.start(roles)
         required = runtime.tasks.required
         assert ("trigger_daemon" in required) == role_enabled(roles, "worker")
+        assert ("agent_setup" in required) == role_enabled(roles, "worker")
         assert ("gateway_report_relay" in required) == role_enabled(roles, "worker")
         assert ("Connector" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])
@@ -84,9 +89,10 @@ async def test_actual_start_registers_required_role_evidence(monkeypatch: pytest
         if role_enabled(roles, "api"):
             subscriber.ready = False
             assert not await runtime.readiness.check()
+            subscriber.ready = True
         if role_enabled(roles, "worker"):
-            required["trigger_daemon"][0].cancel()
-            await asyncio.gather(required["trigger_daemon"][0], return_exceptions=True)
+            required[failed_worker][0].cancel()
+            await asyncio.gather(required[failed_worker][0], return_exceptions=True)
             assert not await runtime.readiness.check()
     finally:
         await runtime.stop()

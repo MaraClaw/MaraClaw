@@ -19,6 +19,7 @@ from app.services.storage_runtime.base import (
     StorageVersion,
     content_hash_bytes,
 )
+from app.services.storage_runtime.bounded import read_bounded
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -80,6 +81,12 @@ class LocalStorageBackend(StorageBackend):
         path = self._full_path(key)
         async with aiofiles.open(path, "rb") as f:
             return cast(bytes, await f.read())
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        return await anyio.to_thread.run_sync(
+            _read_file_bounded, self._full_path(key), max_bytes, abandon_on_cancel=True
+        )
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -157,8 +164,23 @@ class LocalStorageBackend(StorageBackend):
     async def create_bytes_if_absent(
         self, key: str, data: bytes, content_type: str | None = None
     ) -> ConditionalWriteResult:
-        created = await anyio.to_thread.run_sync(_publish_complete_file, self._full_path(key), data)
-        return ConditionalWriteResult(ok=created, conflict=not created, current_version=await self.get_version(key))
+        stat = await anyio.to_thread.run_sync(_publish_complete_file, self._full_path(key), data)
+        if stat is None:
+            return ConditionalWriteResult(ok=False, conflict=True)
+        file_hash = content_hash_bytes(data)
+        return ConditionalWriteResult(
+            ok=True,
+            current_version=StorageVersion(
+                key=normalize_storage_key(key),
+                exists=True,
+                is_dir=False,
+                size=len(data),
+                modified_at=str(stat.st_mtime),
+                etag=file_hash,
+                version_id=_local_version_token(stat, file_hash),
+                content_hash=file_hash,
+            ),
+        )
 
     @override
     async def local_path_for(self, key: str) -> Path | None:
@@ -176,7 +198,12 @@ def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}:{hash_part}"
 
 
-def _publish_complete_file(path: Path, data: bytes) -> bool:
+def _read_file_bounded(path: Path, max_bytes: int) -> bytes:
+    with path.open("rb", buffering=0) as stream:
+        return read_bounded(stream, max_bytes)
+
+
+def _publish_complete_file(path: Path, data: bytes) -> os.stat_result | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile(dir=path.parent, prefix=".storage-create-", delete=False) as temporary:
         temporary_path = Path(temporary.name)
@@ -184,11 +211,12 @@ def _publish_complete_file(path: Path, data: bytes) -> bool:
             temporary.write(data)
             temporary.flush()
             os.fsync(temporary.fileno())
+            stat = os.fstat(temporary.fileno())
             temporary.close()
             try:
                 os.link(temporary_path, path)
             except FileExistsError:
-                return False
-            return True
+                return None
+            return stat
         finally:
             temporary_path.unlink(missing_ok=True)

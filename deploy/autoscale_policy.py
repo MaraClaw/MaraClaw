@@ -71,6 +71,36 @@ def admit(total: int, stack: int, external: int | None, policy: Policy) -> bool:
     return external is not None and stack + max(int(policy.guest_gib * GIB), external) <= budget(total, policy)
 
 
+@dataclass(eq=False)
+class StartupMemoryError(ValueError):
+    total: int
+    required: int
+    external: int | None
+    policy: Policy
+
+    def __str__(self) -> str:
+        def size(value: int) -> str:
+            return f"{value / GIB:.3f} GiB ({value} bytes)"
+
+        ceiling = min(self.total, int(self.policy.capacity_gib * GIB)) if self.policy.capacity_gib else self.total
+        available = budget(self.total, self.policy)
+        details = (f"daemon_capacity={size(self.total)}; effective_capacity={size(ceiling)}; "
+                   f"host_reserve={size(ceiling - available)}; required_stack={size(self.required)}; ")
+        if self.external is None:
+            details += ("external_reserve=unknown; stack_budget=unknown; shortfall=unknown; "
+                        "reason=running unlimited external containers without policy accounting. "
+                        "Set actual hard limits or explicitly account for their aggregate allocation "
+                        "with external_unlimited_gib (an operator promise, not enforcement). ")
+        else:
+            reserve = max(int(self.policy.guest_gib * GIB), self.external)
+            details += (f"external_reserve={size(reserve)}; stack_budget={size(available - reserve)}; "
+                        f"shortfall={size(self.required + reserve - available)}. ")
+        return ("startup memory admission refused: " + details
+                + "Increase Docker memory (check any capacity_gib cap) or reduce explicitly configured "
+                "memory limits/counts during planned maintenance. For a separate local development "
+                "setup, explicitly use --development; it never adopts production containers.")
+
+
 def capacity(total: int, fixed: int, per_replica: int, policy: Policy) -> int:
     return max(0, min(policy.maximum, (budget(total, policy) - fixed
                                      - int(policy.guest_gib * GIB)) // per_replica))

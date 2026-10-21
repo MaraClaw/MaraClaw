@@ -82,7 +82,7 @@ def prepare(files: tuple[Path, ...], state: Path, environment: dict[str, str]) -
         if json.loads(path.read_text()) != model:
             raise ValueError("effective development settings changed")
     else:
-        if (state / "startup.sha256").exists():
+        if (state / "startup.sha256").exists() or (state / "replicas.json").exists():
             raise ValueError("development override missing from existing state")
         temporary = path.with_suffix(".tmp")
         with temporary.open("x") as output:

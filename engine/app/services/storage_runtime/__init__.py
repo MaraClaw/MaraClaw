@@ -15,6 +15,7 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
+    StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "StorageBackend",
     "StorageConditionalRaceError",
     "StorageEntry",
+    "StorageReadLimitExceededError",
     "StorageVersion",
     "WriteCondition",
     "agent_storage_key",

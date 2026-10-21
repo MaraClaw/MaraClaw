@@ -21,7 +21,6 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
-from app.dao.skill_dao import skill_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction, optional_connection_ctx
@@ -30,18 +29,15 @@ from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.agent_manager import agent_manager
+from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 from app.services.enterprise_llm import (
     assert_distinct_model_slots,
     assert_models_in_tenant_pool,
     is_llm_pool_admin,
 )
-from app.services.gogcli_runtime import gogcli_skill_folder_names
-from app.services.okr_agent_hook import hook_new_agent
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
-from app.services.resource_discovery import import_mcp_from_smithery
-from app.services.storage import get_storage_backend
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 settings = get_settings()
@@ -205,102 +201,6 @@ async def list_agents(
     return out
 
 
-async def _set_agent_status_error(agent_id: uuid.UUID) -> None:
-    agent = await agent_dao.get(agent_id)
-    if agent:
-        _ = await agent_dao.update(db_obj=agent, obj_in={"status": "error"})
-
-
-async def _background_agent_setup(
-    agent_id: uuid.UUID,
-    personality: str,
-    boundaries: str,
-    skill_ids: list[uuid.UUID],
-    template_skill_folder_names: list[str],
-    template_mcp_servers: list[str],
-) -> None:
-    """Run all creation tasks asynchronously with short-lived DAO sessions."""
-    try:
-        agent = await agent_dao.get(agent_id)
-        if not agent:
-            logger.error(f"[background_agent_setup] Agent {agent_id} not found")
-            return
-        await agent_manager.initialize_agent_files(
-            agent,
-            personality=personality,
-            boundaries=boundaries,
-        )
-    except Exception as e:
-        logger.exception(f"Error during agent file initialization for {agent_id}: {e}")
-        await _set_agent_status_error(agent_id)
-        return
-
-    skill_files_to_write: list[tuple[str, str]] = []
-    try:
-        default_ids = await skill_dao.list_default_ids()
-        template_skill_ids = await skill_dao.list_ids_by_folder_names(template_skill_folder_names)
-        all_skill_ids = set(skill_ids) | default_ids | template_skill_ids
-        if all_skill_ids:
-            skills = await skill_dao.list_with_files_by_ids(list(all_skill_ids))
-            agent_prefix = agent_manager._agent_storage_prefix(agent_id)
-            for skill in skills:
-                skill_files_to_write.extend(
-                    (f"{agent_prefix}/skills/{skill.folder_name}/{sf.path}", sf.content) for sf in skill.files
-                )
-    except Exception as e:
-        logger.exception(f"Error resolving skills for agent {agent_id}: {e}")
-        await _set_agent_status_error(agent_id)
-        return
-
-    if skill_files_to_write:
-        try:
-            import asyncio
-
-            storage = get_storage_backend()
-            _ = await asyncio.gather(
-                *[storage.write_text(key, content, encoding="utf-8") for key, content in skill_files_to_write]
-            )
-            logger.info(f"[_skills_copy] background agent={agent_id} files={len(skill_files_to_write)} completed")
-        except Exception as e:
-            logger.exception(f"Error copying skills files for agent {agent_id}: {e}")
-            await _set_agent_status_error(agent_id)
-            return
-
-    if template_mcp_servers:
-        for server_id in template_mcp_servers:
-            try:
-                result_msg = await import_mcp_from_smithery(
-                    server_id=server_id,
-                    agent_id=agent_id,
-                    config={},
-                )
-                if result_msg.startswith("❌"):
-                    logger.warning(
-                        f"[create_agent] background MCP pre-install for '{server_id}' "
-                        + f"on agent {agent_id} reported error: {result_msg[:200]}"
-                    )
-                else:
-                    logger.info(
-                        f"[create_agent] background MCP pre-install '{server_id}' succeeded for agent {agent_id}"
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"[create_agent] background MCP pre-install for '{server_id}' on agent {agent_id} raised: {e}"
-                )
-
-    try:
-        agent = await agent_dao.get(agent_id)
-        if not agent:
-            logger.error(f"[background_agent_setup] Agent {agent_id} not found after file setup")
-            return
-
-        if agent.tenant_id:
-            await hook_new_agent(agent.id, agent.tenant_id)
-    except Exception as e:
-        logger.exception(f"Error finishing agent setup for {agent_id}: {e}")
-        await _set_agent_status_error(agent_id)
-
-
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_agent(
     data: AgentCreate, background_tasks: BackgroundTasks, current_user: UserRecord = Depends(get_current_user)
@@ -400,6 +300,7 @@ async def create_agent(
                 "max_tokens_per_month": data.max_tokens_per_month,
                 "template_id": data.template_id,
                 "status": "idle",
+                "setup_pending": True,
                 "expires_at": expires_at,
                 "max_llm_calls_per_day": max_llm_calls,
                 "max_triggers": default_max_triggers,
@@ -468,38 +369,11 @@ async def create_agent(
                     }
                 )
 
-    _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
-
-    raw_key, key_hash = mint_openclaw_gateway_key()
-    agent = await agent_dao.update(
-        db_obj=agent,
-        obj_in={"api_key_hash": key_hash},
-    )
-    write_gateway_api_key(agent, raw_key)
+        _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
+        raw_key, key_hash = mint_openclaw_gateway_key()
+        agent = await agent_dao.update(db_obj=agent, obj_in={"api_key_hash": key_hash})
+        await persist_agent_setup(agent, data, raw_key)
     await flush_request_transaction()
-
-    folder_names: list[str] = []
-    template_mcp_servers: list[str] = []
-    if data.template_id:
-        tpl = await agent_template_dao.get(data.template_id)
-        if tpl:
-            folder_names = list(tpl.default_skills or [])
-            template_mcp_servers = list(tpl.default_mcp_servers or [])
-
-    if data.gogcli_enabled:
-        for folder_name in gogcli_skill_folder_names():
-            if folder_name not in folder_names:
-                folder_names.append(folder_name)
-
-    background_tasks.add_task(
-        _background_agent_setup,
-        agent_id=agent.id,
-        personality=data.personality or "",
-        boundaries=data.boundaries or "",
-        skill_ids=list(data.skill_ids or []),
-        template_skill_folder_names=folder_names,
-        template_mcp_servers=template_mcp_servers,
-    )
 
     out = (await _agent_to_out(agent, current_user.id)).model_dump()
     out["api_key"] = raw_key
@@ -985,6 +859,8 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can start agent")
+    if agent.setup_pending:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
 
     _ = await agent_manager.start_container(agent)
     agent = await _persist_agent_runtime(agent)
@@ -1060,6 +936,8 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only creator or admin can manage API keys")
+    if agent.setup_pending:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
     raw_key, key_hash = mint_openclaw_gateway_key()
     _ = await agent_dao.update(
         db_obj=agent,

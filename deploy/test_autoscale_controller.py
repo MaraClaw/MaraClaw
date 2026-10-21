@@ -7,17 +7,20 @@ from deploy.autoscale_controller import Controller
 from deploy.autoscale_docker import Container, Service
 from deploy.autoscale_policy import GIB, POOLS, Policy
 from deploy.autoscale_proxy import Row, Snapshot
+from deploy.autoscale_state import Authority, Binding, ReplicaState
 
 
 class RuntimeProbe:
-    def __init__(self) -> None:
+    def __init__(self, directory: Path = Path("/unused")) -> None:
         self.services = {name: Service(128 * 1024**2, 2) for name in POOLS}
         self.current = (Container("f" * 64, "test", "ingress", True, True, "10.0.0.9", 100, "start"),)
         for index, service in enumerate(POOLS, 1):
-            self.current += tuple(Container(str(index + number) * 64, "test", service, True, True,
+            self.current += tuple(Container(f"{index * 16 + number:064x}", "test", service, True, True,
                                             f"10.0.{index}.{number}", 100, "start") for number in (1, 2))
         self.grown: list[tuple[str, int]] = []
         self.removed: list[str] = []
+        self.authority = ReplicaState(Binding("/repo", "test", str(directory), "unix:///fixture/docker.sock",
+                                             "/input.env", ("/compose.yaml",)))
 
     def validate_files(self) -> None:
         pass
@@ -33,9 +36,12 @@ class RuntimeProbe:
 
     def grow(self, service: str, count: int) -> None:
         self.grown.append((service, count))
+        template = self.owned(self.current, service)[0]
+        self.current += (replace(template, identity=f"{len(self.current):064x}", ip=f"10.1.0.{len(self.current)}"),)
 
     def remove(self, identity: str) -> None:
         self.removed.append(identity)
+        self.current = tuple(item for item in self.current if item.identity != identity)
 
 
 class IngressProbe:
@@ -55,7 +61,7 @@ class IngressProbe:
                 continue
             rows[(pool, "BACKEND")] = Row(pool, "BACKEND", self.requests, self.sessions, 0, "", "UP", ())
             for index, item in enumerate(self.runtime.owned(self.runtime.current, service), 1):
-                name = f"server{index}"
+                name = f"{pool.removesuffix('_pool')}{index}"
                 status = "MAINT" if (pool, name, "maint") in self.states else "UP"
                 rows[(pool, name)] = Row(pool, name, 0, self.sessions, 0, item.ip + ":8000", status, (0, 0, 0))
                 addresses[(pool, name)] = item.ip
@@ -72,7 +78,8 @@ class ControllerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.runtime = RuntimeProbe()
+        self.runtime = RuntimeProbe(Path(self.directory.name))
+        self.runtime.authority.save(Authority({name: 2 for name in POOLS}))
         self.ingress = IngressProbe(self.runtime)
         self.controller = Controller(self.runtime, self.ingress,
                                      Policy(low_samples=2, high_samples=2, cooldown_seconds=0),

@@ -17,7 +17,7 @@ from python_on_whales import ClientNotFoundError, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, json_loads_object, json_object_from
+from app.core.json_types import JsonObject, json_object_from
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.dao import llm_model_dao
@@ -249,137 +249,17 @@ class AgentManager:
         link.symlink_to(workspace)
 
     async def initialize_agent_files(self, agent: AgentRecord, personality: str = "", boundaries: str = "") -> None:
-        """Copy template files and customize for this agent."""
-        agent_dir = self._agent_dir(agent.id)
-        template_dir = self._template_dir()
-        storage = get_storage_backend()
-        agent_prefix = self._agent_storage_prefix(agent.id)
+        """Await resumable initialization for synchronous bootstrap callers."""
+        from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
+        from app.services.agent_workspace import render_agent_files, write_missing_agent_files
 
-        # A gateway key file may already be on disk; that is not a workspace.
-        if await storage.exists(f"{agent_prefix}/soul.md"):
-            logger.warning(f"Agent dir already exists: {agent_dir}")
-            return
+        files = await render_agent_files(agent, self._template_dir(), personality=personality, boundaries=boundaries)
 
-        if template_dir.exists():
-            import asyncio
-            import time
+        async def initialize() -> None:
+            async with setup_workspace_lock(self._agent_dir(agent.id)):
+                await write_missing_agent_files(agent.id, files)
 
-            t_start_files = time.perf_counter()
-
-            async def _write_template(dest: str, payload: bytes) -> None:
-                await storage.write_bytes(dest, payload)
-
-            tasks: list[asyncio.Task[None]] = []
-            for src in template_dir.rglob("*"):
-                if src.is_dir():
-                    continue
-                rel = src.relative_to(template_dir).as_posix()
-                if rel == "tasks.json" or rel == "todo.json" or rel.startswith("enterprise_info/"):
-                    continue
-                tasks.append(asyncio.create_task(_write_template(f"{agent_prefix}/{rel}", src.read_bytes())))
-            if tasks:
-                _ = await asyncio.gather(*tasks)
-            logger.info(
-                f"[AgentManager] Uploaded {len(tasks)} template files concurrently in {time.perf_counter() - t_start_files:.2f}s for agent {agent.id}"
-            )
-        else:
-            logger.info(f"Template dir not found ({template_dir}), creating minimal workspace")
-            await storage.write_text(f"{agent_prefix}/tasks.json", "[]", encoding="utf-8")
-            for placeholder in (
-                "workspace/.gitkeep",
-                "workspace/knowledge_base/.gitkeep",
-                "memory/.gitkeep",
-                "skills/.gitkeep",
-            ):
-                await storage.write_text(f"{agent_prefix}/{placeholder}", "", encoding="utf-8")
-
-        # Customize soul.md
-        # Get creator name via DAO (psycopg)
-        from app.dao import user_dao
-
-        creator = await user_dao.get(agent.creator_id)
-        creator_name = creator.display_name if creator else "Unknown"
-
-        soul_content = f"# Personality\n\nI'm {agent.name}, {agent.role_description or 'a digital assistant'}.\n"
-        soul_key = f"{agent_prefix}/soul.md"
-        if await storage.exists(soul_key):
-            template_content = await storage.read_text(soul_key, encoding="utf-8", errors="replace")
-            soul_content = template_content.replace("{{agent_name}}", agent.name)
-            soul_content = soul_content.replace("{{role_description}}", agent.role_description or "General assistant")
-            soul_content = soul_content.replace("{{creator_name}}", creator_name)
-            soul_content = soul_content.replace("{{created_at}}", datetime.now(UTC).strftime("%Y-%m-%d"))
-
-        # Helper function to replace or append sections
-        def replace_or_append_section(content: str, section_name: str, section_content: str) -> str:
-            """Replace existing ## SectionName or append if not found."""
-            if not section_content:
-                return content
-
-            # Pattern to match existing section (case-insensitive header)
-            import re
-
-            pattern = rf"^##\s+{re.escape(section_name)}\s*$"
-            lines = content.split("\n")
-
-            # Find the section header
-            for i, line in enumerate(lines):
-                if re.match(pattern, line.strip(), re.IGNORECASE):
-                    # Found existing section - replace until next ## header or end
-                    section_start = i
-                    section_end = len(lines)
-                    for j in range(i + 1, len(lines)):
-                        if lines[j].strip().startswith("## "):
-                            section_end = j
-                            break
-
-                    # Replace the section content (with trailing newline for proper spacing)
-                    new_section = f"## {section_name}\n{section_content}\n"
-                    lines = [*lines[:section_start], new_section, *lines[section_end:]]
-                    return "\n".join(lines)
-
-            # Section not found - append at the end
-            return content + f"\n## {section_name}\n{section_content}\n"
-
-        # Use the helper to replace or append Personality and Boundaries
-        soul_content = replace_or_append_section(soul_content, "Personality", personality)
-        soul_content = replace_or_append_section(soul_content, "Boundaries", boundaries)
-
-        await storage.write_text(soul_key, soul_content, encoding="utf-8")
-
-        # Ensure memory.md exists
-        mem_key = f"{agent_prefix}/memory/memory.md"
-        if not await storage.exists(mem_key):
-            await storage.write_text(
-                mem_key, "# Memory\n\n_Record important information and knowledge here._\n", encoding="utf-8"
-            )
-
-        # Ensure reflections.md exists - copy from central template
-        refl_key = f"{agent_prefix}/memory/reflections.md"
-        if not await storage.exists(refl_key):
-            refl_template = Path(__file__).parent.parent / "templates" / "reflections.md"
-            refl_content = (
-                refl_template.read_text(encoding="utf-8") if refl_template.exists() else "# Reflections Journal\n"
-            )
-            await storage.write_text(refl_key, refl_content, encoding="utf-8")
-
-        # Ensure HEARTBEAT.md exists - copy from central template
-        hb_key = f"{agent_prefix}/HEARTBEAT.md"
-        if not await storage.exists(hb_key):
-            hb_template = Path(__file__).parent.parent / "templates" / "HEARTBEAT.md"
-            hb_content = (
-                hb_template.read_text(encoding="utf-8") if hb_template.exists() else "# Heartbeat Instructions\n"
-            )
-            await storage.write_text(hb_key, hb_content, encoding="utf-8")
-
-        # Customize state.json
-        state_key = f"{agent_prefix}/state.json"
-        if await storage.exists(state_key):
-            state = json_loads_object(await storage.read_text(state_key, encoding="utf-8", errors="replace"))
-            state["agent_id"] = str(agent.id)
-            state["name"] = agent.name
-            await storage.write_text(state_key, json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        logger.info(f"Initialized agent files at {agent_dir}")
+        await drain_on_cancel(initialize())
 
     def _model_aliases(
         self,
@@ -671,6 +551,8 @@ class AgentManager:
 
         Returns container_id or None if Docker not available.
         """
+        if agent.setup_pending:
+            raise ValueError("Agent setup is incomplete")
         if not self.docker_client:
             logger.info("Docker not available, skipping container start")
             agent.status = "idle"

@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from deploy import starter, starter_service
+from deploy.starter_legacy import TEMPLATE
 
 
 class OwnershipTests(unittest.TestCase):
@@ -45,6 +46,40 @@ class OwnershipTests(unittest.TestCase):
             "MARACLAW_DOCKER_BINARY": "/fixture/docker"})
         environment.start()
         self.addCleanup(environment.stop)
+
+    def legacy(self) -> tuple[Path, dict[str, str]]:
+        unit = self.home / "controller.service"
+        unit.write_text(TEMPLATE.replace("@ROOT@", str(self.root)).replace("@PYTHON@", sys.executable))
+        values = {"LoadState": "loaded", "FragmentPath": str(unit), "DropInPaths": "", "NeedDaemonReload": "no",
+                  "WorkingDirectory": str(self.root), "User": "root", "Type": "simple",
+                  "Environment": "DOCKER_HOST=unix:///var/run/docker.sock", "EnvironmentFiles": "",
+                  "ExecStartPre": "", "ExecStartPost": "", "ExecStop": "", "ExecStopPost": "", "RootDirectory": "",
+                  "Restart": "on-failure", "RestartUSec": "10s", "TimeoutStopUSec": "4min", "UMask": "0077",
+                  "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+                  "ExecStart": "{ path=" + sys.executable + " ; argv[]="
+                      + shlex.join([sys.executable, "-m", "deploy.autoscale", "--root", str(self.root)]) + " ; }"}
+        return unit, values
+
+    def load_unit(self, values: dict[str, str]) -> None:
+        self.loaded.write_text("\n".join(key + "=" + value for key, value in values.items()))
+
+    def test_approved_legacy_transition_installs_explicit_owner_only_after_verified_stop(self) -> None:
+        unit, values = self.legacy()
+        self.load_unit(values)
+        state = Path("/var/lib/maraclaw-autoscaler")
+        endpoint = "unix:///var/run/docker.sock"
+        command = [sys.executable, "-m", "deploy.autoscale", "--root", str(self.root),
+                   "--state-dir", str(state), "--docker-host", endpoint]
+        (self.root / "deploy").mkdir()
+        (self.root / "deploy/maraclaw-autoscaler.service").write_text(TEMPLATE)
+        with patch.object(starter_service, "UNIT", unit), \
+                patch.dict(os.environ, {"DOCKER_HOST": endpoint}), \
+                patch.object(starter_service.os, "uname", return_value=Mock(sysname="Linux")), \
+                patch.object(starter_service, "private_directory"):
+            starter_service.stop(False, self.root, state, approve_legacy=True)
+            starter_service.install(command, self.root, state, approve_legacy=True)
+        self.assertEqual(self.operations(), ["show", "stop", "show", "daemon-reload", "enable"])
+        starter_service.Ownership(self.root, state, endpoint).unit(unit)
 
     def persist(self, command: list[str]) -> None:
         model = {"Label": starter_service.LABEL, "ProgramArguments": command,
@@ -159,3 +194,50 @@ class OwnershipTests(unittest.TestCase):
             starter_service.install(replacement, self.root, self.state)
         self.assertIn("ExecStart=" + " ".join(replacement), unit.read_text())
         self.assertEqual(self.operations(), ["show", "stop", "show", "daemon-reload", "enable"])
+
+    def test_shipped_legacy_requires_explicit_approval_before_stop_or_replace(self) -> None:
+        unit, values = self.legacy()
+        self.load_unit(values)
+        with patch.object(starter_service, "UNIT", unit), \
+                patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}), \
+                self.assertRaises(ValueError):
+            starter_service.stop(False, self.root, Path("/var/lib/maraclaw-autoscaler"))
+        self.assertEqual(self.operations(), [])
+
+    def test_approved_shipped_legacy_checks_installed_and_loaded_before_stop(self) -> None:
+        unit, values = self.legacy()
+        self.load_unit(values)
+        with patch.object(starter_service, "UNIT", unit), \
+                patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}):
+            starter_service.stop(False, self.root, Path("/var/lib/maraclaw-autoscaler"), approve_legacy=True)
+        self.assertEqual(self.operations(), ["show", "stop"])
+
+    def test_approval_cannot_bypass_modified_or_stale_legacy_definitions(self) -> None:
+        for source in ("installed", "missing-installed", "loaded-root", "loaded-exec", "loaded-path", "drop-in", "stale", "environment"):
+            with self.subTest(source=source):
+                self.events.unlink(missing_ok=True)
+                unit, values = self.legacy()
+                if source == "installed":
+                    unit.write_text(unit.read_text().replace("User=root", "User=other"))
+                if source == "missing-installed":
+                    unit.unlink()
+                if source == "loaded-root":
+                    values["WorkingDirectory"] = "/foreign"
+                if source == "loaded-exec":
+                    values["ExecStart"] = values["ExecStart"].replace("deploy.autoscale", "foreign.module")
+                if source == "loaded-path":
+                    values["ExecStart"] = values["ExecStart"].replace("path=" + sys.executable, "path=/foreign/python")
+                if source == "drop-in":
+                    values["DropInPaths"] = "/foreign/override.conf"
+                if source == "stale":
+                    values["NeedDaemonReload"] = "yes"
+                if source == "environment":
+                    values["Environment"] += " DOCKER_CONTEXT=foreign"
+                self.load_unit(values)
+                before = unit.read_bytes() if unit.exists() else None
+                with patch.object(starter_service, "UNIT", unit), \
+                        patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}), \
+                        self.assertRaises(ValueError):
+                    starter_service.stop(False, self.root, Path("/var/lib/maraclaw-autoscaler"), approve_legacy=True)
+                self.assertEqual(unit.read_bytes() if unit.exists() else None, before)
+                self.assertFalse({"stop", "enable", "daemon-reload"} & set(self.operations()))

@@ -113,9 +113,56 @@ container is role `worker,connector`. Instance IDs are generated per process.
 No long-running process runs migrations/seeds; migration failures are fatal.
 
 Cold-start replicas are **two each** for API, admin and member static servers.
-The starter preserves existing replica counts and installs/enables the persistent
-request-driven controller. See [autoscaling operations](AUTOSCALING.md) for policy,
+The first admitted startup adopts existing counts, including stopped replicas,
+and persists deployment-bound targets in private `replicas.json` before Compose
+startup. Later startups restore missing replicas to those targets, refuse excess
+before unsafe scale-down, and preserve authorized scaled counts despite defaults.
+The starter installs/enables the persistent request-driven controller only after
+readiness, pending proxy cleanup and checkpoint validation.
+See [autoscaling operations](AUTOSCALING.md) for policy,
 memory admission, safe retirement, maintenance and isolated Docker acceptance.
+
+All launcher invocations use `deploy.starter`, including no-flag Linux startup.
+Persistent production startup still requires root, running systemd and rootful
+local Docker. A separate private `handoff.lock` serializes deployment through
+verified predecessor shutdown, readiness, checkpointing and successor installation.
+The fixed systemd identity also uses `/run/maraclaw-starter/handoff.lock`, so
+different requested state directories cannot race replacement of the same unit.
+The controller lock is acquired only after shutdown and released before
+`systemctl enable --now`; a competing launcher refuses without stopping a service.
+Compose must pass `up --wait --wait-timeout 240` before checkpointing. Recording
+requires successful bootstrap, the admitted routed counts and all serving roles
+running and healthy; readiness or recording failure preserves the prior checkpoint
+and never installs or starts the successor. Direct recording also requires valid,
+settled durable replica authority and never adopts observed partial counts. Both
+direct autoscaler startup shortcuts acquire `controller.lock`; neither performs
+a supervisor handoff. Fix the cause before retrying; the
+verified predecessor may already have been stopped.
+
+### Transition the shipped legacy controller
+
+The older shell-installed unit lacks explicit state/socket ownership arguments.
+Ordinary startup refuses it. After inspecting the installed unit and loaded
+`systemctl show maraclaw-autoscaler.service` definition during approved maintenance,
+an operator may authorize only that unchanged shipped production configuration:
+
+```sh
+sudo ./start-docker-compose.sh --approve-legacy-unit
+```
+
+Approval requires the default production env, Compose and policy files, state
+`/var/lib/maraclaw-autoscaler`, and `unix:///var/run/docker.sock`. The installed
+unit must exactly match the frozen historical template for this checkout and its
+absolute Python executable. The loaded unit must agree on executable, arguments,
+working directory, fragment, environment and service settings, have no drop-ins,
+and report no pending daemon reload. Missing, modified, stale or foreign
+definitions are refused before stop/reload/enable or unit replacement. Approval
+does not authorize arbitrary adoption, development, foreground or `--no-install`
+startup. Resolve ambiguous definitions manually under a separate approved plan;
+do not edit metadata to make an unknown service pass recognition.
+
+### Inspect public routing
+
 Ingress waits only for healthy API. Member nginx starts after ingress exists
 because its unchanged proxy config resolves the `maraclaw-engine` name on startup.
 After replacing/recreating ingress, recreate `web-e` once ingress is running:

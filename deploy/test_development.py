@@ -153,11 +153,15 @@ class DevelopmentTests(unittest.TestCase):
         for pending in (False, True):
             with self.subTest(pending=pending):
                 docker = self.docker()
+                assert docker.development is not None
                 runtime = RuntimeProbe()
-                runtime.current = tuple(replace(item, project=docker.project) for item in runtime.current)
+                runtime.current = tuple(replace(item, project=docker.project, development=docker.development["token"])
+                                        for item in runtime.current)
                 proxy = IngressProbe(runtime)
                 controller = Controller(docker, proxy, Policy(low_samples=2), self.state)
                 with patch.object(docker, "containers", side_effect=runtime.containers):
+                    with patch.object(docker, "memory", return_value=(32 * GIB, GIB, 0)):
+                        docker.startup(Policy())
                     controller.tick(0)
                     controller.tick(1)
                     if pending:
@@ -180,11 +184,15 @@ class DevelopmentTests(unittest.TestCase):
 
     def test_corruption_during_final_retirement_verification_blocks_stop_and_rm(self) -> None:
         docker = self.docker()
+        assert docker.development is not None
         runtime = RuntimeProbe()
-        runtime.current = tuple(replace(item, project=docker.project) for item in runtime.current)
+        runtime.current = tuple(replace(item, project=docker.project, development=docker.development["token"])
+                                for item in runtime.current)
         proxy = IngressProbe(runtime)
         controller = Controller(docker, proxy, Policy(low_samples=2), self.state)
         with patch.object(docker, "containers", side_effect=runtime.containers):
+            with patch.object(docker, "memory", return_value=(32 * GIB, GIB, 0)):
+                docker.startup(Policy())
             for now in range(4):
                 controller.tick(now)
             self.assertEqual(controller.retirement.quiet, 1)
@@ -206,7 +214,7 @@ class DevelopmentTests(unittest.TestCase):
             self.assertEqual(calls, 2)
             command.assert_not_called()
             self.assertIsNone(controller.retirement.intent)
-            self.assertFalse((self.state / "pending.json").exists())
+            self.assertIsNone(docker.authority.load().operation)
             self.assertEqual(proxy.states[-1][-1], "ready")
 
     def test_input_change_while_stop_runs_prevents_subsequent_rm(self) -> None:

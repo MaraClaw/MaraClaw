@@ -104,6 +104,20 @@ web-a/
 
 Shell + **login/session** shipped. Feature screens remain placeholders wired to API hints.
 
+## Recent Activity
+
+Open **Activity** in desktop or mobile navigation, or visit `/activity`. Platform admins can filter by exact action, tenant UUID, and actor UUID. Organization admins can filter by exact action only; the API derives the organization from the signed-in session.
+
+This is best-effort operational history, not a complete compliance ledger. The view requests up to 100 recent matching events (the API client accepts limits from 1 to 500), newest first, with nullable actor, target, tenant, IP, and timestamp fields. Expand an event to inspect its changes and details. Filters are applied on submit; Refresh activity reloads the current filter. Password-change requirements block this route like the other protected operational screens.
+
+The standalone browser check uses synthetic wire responses, an ephemeral Vite port, and disposable browser contexts, without changing a backend store:
+
+```bash
+node tests/admin-audit.browser.mjs
+```
+
+It covers both admin roles, desktop/mobile navigation, filter cancellation, nullable/details rendering, failure recovery, password gates, and session replacement. Each run prints its unique temporary artifact directory; set `ADMIN_AUDIT_ARTIFACTS` to choose an owned output directory instead. `receipt.json` records scenarios, screenshots, and owned-resource cleanup. It runs separately from `npm test`.
+
 ## Related
 
 | Package | Role |

@@ -562,6 +562,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	api_key_hash VARCHAR(128), 
 	openclaw_last_seen TIMESTAMP WITH TIME ZONE, 
 	status agent_status_enum NOT NULL DEFAULT 'creating', 
+    setup_pending BOOLEAN NOT NULL DEFAULT false,
 	container_id VARCHAR(100), 
 	container_port INTEGER, 
 	primary_model_id UUID, 
@@ -619,6 +620,21 @@ CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id);
 CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
+
+CREATE TABLE IF NOT EXISTS agent_setups (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    inputs JSONB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
+    claim_token UUID,
+    lease_until TIMESTAMPTZ,
+    failure_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL)),
+    CHECK ((state = 'failed') = (failure_code IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS ix_agent_setups_claim ON agent_setups (created_at, agent_id)
+WHERE state IN ('pending', 'running');
 
 CREATE TABLE IF NOT EXISTS okr_progress_logs (
 	id UUID NOT NULL, 

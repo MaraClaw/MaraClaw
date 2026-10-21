@@ -109,6 +109,7 @@ class DomainTests(unittest.TestCase):
 
         def prepare(directory: Path, domains: Mapping[str, str]) -> Mock:
             captured.append(domains)
+            (directory / "policy.toml").write_text("")
             os.environ.update({key: "changed.invalid" for key in OVERRIDES})
             return Mock(compose=["fixture-compose"])
 
@@ -128,7 +129,7 @@ class TrafficTests(unittest.TestCase):
             with self.subTest(environment=environment), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 domains = acceptance.resolve_domains(environment)
-                docker = Mock(spec=Docker, project="fixture", compose=["fixture-compose"])
+                docker = Mock(spec=Docker, project="fixture", compose=["fixture-compose"], state_dir=directory / "controller")
                 with patch.object(acceptance, "Docker", return_value=docker):
                     acceptance.prepare(directory, domains)
                 config = (directory / "haproxy.cfg").read_text()

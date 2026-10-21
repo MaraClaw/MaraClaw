@@ -11,7 +11,7 @@ import time
 
 from .autoscale_controller import Controller
 from .autoscale_docker import Docker
-from .autoscale_policy import Policy
+from .autoscale_policy import Policy, StartupMemoryError
 from .autoscale_proxy import Proxy
 from .autoscale_transport import ExecProxy
 
@@ -44,19 +44,19 @@ def main() -> int:
         policy = Policy.load(arguments.policy or root / "deploy/autoscaler.toml")
         docker = Docker(root, (arguments.env_file or root / "deploy/.env",
                                *(arguments.compose_file or [root / "compose.yaml"])), arguments.state_dir)
-        if arguments.check_startup:
-            counts = docker.startup(policy)
-            options = " ".join(f"--scale {name}={count}" for name, count in counts.items())
-            if docker.startup_reusable:
-                options += " --no-deps " + " ".join(name for name in docker.services if name != "bootstrap")
-            print(options)
-            return 0
-        if arguments.record_startup:
-            docker.remember_startup()
-            return 0
         directory = arguments.state_dir or docker.state_dir
         with (directory / "controller.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if arguments.check_startup:
+                counts = docker.startup(policy)
+                options = " ".join(f"--scale {name}={count}" for name, count in counts.items())
+                if docker.startup_reusable:
+                    options += " --no-deps " + " ".join(name for name in docker.services if name != "bootstrap")
+                print(options)
+                return 0
+            if arguments.record_startup:
+                docker.remember_startup(policy)
+                return 0
             proxy = ExecProxy(docker) if arguments.socket_transport == "exec" else Proxy(directory / "admin.sock")
             controller = Controller(docker, proxy, policy, directory)
             controller.retirement.recover()
@@ -76,6 +76,9 @@ def main() -> int:
                     stop.wait(policy.sample_seconds)
             finally:
                 controller.retirement.cancel()
+    except StartupMemoryError as error:
+        logger.error("%s", error)
+        return 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, StopIteration, subprocess.TimeoutExpired):
         logger.error("controller_refused inspect_local_configuration=true")
         return 1
