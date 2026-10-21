@@ -3,13 +3,13 @@
 import base64
 import os
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.records.user import UserRecord
+from app.schemas.content_response_files import ChatUploadResponse
 from app.services.document_parser import (
     IMAGE_UPLOAD_MAX_BYTES,
     MAX_INPUT_BYTES,
@@ -89,12 +89,12 @@ def _upload_extract_failure(extension: str, exc: DocumentParseError | None) -> s
     return f"[Unsupported file format: {extension}]"
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=dict[str, object])
 async def upload_file(
     file: UploadFile = File(...),
     agent_id: str = Form(""),
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> ChatUploadResponse:
     """Upload a file for chat context. Saves to agent workspace/uploads/ and returns extracted text."""
     if file.filename in (None, ""):
         raise HTTPException(status_code=400, detail="No filename")

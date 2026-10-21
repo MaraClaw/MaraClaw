@@ -2,7 +2,6 @@
 
 import uuid
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -13,6 +12,7 @@ from app.core.security import get_current_user
 from app.dao.published_page_dao import published_page_dao
 from app.records.published_page import PublishedPageRecord
 from app.records.user import UserRecord
+from app.schemas.content_response_catalog import DeletedAcknowledgement, PublishedPageResponse
 from app.services.storage import get_storage_backend, normalize_storage_key
 
 # Public router - no /api prefix, no auth
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/pages", tags=["pages"])
 
 
 @public_router.get("/p/{short_id}")
-async def render_page(short_id: str):
+async def render_page(short_id: str) -> HTMLResponse:
     """Serve a published HTML page. No authentication required."""
     page = await published_page_dao.get_by_short_id(short_id)
     if not page:
@@ -58,7 +58,7 @@ class PagePublish(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
 
 
-def _page_payload(page: PublishedPageRecord) -> dict[str, Any]:
+def _page_payload(page: PublishedPageRecord) -> PublishedPageResponse:
     return {
         "id": str(page.id),
         "short_id": page.short_id,
@@ -76,8 +76,10 @@ def _require_manage(current_user: UserRecord, access_level: str) -> None:
     raise HTTPException(status_code=403, detail="Manage access required")
 
 
-@router.get("/list")
-async def list_pages(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
+@router.get("/list", response_model=list[dict[str, object]])
+async def list_pages(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[PublishedPageResponse]:
     """List published pages for an agent."""
     _ = await check_agent_access(current_user, agent_id)
 
@@ -85,8 +87,10 @@ async def list_pages(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
     return [_page_payload(p) for p in pages]
 
 
-@router.post("/")
-async def publish_page(body: PagePublish, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
+@router.post("/", response_model=dict[str, object])
+async def publish_page(
+    body: PagePublish, current_user: UserRecord = Depends(get_current_user)
+) -> PublishedPageResponse:
     """Publish an HTML workspace file as a public /p/{short_id} page."""
     from app.services.agent_tool_exec.publish import _publish_page
 
@@ -104,8 +108,10 @@ async def publish_page(body: PagePublish, current_user: UserRecord = Depends(get
     return _page_payload(published)
 
 
-@router.delete("/{page_id}")
-async def unpublish_page(page_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, bool]:
+@router.delete("/{page_id}", response_model=dict[str, bool])
+async def unpublish_page(
+    page_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> DeletedAcknowledgement:
     """Remove a published page. The workspace HTML file is left in place."""
     page = await published_page_dao.get(page_id)
     if not page:

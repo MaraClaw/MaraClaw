@@ -341,7 +341,9 @@ async def test_preview_when_xlsx_then_preserves_sheets_payload(monkeypatch: pyte
     result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
     assert result["kind"] == "xlsx"
     assert result["sheets"][0]["title"] == "Metrics"
-    assert result["sheets"][0]["rows"][0] == ["Month", "Revenue"]
+    rows = result["sheets"][0]["rows"]
+    assert isinstance(rows, list)
+    assert rows[0] == ["Month", "Revenue"]
     assert "Revenue" in result["text"]
 
 
@@ -663,6 +665,7 @@ async def test_preview_when_companion_exists_then_skips_anydoc(monkeypatch: pyte
     monkeypatch.setattr(files_api, "convert_document_isolated_async", fail_convert)
 
     result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
+    assert result["kind"] == "docx"
     assert result["text"] == "sidecar only"
 
 
