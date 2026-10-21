@@ -1,10 +1,10 @@
 """Microsoft Teams Bot Channel API routes."""
 
+import json
 import os
 import time
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path as _Path
 from typing import TypedDict
 
 import httpx
@@ -18,18 +18,14 @@ from app.core.json_types import (
     json_as_str_or,
     json_object_from,
     json_object_from_response,
-    mapping_from_row,
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.user_dao import user_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
-from app.services.agent_tool_exec.channel_context import channel_file_sender as _cfs_s
-from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.channels.teams_auth import (
     TeamsAuthenticationError,
     authenticate_teams_activity,
@@ -414,13 +410,6 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             logger.info(f"Teams: Updated service_url for agent {agent_id} to {service_url}")
 
         activity_id = activity.get("id")
-        if (
-            activity_id is not None
-            and activity_id
-            and await channel_dedup.already_processed_shared("teams", str(activity_id), cap=2000)
-        ):
-            return {"ok": True}
-
         if activity.get("type") != "message":
             return {"ok": True}
 
@@ -436,10 +425,6 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
         conversation = _json_mapping(activity.get("conversation"))
         conversation_id = json_as_str(conversation.get("id"))
         sender_id = json_as_str(from_account.get("id"))
-        sender_name = json_as_str(from_account.get("name")) or (
-            f"Teams User {sender_id[:8]}" if sender_id not in (None, "") else "Teams User"
-        )
-        reply_to_id = activity.get("id")
 
         if conversation_id in (None, "") or sender_id in (None, ""):
             logger.warning(f"[Teams] Missing conversation_id or sender_id in activity for agent {agent_id}")
@@ -447,142 +432,22 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
 
         logger.info(f"[Teams] Message from={sender_id}, conversation={conversation_id}: {user_text[:80]}")
 
-        agent_obj = await channel_inbound.load_agent(agent_id)
-        if not agent_obj:
-            logger.warning(f"[Teams] Agent {agent_id} not found")
-            return {"ok": True}
+        if not bool(activity_id):
+            return Response(status_code=400, content="Teams activity ID is required")
+        from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-        platform_user = await channel_inbound.resolve_sender_user(
-            agent=agent_obj,
-            channel_type="teams",
-            external_user_id=sender_id,
-            is_group=json_as_str_or(conversation.get("conversationType")) in ("groupChat", "channel"),
-            extra_info=mapping_from_row({"name": sender_name}),
-        )
-
-        if (
-            sender_name
-            and platform_user.display_name
-            and platform_user.display_name.startswith("Teams User ")
-            and sender_name != platform_user.display_name
-        ):
-            platform_user = (
-                await user_dao.update(db_obj=platform_user, obj_in={"display_name": sender_name}) or platform_user
-            )
-
-        _conv_type = json_as_str_or(conversation.get("conversationType"))
-        _is_group_teams = _conv_type in ("groupChat", "channel")
-        group_name = json_as_str(conversation.get("name")) or (
-            f"Teams Group {conversation_id[:8]}" if _is_group_teams else None
-        )
-
-        sess = await channel_inbound.open_channel_session(
-            agent_id=agent_id,
-            user_id=platform_user.id if not _is_group_teams else (agent_obj.creator_id or platform_user.id),
-            external_conv_id=conversation_id,
-            source_channel="microsoft_teams",
-            first_message_title=user_text,
-            is_group=_is_group_teams,
-            group_name=group_name,
-        )
-
-        channel_conversation = await channel_inbound.bind_channel_conversation(
-            agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group_teams
-        )
-        sess = channel_conversation.transcript_session
-
-        async def _teams_file_sender(file_path: str | _Path, msg: str = "") -> None:
-            _fp = _Path(file_path)
-            use_mi = bool(_extra_config(config).get("use_managed_identity", False))
-            has_creds = (config.app_id and config.app_secret) or use_mi
-            if not has_creds or not conversation_id:
-                return
-            file_msg_activity: JsonObject = {
-                "type": "message",
-                "conversation": _json_mapping({"id": conversation_id}),
-                "replyToId": reply_to_id,
-                "text": (
-                    f"Agent sent file: {_fp.name} "
-                    + f"(Note: file content not directly supported yet, but I can tell you about it: {msg})"
-                ),
-            }
-            await _send_teams_message(config, conversation_id, file_msg_activity)
-
-        _cfs_s_token = _cfs_s.set(_teams_file_sender)
-
-        try:
-            reply_text = await channel_inbound.run_text_turn(
-                agent=agent_obj,
+        await accept_channel_event(
+            ChannelEvent(
+                config_id=config.id,
                 agent_id=agent_id,
-                platform_user=platform_user,
-                session=sess,
-                user_text=user_text,
-                reply_session_id=channel_conversation.reply_session.id,
+                provider="microsoft_teams",
+                event_key=json.dumps([config.app_id, conversation_id, str(activity_id)], separators=(",", ":")),
+                sender_id=sender_id,
+                conversation_id=conversation_id,
+                text=user_text,
+                is_group=json_as_str_or(conversation.get("conversationType")) in ("groupChat", "channel"),
             )
-            logger.info(f"[Teams] LLM reply generated: {reply_text[:80]}")
-            if channel_inbound.is_queued_channel_reply(reply_text):
-                return None
-        except Exception as e:
-            logger.exception(f"[Teams] Failed to call LLM for agent {agent_id}: {e}")
-            reply_text = "Sorry, I encountered an error processing your message."
-            try:
-                await channel_inbound.persist_assistant_message(
-                    agent_id=agent_id,
-                    user_id=platform_user.id,
-                    session=sess,
-                    content=reply_text,
-                    agent=agent_obj,
-                )
-            except Exception:
-                logger.exception("[Teams] Failed to persist error reply")
-        finally:
-            _cfs_s.reset(_cfs_s_token)
-
-        use_managed_identity = bool(_extra_config(config).get("use_managed_identity", False))
-        has_credentials = (config.app_id and config.app_secret) or use_managed_identity
-        if has_credentials and conversation_id:
-            try:
-                bot_channel_account = _json_mapping(activity.get("recipient"))
-                if (bot_account_id := bot_channel_account.get("id")) is None or not bot_account_id:
-                    if config.app_id not in (None, ""):
-                        bot_channel_account = _json_mapping({"id": config.app_id})
-                    else:
-                        logger.error(
-                            "[Teams] Cannot determine bot channel account ID - no recipient in activity and no app_id configured"
-                        )
-                        raise ValueError("Cannot determine bot channel account ID")
-
-                user_account = _json_mapping(activity.get("from"))
-                if (user_account_id := user_account.get("id")) is None or not user_account_id:
-                    user_account = _json_mapping({"id": sender_id, "name": sender_name})
-
-                reply_activity: JsonObject = {
-                    "type": "message",
-                    "from": bot_channel_account,
-                    "conversation": _json_mapping({"id": conversation_id}),
-                    "recipient": user_account,
-                    "replyToId": reply_to_id,
-                    "text": reply_text,
-                }
-                logger.info(
-                    f"[Teams] Attempting to send reply to conversation {conversation_id}, "
-                    + f"from={bot_channel_account.get('id')}, recipient={user_account.get('id')}"
-                )
-                await _send_teams_message(config, conversation_id, reply_activity)
-                logger.info("[Teams] Successfully sent reply to Teams")
-            except Exception as e:
-                logger.exception(f"[Teams] Failed to send message to Teams: {e}")
-        else:
-            use_mi = bool(_extra_config(config).get("use_managed_identity", False))
-            logger.warning(
-                "[Teams] Cannot send reply - missing credentials "
-                + f"(managed_identity={use_mi}, app_id={bool(config.app_id)}, "
-                + f"app_secret={bool(config.app_secret)}), conversation_id={bool(conversation_id)}"
-            )
-
-        if activity_id is not None and activity_id:
-            await channel_dedup.mark_processed_shared("teams", str(activity_id), cap=2000)
-
+        )
         return {"ok": True}
     except Exception as e:
         logger.exception(f"Teams: Unhandled exception in webhook handler for agent {agent_id}: {e}")
