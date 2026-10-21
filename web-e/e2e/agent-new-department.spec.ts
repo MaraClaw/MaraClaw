@@ -9,7 +9,7 @@ const newAgentPath = '/app/agents/new'
 
 async function captureWrites(page: Page, status = 200, release = Promise.resolve()) {
   const writes: { method: string; body: unknown }[] = []
-  await page.route('**/api/agents/**', async (route) => {
+  await page.route('**/api/agents/', async (route) => {
     const request = route.request()
     if (request.method() === 'GET') return route.fallback()
     writes.push({ method: request.method(), body: request.postDataJSON() })

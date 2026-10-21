@@ -5,6 +5,7 @@ import { originalAgent, originalToken, originalUser, prepareWorkspace, replaceme
 
 export const firstSession = '387b65d4-6a8d-42f4-9677-12d4caaf6d31'
 export const secondSession = 'c47bd538-b299-41eb-b6eb-cf0c28f6bc46'
+export const archivedSession = '647085d3-c393-487c-9c9f-021a493ed319'
 export const firstMessage = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 export const secondMessage = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 export const chatPath = (session = firstSession, agent = originalAgent) => `/app/agents/${agent.id}/chat/${session}`
@@ -17,6 +18,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
   let history = initial
   let onboarded = originalAgent.onboarded_for_me
   let requests = 0
+  let ensures = 0
   let deferred: ReturnType<typeof Promise.withResolvers<void>> | undefined
   let delayedTicket: { readonly requested: ReturnType<typeof Promise.withResolvers<void>>; readonly response: ReturnType<typeof Promise.withResolvers<number>>; readonly finished: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   const tickets: { readonly ticket: string; readonly session_id: string; readonly agent_id: string }[] = []
@@ -40,13 +42,25 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     const agent = path.includes(replacementAgent.id) ? replacementAgent : originalAgent
     if (path === `/api/agents/${agent.id}`) return route.fulfill({ json: { ...agent, onboarded_for_me: onboarded } })
     if (path.endsWith('/metrics')) return route.fulfill({ json: { status: agent.status, tasks: { total: 0, done: 0, pending: 0 } } })
-    if (path.endsWith('/sessions')) return route.fulfill({ json: [firstSession, secondSession].map((id, index) => ({
-      id, agent_id: agent.id, user_id: originalUser.id, title: `Identity thread ${index + 1}`,
-      source_channel: 'web', created_at: '2030-01-01T00:00:00Z', message_count: 0, unread_count: 0,
-    })) })
+    const shared = {
+      id: firstSession, agent_id: agent.id, user_id: 'canonical-creator-not-viewer', title: 'Identity thread 1',
+      source_channel: 'shared', is_primary: true, created_at: '2029-01-01T00:00:00Z', message_count: history.length, unread_count: 0,
+    }
+    if (path.endsWith('/sessions') && route.request().method() === 'POST') {
+      ensures++
+      return route.fulfill({ json: shared })
+    }
+    if (path.endsWith('/sessions')) return route.fulfill({ json: [{
+      id: archivedSession, agent_id: agent.id, user_id: originalUser.id, title: 'Archived private thread',
+      source_channel: 'web', is_primary: true, created_at: '2031-01-01T00:00:00Z', message_count: 1, unread_count: 0,
+    }, shared, {
+      id: secondSession, agent_id: agent.id, user_id: originalUser.id, title: 'Identity thread 2',
+      source_channel: 'agent', created_at: '2030-01-01T00:00:00Z', message_count: 1, unread_count: 0,
+    }] })
     if (path.endsWith('/messages')) {
       requests++
-      const snapshot = path.includes(firstSession) ? history : [message('other-session', 'Current second session')]
+      const snapshot = path.includes(firstSession) ? history : path.includes(archivedSession)
+        ? [message('archive-reply', 'Authorized archived history')] : [message('other-session', 'Current second session')]
       const gate = deferred
       deferred = undefined
       if (gate) await gate.promise
@@ -69,7 +83,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     route.send(JSON.stringify({ type: 'connected' }))
   })
   return {
-    sockets, tickets, requests: () => requests,
+    sockets, tickets, requests: () => requests, ensures: () => ensures,
     holdNextTicket: () => {
       const gate = { requested: Promise.withResolvers<void>(), response: Promise.withResolvers<number>(), finished: Promise.withResolvers<void>() }
       delayedTicket = gate

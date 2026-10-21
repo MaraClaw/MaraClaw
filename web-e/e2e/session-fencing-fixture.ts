@@ -39,6 +39,11 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
   // The fake changes its server-side identity on switch, including same-token reissuance.
   let switched = false
   let tickets = 0
+  const delayedSession = {
+    id: '31bccbda-b487-4da0-bb4f-7ab6800a9433', agent_id: delayedAgent.id, user_id: originalUser.id,
+    title: 'Shared conversation', source_channel: 'shared', is_primary: true,
+    created_at: '2030-01-01T00:00:00Z', message_count: 0,
+  }
   await page.addInitScript(({ tokenKey, originalToken }) => {
     localStorage.setItem(tokenKey, originalToken)
   }, { tokenKey, originalToken })
@@ -86,8 +91,11 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         return
       case '/api/agents/templates':
       case '/api/auth/providers':
-      case `/api/agents/${delayedAgent.id}/sessions`:
+      case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages`:
         await route.fulfill({ json: [] })
+        return
+      case `/api/agents/${delayedAgent.id}/sessions`:
+        await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })
         return
       case `/api/agents/${delayedAgent.id}`:
         await route.fulfill({ json: delayedAgent })

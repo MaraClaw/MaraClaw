@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { accept, chatPath, complete, firstMessage, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
+import { accept, chatPath, complete, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 import { originalAgent, replacementAgent, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 
 for (const boundary of ['owner', 'conversation', 'agent'] as const) {
@@ -95,7 +95,7 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
   })
 }
 
-test('late new-session creation cannot navigate or replay across a conversation switch', async ({ page }) => {
+test('late shared-session ensure cannot navigate or replay across a conversation switch', async ({ page }) => {
   const chat = await prepareChat(page)
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
@@ -103,14 +103,14 @@ test('late new-session creation cannot navigate or replay across a conversation 
     if (route.request().method() !== 'POST') return route.fallback()
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: { id: firstMessage } })
+    await route.fulfill({ json: { id: firstSession, source_channel: 'shared' } })
   })
-  await page.goto(chatPath())
-  await chat.socket()
-  await page.getByRole('button', { name: 'New session', exact: true }).click()
+  await page.goto(`/app/agents/${originalAgent.id}/chat`)
   await requested.promise
+  await page.getByRole('textbox', { name: `Message ${originalAgent.name}` }).fill('Queued for the shared conversation')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
   await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
-  const current = await chat.socket(1)
+  const current = await chat.socket()
   const finished = page.waitForEvent('requestfinished', { predicate: (request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/sessions') })
   release.resolve()
   await finished
@@ -129,7 +129,7 @@ for (const retireOwner of [false, true]) {
     await page.route('**/api/agents/*/sessions', async (route) => {
       requested.resolve()
       await release.promise
-      await route.fulfill({ json: { id: firstSession } })
+      await route.fulfill({ json: { id: firstSession, source_channel: 'shared' } })
     })
     await page.goto(`/app/agents/${originalAgent.id}/chat`)
     await expect(page.getByRole('textbox', { name: `Message ${originalAgent.name}` })).toBeVisible()

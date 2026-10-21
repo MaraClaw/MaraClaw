@@ -46,6 +46,7 @@ export type ChatSession = {
   user_id: string
   title: string
   source_channel: string
+  is_group?: boolean
   created_at: string
   last_message_at?: string | null
   message_count: number

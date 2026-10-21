@@ -37,27 +37,32 @@ for (const selection of ['default', 'explicit'] as const) {
   })
 }
 
-for (const selection of ['default', 'query', 'explicit'] as const) {
+for (const selection of ['default', 'query archive', 'query peer', 'explicit'] as const) {
   test(`Take Control locks the ${selection} session displayed in its selector`, async ({ page }) => {
     await prepareWorkspace(page)
     await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
     await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
-    await page.route(`**/api/agents/${originalAgent.id}/sessions*`, (route) => route.fulfill({ json: [
-      { id: 'first', title: 'First thread' }, { id: 'second', title: 'Second thread' },
+    const shared = { id: 'shared', title: 'Shared thread', source_channel: 'shared', user_id: 'creator-not-viewer', is_primary: true }
+    await page.route(`**/api/agents/${originalAgent.id}/sessions*`, (route) => route.fulfill({ json: route.request().method() === 'POST' ? shared : [
+      { id: 'archive', title: 'Another human private primary', source_channel: 'web', is_primary: true },
+      shared, { id: 'peer', title: 'Agent peer thread', source_channel: 'agent' },
     ] }))
     const bodies: unknown[] = []
     await page.route(`**/api/agents/${originalAgent.id}/control/*`, async (route) => {
       if (new URL(route.request().url()).pathname.endsWith('/lock')) bodies.push(route.request().postDataJSON())
       await route.fulfill({ json: { status: 'locked', owner_token: 'fixture-control-owner' } })
     })
-    await page.goto(`/app/agents/${originalAgent.id}/control${selection === 'query' ? '?session=second&env=computer' : ''}`)
-    await expect(page.getByLabel('Chat session')).toHaveValue(selection === 'query' ? 'second' : 'first')
-    if (selection === 'explicit') await page.getByLabel('Chat session').selectOption('second')
+    const query = selection === 'query archive' ? '?session=archive&env=computer' : selection === 'query peer' ? '?session=peer' : ''
+    await page.goto(`/app/agents/${originalAgent.id}/control${query}`)
+    await expect(page.getByLabel('Chat session')).toHaveValue(selection === 'query peer' ? 'peer' : 'shared')
+    await expect(page.getByRole('option', { name: 'Another human private primary' })).toHaveCount(0)
+    if (selection === 'explicit') await page.getByLabel('Chat session').selectOption('peer')
 
     await page.getByRole('button', { name: 'Take control', exact: true }).click()
 
     await expect(page.getByLabel('Chat session')).toBeDisabled()
-    expect(bodies).toEqual([{ session_id: selection === 'default' ? 'first' : 'second', env_type: selection === 'query' ? 'computer' : 'browser' }])
-    await expect(page).toHaveURL(new RegExp(`session=${selection === 'default' ? 'first' : 'second'}`))
+    const expected = selection === 'explicit' || selection === 'query peer' ? 'peer' : 'shared'
+    expect(bodies).toEqual([{ session_id: expected, env_type: selection === 'query archive' ? 'computer' : 'browser' }])
+    await expect(page).toHaveURL(new RegExp(`session=${expected}`))
   })
 }

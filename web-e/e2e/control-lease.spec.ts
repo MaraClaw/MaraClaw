@@ -11,7 +11,7 @@ async function prepareControl(page: Page) {
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
   await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
   await page.route(`**/api/agents/${originalAgent.id}/sessions?**`, (route) => route.fulfill({
-    json: [{ id: 'control-session', title: 'Control thread' }],
+    json: [{ id: 'control-session', title: 'Control thread', source_channel: 'shared' }],
   }))
   await page.clock.install()
   const errors: string[] = []
