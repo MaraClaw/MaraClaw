@@ -8,6 +8,7 @@ from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row
+from app.dao.analytics_projection_contracts import PlazaStatsProjection
 from app.dao.base import BaseDAO
 from app.records.plaza import PlazaCommentRecord, PlazaLikeRecord, PlazaPostRecord
 
@@ -105,9 +106,9 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             )
             return [PlazaPostRecord.from_row(row) for row in rows]
 
-    async def get_stats(self, tenant_id: UUID | str | None = None) -> dict[str, Any]:
+    async def get_stats(self, tenant_id: UUID | str | None = None) -> PlazaStatsProjection:
         """Aggregate plaza stats excluding system/private agent posts."""
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND plaza_posts.tenant_id = %(tenant_id)s"
