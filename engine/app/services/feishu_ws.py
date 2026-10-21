@@ -14,6 +14,7 @@ from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, j
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.runtime.tasks import EventTasks, cancel_tasks, is_async_callback
+from app.services.channels.feishu_ws_acceptance import EventFrame, accept_event_frame
 
 try:
     import lark_oapi as _lark_mod
@@ -35,11 +36,17 @@ def _json_object(value: object) -> JsonObject:
 
 
 class LarkWSClient(Protocol):
+    _handle_data_frame: Callable[[EventFrame], Awaitable[None]]
+
     async def _connect(self) -> None: ...
 
     async def _ping_loop(self) -> None: ...
 
     async def _disconnect(self) -> None: ...
+
+    def _combine(self, message_id: str, total: int, sequence: int, payload: bytes, /) -> bytes | None: ...
+
+    async def _write_message(self, payload: bytes, /) -> None: ...
 
 
 class _EventHandler(Protocol):
@@ -202,7 +209,6 @@ class FeishuWSManager:
         self._clients: dict[uuid.UUID, LarkWSClient] = {}
         # Tasks for reconnection or ping loops if we want to cancel them later
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._event_tasks: set[asyncio.Task[None]] = set()
         self._ping_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._sdk_tasks: EventTasks = EventTasks()
         self._main_loop: asyncio.AbstractEventLoop | None = None
@@ -212,24 +218,7 @@ class FeishuWSManager:
         """Create an event dispatcher for a specific agent."""
 
         def handle_message(data: object) -> None:
-            """Handle im.message.receive_v1 events from Feishu WebSocket."""
-            try:
-                logger.info(f"[Feishu WS] Received event: {data}")
-                if _feishu_event_body(data) is None:
-                    logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
-                    return
-
-                def dispatch() -> None:
-                    if self._closing:
-                        return
-                    task = asyncio.create_task(self._async_handle_message(agent_id, data))
-                    self._event_tasks.add(task)
-                    task.add_done_callback(self._event_tasks.discard)
-
-                if self._main_loop and self._main_loop.is_running():
-                    self._main_loop.call_soon_threadsafe(dispatch)
-            except RuntimeError as exc:
-                logger.warning("[Feishu WS] Could not dispatch event: {}", exc)
+            raise RuntimeError("Feishu message events require the asynchronous acceptance handler")
 
         if _lark_mod is None:
             raise RuntimeError("lark-oapi package is not installed")
@@ -261,6 +250,7 @@ class FeishuWSManager:
 
         except Exception as e:
             logger.exception(f"[Feishu WS] Error processing event for {agent_id}: {e}")
+            raise
 
     async def start_client(
         self,
@@ -327,6 +317,14 @@ class FeishuWSManager:
             return
         client = built
         self._clients[agent_id] = client
+
+        async def accept(body: JsonObject) -> None:
+            await self._async_handle_message(agent_id, body)
+
+        async def handle_data_frame(frame: EventFrame) -> None:
+            await accept_event_frame(client, frame, accept)
+
+        client._handle_data_frame = self._sdk_tasks.wrap(handle_data_frame)
         # Retain SDK-spawned receive/message work for this client, without changing SDK retries.
         for name in ("_receive_message_loop", "_handle_message"):
             callback: object = getattr(client, name, None)
@@ -437,8 +435,6 @@ class FeishuWSManager:
         for result in results:
             if isinstance(result, BaseException):
                 logger.warning("[Feishu WS] Client cleanup failed: {}", result)
-        await cancel_tasks(self._event_tasks)
-        self._event_tasks.clear()
         self._main_loop = None
 
     async def start_all(self) -> None:
