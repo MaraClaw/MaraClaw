@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.config import get_settings
+from app.core.cache_contracts import SessionIdentitySnapshot, SessionSnapshot
 from app.core.json_types import (
     is_json_object,
     json_as_bool,
@@ -74,9 +75,9 @@ def _parse_dt(value: object) -> datetime | None:
     return None
 
 
-def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> dict[str, object]:
+def _snapshot(user: UserRecord, user_ver: str, ident_ver: str) -> SessionSnapshot:
     identity = user.identity
-    ident_payload: dict[str, object] | None = None
+    ident_payload: SessionIdentitySnapshot | None = None
     if identity is not None:
         ident_payload = {
             "id": str(identity.id),

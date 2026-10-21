@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -79,7 +78,7 @@ async def test_legacy_snapshot_ignores_retired_field_without_invalidating_sessio
     user = _user()
     assert user.identity is not None
     user.identity.must_change_password = True
-    payload = session_cache._snapshot(user, "0", "0")
+    payload = dict[str, object](session_cache._snapshot(user, "0", "0"))
     identity_payload = payload["identity"]
     assert is_json_object(identity_payload)
     identity_payload["username"] = "legacy-handle"
@@ -148,7 +147,8 @@ async def test_session_cache_redis_down_returns_none(fake_cache: FakeRedis) -> N
 
 def test_snapshot_never_includes_hash() -> None:
     user = _user()
-    payload: dict[str, Any] = session_cache._snapshot(user, "0", "0")
+    payload = session_cache._snapshot(user, "0", "0")
+    assert payload["identity"] is not None
     assert "password_hash" not in payload["identity"]
     assert payload["identity"]["must_change_password"] is False
     assert payload["user"]["role"] == "member"
