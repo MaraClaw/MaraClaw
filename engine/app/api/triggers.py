@@ -11,6 +11,7 @@ from app.core.json_types import JsonObject, json_as_str, json_object_from, objec
 from app.core.permissions import check_agent_access
 from app.dao.trigger_dao import agent_trigger_dao
 from app.records.user import UserRecord
+from app.schemas.content_response_catalog import OkAcknowledgement
 
 router = APIRouter(prefix="/api/agents", tags=["triggers"])
 
@@ -46,7 +47,9 @@ def _can_manage(user: UserRecord, access_level: str) -> bool:
 
 
 @router.get("/{agent_id}/triggers", response_model=list[TriggerResponse])
-async def list_agent_triggers(agent_id: uuid.UUID, user: UserRecord = Depends(get_current_user)):
+async def list_agent_triggers(
+    agent_id: uuid.UUID, user: UserRecord = Depends(get_current_user)
+) -> list[TriggerResponse]:
     """List all triggers for an agent."""
     _, access_level = await check_agent_access(user, agent_id)
     can_manage = _can_manage(user, access_level)
@@ -77,13 +80,13 @@ async def list_agent_triggers(agent_id: uuid.UUID, user: UserRecord = Depends(ge
     ]
 
 
-@router.patch("/{agent_id}/triggers/{trigger_id}")
+@router.patch("/{agent_id}/triggers/{trigger_id}", response_model=None)
 async def update_trigger(
     agent_id: uuid.UUID,
     trigger_id: uuid.UUID,
     body: TriggerUpdate,
     user: UserRecord = Depends(get_current_user),
-):
+) -> OkAcknowledgement:
     """Update a trigger (from frontend management UI)."""
     _, access_level = await check_agent_access(user, agent_id)
     if not _can_manage(user, access_level):
@@ -111,12 +114,12 @@ async def update_trigger(
     return {"ok": True}
 
 
-@router.delete("/{agent_id}/triggers/{trigger_id}")
+@router.delete("/{agent_id}/triggers/{trigger_id}", response_model=None)
 async def delete_trigger(
     agent_id: uuid.UUID,
     trigger_id: uuid.UUID,
     user: UserRecord = Depends(get_current_user),
-):
+) -> OkAcknowledgement:
     """Delete a trigger entirely."""
     _, access_level = await check_agent_access(user, agent_id)
     if not _can_manage(user, access_level):

@@ -17,6 +17,7 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.user_dao import user_dao
 from app.records.activity_log import AgentActivityLogRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import ScheduleTriggerResponse
 from app.services.schedule_time import ScheduleTimezoneError, validate_timezone
 from app.services.scheduler import compute_next_run
 
@@ -137,7 +138,7 @@ async def list_schedules(
 @router.post("/", response_model=ScheduleOut, status_code=status.HTTP_201_CREATED)
 async def create_schedule(
     agent_id: uuid.UUID, data: ScheduleCreate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ScheduleOut:
     """Create a new schedule for an agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -167,7 +168,7 @@ async def update_schedule(
     schedule_id: uuid.UUID,
     data: ScheduleUpdate,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> ScheduleOut:
     """Update a schedule."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -197,10 +198,10 @@ async def update_schedule(
     return ScheduleOut.model_validate(updated)
 
 
-@router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_schedule(
     agent_id: uuid.UUID, schedule_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> None:
     """Delete a schedule."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -213,10 +214,10 @@ async def delete_schedule(
     _ = await agent_schedule_dao.delete(id=sched.id)
 
 
-@router.post("/{schedule_id}/run")
+@router.post("/{schedule_id}/run", response_model=None)
 async def trigger_schedule(
     agent_id: uuid.UUID, schedule_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ScheduleTriggerResponse:
     """Manually trigger a schedule execution."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if is_agent_expired(agent):

@@ -5,8 +5,6 @@ in chat_messages (via ChatSession with source_channel='agent').
 This API now queries chat_sessions + chat_messages for the inbox.
 """
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Query
 
 from app.core.security import get_current_user
@@ -14,14 +12,16 @@ from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import MessageInboxItem
+from app.schemas.notification_responses import NotificationUnreadCountResponse
 
 router = APIRouter(tags=["messages"])
 
 
-@router.get("/messages/inbox")
+@router.get("/messages/inbox", response_model=None)
 async def get_inbox(
     limit: int = Query(50, le=200), current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[MessageInboxItem]:
     """Get agent-to-agent messages for agents the current user manages.
 
     Returns recent messages from ChatSessions with source_channel='agent'
@@ -43,7 +43,7 @@ async def get_inbox(
         participant.id: participant for participant in await participant_dao.get_many(list(participant_ids))
     }
 
-    result_list: list[dict[str, Any]] = []
+    result_list: list[MessageInboxItem] = []
     for sess in sessions:
         for msg in messages_by_conv.get(str(sess.id), []):
             sender_name = "Unknown"
@@ -66,8 +66,10 @@ async def get_inbox(
     return result_list[:limit]
 
 
-@router.get("/messages/unread-count")
-async def get_unread_count(current_user: UserRecord = Depends(get_current_user)):
+@router.get("/messages/unread-count", response_model=None)
+async def get_unread_count(
+    current_user: UserRecord = Depends(get_current_user),
+) -> NotificationUnreadCountResponse:
     """Get count of unread agent-to-agent messages for the current user's agents."""
     my_agent_ids = await agent_dao.list_ids_for_creator(current_user.id)
 

@@ -14,6 +14,7 @@ from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import UserPagePosition, user_dao
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import UserRoleResponse
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminActivationError,
@@ -197,7 +198,7 @@ async def list_users_page(
 @router.patch("/{user_id}/quota", response_model=UserOut)
 async def update_user_quota(
     user_id: uuid.UUID, data: UserQuotaUpdate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> UserOut:
     """Update a user's quota settings (admin only)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -262,7 +263,7 @@ async def set_user_active(
     data: UserActiveUpdate,
     current_user: UserRecord = Depends(get_current_user),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> UserOut:
     """Activate or deactivate an end user. Org admin: own company. Platform admin: any company."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -347,7 +348,7 @@ async def create_org_admin(
     data: OrgAdminCreateRequest,
     current_user: UserRecord = Depends(require_role("org_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> OrgAdminCreateResponse:
     """Create another org admin in the caller's company. Genesis org admin only."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
@@ -386,7 +387,7 @@ async def create_org_admin(
 
 
 @router.get("/org-admins", response_model=list[OrgAdminOut])
-async def list_org_admins(current_user: UserRecord = Depends(require_role("org_admin"))):
+async def list_org_admins(current_user: UserRecord = Depends(require_role("org_admin"))) -> list[OrgAdminOut]:
     """List org admins in the caller's company."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
@@ -412,7 +413,7 @@ async def set_org_admin_active(
     data: AdminActiveUpdate,
     current_user: UserRecord = Depends(require_role("org_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> OrgAdminOut:
     """Activate or deactivate another org admin. Genesis org admin only."""
     target = await user_dao.get_with_identity(user_id)
     if not target:
@@ -444,7 +445,7 @@ async def list_org_admin_audit_logs(
     action: str | None = None,
     limit: int = 100,
     current_user: UserRecord = Depends(require_role("org_admin")),
-):
+) -> list[AdminAuditLogOut]:
     """List admin action logs for the caller's company."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
@@ -488,13 +489,13 @@ async def get_user_detail(
     return detail
 
 
-@router.patch("/{user_id}/role")
+@router.patch("/{user_id}/role", response_model=None)
 async def update_user_role(
     user_id: uuid.UUID,
     data: RoleUpdate,
     current_user: UserRecord = Depends(get_current_user),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> UserRoleResponse:
     """Change a user's role within the same company.
 
     Permissions:
