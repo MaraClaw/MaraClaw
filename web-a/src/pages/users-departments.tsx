@@ -157,7 +157,7 @@ export function TenantUsers({
             <ul className="grid items-start gap-3 sm:grid-cols-2" aria-label="Departments">
               {departments.data.departments.map((department) => (
                 <li key={department.id} className="min-w-0">
-                  <DepartmentCard department={department} tenantId={tenantId} />
+                  <DepartmentCard department={department} tenantId={tenantId} onDeleted={() => setFocus('name')} />
                 </li>
               ))}
             </ul>

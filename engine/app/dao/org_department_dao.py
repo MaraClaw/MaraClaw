@@ -76,6 +76,42 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
             )
             return {uuid_from_row(row["id"]) for row in rows}
 
+    async def member_user_ids(self, department: OrgDepartmentRecord) -> set[UUID]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT user_id FROM local_department_memberships "
+                "WHERE tenant_id = %(tenant)s AND department_id = %(department)s",
+                {"tenant": department.tenant_id, "department": department.id},
+            )
+            return {uuid_from_row(row["user_id"]) for row in rows}
+
+    async def grant_agents_for_department(self, department: OrgDepartmentRecord) -> set[UUID]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT a.id FROM agents a JOIN agent_permissions p ON p.agent_id = a.id "
+                "WHERE a.tenant_id = %(tenant)s AND p.scope_type = 'department' AND p.scope_id = %(department)s",
+                {"tenant": department.tenant_id, "department": department.id},
+            )
+            return {uuid_from_row(row["id"]) for row in rows}
+
+    async def delete_department(self, department: OrgDepartmentRecord) -> None:
+        async with self.session() as db:
+            params = {"tenant": department.tenant_id, "department": department.id}
+            await db.execute(
+                "DELETE FROM agent_permissions p USING agents a "
+                "WHERE p.agent_id = a.id AND a.tenant_id = %(tenant)s "
+                "AND p.scope_type = 'department' AND p.scope_id = %(department)s",
+                params,
+            )
+            await db.execute(
+                "DELETE FROM local_department_memberships "
+                "WHERE tenant_id = %(tenant)s AND department_id = %(department)s",
+                params,
+            )
+            await db.execute(
+                "DELETE FROM local_departments WHERE tenant_id = %(tenant)s AND id = %(department)s", params
+            )
+
     async def has_agent_access(self, user_id: UUID, agent_id: UUID) -> bool:
         async with self.session() as db:
             return bool(
