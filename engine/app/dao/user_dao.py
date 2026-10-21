@@ -25,6 +25,7 @@ from app.core.session_cache import (
     set_cached_user,
 )
 from app.dao.base import BaseDAO, as_uuid
+from app.dao.projection_contracts import UserNameAvatarProjection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -525,7 +526,7 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return {uuid_from_row(row["id"]): str_from_row(row.get("display_name")) for row in rows}
 
-    async def list_id_name_avatar_for_tenant(self, tenant_id: UUID) -> Sequence[dict[str, Any]]:
+    async def list_id_name_avatar_for_tenant(self, tenant_id: UUID) -> Sequence[UserNameAvatarProjection]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name, "
@@ -533,7 +534,14 @@ class UserDAO(BaseDAO[UserRecord]):
                 + "WHERE u.tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
-            return list(rows)
+            return [
+                UserNameAvatarProjection(
+                    id=uuid_from_row(row["id"]),
+                    display_name=str_from_row(row["display_name"]),
+                    avatar_url=str_from_row_opt(row.get("avatar_url")),
+                )
+                for row in rows
+            ]
 
     async def exists(self, user_id: UUID) -> bool:
         async with self.session() as db:
