@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import struct
-import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import TypedDict, overload
 from xml.parsers.expat import ExpatError, ParserCreate
 
@@ -30,22 +29,16 @@ from app.core.json_types import (
     json_as_str_or,
     json_object_from,
     json_object_from_response,
-    mapping_from_row,
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
-from app.services.activity_logger import log_activity
 from app.services.auth_registry import auth_provider_registry
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channels import inbound as channel_inbound
 from app.services.platform_service import platform_service
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 from app.services.wecom_stream import wecom_stream_manager
@@ -416,15 +409,6 @@ async def wecom_event_webhook(
     # Group chat ID - present when message comes from a WeCom group
     chat_id = msg_root.findtext("ChatId", "")
 
-    # Dedup
-    from app.services.channels import dedup as channel_dedup
-
-    dedup_key = msg_id if msg_id else token
-    if dedup_key and await channel_dedup.already_processed_shared("wecom", dedup_key):
-        return Response(content="success", media_type="text/plain")
-    if dedup_key:
-        await channel_dedup.mark_processed_shared("wecom", dedup_key)
-
     logger.info(f"[WeCom] Message type={msg_type}, from={from_user}, msg_id={msg_id}, chat_id={chat_id or 'N/A'}")
 
     if msg_type == "text":
@@ -432,17 +416,20 @@ async def wecom_event_webhook(
         if not user_text:
             return Response(content="success", media_type="text/plain")
 
-        # Process in background task (manages its own sessions)
-        schedule_background_task(
-            _process_wecom_text(agent_id, config, from_user, user_text, chat_id=chat_id), "WeCom process text"
-        )
+        try:
+            await _process_wecom_text(agent_id, config, from_user, user_text, chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            logger.exception("[WeCom] Text acceptance failed for agent {}", agent_id)
+            return Response(status_code=503)
 
     elif msg_type == "event":
         event = msg_root.findtext("Event", "")
         if event == "kf_msg_or_event":
-            schedule_background_task(
-                _process_wecom_kf_event(agent_id, config, token, open_kfid), "WeCom process kf event"
-            )
+            try:
+                await _process_wecom_kf_event(agent_id, config, token, open_kfid)
+            except Exception:
+                logger.exception("[WeCom] KF acceptance failed for agent {}", agent_id)
+                return Response(status_code=503)
         else:
             logger.info(f"[WeCom] Received event: {event} (not handled)")
 
@@ -459,7 +446,6 @@ async def _process_wecom_kf_event(
     token: str,
     open_kfid: str | None = None,
 ):
-    """Sync WeCom Customer Service (KF) messages in background."""
     _ = config_obj
     try:
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
@@ -474,11 +460,10 @@ async def _process_wecom_kf_event(
             token_data = json_object_from_response(tok_resp)
             access_token = json_as_str(token_data.get("access_token"))
             if access_token in (None, ""):
-                return
+                raise HTTPException(status_code=503, detail="WeCom KF token unavailable")
 
             current_cursor = token
             has_more = 1
-            current_ts = int(time.time())
 
             while has_more:
                 payload: dict[str, int | str] = {"limit": 20}
@@ -496,8 +481,7 @@ async def _process_wecom_kf_event(
                 )
                 sync_data = json_object_from_response(sync_resp)
                 if sync_data.get("errcode") != 0:
-                    logger.error(f"[WeCom KF] sync_msg error: {sync_data}")
-                    break
+                    raise HTTPException(status_code=503, detail="WeCom KF sync failed")
 
                 has_more = json_as_int(sync_data.get("has_more"))
                 current_cursor = json_as_str_or(sync_data.get("next_cursor"))
@@ -507,19 +491,6 @@ async def _process_wecom_kf_event(
                     msg = json_object_from(raw_msg)
                     if json_as_int(msg.get("origin")) == 3 and json_as_str(msg.get("msgtype")) == "text":
                         mid = msg.get("msgid")
-                        from app.services.channels import dedup as channel_dedup
-
-                        if (
-                            mid is not None
-                            and mid
-                            and await channel_dedup.already_processed_shared("wecom_kf", str(mid))
-                        ):
-                            continue
-                        send_time = json_as_int(msg.get("send_time"))
-                        if send_time > 0 and (current_ts - send_time > 86400):
-                            continue
-                        if mid is not None and mid:
-                            await channel_dedup.mark_processed_shared("wecom_kf", str(mid))
                         text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
                         if text:
                             external_userid = json_as_str_or(msg.get("external_userid"))
@@ -536,7 +507,8 @@ async def _process_wecom_kf_event(
                 if not has_more:
                     break
     except Exception as e:
-        logger.error(f"[WeCom KF] Error in background task: {e}")
+        logger.error(f"[WeCom KF] Acceptance failed: {e}")
+        raise
 
 
 async def _process_wecom_text(
@@ -548,145 +520,25 @@ async def _process_wecom_text(
     open_kfid: str | None = None,
     kf_msg_id: str | None = None,
     chat_id: str = "",
+    message_id: str = "",
 ):
-    """Process an incoming WeCom text message and reply.
+    native_id = kf_msg_id or message_id
+    if not native_id:
+        raise HTTPException(status_code=400, detail="WeCom message ID is required")
+    from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-    Manages its own short-lived database transactions via pure-psycopg DAOs.
-    """
-    _ = kf_msg_id
-    agent_obj = await agent_dao.get(agent_id)
-    if not agent_obj:
-        logger.warning(f"[WeCom] Agent {agent_id} not found")
-        return
-    creator_id = agent_obj.creator_id
-    from app.services.channels.inbound import routing_history_limit
-
-    ctx_size = routing_history_limit(agent_obj.context_window_size)
-
-    # Distinguish group chat from P2P by chat_id presence
-    _is_group = bool(chat_id)
-    conv_id = f"wecom_group_{chat_id}" if _is_group else f"wecom_p2p_{from_user}"
-
-    # The channel_user_service resolves display names from OrgMember records
-    # (populated by org-sync or enriched on first SSO login). No need to
-    # make an extra API call here - it fails with 48009 when IP is not whitelisted.
-    extra_info = mapping_from_row({"unionid": from_user})
-
-    # Resolve channel user via unified service (uses OrgMember + SSO patterns)
-    platform_user = await channel_inbound.resolve_sender_user(
-        agent=agent_obj,
-        channel_type="wecom",
-        external_user_id=from_user,
-        is_group=_is_group,
-        extra_info=extra_info,
-    )
-    platform_user_id = platform_user.id
-
-    # Find or create session
-    sess = await find_or_create_channel_session(
-        agent_id=agent_id,
-        user_id=creator_id if _is_group else platform_user_id,
-        external_conv_id=conv_id,
-        source_channel="wecom",
-        first_message_title=user_text,
-        is_group=_is_group,
-        group_name=f"WeCom Group {chat_id[:8]}" if _is_group else None,
-    )
-    conversation = await channel_inbound.bind_channel_conversation(
-        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group
-    )
-    sess = conversation.transcript_session
-    session_conv_id = str(sess.id)
-
-    from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
-
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=ctx_size,
-    )
-    history = _conv(history_msgs)
-
-    from app.services.channels.llm_bridge import _load_agent_and_model
-
-    _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-    reply_text = await channel_inbound.generate_channel_reply(
-        agent_id=agent_id,
-        user_text=user_text,
-        history=history,
-        user_id=platform_user_id,
-        session_id=session_conv_id,
-        reply_session_id=conversation.reply_session.id,
-        user_message_content=user_text,
-        agent_model=_agent_model,
-        llm_model=_llm_model,
-        fallback_model=_fallback_model,
-    )
-    logger.info(f"[WeCom] LLM reply: {reply_text[:100]}")
-    if channel_inbound.is_queued_channel_reply(reply_text):
-        return
-
-    # Send reply via WeCom API
-    wecom_agent_id_str = json_as_str_or(json_object_from(config.extra_config).get("wecom_agent_id"))
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            tok_resp = await client.get(
-                "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
-                params={"corpid": config.app_id, "corpsecret": config.app_secret},
-            )
-            access_token = json_as_str_or(json_object_from_response(tok_resp).get("access_token"))
-            if access_token:
-                if is_kf and open_kfid not in (None, ""):
-                    # For KF messages, need to bridge/trans state first then send via kf/send_msg
-                    res_state = await client.post(
-                        f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={access_token}",
-                        json={"open_kfid": open_kfid, "external_userid": from_user, "service_state": 1},
-                    )
-                    logger.info(f"[WeCom KF] trans state result: {json_object_from_response(res_state)}")
-                    res_send = await client.post(
-                        f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={access_token}",
-                        json={
-                            "touser": from_user,
-                            "open_kfid": open_kfid,
-                            "msgtype": "text",
-                            "text": {"content": reply_text},
-                        },
-                    )
-                    logger.info(f"[WeCom KF] send_msg result: {json_object_from_response(res_send)}")
-                else:
-                    # Default legacy Send as text
-                    _ = await client.post(
-                        f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}",
-                        json={
-                            "touser": from_user,
-                            "msgtype": "text",
-                            "agentid": int(wecom_agent_id_str) if wecom_agent_id_str else 0,
-                            "text": {"content": reply_text},
-                        },
-                    )
-    except Exception as e:
-        logger.error(f"[WeCom] Failed to send reply: {e}")
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="assistant",
-        content=reply_text,
-        conversation_id=session_conv_id,
-    )
-    try:
-        fresh = await chat_session_dao.get(uuid.UUID(session_conv_id))
-        if fresh:
-            _ = await chat_session_dao.update(db_obj=fresh, obj_in={"last_message_at": datetime.now(UTC)})
-    except ValueError, TypeError:
-        pass
-
-    await log_activity(
-        agent_id,
-        "chat_reply",
-        f"Replied to WeCom message: {reply_text[:80]}",
-        detail={"channel": "wecom", "user_text": user_text[:200], "reply": reply_text[:500]},
+    await accept_channel_event(
+        ChannelEvent(
+            config_id=config.id,
+            agent_id=agent_id,
+            provider="wecom",
+            event_key=json.dumps([config.app_id, open_kfid or chat_id, native_id], separators=(",", ":")),
+            sender_id=from_user,
+            conversation_id=f"wecom_group_{chat_id}" if chat_id else f"wecom_p2p_{from_user}",
+            text=user_text,
+            kind="kf_text" if is_kf else "text",
+            is_group=bool(chat_id),
+        )
     )
 
 

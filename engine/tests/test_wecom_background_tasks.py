@@ -15,7 +15,8 @@ from test_db_session import _FakePool, _FakeRawConnection
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["text", "kf"])
-async def test_webhook_acks_and_deduplicates_while_processing_is_blocked(monkeypatch, kind):
+@pytest.mark.parametrize("fails", [False, True])
+async def test_webhook_waits_for_acceptance_and_retries_failure(monkeypatch, kind, fails):
     # Given
     agent_id = uuid4()
     key = str(uuid4())
@@ -38,46 +39,40 @@ async def test_webhook_acks_and_deduplicates_while_processing_is_blocked(monkeyp
     monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(wecom, "_decrypt_msg", lambda *_: (xml, "corp"))
     monkeypatch.setattr(wecom, "_verify_signature", lambda *_: "signature")
-    marked: set[str] = set()
-    started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    calls = []
-    scheduled_after_mark = []
-
-    def schedule(coroutine, description):
-        scheduled_after_mark.append(key in marked)
-        background_tasks.schedule_background_task(coroutine, description)
-
-    async def already_processed(_namespace, value):
-        return value in marked
-
-    async def mark_processed(_namespace, value):
-        marked.add(value)
+    started, release = asyncio.Event(), asyncio.Event()
+    committed = []
+    attempts = []
 
     async def process(*args, **kwargs):
-        calls.append(key in marked)
+        attempts.append(key)
         started.set()
-        try:
-            await release.wait()
-        finally:
-            completed.set()
+        await release.wait()
+        if fails and len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+        committed.append(key)
 
-    monkeypatch.setattr(dedup, "already_processed_shared", already_processed)
-    monkeypatch.setattr(dedup, "mark_processed_shared", mark_processed)
-    monkeypatch.setattr(wecom, "schedule_background_task", schedule)
+    monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=True))
+    mark = AsyncMock()
+    monkeypatch.setattr(dedup, "mark_processed_shared", mark)
+    scheduled = Mock()
+    monkeypatch.setattr(wecom, "schedule_background_task", scheduled)
     monkeypatch.setattr(wecom, "_process_wecom_text" if kind == "text" else "_process_wecom_kf_event", process)
     # When
-    try:
-        response = await asyncio.wait_for(wecom.wecom_event_webhook(agent_id, request, "signature"), 1)
-        await asyncio.wait_for(started.wait(), 1)
-        duplicate = await asyncio.wait_for(wecom.wecom_event_webhook(agent_id, request, "signature"), 1)
-        # Then
-        assert response.body == duplicate.body == b"success"
-        assert not completed.is_set()
-        assert calls == [True]
-        assert scheduled_after_mark == [True]
-    finally:
-        release.set()
-        await asyncio.wait_for(completed.wait(), 1)
+    pending = asyncio.create_task(wecom.wecom_event_webhook(agent_id, request, "signature"))
+    await asyncio.wait_for(started.wait(), 1)
+    assert not pending.done()
+    assert committed == []
+    release.set()
+    response = await asyncio.wait_for(pending, 1)
+    # Then
+    assert response.status_code == (503 if fails else 200)
+    assert committed == ([] if fails else [key])
+    if fails:
+        retry = await wecom.wecom_event_webhook(agent_id, request, "signature")
+        assert retry.status_code == 200
+        assert committed == [key]
+    scheduled.assert_not_called()
+    mark.assert_not_awaited()
 
 
 @pytest.mark.asyncio
