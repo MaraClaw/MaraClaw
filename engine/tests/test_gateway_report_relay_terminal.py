@@ -6,7 +6,6 @@ import anyio
 import pytest
 
 from app.records.agent import AgentRecord
-from app.records.chat import ChatSessionRecord
 from app.records.gateway_report_delivery import TerminalReason
 from app.services import gateway_report_relay as relay
 from gateway_report_relay_fakes import RelayStore
@@ -237,11 +236,11 @@ async def test_im_identity_change_after_provider_attempt_is_not_terminal(
     # Given
     row = store.intent("im")
 
-    async def send(*, agent: AgentRecord, session: ChatSessionRecord, content: str, strict: bool = False) -> None:
-        await store.send(agent=agent, session=session, content=content, strict=strict)
+    async def send(outbound, chunk) -> None:
+        await store.send_chunk(outbound, chunk)
         store.source.tenant_id = uuid4()
 
-    monkeypatch.setattr(relay, "deliver_session_reply", send)
+    monkeypatch.setattr(relay, "send_chunk", send)
     # When
     await relay.relay_batch(store.clock)
     # Then
