@@ -12,7 +12,7 @@ export type SectionRailItem<Id extends string = string> = {
 }
 
 const itemClassName =
-  'relative flex min-h-12 w-full shrink-0 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-[0.96] md:px-1'
+  'relative flex min-h-12 w-full shrink-0 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-[0.96] motion-reduce:active:scale-100 motion-reduce:transition-none md:px-1'
 
 export function SectionRailButton<Id extends string>({
   item,
