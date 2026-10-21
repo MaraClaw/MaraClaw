@@ -3,10 +3,9 @@
 import base64
 import uuid
 from datetime import datetime
-from functools import partial
 from typing import Annotated, ClassVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.core.json_types import json_as_bool, json_as_str_or, object_mapping_from
@@ -14,7 +13,9 @@ from app.core.permissions import check_agent_access, is_agent_creator, is_agent_
 from app.core.security import get_current_user
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
+from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
 from app.dao.user_dao import user_dao
+from app.db.session import flush_request_transaction
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import ScheduleTriggerResponse
 from app.schemas.schedule_history import (
@@ -173,7 +174,10 @@ async def delete_schedule(
 
 @router.post("/{schedule_id}/run", response_model=None)
 async def trigger_schedule(
-    agent_id: uuid.UUID, schedule_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None,
 ) -> ScheduleTriggerResponse:
     """Manually trigger a schedule execution."""
     agent, _access = await check_agent_access(current_user, agent_id)
@@ -187,12 +191,13 @@ async def trigger_schedule(
     if agent.status != "running":
         raise HTTPException(status_code=409, detail="Agent is not running")
 
-    from app.services.scheduler import _execute_schedule
-    from app.services.scheduler_tasks import schedule_execution
-
-    schedule_execution(partial(_execute_schedule, sched.id, sched.agent_id, sched.instruction))
-
-    return {"status": "triggered", "schedule_id": str(schedule_id)}
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must be nonempty")
+    run = await schedule_manual_run_dao.accept(schedule_id, current_user.id, idempotency_key)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    await flush_request_transaction()
+    return {"status": "triggered", "schedule_id": str(schedule_id), "run_id": str(run.id)}
 
 
 @router.get("/{schedule_id}/history", response_model=list[ScheduleHistoryItem])

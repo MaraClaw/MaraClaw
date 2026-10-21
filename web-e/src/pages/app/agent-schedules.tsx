@@ -18,7 +18,7 @@ import {
   type ScheduleOut,
 } from '@/lib/schedules-api'
 import type { AgentOut } from '@/lib/workspace-api'
-import { userFacingRequestError } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
 import { emptyScheduleDraft, scheduleChanges, type ScheduleDraft } from '@/lib/schedule-editor'
 import { formatScheduleNextRun, scheduleTimezoneError } from '@/lib/schedule-time'
 import { useAuth } from '@/hooks/use-auth'
@@ -39,6 +39,8 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const timezoneInput = useRef<HTMLInputElement>(null)
   const [historyId, setHistoryId] = useState<string | null>(null)
+  const runIntents = useRef(new Map<string, string>())
+  const [runMessages, setRunMessages] = useState<Readonly<Record<string, string>>>({})
   const schedules = useQuery({ queryKey: ['schedules', agent.id], queryFn: () => listSchedules(agent.id) })
 
   const save = useMutation({
@@ -55,14 +57,32 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
     },
   })
   const run = useMutation({
-    mutationFn: (id: string) => runSchedule(agent.id, id),
-    onError(error) { toast.error(userFacingRequestError(error, 'Unable to run schedule. Try again.')) },
+    mutationFn: ({ id, key }: { readonly id: string; readonly key: string }) => runSchedule(agent.id, id, key),
+    onSuccess(_accepted, { id }) {
+      runIntents.current.delete(id)
+      setRunMessages((messages) => ({ ...messages, [id]: 'Run accepted. Check history for completion.' }))
+    },
+    onError(error, { id }) {
+      const definite = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408
+      if (definite) runIntents.current.delete(id)
+      setRunMessages((messages) => ({ ...messages, [id]: definite
+        ? userFacingRequestError(error, 'Unable to run schedule. Try again.')
+        : 'Acceptance could not be confirmed. Retry Run to check the same request without starting another run.' }))
+    },
   })
   const remove = useMutation({
     mutationFn: (id: string) => deleteSchedule(agent.id, id),
     onSuccess() { void queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] }) },
     onError(error) { toast.error(userFacingRequestError(error, 'Unable to delete schedule. Try again.')) },
   })
+
+  function requestRun(id: string) {
+    if (run.isPending) return
+    const key = runIntents.current.get(id) ?? crypto.randomUUID()
+    runIntents.current.set(id, key)
+    setRunMessages((messages) => ({ ...messages, [id]: 'Requesting run…' }))
+    run.mutate({ id, key })
+  }
 
   return (
     <div className="space-y-5 p-6">
@@ -130,10 +150,13 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               <p className="text-xs text-muted-foreground">
                 {item.cron_expr} · {item.timezone} · next {formatScheduleNextRun(item)}
               </p>
+              <p aria-live="polite" className="text-sm text-muted-foreground">{runMessages[item.id]}</p>
             </div>
             {isCreator ? (
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" disabled={save.isPending || run.isPending} onClick={() => run.mutate(item.id)}>
+                <Button size="sm" variant="outline" disabled={save.isPending || run.isPending} onClick={() => {
+                  if (scope.isCurrent()) requestRun(item.id)
+                }}>
                   Run
                 </Button>
                 <Button

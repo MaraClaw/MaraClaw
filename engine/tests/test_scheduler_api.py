@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from unittest.mock import AsyncMock
@@ -15,6 +14,7 @@ from app.db import session
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
+from app.records.schedule_manual_run import ScheduleManualRunRecord
 from app.records.user import UserRecord
 from test_schedule_dao import NOW, _Pool, _schedule, pool as pool
 from test_scheduler import clock as clock
@@ -88,30 +88,17 @@ async def test_manual_accepts_disabled_schedule_after_commit_without_advancing_n
     row = replace(api.row, is_enabled=False)
     api.get_schedule.return_value = row
     pool.rows[row.id] = row
-    completed = asyncio.Event()
-    errors: list[str] = []
-
-    async def llm(**_kwargs: object) -> str:
-        if session.get_connection() is not None:
-            errors.append("inherited request connection")
-        if len(pool.connections) != 2 or any(raw.commits != 1 for raw in pool.connections):
-            errors.append("request or bookkeeping uncommitted")
-        return "reply"
-
-    async def activity(*_args: object, **_kwargs: object) -> None:
-        completed.set()
-
-    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", llm)
-    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
-    # When a manual request commits and its admitted execution finishes.
+    run = ScheduleManualRunRecord(uuid4(), row.id, row.agent_id, row.created_by, row.instruction)
+    accept = AsyncMock(return_value=run)
+    monkeypatch.setattr(schedules.schedule_manual_run_dao, "accept", accept)
+    # When a manual request is accepted without starting an execution callback.
     response = await api.client.post(api.url + "/run")
-    await asyncio.wait_for(completed.wait(), timeout=1)
-    # Then a disabled schedule executes once, retaining its slot and enabled state.
+    # Then it returns its durable identity without changing cron or start bookkeeping.
     assert response.status_code == 200
-    assert response.json() == {"status": "triggered", "schedule_id": str(row.id)}
-    assert errors == []
-    assert pool.rows[row.id] == replace(row, run_count=row.run_count + 1, last_run_at=NOW)
+    assert response.json() == {"status": "triggered", "schedule_id": str(row.id), "run_id": str(run.id)}
+    assert pool.rows[row.id] == row
     api.update.assert_not_awaited()
+    api.activity.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

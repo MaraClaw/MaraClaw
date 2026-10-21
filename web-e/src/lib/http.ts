@@ -65,6 +65,7 @@ export type RequestOptions = {
   /** Pass the original owner when a token was captured by earlier work. */
   readonly owner?: SessionOwner
   readonly signal?: AbortSignal
+  readonly idempotencyKey?: string | undefined
 }
 
 export function createHttpClient(
@@ -82,6 +83,7 @@ export function createHttpClient(
     assertCurrent(owner)
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (token) headers['Authorization'] = `Bearer ${token}`
+    if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey
     let body: BodyInit | undefined = form
     if (!form && options.body !== undefined) {
       headers['Content-Type'] = 'application/json'

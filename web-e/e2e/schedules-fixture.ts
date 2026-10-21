@@ -43,7 +43,9 @@ export async function prepareSchedules(page: Page, initial: readonly ScheduleOut
         await route.fulfill({ json: authorization === `Bearer ${originalToken}` && !request.url().endsWith('/history') ? schedules : [] })
         return
       case 'POST': {
-        if (request.url().endsWith('/run')) return route.fulfill({ json: {} })
+        if (request.url().endsWith('/run')) return route.fulfill({ json: {
+          status: 'triggered', schedule_id: new URL(request.url()).pathname.split('/').at(-2), run_id: 'fixture-manual-run',
+        } })
         const body = createSchema.parse(request.postDataJSON())
         creations.push(body)
         const created = { ...savedSchedule, ...body, next_run_at: z.string().parse(nextRuns.get(body.timezone)) }

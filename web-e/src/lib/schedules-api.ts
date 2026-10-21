@@ -21,6 +21,9 @@ const historyPageSchema = z.object({
   items: historySchema.readonly(), next_cursor: z.string().nullable(),
 }).readonly()
 export const scheduleHistoryOutcomeSchema = z.enum(['all', 'success', 'failure', 'cancelled', 'unknown'])
+const runAcceptanceSchema = z.object({
+  status: z.literal('triggered'), schedule_id: z.string().min(1), run_id: z.string().min(1),
+}).readonly()
 
 export type ScheduleOut = z.infer<typeof scheduleSchema>
 export type ScheduleCreate = Readonly<z.input<typeof createSchema>>
@@ -28,6 +31,7 @@ export type SchedulePatch = Readonly<z.input<typeof patchSchema>>
 export type ScheduleHistoryItem = z.infer<typeof historyItemSchema>
 export type ScheduleHistoryPage = z.infer<typeof historyPageSchema>
 export type ScheduleHistoryOutcome = z.infer<typeof scheduleHistoryOutcomeSchema>
+export type ScheduleRunAcceptance = z.infer<typeof runAcceptanceSchema>
 type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal; outcome?: ScheduleHistoryOutcome }>
 
 export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
@@ -46,8 +50,10 @@ export async function updateSchedule(agentId: string, scheduleId: string, body: 
   }))
 }
 
-export async function runSchedule(agentId: string, scheduleId: string): Promise<unknown> {
-  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}/run`, { method: 'POST' })
+export async function runSchedule(agentId: string, scheduleId: string, idempotencyKey?: string): Promise<ScheduleRunAcceptance> {
+  return runAcceptanceSchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}/run`, {
+    method: 'POST', idempotencyKey,
+  }))
 }
 
 export async function deleteSchedule(agentId: string, scheduleId: string): Promise<void> {

@@ -85,6 +85,7 @@ class SlackChallengeResponse(TypedDict):
 class ScheduleTriggerResponse(TypedDict):
     status: Literal["triggered"]
     schedule_id: str
+    run_id: str
 
 
 class TaskTriggerResponse(TypedDict):

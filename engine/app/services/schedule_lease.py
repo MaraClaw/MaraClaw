@@ -71,9 +71,7 @@ class ScheduleLeaseHold:
                     start, start_wall = self.loop.time(), time.time()
                     if start >= bound or start_wall >= wall_bound:
                         raise ScheduleLeaseLostError(_EXPIRED)
-                    renewed = await in_fresh_schedule_context(
-                        agent_schedule_dao.renew_occurrence(self.schedule_id, self.token, datetime.now(UTC))
-                    )
+                    renewed = await in_fresh_schedule_context(self.renew_ownership(datetime.now(UTC)))
                     if self.loop.time() >= bound or time.time() >= wall_bound:
                         raise ScheduleLeaseLostError(_EXPIRED)
                     if not renewed:
@@ -86,6 +84,9 @@ class ScheduleLeaseHold:
                 raise
             raise ScheduleLeaseLostError(_EXPIRED) from exc
 
+    async def renew_ownership(self, now: datetime) -> bool:
+        return await agent_schedule_dao.renew_occurrence(self.schedule_id, self.token, now)
+
     async def confirm(self) -> None:
         self.ensure_held()
         await self._renew(self.deadline, self.wall_deadline)
@@ -94,7 +95,7 @@ class ScheduleLeaseHold:
     def _fire(self, reason: str) -> None:
         if not self.closed and self.fired_reason is None:
             self.fired_reason = reason
-            logger.bind(schedule_id=str(self.schedule_id)).warning("Stopping periodic schedule: {}", reason)
+            logger.bind(schedule_id=str(self.schedule_id)).warning("Stopping schedule execution: {}", reason)
             _ = self.owner_task.cancel()
 
     async def _heartbeat(self) -> None:

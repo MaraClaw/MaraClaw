@@ -69,3 +69,12 @@ async def test_invalid_history_outcome_is_rejected(api: _HTTP, outcome: str) -> 
     response = await api.client.get(api.url + "/history/page", params={"outcome": outcome})
     # Then it never reaches the DAO.
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("key", ["", " ", "k" * 201])
+async def test_manual_rejects_unbounded_or_empty_key(api: _HTTP, key: str) -> None:
+    # Given an invalid optional request identity.
+    # When accepting a manual request.
+    response = await api.client.post(api.url + "/run", headers={"Idempotency-Key": key})
+    # Then no durable intent is accepted.
+    assert response.status_code == 422
