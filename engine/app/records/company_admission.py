@@ -11,6 +11,7 @@ class AdmissionStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"
 
 
 class AdmissionMethod(StrEnum):

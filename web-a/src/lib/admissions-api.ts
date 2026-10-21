@@ -5,7 +5,7 @@ import { apiRequest } from './http.ts'
 export const ADMISSIONS_PAGE_SIZE = 50
 export const ADMISSION_REASON_LIMIT = 2000
 export const admissionIdSchema = z.uuid().brand<'AdmissionId'>()
-export const admissionStatusSchema = z.enum(['pending', 'approved', 'rejected'])
+export const admissionStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn'])
 const tenantSchema = z.object({ id: z.uuid(), name: z.string() }).readonly()
 const timestampSchema = z.iso.datetime({ offset: true, local: true })
 export const admissionDetailSchema = z.object({

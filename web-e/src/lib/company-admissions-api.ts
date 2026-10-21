@@ -32,3 +32,12 @@ export async function getMyAdmission(id: string, context: RequestContext): Promi
     await apiRequest<unknown>(`/api/company-admissions/${encodeURIComponent(id)}`, requestContext(owner, signal)),
   )
 }
+
+export async function withdrawMyAdmission(id: string, context: RequestContext): Promise<AdmissionDetail> {
+  const { owner, signal } = context
+  return admissionDetailSchema.parse(
+    await apiRequest<unknown>(`/api/company-admissions/${encodeURIComponent(id)}/withdraw`, {
+      ...requestContext(owner, signal), method: 'POST',
+    }),
+  )
+}

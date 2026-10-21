@@ -1,9 +1,12 @@
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import anyio
 import pytest
 
 from app.dao.tenant_dao import tenant_dao
+from app.db.connection import DbConnection
+from app.records.company_admission import CompanyAdmissionRecord
 from app.services import company_admission_decisions, company_admissions
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 
@@ -95,5 +98,96 @@ async def test_parallel_conflicting_decisions_have_one_winner(admission_scenario
 async def test_company_deletion_cleans_pending_admission(admission_scenario: AdmissionScenario, tenant: str):
     scenario = admission_scenario
     await scenario.submit()
-    await tenant_dao.delete_cascade(getattr(scenario, tenant))
+    tenants = {"source_id": scenario.source_id, "target_id": scenario.target_id}
+    await tenant_dao.delete_cascade(tenants[tenant])
     assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == 0
+
+
+async def test_response_failure_rolls_back_withdrawal(
+    admission_scenario: AdmissionScenario, monkeypatch: pytest.MonkeyPatch
+):
+    # Given a failure after the service update, before the HTTP transaction commits.
+    from app.api import company_admissions as admission_api
+
+    scenario = admission_scenario
+    request_id = await scenario.submit()
+    monkeypatch.setattr(admission_api, "detail", AsyncMock(side_effect=RuntimeError("injected detail failure")))
+
+    # When response assembly fails.
+    with pytest.raises(RuntimeError, match="injected detail failure"):
+        await scenario.client.post(
+            f"/api/company-admissions/{request_id}/withdraw", headers=scenario.headers(scenario.applicant)
+        )
+
+    # Then no part of the withdrawal survives the rollback.
+    assert await scenario.db.fetchone(
+        "SELECT status,decided_at,decided_by_user_id FROM company_admission_requests"
+    ) == {
+        "status": "pending",
+        "decided_at": None,
+        "decided_by_user_id": None,
+    }
+    assert (await scenario.current_applicant()).tenant_id == scenario.source_id
+    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+@pytest.mark.parametrize("first", ["decision", "withdraw"])
+async def test_withdrawal_and_reviewer_decision_have_one_terminal_winner(
+    admission_scenario: AdmissionScenario, monkeypatch: pytest.MonkeyPatch, decision: str, first: str
+):
+    # Given a real PostgreSQL transaction paused while holding its ordered row locks.
+    scenario = admission_scenario
+    request_id = await scenario.submit()
+    locked = anyio.Event()
+    contender = anyio.Event()
+    release = anyio.Event()
+    get_locked = company_admissions.admissions.get_locked
+    lock_tenants = company_admissions.lock_tenants
+    results: dict[str, int] = {}
+
+    async def pause_first(request_id: UUID) -> CompanyAdmissionRecord | None:
+        request = await get_locked(request_id)
+        if not locked.is_set():
+            locked.set()
+            await release.wait()
+        return request
+
+    async def mark_contender(db: DbConnection, ids: tuple[UUID | None, ...]) -> None:
+        if locked.is_set():
+            contender.set()
+        await lock_tenants(db, ids)
+
+    monkeypatch.setattr(company_admissions.admissions, "get_locked", pause_first)
+    monkeypatch.setattr(company_admissions, "lock_tenants", mark_contender)
+    monkeypatch.setattr(company_admission_decisions, "lock_tenants", mark_contender)
+
+    async def transition(action: str) -> None:
+        user = scenario.applicant if action == "withdraw" else scenario.genesis
+        response = await scenario.client.post(
+            f"/api/company-admissions/{request_id}/{action}",
+            json={"decision": decision} if action == "decision" else None,
+            headers=scenario.headers(user),
+        )
+        results[action] = response.status_code
+
+    # When the competing HTTP transaction begins before the first one is released.
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(transition, first)
+            await locked.wait()
+            group.start_soon(transition, "withdraw" if first == "decision" else "decision")
+            await contender.wait()
+            release.set()
+
+    # Then exactly one terminal result and only that result's side effects commit.
+    expected = decision if first == "decision" else "withdrawn"
+    assert results[first] == 200
+    assert sorted(results.values()) == [200, 409]
+    assert await scenario.db.fetchval("SELECT status FROM company_admission_requests") == expected
+    approved = expected == "approved"
+    assert (await scenario.current_applicant()).tenant_id == (scenario.target_id if approved else scenario.source_id)
+    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == int(approved)
+    assert await scenario.db.fetchval(
+        "SELECT count(*) FROM notifications WHERE type='company_admission_resolved'"
+    ) == int(first == "decision")

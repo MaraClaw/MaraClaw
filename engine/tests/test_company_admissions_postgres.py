@@ -1,5 +1,6 @@
 import pytest
 
+from app.schemas.company_admission import RequestDetail
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 
 __all__ = ["admission_scenario"]
@@ -32,10 +33,11 @@ async def test_duplicate_request_is_idempotent(admission_scenario: AdmissionScen
 async def test_only_target_genesis_may_decide(admission_scenario: AdmissionScenario, actor: str):
     scenario = admission_scenario
     request_id = await scenario.submit()
+    actors = {"additional": scenario.additional, "outsider": scenario.outsider, "applicant": scenario.applicant}
     response = await scenario.client.post(
         f"/api/company-admissions/{request_id}/decision",
         json={"decision": "approved", "reason": None},
-        headers=scenario.headers(getattr(scenario, actor)),
+        headers=scenario.headers(actors[actor]),
     )
     assert response.status_code == 403
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
@@ -132,3 +134,49 @@ async def test_request_detail_access_is_applicant_or_target_genesis(admission_sc
     assert "username" not in review.json()[0]["applicant"]
     assert mine.json()[0]["id"] == request_id
     assert "applicant" not in mine.json()[0]
+
+
+async def test_withdrawal_preserves_membership_invitation_and_session(admission_scenario: AdmissionScenario):
+    # Given a pending invitation request and the applicant's existing session.
+    scenario = admission_scenario
+    request_id = await scenario.submit()
+    headers = scenario.headers(scenario.applicant)
+    before = await scenario.current_applicant()
+    notifications = await scenario.db.fetchall("SELECT * FROM notifications")
+
+    # When the applicant withdraws without a request body.
+    response = await scenario.client.post(f"/api/company-admissions/{request_id}/withdraw", headers=headers)
+
+    # Then history is terminal without any approval or authentication side effects.
+    assert response.status_code == 200, response.text
+    result = RequestDetail.model_validate_json(response.content)
+    assert str(result.id) == request_id
+    assert result.status == "withdrawn"
+    assert result.decided_at is not None
+    assert result.decided_by_user_id is None
+    assert result.decision_reason is None
+    assert result.applicant.id == scenario.applicant.id
+    assert result.source_tenant_id == scenario.source_id
+    assert result.target_tenant.id == scenario.target_id
+    assert await scenario.current_applicant() == before
+    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
+    assert await scenario.db.fetchall("SELECT * FROM notifications") == notifications
+    assert response.headers.get("set-cookie") is None
+    assert (await scenario.client.get("/api/auth/me", headers=headers)).status_code == 200
+
+
+@pytest.mark.parametrize("actor", ["genesis", "additional", "outsider"])
+async def test_withdrawal_denies_other_users_after_session_switch(admission_scenario: AdmissionScenario, actor: str):
+    # Given a request opened using the applicant's session.
+    scenario = admission_scenario
+    request_id = await scenario.submit()
+    path = f"/api/company-admissions/{request_id}"
+    assert (await scenario.client.get(path, headers=scenario.headers(scenario.applicant))).status_code == 200
+
+    # When the same client switches to another membership before withdrawal.
+    actors = {"genesis": scenario.genesis, "additional": scenario.additional, "outsider": scenario.outsider}
+    response = await scenario.client.post(f"{path}/withdraw", headers=scenario.headers(actors[actor]))
+
+    # Then neither reviewer privileges nor the old page's owner authorize withdrawal.
+    assert response.status_code == 403
+    assert await scenario.db.fetchval("SELECT status FROM company_admission_requests") == "pending"

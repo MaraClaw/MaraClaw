@@ -476,14 +476,15 @@ CREATE TABLE IF NOT EXISTS company_admission_requests (
     source_tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     target_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     method VARCHAR(24) NOT NULL CHECK (method IN ('invitation','verified_domain','sso')),
-    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','withdrawn')),
     invitation_code VARCHAR(32),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at TIMESTAMPTZ,
     decided_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     decision_reason TEXT,
     CHECK ((status='pending' AND decided_at IS NULL AND decided_by_user_id IS NULL)
-        OR (status<>'pending' AND decided_at IS NOT NULL))
+        OR (status IN ('approved','rejected') AND decided_at IS NOT NULL)
+        OR (status='withdrawn' AND decided_at IS NOT NULL AND decided_by_user_id IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
     ON company_admission_requests(applicant_user_id) WHERE status='pending';
