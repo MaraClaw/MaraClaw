@@ -25,6 +25,8 @@ from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import WebhookUrlResponse
+from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
 
 router = APIRouter(tags=["whatsapp"])
@@ -122,7 +124,7 @@ async def _send_whatsapp_messages(
 @router.post("/agents/{agent_id}/whatsapp-channel", response_model=ChannelConfigOut, status_code=201)
 async def configure_whatsapp_channel(
     agent_id: uuid.UUID, data: WhatsAppChannelPayload, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure channel")
@@ -170,7 +172,9 @@ async def configure_whatsapp_channel(
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel", response_model=ChannelConfigOut)
-async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_whatsapp_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
@@ -178,16 +182,16 @@ async def get_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     return ChannelConfigOut.model_validate(config)
 
 
-@router.get("/agents/{agent_id}/whatsapp-channel/webhook-url")
-async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request):
+@router.get("/agents/{agent_id}/whatsapp-channel/webhook-url", response_model=None)
+async def get_whatsapp_webhook_url(agent_id: uuid.UUID, request: Request) -> WebhookUrlResponse:
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/whatsapp/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/whatsapp-channel", status_code=204)
-async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/whatsapp-channel", status_code=204, response_model=None)
+async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
@@ -204,7 +208,7 @@ async def whatsapp_verify_webhook(
     hub_mode: str = Query("", alias="hub.mode"),
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
-):
+) -> Response:
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:
         return Response(status_code=404)
@@ -218,8 +222,8 @@ async def whatsapp_verify_webhook(
     return Response(status_code=403)
 
 
-@router.post("/channel/whatsapp/{agent_id}/webhook")
-async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
+@router.post("/channel/whatsapp/{agent_id}/webhook", response_model=None)
+async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | OkAcknowledgement:
     body = await request.body()
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
     if not config:

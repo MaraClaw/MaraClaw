@@ -28,6 +28,8 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import SlackChallengeResponse, WebhookUrlResponse
+from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import ChannelUserResolutionError
@@ -50,7 +52,7 @@ class SlackChannelPayload(TypedDict, total=False):
 @router.post("/agents/{agent_id}/slack-channel", response_model=ChannelConfigOut, status_code=201)
 async def configure_slack_channel(
     agent_id: uuid.UUID, data: SlackChannelPayload, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     """Configure Slack bot for an agent. Fields: bot_token, signing_secret."""
     from app.services.channels import config as channel_cfg
     from app.services.channels.redact import channel_config_out
@@ -74,7 +76,9 @@ async def configure_slack_channel(
 
 
 @router.get("/agents/{agent_id}/slack-channel", response_model=ChannelConfigOut)
-async def get_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_slack_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     from app.services.channels import config as channel_cfg
     from app.services.channels.redact import channel_config_out
 
@@ -85,12 +89,12 @@ async def get_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
     return channel_config_out(config)
 
 
-@router.get("/agents/{agent_id}/slack-channel/webhook-url")
+@router.get("/agents/{agent_id}/slack-channel/webhook-url", response_model=None)
 async def get_slack_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> WebhookUrlResponse:
     from app.services.platform_service import platform_service
 
     _ = await check_agent_access(current_user, agent_id)
@@ -98,8 +102,8 @@ async def get_slack_webhook_url(
     return {"webhook_url": f"{public_base}/api/channel/slack/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/slack-channel", status_code=204)
-async def delete_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/slack-channel", status_code=204, response_model=None)
+async def delete_slack_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     from app.services.channels import config as channel_cfg
 
     await channel_cfg.require_channel_creator(current_user, agent_id)
@@ -141,8 +145,10 @@ async def _send_slack_messages(bot_token: str, channel: str, text: str, *, stric
                     raise RuntimeError("Slack rejected the message")
 
 
-@router.post("/channel/slack/{agent_id}/webhook")
-async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
+@router.post("/channel/slack/{agent_id}/webhook", response_model=None)
+async def slack_event_webhook(
+    agent_id: uuid.UUID, request: Request
+) -> Response | OkAcknowledgement | SlackChallengeResponse:
     """Handle Slack Event API callbacks."""
     body_bytes = await request.body()
 

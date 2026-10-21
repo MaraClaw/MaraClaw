@@ -17,6 +17,7 @@ from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channels import (
     config as channel_config,
@@ -55,7 +56,7 @@ async def configure_google_chat_channel(
     agent_id: uuid.UUID,
     data: GoogleChatChannelPayload,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> ChannelConfigOut:
     """Configure Google Chat for an agent."""
     await channel_config.require_channel_creator(current_user, agent_id)
 
@@ -104,7 +105,9 @@ async def configure_google_chat_channel(
 
 
 @router.get("/agents/{agent_id}/google-chat-channel", response_model=ChannelConfigOut)
-async def get_google_chat_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_google_chat_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     agent, _ = await check_agent_access(current_user, agent_id)
     # Secrets: only creator/manage path should see config metadata; still redacted.
     if not is_agent_creator(current_user, agent):
@@ -113,19 +116,21 @@ async def get_google_chat_channel(agent_id: uuid.UUID, current_user: UserRecord 
     return channel_config_out(config)
 
 
-@router.get("/agents/{agent_id}/google-chat-channel/webhook-url")
+@router.get("/agents/{agent_id}/google-chat-channel/webhook-url", response_model=None)
 async def get_google_chat_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> WebhookUrlResponse:
     _ = await check_agent_access(current_user, agent_id)
     public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/google-chat/{agent_id}/webhook"}
 
 
 @router.delete("/agents/{agent_id}/google-chat-channel", status_code=204)
-async def delete_google_chat_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def delete_google_chat_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> Response:
     await channel_config.require_channel_creator(current_user, agent_id)
     await channel_config.delete_channel_config(agent_id, CHANNEL_TYPE)
     return Response(status_code=204)
@@ -249,7 +254,7 @@ async def _process_message_event(
 
 
 @router.post("/channel/google-chat/{agent_id}/webhook", response_model=None)
-async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | dict[str, Any]:
+async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | dict[str, object]:
     """HTTP endpoint for a Google Chat app (interaction events).
 
     Configure the Chat app's HTTP endpoint URL to the webhook-url from

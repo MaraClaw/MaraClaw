@@ -23,6 +23,7 @@ from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import DiscordInteractionResponse, WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 
 router = APIRouter(tags=["discord"])
@@ -48,7 +49,7 @@ class DiscordSlashRegistration(TypedDict):
 @router.post("/agents/{agent_id}/discord-channel", response_model=ChannelConfigOut, status_code=201)
 async def configure_discord_channel(
     agent_id: uuid.UUID, data: DiscordChannelPayload, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     """Configure Discord bot for an agent.
 
     Gateway mode fields: bot_token (+ connection_mode='gateway').
@@ -114,7 +115,9 @@ async def configure_discord_channel(
 
 
 @router.get("/agents/{agent_id}/discord-channel", response_model=ChannelConfigOut)
-async def get_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_discord_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
     if not config:
@@ -122,16 +125,16 @@ async def get_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = De
     return ChannelConfigOut.model_validate(config)
 
 
-@router.get("/agents/{agent_id}/discord-channel/webhook-url")
-async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request):
+@router.get("/agents/{agent_id}/discord-channel/webhook-url", response_model=None)
+async def get_discord_webhook_url(agent_id: uuid.UUID, request: Request) -> WebhookUrlResponse:
     from app.services.platform_service import platform_service
 
     public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/discord/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/discord-channel", status_code=204)
-async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/discord-channel", status_code=204, response_model=None)
+async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
@@ -225,7 +228,7 @@ async def _send_discord_followup(application_id: str, bot_token: str, interactio
 
 
 @router.post("/channel/discord/{agent_id}/webhook", response_model=None)
-async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> Response | JsonObject:
+async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> Response | DiscordInteractionResponse:
     """Handle Discord Interaction webhooks (PING + slash commands)."""
     body_bytes = await request.body()
 

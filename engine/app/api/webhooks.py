@@ -56,7 +56,7 @@ async def _record_and_count_hits(token: str) -> int:
 
 
 @router.post("/t/{token}")
-async def receive_webhook(token: str, request: Request):
+async def receive_webhook(token: str, request: Request) -> JSONResponse:
     """Receive a webhook POST from an external service.
 
     Public endpoint - no authentication required.
