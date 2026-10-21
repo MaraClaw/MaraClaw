@@ -8,10 +8,10 @@ import io
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any, ClassVar, TypedDict
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
@@ -25,6 +25,14 @@ from app.db.session import optional_connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import PendingAdmissionResponse
+from app.schemas.organization_response_tenant import (
+    TenantAssignmentResponse,
+    TenantDeletedResponse,
+    TenantRegistrationResponse,
+    TenantResolvedResponse,
+    TenantTokenUsageResponse,
+    TokenUsageBucket,
+)
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminGuardError,
@@ -50,13 +58,6 @@ async def get_client_ip(request: Request) -> str | None:
     if request.client is None:
         return None
     return request.client.host
-
-
-class TokenUsageBucket(TypedDict):
-    total_tokens: int
-    cache_read_tokens: int
-    cache_creation_tokens: int
-    cache_hit_rate: float
 
 
 # ─── Schemas ────────────────────────────────────────────
@@ -200,7 +201,7 @@ async def create_tenant(
     data: TenantCreate,
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> TenantCreateResponse:
     """Create a company and its genesis org admin (platform admin only).
 
     The org admin is provisioned with the given email + initial password and
@@ -279,7 +280,9 @@ async def _require_admission_join_source(current_user: UserRecord) -> None:
 
 
 @router.post("/join", response_model=JoinResponse, responses={202: {"model": PendingAdmissionResponse}})
-async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get_current_user)):
+async def join_company(
+    data: JoinRequest, current_user: UserRecord = Depends(get_current_user)
+) -> JoinResponse | JSONResponse:
     """Join an existing company using an invitation code.
 
     End users may belong to only one organization. A second membership is refused.
@@ -313,8 +316,6 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
         raise HTTPException(status_code=400, detail="Company not found or is disabled")
 
     if not tenant.is_default_end_user_org and not tenant.is_system:
-        from fastapi.responses import JSONResponse
-
         from app.records.company_admission import AdmissionMethod
         from app.schemas.company_admission import PendingAdmissionResponse
         from app.services.company_admissions import submit_request, summarize
@@ -344,8 +345,8 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
 # ─── Registration Config ───────────────────────────────
 
 
-@router.get("/registration-config")
-async def get_registration_config() -> dict[str, Any]:
+@router.get("/registration-config", response_model=None)
+async def get_registration_config() -> TenantRegistrationResponse:
     """Public - tenant creation is platform-admin only; self-create is gone."""
     return {"tenant_creation": "platform_admin_only"}
 
@@ -355,7 +356,7 @@ def _org_summary(tenant: TenantRecord) -> OrgSummary:
 
 
 @router.get("/lookup-by-email", response_model=EmailLookupResponse)
-async def lookup_org_by_email(email: str):
+async def lookup_org_by_email(email: str) -> EmailLookupResponse:
     """Public: which org an email would join, plus the OpenClaw fallback."""
     from app.services.org_membership import DefaultOrgUnavailableError, get_fallback_org, lookup_tenant_by_email_domain
 
@@ -374,7 +375,7 @@ async def lookup_org_by_email(email: str):
 async def join_suggested_org(
     data: SuggestedJoinRequest,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> JoinOrgResponse | JSONResponse:
     """Confirm joining the organization suggested by the verified email domain."""
     from app.core.security import create_access_token
     from app.services.org_membership import (
@@ -390,8 +391,6 @@ async def join_suggested_org(
     if data.tenant_id is not None and data.tenant_id != suggested.id:
         raise HTTPException(status_code=400, detail="That organization is not the suggested match")
     if not suggested.is_default_end_user_org and not suggested.is_system:
-        from fastapi.responses import JSONResponse
-
         from app.records.company_admission import AdmissionMethod
         from app.schemas.company_admission import PendingAdmissionResponse
         from app.services.company_admissions import submit_request, summarize
@@ -413,7 +412,7 @@ async def join_suggested_org(
 
 
 @router.post("/join-default", response_model=JoinOrgResponse)
-async def join_default_org(current_user: UserRecord = Depends(get_current_user)):
+async def join_default_org(current_user: UserRecord = Depends(get_current_user)) -> JoinOrgResponse:
     """Decline a suggested org and join OpenClaw."""
     from app.core.security import create_access_token
     from app.services.org_membership import (
@@ -444,7 +443,7 @@ async def join_default_org(current_user: UserRecord = Depends(get_current_user))
 async def transfer_organization(
     data: TransferRequest,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> JoinOrgResponse | JSONResponse:
     """Move a member from their current org to another after password confirmation."""
     from app.core.security import create_access_token, load_identity_for_password, verify_password_async
     from app.services.org_membership import (
@@ -506,8 +505,6 @@ async def transfer_organization(
         raise HTTPException(status_code=400, detail="You already belong to that organization")
 
     if not target.is_default_end_user_org and not target.is_system:
-        from fastapi.responses import JSONResponse
-
         from app.records.company_admission import AdmissionMethod
         from app.schemas.company_admission import PendingAdmissionResponse
         from app.services.company_admissions import submit_request, summarize
@@ -538,8 +535,8 @@ async def transfer_organization(
 # ─── Public: Resolve Tenant by Domain ───────────────────
 
 
-@router.get("/resolve-by-domain")
-async def resolve_tenant_by_domain(domain: str) -> dict[str, Any]:
+@router.get("/resolve-by-domain", response_model=None)
+async def resolve_tenant_by_domain(domain: str) -> TenantResolvedResponse:
     """Resolve a tenant by its sso_domain or subdomain slug.
 
     sso_domain is stored as a full URL (e.g. "https://acme.maraclaw.ai" or "http://1.2.3.4:3009").
@@ -593,14 +590,14 @@ async def resolve_tenant_by_domain(domain: str) -> dict[str, Any]:
 
 
 @router.get("/", response_model=list[TenantOut])
-async def list_tenants(current_user: UserRecord = Depends(require_role("platform_admin"))):
+async def list_tenants(current_user: UserRecord = Depends(require_role("platform_admin"))) -> list[TenantOut]:
     """List all tenants (platform_admin only)."""
     tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
     return [TenantOut.model_validate(t) for t in tenants]
 
 
 @router.get("/me", response_model=TenantOut)
-async def get_my_tenant(current_user: UserRecord = Depends(get_current_user)):
+async def get_my_tenant(current_user: UserRecord = Depends(get_current_user)) -> TenantOut:
     """Return the current user's own tenant. Any authenticated member can read
     this - the wizard and the chat model switcher need default_model_id, which
     shouldn't require admin privileges.
@@ -613,8 +610,8 @@ async def get_my_tenant(current_user: UserRecord = Depends(get_current_user)):
     return TenantOut.model_validate(tenant)
 
 
-@router.get("/me/token-usage")
-async def get_my_tenant_token_usage(current_user: UserRecord = Depends(get_current_user)):
+@router.get("/me/token-usage", response_model=None)
+async def get_my_tenant_token_usage(current_user: UserRecord = Depends(get_current_user)) -> TenantTokenUsageResponse:
     """Return aggregate token and prompt-cache usage for the current company."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=404, detail="User is not in a tenant")
@@ -639,7 +636,7 @@ async def get_my_tenant_token_usage(current_user: UserRecord = Depends(get_curre
 
 
 @router.get("/{tenant_id}", response_model=TenantOut)
-async def get_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> TenantOut:
     """Get tenant details. Platform admins can view any; org_admins only their own."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -658,7 +655,7 @@ async def get_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(ge
 async def list_email_domains(
     tenant_id: uuid.UUID,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
-):
+) -> list[EmailDomainOut]:
     from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
 
     _ = await _get_updateable_tenant(tenant_id, current_user)
@@ -672,7 +669,7 @@ async def create_email_domain(
     data: EmailDomainCreate,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> EmailDomainOut:
     from app.services.org_membership import DomainClaimedError, InvalidEmailDomainError, add_email_domain
 
     _ = await _get_updateable_tenant(tenant_id, current_user)
@@ -701,7 +698,7 @@ async def patch_email_domain(
     data: EmailDomainPatch,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> EmailDomainOut:
     from app.services.org_membership import set_default_email_domain
 
     _ = await _get_updateable_tenant(tenant_id, current_user)
@@ -729,7 +726,7 @@ async def remove_email_domain(
     domain_id: uuid.UUID,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> None:
     from app.services.org_membership import delete_email_domain
 
     _ = await _get_updateable_tenant(tenant_id, current_user)
@@ -755,7 +752,7 @@ async def update_tenant(
     data: TenantUpdate,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> TenantOut:
     """Update tenant settings. Platform admins can update any; org_admins only their own."""
     if current_user.role == "org_admin":
         if not current_user.tenant_id:
@@ -805,7 +802,7 @@ async def update_tenant(
 
 
 @router.get("/{tenant_id}/logo")
-async def get_tenant_logo(tenant_id: uuid.UUID):
+async def get_tenant_logo(tenant_id: uuid.UUID) -> FileResponse:
     """Serve a tenant logo. Logos are public UI assets, addressed by UUID."""
     storage = get_storage_backend()
     key = _tenant_logo_key(tenant_id)
@@ -820,7 +817,7 @@ async def upload_tenant_logo(
     tenant_id: uuid.UUID,
     file: UploadFile = File(...),
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
-):
+) -> TenantOut:
     """Upload a cropped square company logo.
 
     The frontend crops to a 1:1 PNG before upload. The backend keeps a hard
@@ -859,7 +856,7 @@ async def upload_tenant_logo(
 @router.delete("/{tenant_id}/logo", response_model=TenantOut)
 async def delete_tenant_logo(
     tenant_id: uuid.UUID, current_user: UserRecord = Depends(require_role("org_admin", "platform_admin"))
-):
+) -> TenantOut:
     """Remove a custom company logo and fall back to the generated default."""
     tenant = await _get_updateable_tenant(tenant_id, current_user)
 
@@ -874,14 +871,14 @@ async def delete_tenant_logo(
     return TenantOut.model_validate(updated)
 
 
-@router.put("/{tenant_id}/assign-user/{user_id}")
+@router.put("/{tenant_id}/assign-user/{user_id}", response_model=None)
 async def assign_user_to_tenant(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     role: str = "member",
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> TenantAssignmentResponse:
     """Assign a user to a tenant with a specific role."""
     if role not in ("agent_admin", "member"):
         raise HTTPException(status_code=400, detail="Invalid role")
@@ -916,7 +913,7 @@ async def repair_genesis_org_admin(
     data: GenesisOrgAdminCreate,
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> TenantCreateResponse:
     """Attach a genesis org admin to a tenant that does not have one."""
     if not await is_genesis_platform_admin(current_user):
         raise HTTPException(status_code=403, detail="Only the genesis platform admin can repair a company admin")
@@ -984,8 +981,10 @@ async def get_tenant_deletion_preview(
     return await tenant_dao.deletion_preview(tenant_id)
 
 
-@router.delete("/{tenant_id}")
-async def delete_tenant(tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
+@router.delete("/{tenant_id}", response_model=None)
+async def delete_tenant(
+    tenant_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> TenantDeletedResponse:
     """Permanently delete a company and ALL its data.
 
     Only a platform_admin may call this endpoint.

@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -18,19 +18,14 @@ from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.user import UserRecord
+from app.schemas.organization_response_onboarding import (
+    OnboardingStatusPayload,
+    PersonalAssistantResponse,
+)
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.enterprise_llm import assert_distinct_model_slots, model_usable_in_tenant
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
-
-
-class OnboardingStatusPayload(TypedDict):
-    exists: bool
-    status: str
-    current_step: str
-    entry_mode: str | None
-    personal_assistant_agent_id: str | None
-    completed_at: str | None
 
 
 class OnboardingStartRequest(BaseModel):
@@ -219,23 +214,25 @@ async def _create_personal_assistant(
     return agent, raw_key
 
 
-@router.get("/status")
-async def get_onboarding_status(current_user: UserRecord = Depends(get_current_user)):
+@router.get("/status", response_model=None)
+async def get_onboarding_status(current_user: UserRecord = Depends(get_current_user)) -> OnboardingStatusPayload:
     """Return onboarding state for the current user/company."""
     return _status_payload(await _get_row(current_user))
 
 
-@router.post("/start")
-async def start_onboarding(data: OnboardingStartRequest, current_user: UserRecord = Depends(get_current_user)):
+@router.post("/start", response_model=None)
+async def start_onboarding(
+    data: OnboardingStartRequest, current_user: UserRecord = Depends(get_current_user)
+) -> OnboardingStatusPayload:
     """Start or resume onboarding for the current user/company."""
     row = await _ensure_row(current_user, data.entry_mode)
     return _status_payload(row)
 
 
-@router.post("/personal-assistant", status_code=status.HTTP_201_CREATED)
+@router.post("/personal-assistant", status_code=status.HTTP_201_CREATED, response_model=None)
 async def create_personal_assistant(
     data: PersonalAssistantRequest, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> PersonalAssistantResponse:
     """Create the user's private assistant and advance onboarding."""
     row = await _ensure_row(current_user, "join")
     if row.personal_assistant_agent_id:
@@ -262,8 +259,8 @@ async def create_personal_assistant(
     }
 
 
-@router.post("/complete")
-async def complete_onboarding(current_user: UserRecord = Depends(get_current_user)):
+@router.post("/complete", response_model=None)
+async def complete_onboarding(current_user: UserRecord = Depends(get_current_user)) -> OnboardingStatusPayload:
     """Mark the current user/company onboarding as completed."""
     row = await _get_row(current_user)
     if not row:
