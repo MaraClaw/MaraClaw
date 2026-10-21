@@ -4,10 +4,10 @@ import base64
 import uuid
 from datetime import datetime
 from functools import partial
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.core.json_types import json_as_bool, json_as_str_or, object_mapping_from
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
@@ -15,9 +15,15 @@ from app.core.security import get_current_user
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.user_dao import user_dao
-from app.records.activity_log import AgentActivityLogRecord
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import ScheduleTriggerResponse
+from app.schemas.schedule_history import (
+    HistoryCursor,
+    HistoryOutcome,
+    ScheduleHistoryItem,
+    ScheduleHistoryPage,
+    history_cursor_adapter,
+)
 from app.services.schedule_time import ScheduleTimezoneError, validate_timezone
 from app.services.scheduler import compute_next_run
 
@@ -57,55 +63,6 @@ class ScheduleOut(BaseModel):
     created_at: datetime | None = None
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
-
-
-class ScheduleHistoryItem(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
-
-    id: uuid.UUID
-    created_at: str | None
-    summary: str
-    instruction: str
-    reply: str
-    status: Literal["success", "failure", "cancelled", "unknown"]
-
-    @classmethod
-    def from_record(cls, log: AgentActivityLogRecord) -> ScheduleHistoryItem:
-        detail = object_mapping_from(log.detail_json)
-        match detail.get("status"):
-            case "success":
-                run_status = "success"
-            case "failure" | "failed":
-                run_status = "failure"
-            case "cancelled":
-                run_status = "cancelled"
-            case _:
-                run_status = "unknown"
-        return cls(
-            id=log.id,
-            created_at=log.created_at.isoformat() if log.created_at is not None else None,
-            summary=log.summary,
-            instruction=json_as_str_or(detail.get("instruction")),
-            reply=json_as_str_or(detail.get("reply")),
-            status=run_status,
-        )
-
-
-class ScheduleHistoryPage(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
-
-    items: list[ScheduleHistoryItem]
-    next_cursor: str | None
-
-
-class _HistoryCursor(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
-
-    version: Literal[1]
-    agent_id: uuid.UUID
-    schedule_id: uuid.UUID
-    created_at: AwareDatetime | None
-    id: uuid.UUID
 
 
 def _validated_next_run(cron_expr: str, timezone: str) -> datetime:
@@ -256,25 +213,36 @@ async def get_schedule_history_page(
     current_user: UserRecord = Depends(get_current_user),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    outcome: HistoryOutcome = "all",
 ) -> ScheduleHistoryPage:
     _ = await check_agent_access(current_user, agent_id)
     before = None
     if cursor is not None:
         try:
             payload = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-            position = _HistoryCursor.model_validate_json(payload)
+            position = history_cursor_adapter.validate_json(payload)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="Invalid history cursor") from error
         if position.agent_id != agent_id or position.schedule_id != schedule_id:
             raise HTTPException(status_code=400, detail="History cursor does not match this schedule")
+        cursor_outcome = position.outcome if isinstance(position, HistoryCursor) else "all"
+        if cursor_outcome != outcome:
+            raise HTTPException(status_code=400, detail="History cursor does not match this outcome")
         before = (position.created_at, position.id)
-    rows = await agent_activity_log_dao.list_schedule_history(agent_id, schedule_id, limit=limit + 1, before=before)
+    rows = await agent_activity_log_dao.list_schedule_history(
+        agent_id, schedule_id, limit=limit + 1, before=before, outcome=outcome
+    )
     items = [ScheduleHistoryItem.from_record(log) for log in rows[:limit]]
     next_cursor = None
     if len(rows) > limit:
         last = rows[limit - 1]
-        position = _HistoryCursor(
-            version=1, agent_id=agent_id, schedule_id=schedule_id, created_at=last.created_at, id=last.id
+        position = HistoryCursor(
+            version=2,
+            outcome=outcome,
+            agent_id=agent_id,
+            schedule_id=schedule_id,
+            created_at=last.created_at,
+            id=last.id,
         )
         next_cursor = base64.urlsafe_b64encode(position.model_dump_json().encode()).decode().rstrip("=")
     return ScheduleHistoryPage(items=items, next_cursor=next_cursor)

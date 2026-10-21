@@ -176,8 +176,8 @@ test('history distinguishes outcomes and loads older runs without losing rows on
   await expect(history.getByRole('status')).toHaveText('Loading run history...')
   await expect(history.getByText('No history yet.', { exact: true })).toHaveCount(0)
   firstRelease.resolve()
-  await expect(history.getByText('Success', { exact: true })).toBeVisible()
-  await expect(history.getByText('Failure', { exact: true })).toBeVisible()
+  await expect(history.getByRole('list', { name: 'Schedule runs' }).getByText('Success', { exact: true })).toBeVisible()
+  await expect(history.getByRole('list', { name: 'Schedule runs' }).getByText('Failure', { exact: true })).toBeVisible()
 
   await history.getByRole('button', { name: 'Load older runs', exact: true }).click()
 
@@ -190,8 +190,8 @@ test('history distinguishes outcomes and loads older runs without losing rows on
   await expect(history.getByRole('listitem')).toHaveCount(2)
   olderRelease.resolve()
   await expect(history.getByRole('listitem')).toHaveCount(4)
-  await expect(history.getByText('Cancelled', { exact: true })).toBeVisible()
-  await expect(history.getByText('Unknown', { exact: true })).toBeVisible()
+  await expect(history.getByRole('list', { name: 'Schedule runs' }).getByText('Cancelled', { exact: true })).toBeVisible()
+  await expect(history.getByRole('list', { name: 'Schedule runs' }).getByText('Unknown', { exact: true })).toBeVisible()
   await expect(history.getByText('No older runs.', { exact: true })).toBeVisible()
   await expect(history.getByRole('button')).toHaveCount(0)
   expect(cursors).toEqual([null, cursor, cursor])

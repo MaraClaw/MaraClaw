@@ -10,6 +10,7 @@ from uuid import UUID
 from app.core.json_types import date_from_row, int_from_row
 from app.dao.base import BaseDAO
 from app.records.activity_log import AgentActivityLogRecord
+from app.schemas.schedule_history import HistoryOutcome
 
 _COLUMNS = (
     "id",
@@ -60,6 +61,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         *,
         limit: int = 20,
         before: tuple[datetime | None, UUID] | None = None,
+        outcome: HistoryOutcome = "all",
     ) -> list[AgentActivityLogRecord]:
         params: dict[str, object] = {"agent_id": agent_id, "schedule_id": str(schedule_id), "limit": limit}
         clauses = [
@@ -67,6 +69,13 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
             "action_type = 'schedule_run'",
             "detail_json ->> 'schedule_id' = %(schedule_id)s",
         ]
+        if outcome != "all":
+            clauses.append(
+                "(CASE detail_json ->> 'status' WHEN 'success' THEN 'success' "
+                "WHEN 'failure' THEN 'failure' WHEN 'failed' THEN 'failure' "
+                "WHEN 'cancelled' THEN 'cancelled' ELSE 'unknown' END) = %(outcome)s"
+            )
+            params["outcome"] = outcome
         if before is not None:
             created_at, log_id = before
             params["before_id"] = log_id

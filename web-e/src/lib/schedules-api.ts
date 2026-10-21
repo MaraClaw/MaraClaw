@@ -20,13 +20,15 @@ const historySchema = z.array(historyItemSchema)
 const historyPageSchema = z.object({
   items: historySchema.readonly(), next_cursor: z.string().nullable(),
 }).readonly()
+export const scheduleHistoryOutcomeSchema = z.enum(['all', 'success', 'failure', 'cancelled', 'unknown'])
 
 export type ScheduleOut = z.infer<typeof scheduleSchema>
 export type ScheduleCreate = Readonly<z.input<typeof createSchema>>
 export type SchedulePatch = Readonly<z.input<typeof patchSchema>>
 export type ScheduleHistoryItem = z.infer<typeof historyItemSchema>
 export type ScheduleHistoryPage = z.infer<typeof historyPageSchema>
-type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal }>
+export type ScheduleHistoryOutcome = z.infer<typeof scheduleHistoryOutcomeSchema>
+type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal; outcome?: ScheduleHistoryOutcome }>
 
 export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
   return z.array(scheduleSchema).parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/`))
@@ -57,10 +59,11 @@ export async function listScheduleHistory(agentId: string, scheduleId: string) {
 }
 
 export async function listScheduleHistoryPage(
-  agentId: string, scheduleId: string, { cursor, signal }: HistoryPageRequest = {},
+  agentId: string, scheduleId: string, { cursor, signal, outcome }: HistoryPageRequest = {},
 ): Promise<ScheduleHistoryPage> {
   const query = new URLSearchParams({ limit: '20' })
   if (cursor !== undefined) query.set('cursor', cursor)
+  if (outcome !== undefined) query.set('outcome', outcome)
   if (signal !== undefined) {
     return historyPageSchema.parse(await apiRequest<unknown>(
       `/api/agents/${agentId}/schedules/${scheduleId}/history/page?${query}`, { signal },

@@ -87,6 +87,25 @@ test('older history passes an encoded cursor unchanged and supports cancellation
   assert.deepEqual(page, { items: [], next_cursor: null })
 })
 
+for (const outcome of ['all', 'success', 'failure', 'cancelled', 'unknown'] as const) {
+  test(`history forwards ${outcome} alongside its scoped cursor without changing the page contract`, async (context) => {
+    // Given
+    const signal = new AbortController().signal
+    context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
+      const query = new URL(path, 'https://example.test').searchParams
+      assert.equal(query.get('outcome'), outcome)
+      assert.equal(query.get('cursor'), 'filter/+ cursor')
+      assert.equal(query.get('limit'), '20')
+      assert.equal(init.signal, signal)
+      return Response.json({ items: [], next_cursor: null })
+    })
+    // When
+    const page = await listScheduleHistoryPage('agent', 'schedule', { outcome, cursor: 'filter/+ cursor', signal })
+    // Then
+    assert.deepEqual(page, { items: [], next_cursor: null })
+  })
+}
+
 test('missing status remains unknown even when paged history has a successful-looking reply', async (context) => {
   const legacy = { id: 'legacy', summary: 'Completed successfully', reply: 'Done' }
   context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [legacy], next_cursor: null }))
