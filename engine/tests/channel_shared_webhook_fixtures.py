@@ -14,7 +14,7 @@ from starlette.requests import Request
 from app.api import discord_bot, feishu, google_chat, slack, teams, whatsapp
 from app.core.json_types import JsonObject
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.services.channels import dedup, inbound
+from app.services.channels import dedup, feishu_submissions, inbound, slack_submissions
 from test_channel_shared_processors import context as context, pipeline as pipeline
 
 WEBHOOKS = [
@@ -29,20 +29,17 @@ WEBHOOKS = [
     "feishu_file",
     "google_inline",
 ]
-ACK_ONLY = {"slack_file_only", "feishu_file"}
 
 
 @pytest.fixture
 def webhook_pipeline(pipeline, monkeypatch):
-    agent, _, _, route, config, *_ = pipeline
+    agent, _, _, _, config, *_ = pipeline
     config.is_configured = True
     config.encrypt_key = "signing-secret"
     config.verification_token = "verification-token"
     monkeypatch.setattr(slack.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.gchat, "audience_for_config", lambda _: "")
-    for module in (slack, whatsapp, discord_bot):
-        monkeypatch.setattr(module, "find_or_create_channel_session", AsyncMock(return_value=route))
     monkeypatch.setattr(feishu, "_load_agent_and_model", AsyncMock(return_value=(agent, None, None)))
     monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=False))
     monkeypatch.setattr(dedup, "mark_processed_shared", AsyncMock())
@@ -54,6 +51,8 @@ def webhook_pipeline(pipeline, monkeypatch):
     upload = AsyncMock(return_value=("key", "workspace/uploads/upload.bin", "path"))
     monkeypatch.setattr(slack, "store_agent_upload", upload)
     monkeypatch.setattr(feishu, "store_agent_upload", upload)
+    monkeypatch.setattr(slack_submissions, "store_agent_upload", upload)
+    monkeypatch.setattr(feishu_submissions, "store_agent_upload", upload)
     storage = MagicMock()
     storage.exists = AsyncMock(return_value=False)
     monkeypatch.setattr(feishu, "get_storage_backend", lambda: storage)
@@ -88,9 +87,20 @@ def request_for(payload, headers=None):
     )
 
 
-async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
+async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False, native_id="native-id"):
     pipeline, scheduled = webhook_pipeline
     agent, _, _, _, config, *_ = pipeline
+    config.channel_type = (
+        "slack"
+        if name.startswith("slack")
+        else "feishu"
+        if name.startswith("feishu")
+        else "microsoft_teams"
+        if name == "teams"
+        else "google_chat"
+        if name == "google_inline"
+        else name
+    )
     match name:
         case "slack" | "slack_upload" | "slack_file_only":
             event: JsonObject = {
@@ -100,7 +110,11 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
                 "text": "" if name == "slack_file_only" else "hello",
             }
             if name != "slack":
-                event["files"] = [{"name": "upload.bin", "url_private_download": "https://provider.invalid/file"}]
+                event["files"] = [
+                    {"id": "native-file", "name": "upload.bin", "url_private_download": "https://provider.invalid/file"}
+                ]
+            if native_id:
+                event["ts"] = native_id
             payload = {"type": "event_callback", "event": event}
             stamp = str(int(time.time()))
             signature = hmac.new(
@@ -117,7 +131,14 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
                         "changes": [
                             {
                                 "value": {
-                                    "messages": [{"from": "15551234567", "type": "text", "text": {"body": "hello"}}]
+                                    "messages": [
+                                        {
+                                            "id": native_id,
+                                            "from": "15551234567",
+                                            "type": "text",
+                                            "text": {"body": "hello"},
+                                        }
+                                    ]
                                 }
                             }
                         ]
@@ -130,6 +151,7 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
             )
         case "teams":
             activity = {
+                "id": native_id,
                 "type": "message",
                 "text": "hello",
                 "from": {"id": "teams-user"},
@@ -141,6 +163,7 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
             key = SigningKey.generate()
             config.encrypt_key = key.verify_key.encode().hex()
             payload = {
+                "id": native_id,
                 "type": 2,
                 "channel_id": "123",
                 "user": {"id": "456"},
@@ -168,6 +191,7 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
                     "event": {
                         "sender": {"sender_id": {"open_id": "ou_open", "user_id": "tenant-user"}},
                         "message": {
+                            "message_id": native_id,
                             "message_type": msg_type,
                             "chat_type": "group" if group else "p2p",
                             "chat_id": "oc_chat",
@@ -184,6 +208,7 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False):
                         "token": "verification-token",
                         "type": "MESSAGE",
                         "message": {
+                            "name": native_id,
                             "text": "hello",
                             "sender": {"name": "users/123", "type": "HUMAN"},
                             "space": {"name": "spaces/ABC", "type": "ROOM" if group else "DM"},

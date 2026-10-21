@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -9,13 +9,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import dingtalk, google_chat, wecom
-from app.dao import agent_dao
-from app.dao.chat_dao import chat_message_dao
+from app.dao import agent_dao, channel_config_dao
+from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
-from app.services import channel_session, discord_gateway, wechat_message_processor, wecom_stream
+from app.services import discord_gateway, openclaw_routing, wechat_message_processor, wecom_stream
 from app.services.channel_user_service import ChannelUserResolutionError
-from app.services.channels import binding, inbound, llm_bridge
+from app.services.channels import binding, submissions
 from app.services.channels.google_chat import parse_google_chat_event
 from test_channel_shared_binding import context as context
 
@@ -29,25 +29,48 @@ def pipeline(context, monkeypatch):
     route = ChatSessionRecord(
         id=uuid4(), agent_id=agent.id, user_id=user.id, source_channel="dingtalk", external_conv_id="provider-route"
     )
-    open_session = AsyncMock(return_value=route)
-    for module in (channel_session, inbound, dingtalk, wecom, wechat_message_processor):
-        monkeypatch.setattr(module, "find_or_create_channel_session", open_session)
+    monkeypatch.setattr(submissions, "find_or_create_channel_session", AsyncMock(return_value=route))
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr(llm_bridge, "_load_agent_and_model", AsyncMock(return_value=(agent, None, None)))
-    monkeypatch.setattr(dingtalk.channel_config_dao, "get_for_agent", AsyncMock(return_value=None))
-    monkeypatch.setattr(binding.channel_user_service, "resolve_channel_user", AsyncMock(return_value=user))
     monkeypatch.setattr("app.services.wechat_channel.remember_wechat_context", AsyncMock())
     history = AsyncMock(return_value=[])
     persist, enqueue = AsyncMock(), AsyncMock()
     monkeypatch.setattr(chat_message_dao, "list_recent", history)
-    monkeypatch.setattr(inbound, "persist_channel_user_message", persist)
-    monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", enqueue)
-    config = ChannelConfigRecord(id=uuid4(), agent_id=agent.id, extra_config={"bot_token": "token"})
+    monkeypatch.setattr(submissions, "persist_channel_user_message", persist)
+    monkeypatch.setattr(submissions, "enqueue_prepared_openclaw_message", enqueue)
+    config = ChannelConfigRecord(id=uuid4(), agent_id=agent.id, is_configured=True, extra_config={"bot_token": "token"})
+    monkeypatch.setattr(channel_config_dao, "get", AsyncMock(return_value=config))
+    monkeypatch.setattr(channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(submissions, "load_user_principal", AsyncMock(return_value=user))
+
+    async def access(principal, target):
+        _, level = await binding.check_agent_access(principal, target.id, fresh=True)
+        return level
+
+    @asynccontextmanager
+    async def connection():
+        yield
+
+    async def locked(session_id, _agent_id):
+        return shared if session_id == shared.id else route
+
+    async def prepare(*, agent, content, history):
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "channel-unit")
+
+    monkeypatch.setattr(submissions, "compute_agent_access_level", access)
+    monkeypatch.setattr(submissions, "connection_ctx", connection)
+    monkeypatch.setattr(submissions.channel_event_receipt_dao, "reserve", AsyncMock(return_value=True))
+    monkeypatch.setattr(submissions.channel_event_receipt_dao, "find", AsyncMock(return_value=None))
+    monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
+    monkeypatch.setattr(submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(chat_session_dao, "lock_for_agent", locked)
     return agent, user, shared, route, config, history, persist, enqueue
 
 
-async def invoke_processor(name, pipeline, *, group=False):
+async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"):
     agent, _, _, _, config, *_ = pipeline
+    config.channel_type = "wecom" if name.startswith("wecom") else "discord" if name == "discord_gateway" else name
     match name:
         case "dingtalk":
             await dingtalk.process_dingtalk_message(
@@ -59,10 +82,18 @@ async def invoke_processor(name, pipeline, *, group=False):
                 "https://provider.invalid/reply",
                 image_base64_list=["data:image/jpeg;base64,aGVsbG8="],
                 saved_file_paths=["workspace/uploads/photo.jpg"],
+                message_id=native_id,
             )
         case "wecom" | "wecom_kf":
             await wecom._process_wecom_text(
-                agent.id, config, "external-id", "hello", is_kf=name == "wecom_kf", chat_id="chat-id" if group else ""
+                agent.id,
+                config,
+                "external-id",
+                "hello",
+                is_kf=name == "wecom_kf",
+                chat_id="chat-id" if group else "",
+                message_id=native_id,
+                kf_msg_id=native_id if name == "wecom_kf" else None,
             )
         case "wecom_stream":
             await wecom_stream._process_wecom_stream_message(
@@ -71,11 +102,13 @@ async def invoke_processor(name, pipeline, *, group=False):
                 "hello",
                 chat_id="chat-id" if group else "",
                 chat_type="group" if group else "single",
+                message_id=native_id,
             )
         case "wechat":
             await wechat_message_processor.process_wechat_message(
                 agent.id,
                 {
+                    "message_id": native_id,
                     "from_user_id": "external-id",
                     "context_token": "context",
                     "session_id": "external-session",
@@ -88,12 +121,15 @@ async def invoke_processor(name, pipeline, *, group=False):
             message.author = SimpleNamespace(id=123, display_name="Human", name="Human")
             message.channel = SimpleNamespace(id=456)
             message.guild = SimpleNamespace(id=789) if group else None
+            if native_id:
+                message.id = native_id
             await discord_gateway.DiscordGatewayManager()._handle_message(agent.id, message, "hello")
         case "google_chat":
             event = parse_google_chat_event(
                 {
                     "type": "MESSAGE",
                     "message": {
+                        "name": native_id,
                         "text": "hello",
                         "sender": {"name": "users/123", "type": "HUMAN"},
                         "space": {"name": "spaces/ABC", "type": "ROOM" if group else "DM"},
@@ -118,8 +154,8 @@ async def test_direct_processor_uses_shared_history_and_original_reply_address(p
     assert enqueue.await_args.kwargs["conversation_id"] == str(shared.id)
     assert enqueue.await_args.kwargs["reply_session_id"] == route.id
     if processor == "dingtalk":
-        assert persist.await_args.kwargs["content"] == "[file:photo.jpg]\nhello"
-        assert "[image_data:" in enqueue.await_args.kwargs["content"]
+        assert persist.await_args.kwargs["content"] == "[file:workspace/uploads/photo.jpg]\nhello"
+        assert "[image_data:" in enqueue.await_args.args[0].content
 
 
 @pytest.mark.parametrize("processor", GROUP_PROCESSORS)
