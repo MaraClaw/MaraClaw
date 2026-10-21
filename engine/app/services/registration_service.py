@@ -24,6 +24,7 @@ from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.org import OrgMemberRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.schemas.seed_registration_contracts import DuplicateIdentityConflict, DuplicateIdentityResult
 from app.services.sso_service import sso_service
 from app.services.system_email_service import SystemEmailConfig, resolve_email_config_async
 
@@ -75,13 +76,13 @@ class RegistrationService:
         self,
         email: str | None = None,
         mobile: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> DuplicateIdentityResult:
         """Check for existing identities that might conflict.
 
         Returns:
             Dict with ``has_conflict`` bool and ``conflicts`` list.
         """
-        conflicts = []
+        conflicts: list[DuplicateIdentityConflict] = []
 
         if email not in (None, "") and await identity_dao.get_by_email(email):
             conflicts.append(

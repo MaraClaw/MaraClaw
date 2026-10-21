@@ -18,6 +18,7 @@ from app.db.errors import UniqueViolationError
 from app.records.agent import AgentRecord
 from app.records.okr import OKRSettingsRecord
 from app.records.tool import ToolRecord
+from app.schemas.seed_registration_contracts import DesiredOKRTriggerSpec
 from app.services.agent_manager import agent_manager
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.storage import get_storage_backend, store_agent_bytes
@@ -617,7 +618,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
         }
     }
 
-    desired: dict[str, dict[str, Any]] = {
+    desired: dict[str, DesiredOKRTriggerSpec] = {
         "daily_okr_collection": {
             "config": {"expr": f"{daily_minute} {daily_hour} * * *"},
             "is_enabled": bool(settings.enabled and settings.daily_report_enabled),

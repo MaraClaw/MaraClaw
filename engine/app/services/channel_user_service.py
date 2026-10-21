@@ -8,7 +8,8 @@ and OrgMember-based identity management.
 from __future__ import annotations
 
 import uuid
-from typing import Any, ClassVar
+from collections.abc import Mapping
+from typing import ClassVar
 
 from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from
 from app.core.logging import logger
@@ -74,7 +75,7 @@ class ChannelUserService:
         self,
         channel_type: str,
         external_user_id: str | None,
-        extra_info: dict[str, Any],
+        extra_info: Mapping[str, object],
     ) -> tuple[str | None, str | None, str | None]:
         info = json_object_from(extra_info)
         normalized_channel = self._normalize_channel_type(channel_type)
@@ -100,7 +101,7 @@ class ChannelUserService:
         agent: AgentRecord,
         channel_type: str,
         external_user_id: str | None,
-        extra_info: dict[str, Any] | None = None,
+        extra_info: Mapping[str, object] | None = None,
     ) -> UserRecord:
         """Resolve channel user identity, find or create platform User."""
         tenant_id = agent.tenant_id
@@ -140,7 +141,7 @@ class ChannelUserService:
                 existing_member = await self._find_existing_org_member_for_user(user.id, provider.id, tenant_id)
                 if existing_member:
                     unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
-                    updates: dict[str, Any] = {}
+                    updates: dict[str, str] = {}
                     if unionid not in (None, "") and existing_member.unionid in (None, ""):
                         updates["unionid"] = unionid
                     if open_id not in (None, "") and existing_member.open_id in (None, ""):
@@ -209,7 +210,7 @@ class ChannelUserService:
         provider_id: uuid.UUID,
         channel_type: str,
         external_user_id: str | None,
-        extra_info: dict[str, Any] | None = None,
+        extra_info: Mapping[str, object] | None = None,
     ) -> OrgMemberRecord | None:
         """Find OrgMember by external identity."""
         try:
@@ -249,10 +250,10 @@ class ChannelUserService:
 
     async def _create_org_member_shell(
         self,
-        provider: IdentityProviderRecord | Any,
+        provider: IdentityProviderRecord,
         channel_type: str,
         external_user_id: str | None,
-        extra_info: dict[str, Any],
+        extra_info: Mapping[str, object],
         linked_user_id: uuid.UUID | None = None,
     ) -> OrgMemberRecord:
         """Create a shell OrgMember record for this identity."""
@@ -294,7 +295,7 @@ class ChannelUserService:
         self,
         channel_type: str,
         external_user_id: str | None,
-        extra_info: dict[str, Any],
+        extra_info: Mapping[str, object],
         tenant_id: uuid.UUID | None,
     ) -> UserRecord:
         """Create a new Identity + User for channel identity (lazy registration)."""
@@ -341,7 +342,7 @@ channel_user_service = ChannelUserService()
 
 
 async def get_platform_user_by_org_member(
-    org_member: OrgMemberRecord | Any,
+    org_member: OrgMemberRecord,
     agent_tenant_id: uuid.UUID | None = None,
 ) -> UserRecord:
     """Get or create platform User from an existing OrgMember."""
