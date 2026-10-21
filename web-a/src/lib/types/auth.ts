@@ -108,3 +108,7 @@ export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
 export function canSendBroadcast(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user)
 }
+
+export function canReviewAdmissions(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && user.is_genesis === true
+}

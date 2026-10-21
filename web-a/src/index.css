@@ -3,6 +3,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@media (width < 48rem) {
+  .admission-content,
+  .admission-content :is(.text-sm, .text-base) {
+    font-size: 1.0625rem;
+    line-height: 1.5;
+  }
+
+  .admission-content :is(.text-xs, dt) {
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
