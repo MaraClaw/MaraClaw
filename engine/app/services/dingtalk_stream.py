@@ -17,7 +17,8 @@ import httpx
 
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
-from app.runtime.tasks import OwnedTasks
+from app.runtime.tasks import EventTasks
+from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.storage import store_agent_upload
 
@@ -478,23 +479,31 @@ class DingTalkStreamManager:
         self._threads: dict[uuid.UUID, threading.Thread] = {}
         self._stop_events: dict[uuid.UUID, threading.Event] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
-        self._children: OwnedTasks = OwnedTasks()
+        self._children: EventTasks = EventTasks()
         self._closing: bool = False
 
-    def _dispatch(self, loop: asyncio.AbstractEventLoop, coro: Coroutine[object, object, object]) -> None:
-        def schedule() -> None:
+    async def _dispatch(self, loop: asyncio.AbstractEventLoop | None, coro: Coroutine[object, object, object]) -> None:
+        if self._closing or loop is None or loop.is_closed() or not loop.is_running():
+            coro.close()
+            raise RuntimeError("DingTalk acceptance loop unavailable")
+
+        async def accept() -> None:
             if self._closing:
                 coro.close()
-            else:
-                self._children.start("dingtalk-message", coro)
+                raise RuntimeError("DingTalk acceptance is stopping")
+            await coro
 
-        if self._closing or loop.is_closed():
-            coro.close()
+        if loop is asyncio.get_running_loop():
+            await self._children.wrap(accept)()
             return
+        owned = self._children.wrap(accept)()
         try:
-            loop.call_soon_threadsafe(schedule)
+            future = asyncio.run_coroutine_threadsafe(owned, loop)
         except RuntimeError:
+            owned.close()
             coro.close()
+            raise
+        await asyncio.wrap_future(future)
 
     async def start_client(
         self,
@@ -513,6 +522,7 @@ class DingTalkStreamManager:
         # Capture the main event loop so threads can dispatch coroutines back
         self._main_loop = asyncio.get_running_loop()
         self._closing = False
+        self._children.closing = False
 
         # Stop existing client if any
         if stop_existing:
@@ -605,57 +615,37 @@ class DingTalkStreamManager:
 
                     from app.api.dingtalk import process_dingtalk_message
 
-                    if main_loop and main_loop.is_running():
-                        # Add thinking reaction immediately
-                        from app.services.dingtalk_reaction import add_thinking_reaction
-
-                        manager_self._dispatch(
-                            main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
-                        )
-
-                        manager_self._dispatch(
-                            main_loop,
-                            process_dingtalk_message(
-                                agent_id=agent_id,
-                                sender_staff_id=sender_staff_id,
-                                user_text=user_text,
-                                conversation_id=conversation_id,
-                                conversation_type=conversation_type,
-                                session_webhook=session_webhook,
-                                sender_nick=sender_nick,
-                                message_id=message_id,
-                            ),
-                        )
-                    else:
-                        logger.warning("[DingTalk Stream] Main loop not available")
+                    await manager_self._dispatch(
+                        main_loop,
+                        process_dingtalk_message(
+                            agent_id=agent_id,
+                            sender_staff_id=sender_staff_id,
+                            user_text=user_text,
+                            conversation_id=conversation_id,
+                            conversation_type=conversation_type,
+                            session_webhook=session_webhook,
+                            sender_nick=sender_nick,
+                            message_id=message_id,
+                        ),
+                    )
 
                 else:
                     # Non-text message: process media in the main loop
-                    if main_loop and main_loop.is_running():
-                        # Add thinking reaction immediately
-                        from app.services.dingtalk_reaction import add_thinking_reaction
-
-                        manager_self._dispatch(
-                            main_loop, add_thinking_reaction(app_key, app_secret, message_id, conversation_id)
-                        )
-
-                        manager_self._dispatch(
-                            main_loop,
-                            manager_self._handle_media_and_dispatch(
-                                msg_data=msg_data,
-                                app_key=app_key,
-                                app_secret=app_secret,
-                                agent_id=agent_id,
-                                sender_staff_id=sender_staff_id,
-                                conversation_id=conversation_id,
-                                conversation_type=conversation_type,
-                                session_webhook=session_webhook,
-                                sender_nick=sender_nick,
-                                message_id=message_id,
-                            ),
-                        )
-                    else:
-                        logger.warning("[DingTalk Stream] Main loop not available")
+                    await manager_self._dispatch(
+                        main_loop,
+                        manager_self._handle_media_and_dispatch(
+                            msg_data=msg_data,
+                            app_key=app_key,
+                            app_secret=app_secret,
+                            agent_id=agent_id,
+                            sender_staff_id=sender_staff_id,
+                            conversation_id=conversation_id,
+                            conversation_type=conversation_type,
+                            session_webhook=session_webhook,
+                            sender_nick=sender_nick,
+                            message_id=message_id,
+                        ),
+                    )
 
                 return dingtalk_stream.AckMessage.STATUS_OK, "ok"
             except Exception as e:
@@ -746,6 +736,45 @@ class DingTalkStreamManager:
         """Download media, then dispatch to process_dingtalk_message."""
         from app.api.dingtalk import process_dingtalk_message
 
+        native = None
+        if message_id:
+            from app.dao.channel_config_dao import channel_config_dao
+
+            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+            if config is None:
+                return
+            body = msg_data.get("content", {})
+            parts = [msg_data.get("text", {}).get("content", ""), body.get("recognition", "")]
+            media = [
+                code
+                for code in (msg_data.get("downloadCode"), body.get("downloadCode"))
+                if code is not None and code != ""
+            ]
+            for section in body.get("richText", []):
+                for item in section if isinstance(section, list) else [section]:
+                    parts.append(item.get("text", ""))
+                    code = item.get("downloadCode")
+                    if code is not None and code != "":
+                        media.append(code)
+            native = ChannelEvent(
+                config_id=config.id,
+                agent_id=agent_id,
+                provider="dingtalk",
+                event_key=json.dumps([app_key, conversation_id, message_id], separators=(",", ":")),
+                sender_id=sender_staff_id,
+                conversation_id=(
+                    f"dingtalk_group_{conversation_id}"
+                    if conversation_type == "2"
+                    else f"dingtalk_p2p_{sender_staff_id}"
+                ),
+                text="\n".join(part for part in parts if part),
+                kind=msg_data.get("msgtype", "text"),
+                media_ids=tuple(media),
+                is_group=conversation_type == "2",
+            )
+            if await is_channel_event_replay(native):
+                return
+
         user_text, image_base64_list, saved_file_paths = await _process_media_message(
             msg_data=msg_data,
             app_key=app_key,
@@ -768,6 +797,7 @@ class DingTalkStreamManager:
             saved_file_paths=saved_file_paths,
             sender_nick=sender_nick,
             message_id=message_id,
+            native_event=native,
         )
 
     async def stop_client(self, agent_id: uuid.UUID):
@@ -789,11 +819,11 @@ class DingTalkStreamManager:
         self._closing = True
         for stop_event in tuple(self._stop_events.values()):
             stop_event.set()
+        await self._children.stop()
         results = await asyncio.gather(*(self.stop_client(aid) for aid in tuple(self._threads)), return_exceptions=True)
         for result in results:
             if isinstance(result, BaseException):
                 logger.warning("[DingTalk Stream] Cleanup failed: {}", result)
-        await self._children.stop()
         self._main_loop = None
 
     async def start_all(self):
