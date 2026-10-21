@@ -2,6 +2,7 @@ import { apiRequest } from './http.ts'
 import { z } from 'zod'
 import type { SessionOwner } from './auth-session.ts'
 import { joinOrgResponseSchema } from './types/auth.ts'
+import { admissionSummarySchema } from './types/company-admissions.ts'
 import type {
   AuthProvider,
   ChangePasswordResponse,
@@ -49,19 +50,20 @@ export async function loginRequest(
 export async function registerRequest(
   body: {
     email: string
-    username: string
+    display_name?: string
     password: string
     invitation_code?: string
   },
   signal?: AbortSignal,
   owner?: SessionOwner,
 ): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/auth/register/init', {
+  const { admission_request, ...session } = await apiRequest<Omit<TokenResponse, 'admission_request'> & { admission_request?: unknown }>('/api/auth/register/init', {
     method: 'POST',
     body,
     token: null,
     ...requestContext(owner, signal),
   })
+  return admission_request === undefined ? session : { ...session, admission_request: admissionSummarySchema.nullable().parse(admission_request) }
 }
 
 export async function fetchCurrentUser(token: string, signal?: AbortSignal, owner?: SessionOwner): Promise<UserOut> {
@@ -73,7 +75,7 @@ export async function fetchCurrentUser(token: string, signal?: AbortSignal, owne
 }
 
 export async function updateCurrentUser(
-  body: { display_name?: string; username?: string; email?: string },
+  body: { display_name?: string; email?: string },
   owner?: SessionOwner,
 ): Promise<UserOut> {
   return apiRequest<UserOut>('/api/auth/me', {
@@ -175,12 +177,9 @@ export async function fetchRegistrationConfig(owner?: SessionOwner): Promise<{ i
 }
 
 export async function checkDuplicate(params: {
-  email?: string
-  username?: string
-}, owner?: SessionOwner): Promise<{ email_exists: boolean; username_exists: boolean; has_conflict: boolean }> {
-  const query = new URLSearchParams()
-  if (params.email) query.set('email', params.email)
-  if (params.username) query.set('username', params.username)
+  email: string
+}, owner?: SessionOwner): Promise<{ email_exists: boolean; has_conflict: boolean }> {
+  const query = new URLSearchParams({ email: params.email })
   return apiRequest(`/api/auth/check-duplicate?${query.toString()}`, { token: null, ...requestContext(owner) })
 }
 

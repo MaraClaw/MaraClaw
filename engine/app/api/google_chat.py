@@ -143,11 +143,14 @@ async def _process_message_event(
         logger.warning("[GoogleChat] Agent %s not found", agent_id)
         return
 
-    external_user_id = event.sender_name or event.sender_email or "unknown"
+    external_user_id = event.sender_name or event.sender_email
+    if not external_user_id:
+        return
     platform_user = await channel_inbound.resolve_sender_user(
         agent=agent,
         channel_type=CHANNEL_TYPE,
         external_user_id=external_user_id,
+        is_group=gchat.is_group_space(event),
         extra_info={
             "name": event.sender_display_name or f"Google Chat User {external_user_id[-8:]}",
             "email": event.sender_email,
@@ -169,6 +172,10 @@ async def _process_message_event(
         group_name=group_label if is_group else None,
     )
 
+    conversation = await channel_inbound.bind_channel_conversation(
+        agent=agent, platform_user=platform_user, reply_session=session, is_group=is_group
+    )
+    session = conversation.transcript_session
     user_text = event.text
     if event.has_attachment and not user_text:
         # Attachments not downloaded yet - honest failure instead of empty LLM turn.
@@ -202,13 +209,6 @@ async def _process_message_event(
         session=session,
         context_window_size=agent.context_window_size,
     )
-    await channel_inbound.persist_user_message(
-        agent_id=agent_id,
-        user_id=platform_user.id,
-        session=session,
-        content=user_text,
-    )
-
     try:
         reply_text = await channel_inbound.generate_channel_reply(
             agent_id=agent_id,
@@ -216,6 +216,8 @@ async def _process_message_event(
             history=history,
             user_id=platform_user.id,
             session_id=str(session.id),
+            reply_session_id=conversation.reply_session.id,
+            user_message_content=user_text,
         )
     except Exception:
         logger.exception("[GoogleChat] LLM failed for agent %s", agent_id)
@@ -337,11 +339,14 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         agent = await channel_inbound.load_agent(agent_id)
         if not agent:
             return {}
-        external_user_id = event.sender_name or event.sender_email or "unknown"
+        external_user_id = event.sender_name or event.sender_email
+        if not external_user_id:
+            return {}
         platform_user = await channel_inbound.resolve_sender_user(
             agent=agent,
             channel_type=CHANNEL_TYPE,
             external_user_id=external_user_id,
+            is_group=gchat.is_group_space(event),
             extra_info={
                 "name": event.sender_display_name or f"Google Chat User {external_user_id[-8:]}",
                 "email": event.sender_email,
@@ -360,6 +365,10 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
             is_group=is_group,
             group_name=(event.space_display_name or event.space_name) if is_group else None,
         )
+        conversation = await channel_inbound.bind_channel_conversation(
+            agent=agent, platform_user=platform_user, reply_session=session, is_group=is_group
+        )
+        session = conversation.transcript_session
         if event.has_attachment and not event.text:
             msg = (
                 "I received an attachment, but attachment handling requires a service account "
@@ -376,12 +385,6 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
             session=session,
             context_window_size=agent.context_window_size,
         )
-        await channel_inbound.persist_user_message(
-            agent_id=agent_id,
-            user_id=platform_user.id,
-            session=session,
-            content=event.text,
-        )
         try:
             reply_text = await asyncio.wait_for(
                 channel_inbound.generate_channel_reply(
@@ -390,6 +393,8 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
                     history=history,
                     user_id=platform_user.id,
                     session_id=str(session.id),
+                    reply_session_id=conversation.reply_session.id,
+                    user_message_content=event.text,
                 ),
                 timeout=25.0,
             )

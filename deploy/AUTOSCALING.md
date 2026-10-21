@@ -1,8 +1,10 @@
 # Single-Host Autoscaling
 
 The opt-in [development/macOS launcher](./DEVELOPMENT.md) uses the same admission
-and retirement policy with qualified reduced limits and a bounded exec socket
-transport. This guide's default production Linux/systemd contract is unchanged.
+and retirement policy with reduced limits and a bounded exec socket
+transport. This guide covers the default production Linux/systemd path.
+PostgreSQL and Redis are externally provisioned in both modes; neither store is
+part of Compose or the controller's lifecycle.
 
 Run from the repository root on a dedicated, trusted **Linux systemd host**, with
 rootful local Docker at `/var/run/docker.sock`, system-wide Compose 2.24+ and
@@ -16,13 +18,25 @@ run `sudo ./start-docker-compose.sh`. The script validates prerequisites/config,
 stops the controller, builds images, admits startup memory, preserves existing routed replica
 counts (including stopped containers), starts Compose and installs/enables
 `maraclaw-autoscaler.service`. Fresh counts remain two each. Background, bootstrap,
-ingress and stores remain singletons. Bootstrap remains one-shot.
+and ingress remain singletons. Bootstrap remains one-shot and must complete
+schema/runtime/genesis setup before engine/background start. External stores must
+already be reachable; Compose cannot start them or migrate data into them.
 
 The root-run unit uses the same absolute project directory, Compose file and env
 file as the starter. Keep the checkout, policy and all their parent directories
 root-controlled: this service has host-root Docker authority. Keep secrets in the
-protected env file, not the policy/unit. Shell resource variables are deliberately
-not Compose inputs; put overrides in `deploy/.env`. Unsupported remote/rootless
+protected mode-0600 env file, not the policy/unit. The selected file must contain
+complete canonical `DATABASE_URL` and `REDIS_URL` values (`deploy/.env` in
+production). Ambient exported shell secrets are deliberately filtered so startup
+and persistent supervision agree; exporting URLs alone is not sufficient. Use
+container-reachable store hosts, not `localhost`, percent-encode only the username
+and password components, and single-quote dotenv values with literal `$`. Configure
+TLS through supported client URL schemes/options and validate access, versions,
+reachability and certificate checks before launch. See the
+[URL contract](./README.md#external-store-connection-urls).
+
+Production shell resource variables are deliberately not Compose inputs; put
+overrides in `deploy/.env`. Unsupported remote/rootless
 Docker endpoints and repository paths with systemd metacharacters are rejected.
 
 `AUTOSCALER_STATE_DIR` defaults to `/var/lib/maraclaw-autoscaler`. The starter makes
@@ -65,13 +79,31 @@ larger. **Any running unlimited external container blocks growth/startup**, unle
 `external_unlimited_gib` explicitly accounts for the aggregate unlimited external
 allocation; it is added to known external limits. That override is an operator
 promise, not enforcement. Set actual guest hard limits wherever possible.
+Externally managed PostgreSQL/Redis on the same daemon count as external
+containers. This includes old managed-store containers left running as orphans
+after cutover: known hard limits remain charged, and unlimited allocations still
+fail closed unless accounted. Off-host stores need separate capacity planning.
 
 `capacity_gib=0` uses daemon memory; a positive value may lower, never raise it.
 There is no fixed 16-GiB cap. With other default pools at two replicas, fixed
-non-API limits are 6.75 GiB: 16/24/32-GiB hosts admit respectively **2/5/9 API
-replicas** at 2 GiB each, before other pools grow. Shared admission means these
+non-API steady limits are **2.75 GiB**: 2 GiB background, 0.5 GiB for four web
+containers and 0.25 GiB ingress. With external allocations at or below the 2-GiB
+floor, API capacity is `floor((M - max(2, 0.15*M) - 2 - 2.75) / 2)` for daemon
+memory `M` in GiB:
+
+| Daemon memory | Host reserve | External floor | Stack budget | API replicas at 2 GiB each |
+|---|---:|---:|---:|---:|
+| 16 GiB | 2.4 GiB | 2 GiB | 11.6 GiB | 4 |
+| 24 GiB | 3.6 GiB | 2 GiB | 18.4 GiB | 7 |
+| 32 GiB | 4.8 GiB | 2 GiB | 25.2 GiB | 11 |
+
+These counts apply before other pools grow. Shared admission means these
 are not simultaneous independent maxima. Resource overrides and guest allocations
-change the result. Default startup is refused on an 8-GiB daemon.
+change the result. Production defaults total 6.75 GiB steady, 1.75 GiB with
+bootstrap as the only engine role, or 7.75 GiB when bootstrap overlaps serving
+roles. On an 8-GiB daemon, the 2-GiB host reserve and 2-GiB external floor leave
+only a 4-GiB stack budget. Even the 6.75-GiB steady default cannot fit, so startup
+remains refused. Store removal does not reduce either reserve.
 
 After a successful starter deployment, `startup.sha256` records a digest of resolved
 Compose service hashes, built image IDs, the bootstrap container ID and the bound
@@ -84,7 +116,7 @@ Autoscaled routed counts are preserved and do not invalidate the checkpoint.
 A missing checkpoint, changed image/config/script, failed bootstrap or incomplete
 running topology retains bootstrap-overlap admission. This includes adopting this
 starter on an older deployment without a checkpoint. Do not manufacture a checkpoint
-to bypass admission. If the 16-GiB budget cannot accommodate the real overlap, use
+to bypass admission. If the budget cannot accommodate the real overlap, use
 a planned, quiesced maintenance window (these manual stops can interrupt traffic):
 
 ```sh
@@ -140,6 +172,15 @@ Compose scale-down/recreation can interrupt traffic and is not safe retirement.
 Do not clear stats or alter HAProxy slots while the controller runs. This controller
 does not relocate process-local WebSocket state; reconnect behavior is unchanged.
 
+For an existing managed-store installation, follow the
+[maintenance cutover](./README.md#cut-over-an-existing-managed-store-installation).
+Stop writers safely, verify backups/restores and migrate PostgreSQL/Redis state,
+including queues as appropriate; require external connectivity/TLS/access checks,
+bootstrap success and serving readiness before traffic. Keep legacy orphan
+containers and volumes intact until backups and cutover are accepted. Do not use
+blanket `--remove-orphans`, `down -v` or pruning; retirement is an explicit manual
+operator action. There is no automatic data migration.
+
 ## Isolated Acceptance
 
 Unit tests render synthetic env files; they never read `deploy/.env`:
@@ -184,5 +225,9 @@ Its `finally` removes only its own containers, network, volume and temp
 files on success/failure (not an uncatchable host crash). It pulls/builds nothing
 and does not install units or touch the live project. The separate
 [development qualification](./DEVELOPMENT.md#reproducible-disposable-qualification)
-also exercises the real full stack, TLS and authentication. Boot recovery and
-application WebSocket/guest integration remain separate target-host checks.
+procedure covers the real full stack, TLS and authentication, but now requires
+explicit dedicated disposable external stores and caller-managed store cleanup.
+All former QA receipt JSON files, including `DEVELOPMENT-QA.json`, remain
+historical managed-store evidence, not qualification of the new external-store
+topology. Boot recovery and application WebSocket/guest integration remain
+separate target-host checks.

@@ -1,10 +1,14 @@
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from tests.test_background_llm import background_case, tool_response
 
+from app.records.chat import ChatSessionRecord
 from app.services.llm import caller
 from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.llm.types import LLMResponse
@@ -121,33 +125,42 @@ async def test_lease_loss_raised_by_done_callback_is_not_swallowed(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("existing", [False, True], ids=["create", "promote"])
+@pytest.mark.parametrize("phase", ["agent_read", "connection_checkout"])
 @pytest.mark.parametrize("guarded", [False, True], ids=["default", "expired"])
-async def test_primary_session_checks_guard_after_read_before_mutation(monkeypatch, existing, guarded):
-    from app.services import chat_session_service as service
+async def test_primary_session_checks_guard_after_read_before_mutation(monkeypatch, phase, guarded):
+    from app.dao import shared_chat_dao
+    from app.services import chat_session_service as service, shared_chat
 
-    # Given a read-before-write session selection with no primary session.
-    row = SimpleNamespace(id=uuid4())
-    writes = []
-    monkeypatch.setattr(service, "get_primary_platform_session", lambda *_a: _async_return(None))
-    monkeypatch.setattr(
-        service.chat_session_dao, "find_best_web_session", lambda **_k: _async_return(row if existing else None)
+    agent_id, user_id = uuid4(), uuid4()
+    row = ChatSessionRecord(
+        id=shared_chat.shared_session_id(agent_id), agent_id=agent_id, user_id=user_id, source_channel="shared"
     )
+    connection = SimpleNamespace(execute=AsyncMock(), fetchone=AsyncMock(return_value=asdict(row)))
+    expired = False
 
-    async def mutate(**_kwargs):
-        writes.append(True)
-        return row
+    async def get_agent(_agent_id):
+        nonlocal expired
+        expired = phase == "agent_read"
+        return SimpleNamespace(creator_id=user_id)
 
-    monkeypatch.setattr(service.chat_session_dao, "create", mutate)
-    monkeypatch.setattr(service.chat_session_dao, "update", mutate)
-    # When admission is checked after the lookup.
+    @asynccontextmanager
+    async def checkout():
+        nonlocal expired
+        expired = True
+        yield connection
+
+    def guard():
+        if expired:
+            lost()
+
+    monkeypatch.setattr(shared_chat.agent_dao, "get", get_agent)
+    monkeypatch.setattr(shared_chat_dao, "connection_ctx", checkout)
     if guarded:
         with pytest.raises(ExecutionLeaseLostError):
-            await service.ensure_primary_platform_session(uuid4(), uuid4(), guard=lost)
+            await service.ensure_primary_platform_session(agent_id, user_id, guard=guard)
     else:
-        assert await service.ensure_primary_platform_session(uuid4(), uuid4()) is row
-    # Then only the default, unguarded call mutates the session.
-    assert writes == ([] if guarded else [True])
+        assert await service.ensure_primary_platform_session(agent_id, user_id) == row
+    assert connection.execute.await_count == (0 if guarded else 1)
 
 
 @pytest.mark.asyncio
@@ -204,7 +217,8 @@ async def test_read_mark_checks_guard_after_lookup_before_update(monkeypatch, gu
     # Given an active viewer and an existing session.
     writes = []
     monkeypatch.setattr(websocket.manager, "is_user_viewing_session", lambda *_a: _async_return(True))
-    monkeypatch.setattr(websocket.chat_session_dao, "get", lambda *_a: _async_return(SimpleNamespace(id=uuid4())))
+    session = ChatSessionRecord(id=uuid4(), agent_id=uuid4(), user_id=uuid4())
+    monkeypatch.setattr(websocket.chat_session_dao, "get", lambda *_a: _async_return(session))
 
     async def update(**_kwargs):
         writes.append(True)

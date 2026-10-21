@@ -37,9 +37,7 @@ async def roster_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch)
     await schema_db.execute(
         "INSERT INTO local_departments (id, tenant_id, name) VALUES (%s, %s, 'Sales')", (department, tenant)
     )
-    await schema_db.execute(
-        "INSERT INTO identities (id, username, email) VALUES (%s, 'private-login', 'private@example.test')", (identity,)
-    )
+    await schema_db.execute("INSERT INTO identities (id, email) VALUES (%s, 'private@example.test')", (identity,))
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, identity_id, display_name) VALUES (%s, %s, %s, 'Same Name')",
         (membership, tenant, identity),

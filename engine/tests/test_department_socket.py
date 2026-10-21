@@ -14,6 +14,7 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions, chat_tickets
+from app.services.shared_chat import shared_session_id
 
 
 @pytest.mark.asyncio
@@ -61,7 +62,11 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     await socket.accept()
     handler = ws_api.WebSocketChatHandler(socket, agent.id, "token")
     handler.binding = chat_tickets.ChatTicketBinding(
-        user_id=user.id, tenant_id=tenant, agent_id=agent.id, session_id=uuid4(), auth_deadline=int(time.time()) + 3600
+        user_id=user.id,
+        tenant_id=tenant,
+        agent_id=agent.id,
+        session_id=shared_session_id(agent.id),
+        auth_deadline=int(time.time()) + 3600,
     )
     handler.conv_id = str(handler.binding.session_id)
 
@@ -74,10 +79,13 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", AsyncMock())
     monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", dispatch)
-    session = ChatSessionRecord(id=handler.binding.session_id, agent_id=agent.id, user_id=user.id)
+    session = ChatSessionRecord(
+        id=handler.binding.session_id, agent_id=agent.id, user_id=user.id, source_channel="shared"
+    )
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
     persist = AsyncMock(
         return_value=ChatMessageRecord(id=uuid4(), agent_id=agent.id, user_id=user.id, role="user", content="hello")
     )
@@ -90,6 +98,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(permissions.org_department_dao, "has_agent_access", department_access)
     # A stale Redis allow must not override the fresh turn's database policy.
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value="use"))
+    monkeypatch.setattr(ws_api.manager, "send_to_session", AsyncMock())
     monkeypatch.setattr(handler, "_check_quotas", AsyncMock(return_value=True))
     # When the first dispatch revokes access and the next frame is received.
     await handler.message_loop()

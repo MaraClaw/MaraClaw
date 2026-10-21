@@ -171,7 +171,7 @@ export function AgentPermissionsPage() {
             <option value="">Choose a teammate</option>
             {(candidates.data ?? []).map((row) => (
               <option key={row.id} value={row.id}>
-                {row.name || row.email || row.username}
+                {row.name || row.email || row.id}
               </option>
             ))}
           </Select>

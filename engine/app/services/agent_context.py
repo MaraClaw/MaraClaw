@@ -567,7 +567,7 @@ Default visual style for generated HTML or rich visual documents:
    - DON'T mechanically remind people of every pending item
 
 9. **Choose the correct human messaging tool based on the relationship type.**
-   - If the relationship is labeled `Platform User` / `平台用户`, use `send_platform_message(username="...", message="...")`.
+   - If the relationship is labeled `Platform User` / `平台用户`, use `send_platform_message(username="<email or display name>", message="...")`.
    - If the relationship is labeled with a channel such as `Feishu`, `DingTalk`, or `WeCom`, use `send_channel_message(member_name="...", message="...")`.
    - `send_channel_message` is for external channels only. Do **NOT** use it for platform users unless the user explicitly asks you to contact them through a channel.
    - `send_platform_message` is for MaraClaw first-party users on web/app and should be your default choice for platform users.

@@ -139,19 +139,34 @@ class BaseAuthProvider(ABC):
         user_info: ExternalUserInfo,
         tenant_id: str | None = None,
     ) -> tuple[UserRecord, bool]:
+        from app.db.session import connection_ctx
+
+        async with connection_ctx():
+            return await self._find_or_create_user(user_info, tenant_id)
+
+    async def _find_or_create_user(
+        self,
+        user_info: ExternalUserInfo,
+        tenant_id: str | None = None,
+    ) -> tuple[UserRecord, bool]:
         """Find existing user or create new one via Identity/OrgMember."""
         from app.services.registration_service import registration_service
         from app.services.sso_service import sso_service
 
-        _ = await self._ensure_provider(tenant_id)
+        provider = await self._ensure_provider(tenant_id)
+        from app.services.sso_company_admission import find_pending_sso_user, stage_sso_admission
+
+        effective_tenant_id = as_uuid(tenant_id) or provider.tenant_id
+        scope = str(effective_tenant_id) if effective_tenant_id else None
 
         provider_user_id = user_info.provider_user_id or user_info.provider_union_id
         if provider_user_id is None:
             raise ValueError(f"{self.provider_type} user info does not include an external identity")
-        user = await sso_service.resolve_user_identity(
+        user = await find_pending_sso_user(provider, provider_user_id)
+        user = user or await sso_service.resolve_user_identity(
             provider_user_id,
             self.provider_type,
-            tenant_id=tenant_id,
+            tenant_id=scope,
             identity_data=dict(user_info.raw_data) if user_info.raw_data else None,
         )
 
@@ -162,10 +177,11 @@ class BaseAuthProvider(ABC):
             if not user and user_info.mobile and tenant_id not in (None, ""):
                 user = await sso_service.match_user_by_mobile(user_info.mobile, tenant_id)
 
-            if user and tenant_id not in (None, "") and str(user.tenant_id) != tenant_id:
-                user = None
-
+        pending_admission = False
         if user:
+            pending_admission = await stage_sso_admission(
+                user, provider, provider_user_id, target_id=effective_tenant_id
+            )
             if not user.identity_id:
                 identity = await registration_service.find_or_create_identity(
                     email=user_info.email, phone=user_info.mobile
@@ -177,12 +193,17 @@ class BaseAuthProvider(ABC):
             user = await self._create_new_user(user_info, tenant_id)
             is_new = True
 
+        if pending_admission or await stage_sso_admission(
+            user, provider, provider_user_id, target_id=effective_tenant_id
+        ):
+            _ = await registration_service.ensure_web_org_member(user)
+            return user, is_new
         _ = await sso_service.link_identity(
             str(user.id),
             self.provider_type,
             provider_user_id,
             dict(user_info.raw_data) if user_info.raw_data else None,
-            tenant_id=tenant_id,
+            tenant_id=scope,
         )
         _ = await registration_service.ensure_web_org_member(user)
         return user, is_new
@@ -231,34 +252,21 @@ class BaseAuthProvider(ABC):
 
     async def _create_new_user(self, user_info: ExternalUserInfo, tenant_id: str | None) -> UserRecord:
         """Create new user from external identity."""
-        import uuid
-
         from app.services.registration_service import registration_service
 
-        effective_id = user_info.provider_user_id or user_info.provider_union_id or "unknown"
         identity = await registration_service.find_or_create_identity(
             email=user_info.email,
             phone=user_info.mobile,
-            username=user_info.email.split("@")[0] if user_info.email else None,
         )
 
-        username = user_info.email.split("@")[0] if user_info.email else f"{self.provider_type}_{effective_id[:8]}"
-        if await identity_dao.is_username_taken(username):
-            username = f"{username}_{uuid.uuid4().hex[:6]}"
+        from app.services.sso_company_admission import create_sso_user
 
-        user = await user_dao.create(
-            obj_in={
-                "identity_id": identity.id,
-                "display_name": user_info.name or username,
-                "avatar_url": user_info.avatar_url or None,
-                "registration_source": self.provider_type,
-                "tenant_id": tenant_id,
-                "is_active": True,
-                "role": "member",
-            }
+        return await create_sso_user(
+            identity.id,
+            user_info.name or user_info.email or "User",
+            source=self.provider_type,
+            avatar=user_info.avatar_url or None,
         )
-        user.identity = identity
-        return user
 
 
 class FeishuAuthProvider(BaseAuthProvider):

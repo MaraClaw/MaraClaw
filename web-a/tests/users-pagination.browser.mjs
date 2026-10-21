@@ -11,7 +11,7 @@ let browser
 let skillBrowser
 const evidence = []
 const row = (id, tenant = 'alpha', extra = {}) => ({
-  id, username: `${id}-handle`, email: `${id}@example.test`, display_name: id,
+  id, email: `${id}@example.test`, display_name: id,
   role: 'member', is_active: false, is_genesis: false, tenant_id: tenant,
   agents_count: 2, created_at: '2026-10-20T00:00:00Z', source: 'local', ...extra,
 })
@@ -217,7 +217,7 @@ try {
     // When
     await page.getByRole('button', { name: 'Sign out', exact: true }).click()
     state.role = 'org_admin'
-    await page.getByLabel('Email, phone, or username').fill('operator@example.test')
+    await page.getByLabel('Email', { exact: true }).fill('operator@example.test')
     await page.getByLabel('Password', { exact: true }).fill('synthetic-password')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
     // Then

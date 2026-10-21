@@ -95,7 +95,9 @@ async def test_prepared_enqueue_defers_wake_until_commit(
     assert raw.rollbacks == int(rollback)
 
 
-async def test_prepared_enqueue_suppresses_duplicate_user_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_prepared_enqueue_suppresses_duplicate_user_message(
+    monkeypatch: pytest.MonkeyPatch, raw: _FakeRawConnection
+) -> None:
     # Given
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
     sender = uuid4()

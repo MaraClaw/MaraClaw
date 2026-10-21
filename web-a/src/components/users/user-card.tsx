@@ -30,7 +30,7 @@ export function UserCard({
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div>
           <CardTitle>{row.display_name || row.email || 'User'}</CardTitle>
-          <CardDescription>{row.email || row.username}</CardDescription>
+          <CardDescription>{row.email || 'No email'}</CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{roleLabel(row.role)}</Badge>

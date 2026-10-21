@@ -29,7 +29,7 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
+from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["whatsapp"])
 
@@ -277,7 +277,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 if not agent_obj:
                     continue
 
-                platform_user = await channel_user_service.resolve_channel_user(
+                platform_user = await channel_inbound.resolve_sender_user(
                     agent=agent_obj,
                     channel_type="whatsapp",
                     external_user_id=sender_phone,
@@ -292,6 +292,10 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                     source_channel="whatsapp",
                     first_message_title=user_text,
                 )
+                conversation = await channel_inbound.bind_channel_conversation(
+                    agent=agent_obj, platform_user=platform_user, reply_session=sess
+                )
+                sess = conversation.transcript_session
                 session_conv_id = str(sess.id)
                 history_msgs = await chat_message_dao.list_recent(
                     agent_id=agent_id,
@@ -300,18 +304,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                 )
                 history = _conv(history_msgs)
 
-                _ = await chat_message_dao.insert_message(
-                    agent_id=agent_id,
-                    user_id=platform_user_id,
-                    role="user",
-                    content=user_text,
-                    conversation_id=session_conv_id,
-                )
-                _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-
                 _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-                from app.services.channels import inbound as channel_inbound
 
                 try:
                     reply_text = await channel_inbound.generate_channel_reply(
@@ -320,6 +313,8 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request):
                         history=history,
                         user_id=platform_user_id,
                         session_id=session_conv_id,
+                        reply_session_id=conversation.reply_session.id,
+                        user_message_content=user_text,
                         agent_model=_agent_model,
                         llm_model=_llm_model,
                         fallback_model=_fallback_model,

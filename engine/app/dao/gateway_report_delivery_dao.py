@@ -76,6 +76,9 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
                     SELECT id FROM {self.table}
                     WHERE delivered_at IS NULL AND terminal_at IS NULL AND available_at <= %(now)s
                       AND (lease_expires_at IS NULL OR lease_expires_at <= %(now)s)
+                      AND EXISTS (SELECT 1 FROM gateway_messages AS message
+                                  WHERE message.id = gateway_report_deliveries.message_id
+                                    AND message.status = 'completed')
                     ORDER BY available_at, id
                     LIMIT %(limit)s FOR UPDATE SKIP LOCKED
                 )
@@ -93,8 +96,27 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
         """Lock a live claim; caller must retain an outer connection_ctx transaction."""
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT id FROM {self.table} WHERE {_FENCE} FOR UPDATE",
-                {"id": claim.id, "claim_token": claim.claim_token, "now": now},
+                f"SELECT id FROM {self.table} WHERE {_FENCE} "
+                "AND message_id = %(message)s AND destination_kind = %(kind)s "
+                "AND destination_id = %(destination)s AND tenant_id IS NOT DISTINCT FROM %(tenant)s FOR UPDATE",
+                {
+                    "id": claim.id,
+                    "claim_token": claim.claim_token,
+                    "now": now,
+                    "message": claim.message_id,
+                    "kind": claim.destination_kind,
+                    "destination": claim.destination_id,
+                    "tenant": claim.tenant_id,
+                },
+            )
+        return row is not None
+
+    async def has_outstanding_session(self, session_id: UUID) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT id FROM {self.table} WHERE destination_kind = 'im' AND destination_id = %(id)s "
+                "AND delivered_at IS NULL AND terminal_at IS NULL LIMIT 1",
+                {"id": session_id},
             )
         return row is not None
 

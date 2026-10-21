@@ -40,7 +40,7 @@ def missing_public_base(monkeypatch):
 async def test_registration_succeeds_and_logs_skipped_verification_without_trusted_base(
     monkeypatch, missing_public_base
 ):
-    identity = IdentityRecord(id=uuid4(), email="new@example.com", username="newuser")
+    identity = IdentityRecord(id=uuid4(), email="new@example.com")
     user = UserRecord(id=uuid4(), identity_id=identity.id, display_name="New User", created_at=datetime.now(UTC))
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(auth.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
@@ -63,7 +63,7 @@ async def test_registration_succeeds_and_logs_skipped_verification_without_trust
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.example") as client:
         response = await client.post(
             "/api/auth/register/init",
-            json={"email": identity.email, "username": identity.username, "password": "password123"},
+            json={"email": identity.email, "password": "password123"},
             headers={"origin": "https://evil.example"},
         )
 
@@ -77,7 +77,7 @@ async def test_registration_succeeds_and_logs_skipped_verification_without_trust
 @pytest.mark.asyncio
 @pytest.mark.parametrize("known_identity", [False, True])
 async def test_forgot_password_stays_generic_without_public_base(monkeypatch, missing_public_base, known_identity):
-    identity = IdentityRecord(id=uuid4(), email="alice@example.com", username="alice")
+    identity = IdentityRecord(id=uuid4(), email="alice@example.com")
     lookup = AsyncMock(return_value=identity if known_identity else None)
     monkeypatch.setattr(auth.identity_dao, "get_by_email", lookup)
     create_token = AsyncMock(return_value=("reset-token", datetime.now(UTC) + timedelta(minutes=15)))

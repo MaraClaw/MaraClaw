@@ -125,7 +125,7 @@ async def list_schedules(
     _ = await check_agent_access(current_user, agent_id)
     schedules = await agent_schedule_dao.list_for_agent(agent_id)
     creator_ids = {s.created_by for s in schedules if s.created_by}
-    creator_map = await user_dao.usernames_for_ids(list(creator_ids)) if creator_ids else {}
+    creator_map = await user_dao.labels_for_ids(list(creator_ids)) if creator_ids else {}
     out_list: list[ScheduleOut] = []
     for s in schedules:
         s_out = ScheduleOut.model_validate(s)

@@ -13,6 +13,8 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/account` `/settings` | admin; force-pw allowlist | account, settings |
 | `/users` `/users/:userId` | admin (PA + OA) | users |
 | `/models` | admin (PA + OA) | llm-models |
+| `/notifications` | admin (PA + OA); force-pw blocked | current-user Inbox; desktop/mobile bell |
+| `/admission-approvals` `/admission-approvals/:id` | `org_admin` + `is_genesis`; force-pw blocked | admission requests + review decisions |
 | `/tools` | admin | `placeholder.tsx` |
 | `/companies` `/companies/:companyId` | platform_admin | companies |
 | `/search-engine` | platform_admin | search-engine |

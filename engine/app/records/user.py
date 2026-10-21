@@ -71,15 +71,6 @@ class UserRecord:
             self.identity.email = value
 
     @property
-    def username(self) -> str | None:
-        return self.identity.username if self.identity else None
-
-    @username.setter
-    def username(self, value: str | None) -> None:
-        if self.identity is not None:
-            self.identity.username = value
-
-    @property
     def password_hash(self) -> str | None:
         return self.identity.password_hash if self.identity else None
 

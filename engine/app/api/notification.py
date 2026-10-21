@@ -18,7 +18,7 @@ router = APIRouter(tags=["notifications"])
 # Category -> type mapping for filtering
 CATEGORY_TYPE_MAP: dict[str, list[str]] = {
     "tool": ["autonomy_l2"],
-    "approval": ["approval_pending", "approval_resolved"],
+    "approval": ["approval_pending", "approval_resolved", "company_admission_pending", "company_admission_resolved"],
     "social": ["plaza_comment", "plaza_reply", "mention", "broadcast"],
     "broadcast": ["broadcast"],
 }
@@ -111,7 +111,7 @@ async def broadcast_notification(
     from app.services.notification_service import send_notification
 
     tenant_id = current_user.tenant_id
-    sender_name = current_user.display_name or current_user.username or "Admin"
+    sender_name = current_user.display_name or current_user.email or "Admin"
     count_users = 0
     count_agents = 0
     count_emails = 0

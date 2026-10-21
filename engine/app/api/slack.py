@@ -30,7 +30,7 @@ from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import inbound as channel_inbound
 from app.services.storage import store_agent_upload
 
@@ -254,28 +254,37 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
             "avatar_url": _slack_avatar,
         }
     )
-    platform_user = await channel_user_service.resolve_channel_user(
-        agent=agent_obj,
-        channel_type="slack",
-        external_user_id=sender_id,
-        extra_info=_extra_info,
-    )
-
-    if _slack_real_name and platform_user.display_name and platform_user.display_name.startswith("Slack User "):
-        platform_user = (
-            await user_dao.update(db_obj=platform_user, obj_in={"display_name": _slack_real_name}) or platform_user
+    try:
+        platform_user = await channel_inbound.resolve_sender_user(
+            agent=agent_obj,
+            channel_type="slack",
+            external_user_id=sender_id,
+            is_group=_is_group_slack,
+            extra_info=_extra_info,
         )
-    platform_user_id = platform_user.id
 
-    sess = await find_or_create_channel_session(
-        agent_id=agent_id,
-        user_id=creator_id if _is_group_slack else platform_user_id,
-        external_conv_id=conv_id,
-        source_channel="slack",
-        first_message_title=user_text,
-        is_group=_is_group_slack,
-        group_name=f"Slack Channel {channel_id[:8]}" if _is_group_slack else None,
-    )
+        if _slack_real_name and platform_user.display_name and platform_user.display_name.startswith("Slack User "):
+            platform_user = (
+                await user_dao.update(db_obj=platform_user, obj_in={"display_name": _slack_real_name}) or platform_user
+            )
+        platform_user_id = platform_user.id
+
+        sess = await find_or_create_channel_session(
+            agent_id=agent_id,
+            user_id=creator_id if _is_group_slack else platform_user_id,
+            external_conv_id=conv_id,
+            source_channel="slack",
+            first_message_title=user_text,
+            is_group=_is_group_slack,
+            group_name=f"Slack Channel {channel_id[:8]}" if _is_group_slack else None,
+        )
+        conversation = await channel_inbound.bind_channel_conversation(
+            agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group_slack
+        )
+    except ChannelUserResolutionError as exc:
+        logger.info("[Slack] Rejected channel sender for agent %s: %s", agent_id, exc)
+        return {"ok": True}
+    sess = conversation.transcript_session
     session_conv_id = str(sess.id)
 
     history_msgs = await chat_message_dao.list_recent(
@@ -343,12 +352,11 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     if _file_user_messages and not user_text:
         _file_content = " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
-        _ = await chat_message_dao.insert_message(
+        await channel_inbound.persist_user_message(
             agent_id=agent_id,
             user_id=platform_user_id,
-            role="user",
+            session=sess,
             content=_file_content,
-            conversation_id=session_conv_id,
         )
         _random_source = _random.SystemRandom()
         await _asyncio.sleep(_random_source.uniform(1.0, 2.0))
@@ -367,15 +375,6 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
 
     if _file_user_messages and user_text:
         user_text += "\n" + " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="user",
-        content=user_text,
-        conversation_id=session_conv_id,
-    )
-    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     _cfg_app_secret = config.app_secret or ""
@@ -419,6 +418,8 @@ async def slack_event_webhook(agent_id: uuid.UUID, request: Request):
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        reply_session_id=conversation.reply_session.id,
+        user_message_content=user_text,
         agent_model=_agent_model,
         llm_model=_llm_model,
         fallback_model=_fallback_model,

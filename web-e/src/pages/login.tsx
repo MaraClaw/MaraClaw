@@ -22,7 +22,7 @@ import {
 import { cn } from '@/lib/utils'
 
 const loginSchema = z.object({
-  login_identifier: z.string().trim().min(1, 'Enter your email').max(254, 'Email is too long'),
+  login_identifier: z.string().trim().min(1, 'Enter your email').email('Enter a valid email').max(254, 'Email is too long'),
   password: z.string().min(1, 'Enter your password').max(128, 'Password is too long'),
 })
 

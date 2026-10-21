@@ -112,7 +112,7 @@ for (const source of ['response', 'user', 'identity'] as const) {
       must_change_password: source === 'response',
       user: { ...base.user, must_change_password: source === 'user' },
       identity: {
-        id: 'identity-b', email: null, phone: null, username: null, is_active: true,
+        id: 'identity-b', email: null, phone: null, is_active: true,
         is_platform_admin: false, email_verified: true, must_change_password: source === 'identity',
         created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
       },

@@ -3,7 +3,6 @@ import { apiRequest } from '@/lib/http'
 export type DirectoryUser = {
   id: string
   display_name: string
-  username?: string | null
   email?: string | null
   title?: string | null
   role: string

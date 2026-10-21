@@ -144,7 +144,7 @@ async def test_continues_when_cursor_matches_effective_scope(page_query: AsyncMo
 async def test_serializes_existing_public_fields_when_page_has_lookahead(
     page_query: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ):
-    identity = IdentityRecord(id=UUID(int=10), email="Alice@example.com", username="alice", must_change_password=True)
+    identity = IdentityRecord(id=UUID(int=10), email="Alice@example.com", must_change_password=True)
     first = UserRecord(
         id=UUID(int=10),
         tenant_id=TENANT,
@@ -169,7 +169,6 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
             "id": str(first.id),
             "tenant_id": str(TENANT),
             "email": "Alice@example.com",
-            "username": "alice",
             "display_name": "Alice",
             "role": "org_admin",
             "is_active": True,
@@ -187,8 +186,7 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
             "id": str(second.id),
             "tenant_id": str(TENANT),
             "email": "",
-            "username": "user_00000000",
-            "display_name": "",
+            "display_name": "User",
             "role": "member",
             "is_active": True,
             "is_genesis": False,

@@ -769,14 +769,13 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                 logger.error(f"[Feishu] Failed to resolve sender: {e}")
 
             # Resolve channel user via unified service (uses OrgMember + SSO patterns)
-            from app.services.channel_user_service import channel_user_service
-
             try:
-                platform_user = await channel_user_service.resolve_channel_user(
+                platform_user = await channel_inbound.resolve_sender_user(
                     agent=agent_obj,
                     channel_type="feishu",
                     # For Feishu, external_user_id is strictly user_id (tenant-stable).
                     external_user_id=sender_user_id_feishu or None,
+                    is_group=chat_type == "group",
                     extra_info=extra_info,
                 )
             except Exception as e:
@@ -809,20 +808,16 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                 is_group=_is_group,
                 group_name=f"Feishu Group {chat_id[:8]}" if _is_group else None,
             )
+            conversation = await channel_inbound.bind_channel_conversation(
+                agent=agent_obj, platform_user=platform_user, reply_session=_sess, is_group=_is_group
+            )
+            _sess = conversation.transcript_session
             session_conv_id = str(_sess.id)
             history = await channel_inbound.load_history_for_session(
                 agent_id=agent_id,
                 session=_sess,
                 context_window_size=agent_obj.context_window_size,
             )
-            await channel_inbound.persist_user_message(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                session=_sess,
-                content=user_text,
-                agent=agent_obj,
-            )
-
             # Prepend sender identity so the agent knows who is talking
             llm_user_text = user_text
             if sender_name:
@@ -1079,6 +1074,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                     history=history,
                     user_id=platform_user_id,
                     session_id=session_conv_id,
+                    reply_session_id=conversation.reply_session.id,
+                    user_message_content=user_text,
                     agent_model=_agent_model,
                     llm_model=_llm_model,
                     fallback_model=_fallback_model,
@@ -1341,14 +1338,13 @@ async def _handle_feishu_file(
         logger.warning(f"[Feishu] Failed to resolve file sender details: {error}")
 
     # Resolve channel user via unified service (uses OrgMember + SSO patterns)
-    from app.services.channel_user_service import channel_user_service
-
     try:
-        platform_user = await channel_user_service.resolve_channel_user(
+        platform_user = await channel_inbound.resolve_sender_user(
             agent=agent_obj,
             channel_type="feishu",
             # For Feishu, external_user_id is strictly user_id (tenant-stable).
             external_user_id=sender_user_id_feishu or None,
+            is_group=chat_type == "group",
             extra_info=extra_info,
         )
     except Exception as e:
@@ -1389,6 +1385,10 @@ async def _handle_feishu_file(
         is_group=_is_group_file,
         group_name=f"Feishu Group {chat_id[:8]}" if _is_group_file else None,
     )
+    conversation = await channel_inbound.bind_channel_conversation(
+        agent=agent_obj, platform_user=platform_user, reply_session=_sess, is_group=_is_group_file
+    )
+    _sess = conversation.transcript_session
     session_conv_id = str(_sess.id)
 
     # Store user message - include base64 marker for images so LLM can see them
@@ -1406,13 +1406,14 @@ async def _handle_feishu_file(
         session=_sess,
         context_window_size=agent_obj.context_window_size,
     )
-    await channel_inbound.persist_user_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        session=_sess,
-        content=user_msg_content if msg_type != "image" else f"[file:{filename}]",
-        agent=agent_obj,
-    )
+    if msg_type != "image":
+        await channel_inbound.persist_user_message(
+            agent_id=agent_id,
+            user_id=platform_user_id,
+            session=_sess,
+            content=user_msg_content,
+            agent=agent_obj,
+        )
 
     # Pre-load agent/model for LLM call
     _agent_model_img, _llm_model_img, _fallback_model_img = await _load_agent_and_model(agent_id)
@@ -1522,6 +1523,8 @@ async def _handle_feishu_file(
                 history=_history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
+                reply_session_id=conversation.reply_session.id,
+                user_message_content=f"[file:{filename}]",
                 agent_model=_agent_model_img,
                 llm_model=_llm_model_img,
                 fallback_model=_fallback_model_img,

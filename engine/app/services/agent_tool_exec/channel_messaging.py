@@ -90,12 +90,9 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
 
         if provider_type in (None, ""):
             if target_member.user_id:
-                platform_user = await user_dao.get(target_member.user_id)
+                platform_user = await user_dao.get_with_identity(target_member.user_id)
                 if platform_user:
-                    platform_identifier = platform_user.display_name or getattr(platform_user, "username", None)
-                    if (platform_identifier is None or not platform_identifier) and platform_user.identity is not None:
-                        platform_identifier = getattr(platform_user.identity, "username", None)
-                    platform_identifier = platform_identifier or member_name
+                    platform_identifier = platform_user.email or platform_user.display_name or member_name
                     logger.info(
                         "[ChannelMessage] %s is a platform user; rerouting send_channel_message -> send_platform_message",
                         member_name,

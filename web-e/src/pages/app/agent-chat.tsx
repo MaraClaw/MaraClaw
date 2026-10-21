@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MonitorPlay, Plus, Send } from 'lucide-react'
+import { Loader2, MonitorPlay, Send } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, typ
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
 import { createChatSubmissions, type ChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
+import { isWritableSession } from '@/lib/chat/sessions'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
@@ -79,7 +80,6 @@ export function AgentChatPage() {
   const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
   const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
-  const creatingSessionRef = useRef(false)
   const liveRef = useRef('')
   const threadRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
@@ -97,7 +97,6 @@ export function AgentChatPage() {
     if (authSession.isCurrent(owner)) return
     sendRef.current = null
     queuedSendRef.current = null
-    creatingSessionRef.current = false
   }), [owner])
 
   const sessionsQuery = useQuery({
@@ -106,13 +105,39 @@ export function AgentChatPage() {
     enabled: authSession.isCurrent(mountedOwner) && Boolean(token),
   })
 
-  const activeId = sessionId ?? sessionsQuery.data?.[0]?.id
+  const sharedSessionQuery = useQuery({
+    queryKey: ['shared-session', agent.id],
+    queryFn: () => createSession(agent.id),
+    enabled: authSession.isCurrent(mountedOwner) && Boolean(token) && !sessionId,
+    refetchOnMount: 'always',
+  })
+  const activeId = sessionId ?? sharedSessionQuery.data?.id
+  const activeSession = sessionsQuery.data?.find((session) => session.id === activeId)
+    ?? (sharedSessionQuery.data?.id === activeId ? sharedSessionQuery.data : undefined)
+  const writable = !sessionId || isWritableSession(activeSession)
+  const shared = activeSession?.source_channel === 'shared'
   const submissions = useMemo(() => createChatSubmissions(owner, agent.id, activeId), [owner, agent.id, activeId])
   const submissionScopeRef = useRef(submissions)
   const activeSessionRef = useRef(activeId)
   useLayoutEffect(() => {
     if (submissionScopeRef.current !== submissions) submissionScopeRef.current.retire()
     submissionScopeRef.current = submissions
+    const queued = queuedSendRef.current
+    if (queued && queued.sessionId === undefined && activeSessionRef.current === undefined && !sessionId && activeId) {
+      queuedSendRef.current = { ...queued, sessionId: activeId }
+    }
+    if (activeSessionRef.current !== activeId && (activeSessionRef.current !== undefined || sessionId)) {
+      updateLines([])
+      historyCountRef.current = 0
+      rejectedTurnRef.current = false
+      liveRef.current = ''
+      setLive('')
+      setThinking('')
+      setInfo(null)
+      setLivePreview(null)
+      setBusy(false)
+      setSlow(false)
+    }
     activeSessionRef.current = activeId
     if (queuedSendRef.current?.sessionId !== activeId) queuedSendRef.current = null
     const unsubscribe = authSession.subscribe(() => {
@@ -124,7 +149,17 @@ export function AgentChatPage() {
         if (!mountedRef.current || submissionScopeRef.current !== submissions) submissions.retire()
       })
     }
-  }, [activeId, owner, submissions])
+  }, [activeId, owner, submissions, sessionId, updateLines])
+
+  useEffect(() => {
+    if (!isCurrent() || !submissions.active || !sharedSessionQuery.error || activeId || sessionId) return
+    const queued = queuedSendRef.current
+    if (!queued) return
+    queuedSendRef.current = null
+    setDraft(queued.line.composerText ?? queued.line.content)
+    updateLines([])
+    setBusy(false)
+  }, [sharedSessionQuery.error, activeId, sessionId, isCurrent, submissions, updateLines])
 
   const historyQuery = useQuery({
     queryKey: ['messages', agent.id, activeId],
@@ -142,7 +177,7 @@ export function AgentChatPage() {
     submissions.reconcile(historyQuery.data)
     const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
     updateLines(next)
-    if (switched) {
+    if (switched || !writable) {
       rejectedTurnRef.current = false
       liveRef.current = ''
       setLive('')
@@ -159,16 +194,16 @@ export function AgentChatPage() {
     } else if (!rejectedTurnRef.current && next.at(-1)?.role === 'user' && next.at(-1)?.delivery !== 'rejected') {
       setBusy(true)
     }
-  }, [historyQuery.data, activeId, owner, isCurrent, updateLines, submissions])
+  }, [historyQuery.data, activeId, writable, owner, isCurrent, updateLines, submissions])
 
   useEffect(() => {
-    if (!isCurrent() || !busy || !activeId) return
+    if (!isCurrent() || (!busy && !shared) || !activeId) return
     const timer = window.setInterval(() => {
       if (!isCurrent() || !submissions.active) return
       void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [busy, activeId, agent.id, queryClient, owner, isCurrent, submissions])
+  }, [busy, shared, activeId, agent.id, queryClient, owner, isCurrent, submissions])
 
   useEffect(() => {
     if (!isCurrent() || !busy) return
@@ -202,7 +237,7 @@ export function AgentChatPage() {
   }, [lines, live, thinking, info, owner, isCurrent])
 
   useEffect(() => {
-    if (!isCurrent() || !token || !activeId || historyQuery.isLoading) return
+    if (!isCurrent() || !token || !activeId || !writable || historyQuery.isLoading || historyQuery.isError) return
     let greeted = false
     let active = true
     const current = () => active && isCurrent() && submissions.active && activeSessionRef.current === activeId
@@ -350,16 +385,7 @@ export function AgentChatPage() {
       if (sendRef.current === conn.send) sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, token, owner, queryClient, historyQuery.isLoading, isCurrent, updateLines, submissions])
-
-  const newSession = useMutation({
-    mutationFn: async (origin: MutationOrigin) => isCurrent(origin.owner) ? createSession(origin.agentId, 'New chat') : null,
-    onSuccess(session, origin) {
-      if (!session || !isCurrent(origin.owner) || !origin.scope.active) return
-      void origin.queryClient.invalidateQueries({ queryKey: ['sessions', origin.agentId] })
-      navigate(`/app/agents/${origin.agentId}/chat/${session.id}`)
-    },
-  })
+  }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions])
 
   const rename = useMutation({
     mutationFn: async (origin: MutationOrigin & { readonly sessionId: string; readonly title: string }) =>
@@ -388,8 +414,7 @@ export function AgentChatPage() {
     || (currentTurn.fromHistory && Boolean(currentTurn.message_id)))
 
   async function send() {
-    if (!isCurrent()) return
-    const originClient = queryClient
+    if (!isCurrent() || !writable || !submissions.active) return
     const text = draft.trim()
     if (!text || busy) return
     if (!token) {
@@ -401,29 +426,13 @@ export function AgentChatPage() {
       client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' }
     setSlow(false)
     if (!activeId) {
-      if (creatingSessionRef.current) return
-      creatingSessionRef.current = true
+      if (queuedSendRef.current || sharedSessionQuery.isError) return
       queuedSendRef.current = { line: pendingLine }
       rejectedTurnRef.current = false
       setDraft('')
       setBusy(true)
       setInfo(null)
       updateLines([pendingLine])
-      try {
-        const session = await createSession(agent.id, text.slice(0, 48) || 'New chat')
-        if (!isCurrent() || !submissions.active) return
-        queuedSendRef.current = { line: pendingLine, sessionId: session.id }
-        void originClient.invalidateQueries({ queryKey: ['sessions', agent.id] })
-        navigate(`/app/agents/${agent.id}/chat/${session.id}`)
-      } catch (error) {
-        if (!isCurrent() || !submissions.active) return
-        queuedSendRef.current = null
-        setDraft(text)
-        setBusy(false)
-        toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not start a chat')
-      } finally {
-        if (isCurrent() && submissions.active) creatingSessionRef.current = false
-      }
       return
     }
     if (!sendRef.current) {
@@ -439,7 +448,7 @@ export function AgentChatPage() {
   }
 
   async function onFile(file: File) {
-    if (!isCurrent()) return
+    if (!isCurrent() || !writable || !submissions.active) return
     if (busy) return
     if (!sendRef.current) {
       toast.error('Chat is not connected yet. Try again in a moment.')
@@ -470,7 +479,7 @@ export function AgentChatPage() {
   }
 
   function retry(line: Line) {
-    if (!isCurrent() || !submissions.active || !line.submission || line.delivery === 'accepted'
+    if (!isCurrent() || !writable || !submissions.active || !line.submission || line.delivery === 'accepted'
       || line.retryable === false || !sendRef.current) return
     updateLines((previous) => previous.map((row) => row === line ? { ...row, delivery: 'unknown', pending: true } : row))
     rejectedTurnRef.current = false
@@ -485,12 +494,7 @@ export function AgentChatPage() {
     <div className="grid h-full min-h-0 overflow-hidden grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
       <aside className="min-h-0 max-h-36 overflow-y-auto p-3 md:max-h-none md:border-r md:border-border">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Sessions</p>
-          <Button size="sm" variant="ghost" aria-label="New session" onClick={() => {
-            if (isCurrent()) newSession.mutate({ owner, queryClient, agentId: agent.id, scope: submissions })
-          }}>
-            <Plus className="size-3.5" />
-          </Button>
+          <p className="text-xs font-medium text-muted-foreground">Conversations</p>
         </div>
         <ul className="space-y-1">
           {sessionList.map((session) => (
@@ -522,8 +526,9 @@ export function AgentChatPage() {
                       session.id === activeId && 'font-medium',
                     )}
                   >
-                    {session.title || 'Untitled'}
+                    {session.source_channel === 'shared' ? 'Shared conversation' : session.title || 'Untitled'}
                   </button>
+                  {session.source_channel !== 'shared' ? <>
                   <button
                     type="button"
                     className="px-1 text-[10px] text-muted-foreground"
@@ -545,6 +550,7 @@ export function AgentChatPage() {
                   >
                     Del
                   </button>
+                  </> : null}
                 </div>
               )}
             </li>
@@ -553,6 +559,12 @@ export function AgentChatPage() {
       </aside>
 
       <section className="flex h-full min-h-0 flex-col overflow-hidden">
+        {shared || !sessionId ? <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          Everyone with access to this agent shares this conversation, including messages from connected channels.
+        </p> : !writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          <p>Archived conversation. Read-only history.</p>
+          <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>Return to shared conversation</Link>
+        </div> : null}
         {livePreview ? (
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
             <p className="text-xs text-muted-foreground">
@@ -571,6 +583,13 @@ export function AgentChatPage() {
           className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4"
           aria-busy={busy}
         >
+          {historyQuery.error ? <p role="alert" className="text-sm text-destructive">
+            {historyQuery.error instanceof ApiError ? formatApiDetail(historyQuery.error.detail) ?? historyQuery.error.message : 'Could not load this conversation.'}
+          </p> : null}
+          {!sessionId && sharedSessionQuery.error ? <div role="alert" className="space-y-2 text-sm text-destructive">
+            <p>Could not open the shared conversation.</p>
+            <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
+          </div> : null}
           {visible.map((line, index) => (
             <article
               key={line.entry_id ?? line.client_submission_id ?? `${line.created_at ?? 'row'}-${index}`}
@@ -610,7 +629,7 @@ export function AgentChatPage() {
           </p>
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
         </div>
-        <form
+        {writable ? <form
           className="shrink-0 border-t border-border bg-background p-3"
           onSubmit={(event) => {
             event.preventDefault()
@@ -649,7 +668,7 @@ export function AgentChatPage() {
               Send
             </Button>
           </div>
-        </form>
+        </form> : null}
       </section>
     </div>
   )

@@ -71,7 +71,7 @@ class DockerTests(unittest.TestCase):
         self.assertEqual(counts, {"engine": 3, "web-a": 2, "web-e": 2})
 
     def test_startup_when_compose_override_increases_memory_rejects_over_budget(self) -> None:
-        self.docker.services["engine"] = replace(self.docker.services["engine"], memory=4 * GIB)
+        self.docker.services["engine"] = replace(self.docker.services["engine"], memory=9 * GIB // 2)
         with patch.object(self.docker, "containers", return_value=()), \
                 patch("deploy.autoscale_docker.run", return_value=str(16 * GIB)):
             with self.assertRaisesRegex(ValueError, "admission refused"):
@@ -81,7 +81,7 @@ class DockerTests(unittest.TestCase):
         with patch.object(self.docker, "containers", return_value=()), \
                 patch("deploy.autoscale_docker.run", return_value=str(32 * GIB)):
             with self.assertRaisesRegex(ValueError, "admission refused"):
-                self.docker.startup(Policy(capacity_gib=12))
+                self.docker.startup(Policy(capacity_gib=10))
 
     def test_startup_when_stopped_project_member_is_unlimited_refuses_start(self) -> None:
         members = (replace(container(), running=False, memory=0),)
@@ -121,12 +121,12 @@ class BootstrapRerunTests(unittest.TestCase):
 
     def command(self, arguments: list[str], timeout: int = 30) -> str:
         if arguments[1] == "info":
-            return str(16 * GIB)
+            return str(11 * GIB)
         if arguments[1] == "image":
             return self.image
         return "\n".join(f"{name} {self.config_hash}" for name in DEFAULTS)
 
-    def test_startup_when_successful_checkpoint_matches_admits_sixteen_gib_without_bootstrap(self) -> None:
+    def test_startup_when_successful_checkpoint_matches_admits_eleven_gib_without_bootstrap(self) -> None:
         counts = self.docker.startup(Policy())
         self.assertEqual(counts, {"engine": 2, "web-a": 2, "web-e": 2})
         self.assertTrue(self.docker.startup_reusable)

@@ -20,7 +20,6 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
 from app.services.channels import inbound as channel_inbound
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 
@@ -174,10 +173,11 @@ async def process_dingtalk_message(
     ctx_size = channel_inbound.routing_history_limit(agent_obj.context_window_size)
     conv_id = f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
 
-    platform_user = await channel_user_service.resolve_channel_user(
+    platform_user = await channel_inbound.resolve_sender_user(
         agent=agent_obj,
         channel_type="dingtalk",
         external_user_id=sender_staff_id,
+        is_group=conversation_type == "2",
         extra_info={},
     )
     platform_user_id = platform_user.id
@@ -188,7 +188,12 @@ async def process_dingtalk_message(
         external_conv_id=conv_id,
         source_channel="dingtalk",
         first_message_title=user_text,
+        is_group=conversation_type == "2",
     )
+    conversation = await channel_inbound.bind_channel_conversation(
+        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=conversation_type == "2"
+    )
+    sess = conversation.transcript_session
     session_conv_id = str(sess.id)
 
     history_msgs = await chat_message_dao.list_recent(
@@ -208,15 +213,6 @@ async def process_dingtalk_message(
         saved_content = f"{_file_prefixes}\n{_clean_text}".strip() if _clean_text else _file_prefixes
     else:
         saved_content = _clean_text or user_text
-
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="user",
-        content=saved_content,
-        conversation_id=session_conv_id,
-    )
-    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
 
     _dt_cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
     _dt_app_key = _dt_cfg.app_id if _dt_cfg else None
@@ -309,6 +305,8 @@ async def process_dingtalk_message(
             history=history,
             user_id=platform_user_id,
             session_id=session_conv_id,
+            reply_session_id=conversation.reply_session.id,
+            user_message_content=saved_content,
             agent_model=_agent_model,
             llm_model=_llm_model,
             fallback_model=_fallback_model,

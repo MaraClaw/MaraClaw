@@ -1,0 +1,87 @@
+from datetime import UTC, datetime
+from uuid import UUID
+
+from fastapi import HTTPException
+
+from app.core.acl_locks import lock_tenants, lock_user
+from app.dao.company_admission_dao import company_admission_dao as admissions
+from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx
+from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
+from app.schemas.company_admission import AdmissionDecision
+from app.services.company_admissions import fresh_user, require_genesis, validate_method
+from app.services.notification_service import send_notification
+from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, transfer_user_to_org
+
+
+async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecision) -> CompanyAdmissionRecord:
+    async with connection_ctx() as db:
+        snapshot = await admissions.get(request_id)
+        if snapshot is None:
+            raise HTTPException(404, "Admission request not found")
+        applicant = await user_dao.get(snapshot.applicant_user_id)
+        reviewer = await user_dao.get(reviewer_id)
+        if applicant is None or reviewer is None:
+            raise HTTPException(404, "Membership not found")
+        await lock_tenants(
+            db, (snapshot.source_tenant_id, snapshot.target_tenant_id, applicant.tenant_id, reviewer.tenant_id)
+        )
+        for user in sorted((applicant, reviewer), key=lambda member: member.id):
+            await lock_user(db, user.id, user.tenant_id)
+        await require_genesis(reviewer_id, snapshot.target_tenant_id)
+        request = await admissions.get_locked(request_id)
+        if request is None:
+            raise HTTPException(404, "Admission request not found")
+        result = AdmissionStatus(decision.decision)
+        if request.status != AdmissionStatus.PENDING:
+            if request.status != result:
+                raise HTTPException(409, "Admission request already has a different decision")
+            return request
+        if result == AdmissionStatus.APPROVED:
+            current = await fresh_user(request.applicant_user_id)
+            if current.tenant_id != request.source_tenant_id:
+                raise HTTPException(409, "Applicant organization changed since the request")
+            if current.is_genesis or current.role in {"org_admin", "platform_admin"} or current.is_platform_admin:
+                raise HTTPException(403, "Admin membership cannot be transferred")
+            target = await admissions.tenant(request.target_tenant_id)
+            if target is None or not target.is_active:
+                raise HTTPException(409, "Company is disabled")
+            await validate_method(current, target.id, request.method, request.invitation_code)
+            sso_members = await db.fetchall(
+                "SELECT m.id FROM org_members m JOIN identity_providers p ON p.id=m.provider_id "
+                "WHERE m.user_id=%(user)s AND (p.tenant_id=%(target)s OR p.tenant_id IS NULL) "
+                "AND p.provider_type <> 'web'",
+                {"user": current.id, "target": target.id},
+            )
+            try:
+                await transfer_user_to_org(current, target)
+            except (AlreadyInOrgError, DefaultOrgUnavailableError) as exc:
+                raise HTTPException(409, str(exc)) from exc
+            for member in sso_members:
+                await db.execute(
+                    "UPDATE org_members SET tenant_id=%(tenant)s,user_id=%(user)s WHERE id=%(id)s",
+                    {"tenant": target.id, "user": current.id, "id": member["id"]},
+                )
+            if request.method == AdmissionMethod.INVITATION:
+                await db.execute(
+                    "UPDATE invitation_codes SET used_count=used_count+1 WHERE code=%(code)s",
+                    {"code": request.invitation_code},
+                )
+        resolved = await admissions.update(
+            db_obj=request,
+            obj_in={
+                "status": result.value,
+                "decided_at": datetime.now(UTC),
+                "decided_by_user_id": reviewer_id,
+                "decision_reason": decision.reason,
+            },
+        )
+        await send_notification(
+            request.applicant_user_id,
+            type="company_admission_resolved",
+            title=f"Company admission {result.value}",
+            body=decision.reason or "",
+            link=f"/app/admissions/{request.id}",
+            ref_id=request.id,
+        )
+        return resolved

@@ -132,7 +132,6 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     identity = SimpleNamespace(
         id=identity_id,
         email="orgadmin@acme.com",
-        username="orgadmin",
         must_change_password=True,
     )
     org_admin = SimpleNamespace(
@@ -147,9 +146,6 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     create_identity = AsyncMock(return_value=identity)
     create_user = AsyncMock(return_value=org_admin)
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        "app.services.tenant_provisioning.identity_dao.is_username_taken", AsyncMock(return_value=False)
-    )
     monkeypatch.setattr("app.services.tenant_provisioning.hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr("app.services.tenant_provisioning.tenant_dao.create", AsyncMock(return_value=tenant))
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.create_identity", create_identity)
@@ -271,9 +267,6 @@ async def test_attach_genesis_org_admin_creates_when_missing(monkeypatch):
         "app.services.tenant_provisioning.user_dao.genesis_org_admin_for_tenant", AsyncMock(return_value=None)
     )
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        "app.services.tenant_provisioning.identity_dao.is_username_taken", AsyncMock(return_value=False)
-    )
     monkeypatch.setattr("app.services.tenant_provisioning.hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(
         "app.services.tenant_provisioning.identity_dao.create_identity", AsyncMock(return_value=identity)

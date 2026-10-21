@@ -6,7 +6,7 @@ import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } 
 import type { UserOut } from '../src/lib/types/auth.ts'
 
 const user: UserOut = {
-  id: 'member', username: null, email: 'member@example.com', display_name: 'Member',
+  id: 'member', email: 'member@example.com', display_name: 'Member',
   role: 'member', tenant_id: 'tenant-a', email_verified: true,
 }
 function fixture() {

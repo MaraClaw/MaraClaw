@@ -31,7 +31,7 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
     async with await psycopg.AsyncConnection[DictRow].connect(dsn, row_factory=dict_row, autocommit=True) as raw:
         await raw.execute("""
             CREATE TEMP TABLE identities (
-                id uuid PRIMARY KEY, email text, phone text, username text, password_hash text,
+                id uuid PRIMARY KEY, email text, phone text, password_hash text,
                 is_active boolean DEFAULT true, is_platform_admin boolean DEFAULT false,
                 email_verified boolean DEFAULT false, must_change_password boolean DEFAULT false,
                 created_at timestamptz, updated_at timestamptz
@@ -61,12 +61,11 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
 async def _insert(connection: DbConnection, user: UserRecord) -> None:
     if user.identity is not None:
         await connection.execute(
-            "INSERT INTO identities (id, email, username, must_change_password) "
-            "VALUES (%(id)s, %(email)s, %(username)s, %(must_change_password)s)",
+            "INSERT INTO identities (id, email, must_change_password) "
+            "VALUES (%(id)s, %(email)s, %(must_change_password)s)",
             {
                 "id": user.identity.id,
                 "email": user.email,
-                "username": user.username,
                 "must_change_password": user.must_change_password,
             },
         )
@@ -134,7 +133,7 @@ async def test_exhausts_in_stable_order_when_roles_timestamps_and_nulls_tie(
     assert ids == [10, 11, 12, 20, 21, 22, 23, 24]
 
 
-@pytest.mark.parametrize("search", ["nAmE%_\\", "mAiL%_\\@", "hAnDlE%_\\", "%", "_", "\\", "' OR TRUE --"])
+@pytest.mark.parametrize("search", ["nAmE%_\\", "mAiL%_\\@", "%", "_", "\\", "' OR TRUE --"])
 async def test_literal_identity_search_when_wildcards_and_foreign_matches_exist(
     client: httpx.AsyncClient, database: DbConnection, search: str
 ):
@@ -146,7 +145,7 @@ async def test_literal_identity_search_when_wildcards_and_foreign_matches_exist(
                 tenant_id=tenant,
                 role="member",
                 display_name="Name%_\\MiXeD",
-                identity=IdentityRecord(id=UUID(int=identifier), email="Mail%_\\@example.com", username="Handle%_\\"),
+                identity=IdentityRecord(id=UUID(int=identifier), email="Mail%_\\@example.com"),
             ),
         )
     await _insert(
@@ -156,7 +155,7 @@ async def test_literal_identity_search_when_wildcards_and_foreign_matches_exist(
             tenant_id=TENANT,
             role="member",
             display_name="NameXYZmixed",
-            identity=IdentityRecord(id=UUID(int=11), email="MailXYZ@example.com", username="HandleXYZ"),
+            identity=IdentityRecord(id=UUID(int=11), email="MailXYZ@example.com"),
         ),
     )
     await _insert(database, UserRecord(id=UUID(int=13), tenant_id=TENANT, role="member"))
@@ -214,13 +213,11 @@ async def test_joins_identity_when_search_match_lies_beyond_first_page(
             tenant_id=TENANT,
             role="member",
             created_at=None,
-            identity=IdentityRecord(
-                id=UUID(int=50), email="Target@example.com", username="target", must_change_password=True
-            ),
+            identity=IdentityRecord(id=UUID(int=50), email="Target@example.com", must_change_password=True),
         ),
     )
     response = await client.get("/api/users/page", params={"search": "TARGET@", "limit": 1})
     assert response.status_code == 200
     page = users_api.UsersPageOut.model_validate_json(response.content)
-    assert [(item.id.int, item.email, item.username) for item in page.items] == [(50, "Target@example.com", "target")]
+    assert [(item.id.int, item.email) for item in page.items] == [(50, "Target@example.com")]
     assert page.next_cursor is None

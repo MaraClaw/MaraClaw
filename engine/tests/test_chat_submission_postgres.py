@@ -1,6 +1,6 @@
 import os
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID, uuid4
 
 import anyio
@@ -21,6 +21,7 @@ from app.records.user import UserRecord
 from app.scripts import bootstrap_db
 from app.services import chat_submissions, openclaw_routing
 from app.services.chat_submissions import AcceptedSubmission, ChatSubmission
+from app.services.shared_chat import shared_session_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +88,26 @@ async def receipt_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ReceiptDa
             await owner.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
+@pytest.fixture
+async def writable_receipt_db(receipt_db):
+    db = receipt_db
+    session_id = shared_session_id(db.agent.id)
+    async with transaction(db.first):
+        await db.first.execute(
+            "UPDATE chat_sessions SET id = %(shared)s, source_channel = 'shared', is_primary = TRUE WHERE id = %(old)s",
+            {"shared": session_id, "old": db.session_id},
+        )
+    return replace(db, session_id=session_id)
+
+
 @pytest.mark.parametrize("ordering", ["replay", "accept_then_delete", "delete_then_accept"])
 async def test_parent_lock_serializes_acceptance_replay_and_deletion(receipt_db, monkeypatch, ordering):
     # Given two real connections and a first operation holding the actual parent lock.
     db = receipt_db
+    async with transaction(db.first):
+        await db.first.execute(
+            "UPDATE chat_sessions SET source_channel = 'agent' WHERE id = %(id)s", {"id": db.session_id}
+        )
     submission = ChatSubmission(client_submission_id=uuid4(), content="hello")
     locked, attempted, release = anyio.Event(), anyio.Event(), anyio.Event()
     original_lock = chat_session_dao.lock_for_agent
@@ -189,9 +206,9 @@ async def test_reservation_conflict_preserves_usable_transaction(receipt_db):
     assert existing.id == original.id
 
 
-async def test_receipt_metadata_is_immutable_but_content_can_be_scrubbed(receipt_db):
+async def test_receipt_metadata_is_immutable_but_content_can_be_scrubbed(writable_receipt_db):
     # Given an accepted user receipt.
-    db = receipt_db
+    db = writable_receipt_db
     async with transaction(db.first):
         accepted = await chat_submissions.accept_submission(
             ChatSubmission(client_submission_id=uuid4(), content="hello"),
@@ -219,8 +236,8 @@ async def test_receipt_metadata_is_immutable_but_content_can_be_scrubbed(receipt
     assert stored.content == "scrubbed"
 
 
-async def test_distinct_submission_uuids_enqueue_identical_content_twice(receipt_db):
-    db = receipt_db
+async def test_distinct_submission_uuids_enqueue_identical_content_twice(writable_receipt_db):
+    db = writable_receipt_db
     async with transaction(db.first):
         await db.first.execute("UPDATE users SET quota_message_limit = 2 WHERE id = %(id)s", {"id": db.user.id})
 

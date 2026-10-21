@@ -1,15 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
-import { deleteAgent, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
+import { deleteAgent, getAgentMetrics, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentSettingsPage() {
   const scope = useWorkspaceSession()
@@ -29,6 +30,28 @@ export function AgentSettingsPage() {
   const [timezone, setTimezone] = useState(agent.timezone ?? '')
   const [clamped, setClamped] = useState<Array<{ field: string; requested?: number; applied?: number; reason?: string }>>([])
 
+  const metrics = useQuery({
+    queryKey: ['metrics', agent.id],
+    queryFn: () => getAgentMetrics(agent.id),
+  })
+  const start = useMutation({
+    mutationFn: () => startAgent(agent.id),
+    onSuccess() {
+      void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
+    },
+    onError() {
+      toast.error('Unable to start this agent')
+    },
+  })
+  const stop = useMutation({
+    mutationFn: () => stopAgent(agent.id),
+    onSuccess() {
+      void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
+    },
+    onError() {
+      toast.error('Unable to stop this agent')
+    },
+  })
   const save = useMutation({
     mutationFn: () =>
       updateAgent(agent.id, {
@@ -53,15 +76,35 @@ export function AgentSettingsPage() {
 
   return (
     <div className="mx-auto max-w-xl space-y-4 p-6">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
+          <Badge variant="soft">{agent.status}</Badge>
+          {agent.is_expired ? <Badge>Expired</Badge> : null}
+          {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
+        </div>
+        {metrics.data ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Tokens today {metrics.data.tokens?.used_today ?? 0}
+            {metrics.data.tokens?.limit_day ? ` / ${metrics.data.tokens.limit_day}` : ''}
+            {' · '}
+            Tasks {metrics.data.tasks?.done ?? 0}/{metrics.data.tasks?.total ?? 0}
+            {metrics.data.approvals?.pending ? ` · ${metrics.data.approvals.pending} approvals` : ''}
+          </p>
+        ) : null}
+        {agent.role_description ? (
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
+        ) : null}
+      </div>
       <div className="flex gap-2">
         {canManage ? (
           <>
             {agent.status !== 'running' ? (
-              <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void startAgent(agent.id).then(scope.effect(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))).catch(scope.rethrowCurrent)}>
+              <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
                 Start
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void stopAgent(agent.id).then(scope.effect(() => queryClient.invalidateQueries({ queryKey: ['agent', agent.id] }))).catch(scope.rethrowCurrent)}>
+            <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
               Stop
             </Button>
           </>

@@ -1,12 +1,15 @@
 import { LogOut } from 'lucide-react'
+import { useLayoutEffect, useRef } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
+import { NotificationBell } from '@/components/layout/notification-bell'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
-import { canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
+import { useNotificationUnreadCount } from '@/hooks/use-notifications'
+import { canReviewAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 const navItems: {
@@ -16,11 +19,13 @@ const navItems: {
   end?: boolean
   platformAdminOnly?: boolean
   broadcastOnly?: boolean
+  admissionReviewOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
@@ -82,9 +87,10 @@ function NavItems({
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, admissionReviewOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
+        if (admissionReviewOnly && !canReviewAdmissions(user)) return null
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
           return (
@@ -115,7 +121,7 @@ function NavItems({
                 cn(
                   'transition-[color,transform] duration-150 ease-out hover:text-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                  'active:scale-[0.96]',
+                  'active:scale-[0.96] motion-reduce:active:scale-100 motion-reduce:transition-none',
                   isActive && 'text-foreground',
                 ),
               )
@@ -133,7 +139,17 @@ function NavItems({
 
 export function AdminShell() {
   const { user, logout, mustChangePassword } = useAuth()
+  const unread = useNotificationUnreadCount()
   const { pathname } = useLocation()
+  const mobileNav = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const rail = mobileNav.current
+    const active = rail?.querySelector<HTMLAnchorElement>('[aria-current="page"]')
+    if (!rail || !active || !pathname.startsWith(active.pathname) || rail.clientWidth === 0) return
+    const bounds = rail.getBoundingClientRect()
+    const target = active.getBoundingClientRect()
+    rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
+  }, [pathname])
   const flushMain = pathname.startsWith('/search-engine')
 
   return (
@@ -146,6 +162,9 @@ export function AdminShell() {
             <p className="truncate text-xs text-muted-foreground">Admin Console</p>
           </div>
         </Link>
+        <div className="px-3 pb-3">
+          <NotificationBell expanded unreadCount={unread.data?.unread_count} locked={mustChangePassword} />
+        </div>
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Admin">
           <NavItems />
           {mustChangePassword ? (
@@ -174,6 +193,7 @@ export function AdminShell() {
               <span className="font-display text-sm font-semibold">Admin</span>
             </Link>
             <div className="flex items-center gap-1">
+              <NotificationBell unreadCount={unread.data?.unread_count} locked={mustChangePassword} />
               <ThemeToggle />
               <Button variant="ghost" size="sm" onClick={logout}>
                 <LogOut className="size-3.5" aria-hidden />
@@ -182,6 +202,7 @@ export function AdminShell() {
             </div>
           </div>
           <nav
+            ref={mobileNav}
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
             aria-label="Admin"
           >

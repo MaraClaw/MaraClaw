@@ -21,9 +21,11 @@ from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
+from app.services.shared_chat import ensure_shared_session, is_shared_session
 
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
 
@@ -59,7 +61,7 @@ class SessionOut(BaseModel):
     id: str
     agent_id: str
     user_id: str
-    username: str | None = None  # display_name ?? username
+    username: str | None = None
     source_channel: str = "web"  # web / feishu / discord / slack / agent
     title: str
     created_at: str
@@ -100,7 +102,8 @@ async def list_sessions(
         if not _can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
 
-        sessions = list(await chat_session_dao.list_all_for_agent(agent_id))
+        shared = await ensure_shared_session(agent_id)
+        sessions = [shared, *(s for s in await chat_session_dao.list_all_for_agent(agent_id) if s.id != shared.id)]
         out: list[SessionOut] = []
 
         session_ids = [str(s.id) for s in sessions]
@@ -117,7 +120,7 @@ async def list_sessions(
         if user_ids:
             async with connection_ctx() as conn:
                 rows = await conn.fetchall(
-                    "SELECT u.id, COALESCE(u.display_name, i.username) AS display "
+                    "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display "
                     + "FROM users u JOIN identities i ON u.identity_id = i.id "
                     + "WHERE u.id = ANY(%(ids)s)",
                     {"ids": user_ids},
@@ -142,7 +145,7 @@ async def list_sessions(
 
         for session in sessions:
             count = message_counts.get(str(session.id), 0)
-            if count == 0:
+            if count == 0 and not is_shared_session(session):
                 continue
 
             display = None
@@ -173,7 +176,7 @@ async def list_sessions(
                     created_at=session.created_at.isoformat() if session.created_at else "",
                     last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
                     message_count=count,
-                    unread_count=unread_counts.get(str(session.id), 0),
+                    unread_count=0 if is_shared_session(session) else unread_counts.get(str(session.id), 0),
                     is_primary=bool(session.is_primary),
                     peer_agent_id=peer_agent_id,
                     peer_agent_name=peer_agent_name,
@@ -185,7 +188,9 @@ async def list_sessions(
         return out
 
     # scope == "mine"
-    sessions = list(await chat_session_dao.list_for_user(agent_id=agent_id, user_id=current_user.id))
+    shared = await ensure_shared_session(agent_id)
+    legacy = await chat_session_dao.list_for_user(agent_id=agent_id, user_id=current_user.id)
+    sessions = [shared, *(s for s in legacy if s.id != shared.id)]
     out = []
     session_ids = [str(s.id) for s in sessions]
     session_uuid_ids = [s.id for s in sessions]
@@ -198,7 +203,7 @@ async def list_sessions(
 
     for session in sessions:
         count = total_counts.get(str(session.id), 0)
-        if count == 0:
+        if count == 0 and not is_shared_session(session):
             continue
         out.append(
             SessionOut(
@@ -210,7 +215,7 @@ async def list_sessions(
                 created_at=session.created_at.isoformat() if session.created_at else "",
                 last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
                 message_count=count,
-                unread_count=unread_counts.get(str(session.id), 0),
+                unread_count=0 if is_shared_session(session) else unread_counts.get(str(session.id), 0),
                 is_primary=bool(session.is_primary),
             )
         )
@@ -221,32 +226,21 @@ async def list_sessions(
 async def create_session(
     agent_id: uuid.UUID, body: CreateSessionIn = CreateSessionIn(), current_user: UserRecord = Depends(get_current_user)
 ):
-    """Create a new chat session for the current user."""
+    """Resume the canonical shared human conversation."""
     _ = await check_agent_access(current_user, agent_id)
-
-    now = datetime.now(UTC)
-    session = await chat_session_dao.create(
-        obj_in={
-            "id": uuid.uuid4(),
-            "agent_id": agent_id,
-            "user_id": current_user.id,
-            "title": body.title or f"Session {now.strftime('%m-%d %H:%M')}",
-            "source_channel": "web",
-            "is_primary": False,
-            "created_at": now,
-        }
-    )
+    session = await ensure_shared_session(agent_id)
+    counts = await chat_session_dao.message_counts([str(session.id)], agent_id=agent_id)
     return SessionOut(
         id=str(session.id),
         agent_id=str(session.agent_id),
         user_id=str(session.user_id),
         source_channel=session.source_channel,
         title=session.title,
-        created_at=session.created_at.isoformat() if session.created_at else now.isoformat(),
-        last_message_at=None,
-        message_count=0,
+        created_at=session.created_at.isoformat() if session.created_at else "",
+        last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+        message_count=counts.get(str(session.id), 0),
         unread_count=0,
-        is_primary=False,
+        is_primary=True,
         participant_type="user",
         is_group=False,
     )
@@ -283,8 +277,14 @@ async def delete_session(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        if is_shared_session(session):
+            raise HTTPException(409, {"reason": "shared_session_required", "session_id": str(session.id)})
+
         if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized")
+
+        if await gateway_report_delivery_dao.has_outstanding_session(session_id):
+            raise HTTPException(409, {"reason": "session_delivery_pending", "session_id": str(session_id)})
 
         await chat_message_dao.delete_for_conversation(str(session_id))
         _ = await chat_session_dao.delete(id=session_id)
@@ -305,7 +305,11 @@ async def get_session_messages(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
+    if (
+        not is_shared_session(session)
+        and str(session.user_id) != str(current_user.id)
+        and not _can_view_all_agent_chat_sessions(current_user, agent)
+    ):
         raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
     before_dt = None
@@ -326,7 +330,7 @@ async def get_session_messages(
     if (
         str(session.user_id) == str(current_user.id)
         and not session.is_group
-        and session.source_channel not in ("agent", "trigger")
+        and session.source_channel not in ("agent", "trigger", "shared")
     ):
         _ = await chat_session_dao.update(
             db_obj=session,

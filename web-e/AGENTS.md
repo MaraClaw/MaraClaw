@@ -28,9 +28,10 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 
 - `main.tsx`: ThemeProvider wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
 - Routing uses BrowserRouter, not a data router. Public auth and session-gated `/join` / `/transfer` stay outside `/app`; landing hashes stay on `/`. No catch-all 404; no `src/routes.tsx`.
-- ProtectedRoute sends anonymous users to `/login`, missing-org sessions to `/join`, and `must_change_password` to `/app/settings`. `/app/account` redirects there; settings stays outside OnboardingGate.
+- ProtectedRoute sends anonymous users to `/login`, missing-org sessions to `/join` except their `/app/admissions/*` status views, and `must_change_password` to `/app/settings`. `/app/account` redirects there; settings and admissions stay outside OnboardingGate.
 - Member auth rejects `platform_admin`. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.
 - Capture the current session owner for async work; discard stale completions after logout, replacement, or tenant switch. Use session-scoped workspace query/mutation hooks; AppShell creates a per-owner QueryClient and cancels/clears retired-owner work.
+- Company join/transfer responses can be pending admission requests: keep the source session and link to `/app/admissions/:id`. Approved requests enter the target only through the existing switch/replacement session flow; OpenClaw joins/transfers remain immediate.
 - Keep the inline FOUC script and ThemeProvider aligned: `maraclaw-theme`, system/light/dark resolution, and theme-color `#faf8f5` / `#1c1612`. ThemeToggle uses the provider, not another theme store.
 
 ## CONVENTIONS AND BOUNDARIES

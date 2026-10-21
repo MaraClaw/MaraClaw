@@ -8,6 +8,7 @@ from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.company_admission_dao import company_admission_dao
 from app.dao.enterprise_info_dao import enterprise_info_dao
 from app.dao.focus_dao import agent_focus_item_dao
 from app.dao.gateway_message_dao import gateway_message_dao
@@ -66,6 +67,7 @@ __all__ = [
     "channel_config_dao",
     "chat_message_dao",
     "chat_session_dao",
+    "company_admission_dao",
     "company_report_dao",
     "enterprise_info_dao",
     "gateway_message_dao",

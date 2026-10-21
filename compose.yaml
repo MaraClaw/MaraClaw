@@ -9,8 +9,8 @@ x-logging: &logging
 x-runtime-env: &runtime-env
   SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
-  DATABASE_URL: postgresql://maraclaw:${POSTGRES_PASSWORD_URLENCODED:?Percent-encode POSTGRES_PASSWORD}@postgres:5432/maraclaw
-  REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?Percent-encode REDIS_PASSWORD}@redis:6379/0
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+  REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
   DEBUG: "false"
   ALLOW_MIGRATION_FAILURE: "false"
   SANDBOX_UNSAFE_FALLBACK: "false"
@@ -49,12 +49,8 @@ x-engine: &engine
     - /var/run/docker.sock:/var/run/docker.sock
   cap_add: [SYS_ADMIN, SETUID, SETGID, SYS_CHROOT, SETPCAP, NET_ADMIN, SYS_PTRACE]
   security_opt: [seccomp=unconfined]
-  networks: [app, private]
+  networks: [app]
   depends_on:
-    postgres:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
     bootstrap:
       condition: service_completed_successfully
   restart: unless-stopped
@@ -86,54 +82,6 @@ x-web: &web
     start_period: 10s
 
 services:
-  postgres:
-    image: postgres:${POSTGRES_TAG:-18.6-alpine}
-    environment:
-      POSTGRES_USER: maraclaw
-      POSTGRES_DB: maraclaw
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes: [postgres_data:/var/lib/postgresql]
-    networks: [private]
-    healthcheck:
-      test: [CMD-SHELL, 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U maraclaw -d maraclaw -tAc "SELECT 1" | grep -qx 1']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: unless-stopped
-    stop_grace_period: 60s
-    logging: *logging
-    cpus: ${POSTGRES_CPUS:-1.5}
-    mem_limit: ${POSTGRES_MEMORY:-3g}
-
-  redis:
-    image: redis:${REDIS_TAG:-8.10.2-alpine}
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
-    # Hash the ACL password on stdin; the cleartext password is never a argv item.
-    entrypoint: [/bin/sh, -ec]
-    command:
-      - |
-        hash=$$(printf '%s' "$$REDIS_PASSWORD" | sha256sum | cut -d ' ' -f 1)
-        umask 077
-        printf 'user default on #%s ~* &* +@all\n' "$$hash" > /tmp/users.acl
-        printf 'bind 0.0.0.0\nprotected-mode yes\nappendonly yes\ndir /data\naclfile /tmp/users.acl\n' > /tmp/redis.conf
-        chown redis:redis /tmp/users.acl /tmp/redis.conf
-        exec /usr/local/bin/docker-entrypoint.sh redis-server /tmp/redis.conf
-    volumes: [redis_data:/data]
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
-    networks: [private]
-    healthcheck:
-      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-    stop_grace_period: 60s
-    logging: *logging
-    cpus: ${REDIS_CPUS:-0.5}
-    mem_limit: ${REDIS_MEMORY:-1g}
-
   bootstrap:
     <<: *engine
     cpus: ${BOOTSTRAP_CPUS:-1}
@@ -163,11 +111,7 @@ services:
         bind:
           create_host_path: false
       - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    depends_on: {}
     restart: "no"
     healthcheck:
       disable: true
@@ -262,11 +206,5 @@ services:
 
 networks:
   app: {}
-  private:
-    internal: true
   guest:
     name: ${DOCKER_NETWORK:-maraclaw_network}
-
-volumes:
-  postgres_data: {}
-  redis_data: {}

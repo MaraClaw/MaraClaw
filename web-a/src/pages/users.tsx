@@ -168,7 +168,7 @@ export function UsersPage() {
               type="search"
               value={search}
               onChange={(event) => updateListState({ q: event.target.value })}
-              placeholder="Name, email, or username"
+              placeholder="Name or email"
               className="pl-10"
             />
           </span>
@@ -266,7 +266,7 @@ function filterUsers(rows: AdminUser[], search: string): AdminUser[] {
   const needle = search.trim().toLowerCase()
   if (!needle) return rows
   return rows.filter((row) => {
-    const haystack = `${row.display_name ?? ''} ${row.email ?? ''} ${row.username ?? ''}`.toLowerCase()
+    const haystack = `${row.display_name ?? ''} ${row.email ?? ''}`.toLowerCase()
     return haystack.includes(needle)
   })
 }

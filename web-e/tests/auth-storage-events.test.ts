@@ -52,7 +52,7 @@ function eventSource() {
 
 const key = 'maraclaw-enduser-token'
 const user: UserOut = {
-  id: 'member', username: null, email: 'member@example.com', display_name: 'Member',
+  id: 'member', email: 'member@example.com', display_name: 'Member',
   role: 'member', tenant_id: 'tenant', email_verified: true,
 }
 

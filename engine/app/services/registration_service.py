@@ -11,7 +11,6 @@ import uuid
 from typing import Any, NotRequired, TypedDict
 
 from app.core.json_types import JsonObject
-from app.core.logging import logger
 from app.core.security import hash_password_async
 from app.dao import (
     identity_dao,
@@ -112,7 +111,6 @@ class RegistrationService:
         self,
         email: str | None = None,
         phone: str | None = None,
-        username: str | None = None,
         password: str | None = None,
         is_platform_admin: bool = False,
         email_config: SystemEmailConfig | None = None,
@@ -145,16 +143,6 @@ class RegistrationService:
             email_config = await resolve_email_config_async()
         is_verified = not email_config  # Auto-verify only when no SMTP configured
 
-        # Resolve a safe, unique username
-        final_username = username
-        if username not in (None, "") and await identity_dao.is_username_taken(username):
-            final_username = f"{username}_{uuid.uuid4().hex[:6]}"
-            logger.info(
-                "Username '%s' already taken; assigned '%s' to new identity",
-                username,
-                final_username,
-            )
-
         # Hash password if not pre-hashed
         if password_hash in (None, "") and password not in (None, ""):
             password_hash = await hash_password_async(password)
@@ -162,7 +150,6 @@ class RegistrationService:
         return await identity_dao.create_identity(
             email=email,
             phone=phone,
-            username=final_username,
             password_hash=password_hash,
             is_platform_admin=is_platform_admin,
             email_verified=is_verified,
@@ -181,7 +168,7 @@ class RegistrationService:
         email_config: SystemEmailConfig | None = None,
     ) -> UserRecord:
         """Create a new tenant-specific user linked to an identity."""
-        name = display_name or identity.username or "UserRecord"
+        name = display_name or identity.email or "User"
 
         if not email_config:
             email_config = await resolve_email_config_async()
@@ -270,13 +257,9 @@ class RegistrationService:
             return existing_user, False
 
         # Create new IdentityRecord + UserRecord
-        effective_id = provider_user_id or user_info.get("open_id") or user_info.get("union_id") or uuid.uuid4().hex[:8]
-        username = email.split("@")[0] if email not in (None, "") else f"{provider_type}_{effective_id[:8]}"
-
         identity = await self.find_or_create_identity(
             email=email,
             phone=user_info.get("mobile") or user_info.get("phone"),
-            username=username,
         )
 
         existing_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
@@ -287,7 +270,7 @@ class RegistrationService:
 
         user = await self.create_user_with_identity(
             identity=identity,
-            display_name=user_info.get("name", username),
+            display_name=user_info.get("name") or email or "User",
             registration_source=provider_type,
             tenant_id=tenant_id,
         )
@@ -314,8 +297,6 @@ class RegistrationService:
             return None, str(exc)
         except DefaultOrgUnavailableError as exc:
             return None, str(exc)
-        if resolution.source == "invite":
-            return resolution.matched, None
         return resolution.fallback, None
 
     # ── OrgMember binding ────────────────────────────────────────────────────

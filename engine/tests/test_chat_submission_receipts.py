@@ -75,6 +75,11 @@ async def test_receipt_scope_does_not_suppress_distinct_submission_or_membership
         from app.records.user import UserRecord
 
         state.user = UserRecord(id=uuid4(), tenant_id=uuid4())
+    elif field == "session_id":
+        from app.services.shared_chat import shared_session_id
+
+        state.agent.id = uuid4()
+        state.session_id = str(shared_session_id(state.agent.id))
     else:
         setattr(state, field, str(uuid4()))
 

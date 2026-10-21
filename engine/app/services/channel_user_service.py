@@ -32,6 +32,16 @@ class ChannelUserResolutionError(ValueError):
     """Raised when a channel message cannot be safely attributed to a user."""
 
 
+async def _require_company_membership(user: UserRecord | None, tenant_id: uuid.UUID | None) -> None:
+    from app.dao.company_admission_dao import company_admission_dao
+
+    if tenant_id is None or (user is not None and user.tenant_id == tenant_id):
+        return
+    tenant = await company_admission_dao.tenant(tenant_id)
+    if tenant is not None and not tenant.is_system and not tenant.is_default_end_user_org:
+        raise ChannelUserResolutionError("Company admission must be approved through the web application first.")
+
+
 class ChannelUserService:
     """Service for resolving channel users via OrgMember and SSO patterns."""
 
@@ -105,6 +115,7 @@ class ChannelUserService:
         if org_member and org_member.user_id:
             user = await user_dao.get_with_identity(org_member.user_id)
             if user:
+                await _require_company_membership(user, tenant_id)
                 logger.debug(f"[{channel_type}] Found user via linked OrgMember: {user.id}")
                 return user
 
@@ -122,6 +133,7 @@ class ChannelUserService:
                 logger.info(f"[{channel_type}] Matched user by mobile: {user.id}")
 
         if user:
+            await _require_company_membership(user, tenant_id)
             if org_member and not org_member.user_id:
                 _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
             elif not org_member:
@@ -286,22 +298,14 @@ class ChannelUserService:
         tenant_id: uuid.UUID | None,
     ) -> UserRecord:
         """Create a new Identity + User for channel identity (lazy registration)."""
+        await _require_company_membership(None, tenant_id)
         info = json_object_from(extra_info)
         email = _extra_text(info, "email")
         mobile = _extra_text(info, "mobile")
-        identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
-        name = _extra_text(info, "name") or f"{channel_type.capitalize()} {identity_seed[:8]}"
-
-        username = email.split("@")[0] if email not in (None, "") else f"{channel_type}_{identity_seed[:12]}"
-
-        existing = await user_dao.get_by_identity_username(username)
-        if existing and (tenant_id is None or existing.tenant_id == tenant_id):
-            username = f"{username}_{identity_seed[:6]}"
-
-        email = email or f"{username}@{channel_type}.local"
+        name = _extra_text(info, "name") or email or "User"
 
         identity = None
-        found = await identity_dao.get_by_email(email)
+        found = await identity_dao.get_by_email(email) if email not in (None, "") else None
         if found:
             identity = found
         elif mobile not in (None, ""):
@@ -313,7 +317,6 @@ class ChannelUserService:
             identity = await identity_dao.create_identity(
                 email=email,
                 phone=mobile,
-                username=username,
                 password_hash=None,
                 is_platform_admin=False,
                 email_verified=True,
@@ -347,6 +350,7 @@ async def get_platform_user_by_org_member(
     if org_member.user_id:
         user = await user_dao.get_with_identity(org_member.user_id)
         if user and (agent_tenant_id is None or user.tenant_id == agent_tenant_id):
+            await _require_company_membership(user, agent_tenant_id or org_member.tenant_id)
             return user
 
     user = None
@@ -355,6 +359,7 @@ async def get_platform_user_by_org_member(
     if not user and org_member.phone is not None and org_member.phone:
         user = await sso_service.match_user_by_mobile(org_member.phone, agent_tenant_id_text or "")
 
+    await _require_company_membership(user, agent_tenant_id or org_member.tenant_id)
     if user:
         _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
         loaded = await user_dao.get_with_identity(user.id)
@@ -362,28 +367,11 @@ async def get_platform_user_by_org_member(
 
     provider = await identity_provider_dao.get(org_member.provider_id) if org_member.provider_id else None
     channel_type = provider.provider_type if provider else "unknown"
-    external_seed = org_member.external_id
 
     email = org_member.email
-    seed_for_name = external_seed or org_member.id.hex
-    name = org_member.name or f"{channel_type.capitalize()} User {seed_for_name[:8]}"
+    name = org_member.name or email or "User"
 
-    if email is not None and email:
-        username = email.split("@")[0]
-    elif external_seed is not None and external_seed:
-        username = f"{channel_type}_{external_seed[:12]}"
-    else:
-        username = f"{channel_type}_{org_member.id.hex[:12]}"
-
-    existing = await user_dao.get_by_identity_username(username)
-    if existing and (agent_tenant_id is None or existing.tenant_id == agent_tenant_id):
-        username = (
-            f"{username}_{external_seed[:6] if external_seed is not None and external_seed else org_member.id.hex[:6]}"
-        )
-
-    email = email or f"{username}@{channel_type}.local"
-
-    identity = await identity_dao.get_by_email(email)
+    identity = await identity_dao.get_by_email(email) if email not in (None, "") else None
     if not identity and org_member.phone is not None and org_member.phone:
         identity = await identity_dao.get_by_phone(org_member.phone)
 
@@ -391,7 +379,6 @@ async def get_platform_user_by_org_member(
         identity = await identity_dao.create_identity(
             email=email,
             phone=org_member.phone,
-            username=username,
             password_hash=None,
             is_platform_admin=False,
             email_verified=True,

@@ -45,7 +45,7 @@ from app.schemas.schemas import ChannelConfigOut
 from app.services.activity_logger import log_activity
 from app.services.auth_registry import auth_provider_registry
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
+from app.services.channels import inbound as channel_inbound
 from app.services.platform_service import platform_service
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
 from app.services.wecom_stream import wecom_stream_manager
@@ -573,10 +573,11 @@ async def _process_wecom_text(
     extra_info = mapping_from_row({"unionid": from_user})
 
     # Resolve channel user via unified service (uses OrgMember + SSO patterns)
-    platform_user = await channel_user_service.resolve_channel_user(
+    platform_user = await channel_inbound.resolve_sender_user(
         agent=agent_obj,
         channel_type="wecom",
         external_user_id=from_user,
+        is_group=_is_group,
         extra_info=extra_info,
     )
     platform_user_id = platform_user.id
@@ -591,6 +592,10 @@ async def _process_wecom_text(
         is_group=_is_group,
         group_name=f"WeCom Group {chat_id[:8]}" if _is_group else None,
     )
+    conversation = await channel_inbound.bind_channel_conversation(
+        agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group
+    )
+    sess = conversation.transcript_session
     session_conv_id = str(sess.id)
 
     from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
@@ -602,20 +607,9 @@ async def _process_wecom_text(
     )
     history = _conv(history_msgs)
 
-    _ = await chat_message_dao.insert_message(
-        agent_id=agent_id,
-        user_id=platform_user_id,
-        role="user",
-        content=user_text,
-        conversation_id=session_conv_id,
-    )
-    _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-
     from app.services.channels.llm_bridge import _load_agent_and_model
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
-
-    from app.services.channels import inbound as channel_inbound
 
     reply_text = await channel_inbound.generate_channel_reply(
         agent_id=agent_id,
@@ -623,6 +617,8 @@ async def _process_wecom_text(
         history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
+        reply_session_id=conversation.reply_session.id,
+        user_message_content=user_text,
         agent_model=_agent_model,
         llm_model=_llm_model,
         fallback_model=_fallback_model,

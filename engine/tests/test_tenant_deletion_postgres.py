@@ -91,10 +91,9 @@ async def test_delete_clears_only_departing_author_links_and_tombstones_orphans(
             {**row, author: None} if row[author] == deletion_pg.actor.id else row for row in before[table]
         ]
     orphan = next(row for row in after["identities"] if row["id"] == deletion_pg.actor.identity_id)
-    assert {key: orphan[key] for key in ("email", "phone", "username", "password_hash")} == {
+    assert {key: orphan[key] for key in ("email", "phone", "password_hash")} == {
         "email": None,
         "phone": None,
-        "username": None,
         "password_hash": None,
     }
     assert orphan["is_active"] is False

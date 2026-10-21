@@ -58,7 +58,7 @@ async def admin_update_user(
             raise HTTPException(status_code=404, detail="User not found")
         if user.is_platform_admin:
             raise HTTPException(status_code=403, detail="Cannot edit a platform admin")
-        if user.is_genesis and {"email", "username", "primary_mobile"}.intersection(update_data):
+        if user.is_genesis and {"email", "primary_mobile"}.intersection(update_data):
             raise HTTPException(status_code=403, detail="Cannot edit a genesis user's identity")
     email = json_as_str(update_data.get("email"))
     primary_mobile = json_as_str(update_data.get("primary_mobile"))
@@ -84,7 +84,7 @@ async def admin_update_user(
     user_fields: dict[str, object] = {}
     identity_fields: dict[str, object] = {}
     for field, value in update_data.items():
-        if field in ("email", "username", "primary_mobile"):
+        if field in ("email", "primary_mobile"):
             identity_fields["phone" if field == "primary_mobile" else field] = value
         else:
             user_fields[field] = value

@@ -35,7 +35,6 @@ const passwordSchema = z
 
 const profileSchema = z.object({
   display_name: z.string().trim().min(1).max(100),
-  username: z.string().trim().max(64).optional(),
 })
 
 type PasswordValues = z.infer<typeof passwordSchema>
@@ -69,7 +68,7 @@ export function SettingsPage() {
   })
   const profileForm = useForm<ProfileValues>({
     resolver: zodResolver(profileSchema),
-    defaultValues: { display_name: user?.display_name ?? '', username: user?.username ?? '' },
+    defaultValues: { display_name: user?.display_name ?? '' },
   })
 
   async function onPassword(values: PasswordValues) {
@@ -97,7 +96,6 @@ export function SettingsPage() {
     try {
       await updateCurrentUser({
         display_name: values.display_name,
-        username: values.username || undefined,
       }, expectedOwner)
       if (!isCurrent(expectedOwner) || !await refreshUser(expectedOwner) || !isCurrent(expectedOwner)) return
       toast.success('Profile updated')
@@ -146,10 +144,6 @@ export function SettingsPage() {
             <div className="space-y-2">
               <Label htmlFor={`${formId}-name`}>Display name</Label>
               <Input id={`${formId}-name`} {...profileForm.register('display_name')} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor={`${formId}-user`}>Username</Label>
-              <Input id={`${formId}-user`} {...profileForm.register('username')} />
             </div>
             <Button type="submit" disabled={profileForm.formState.isSubmitting}>
               Save profile

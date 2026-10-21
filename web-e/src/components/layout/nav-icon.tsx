@@ -8,6 +8,7 @@ const ICON_NAMES = [
   'okr',
   'directory',
   'inbox',
+  'admissions',
   'account',
   'settings',
   'chat',

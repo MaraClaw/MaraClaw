@@ -94,6 +94,17 @@ async def test_reply_capable_im_channels_are_delivered(store: RelayStore, channe
     assert store.rows[row.id].delivered_at == store.now
 
 
+async def test_canonical_transcript_delivers_to_independent_provider_session(store: RelayStore) -> None:
+    # Given a persisted IM intent pointing away from the canonical transcript.
+    row = store.intent("im")
+    store.message.conversation_id = str(uuid4())
+    # When the relay executes the accepted destination.
+    await relay.relay_batch(store.clock)
+    # Then strict provider output is acknowledged without rewriting the transcript.
+    assert store.sends == ["authoritative"]
+    assert store.rows[row.id].delivered_at == store.now
+
+
 @pytest.mark.parametrize("failure", ["ack", "expired_preparation"])
 async def test_agent_lost_claim_rolls_back_inbox_and_wake(store: RelayStore, failure: str) -> None:
     # Given

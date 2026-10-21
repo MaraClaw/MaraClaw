@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api import chat_sessions as chat_sessions_api
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
+from app.services.shared_chat import shared_session_id
 
 
 @pytest.mark.asyncio
@@ -68,6 +70,14 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", fake_message_counts)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", fake_unread_counts)
     monkeypatch.setattr(chat_sessions_api, "connection_ctx", lambda: _Ctx())
+    shared = ChatSessionRecord(
+        id=shared_session_id(agent_id),
+        agent_id=agent_id,
+        user_id=agent.creator_id,
+        source_channel="shared",
+        is_primary=True,
+    )
+    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", AsyncMock(return_value=shared))
 
     sessions = await chat_sessions_api.list_sessions(
         agent_id=agent_id,
@@ -75,10 +85,11 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
         current_user=current_user,
     )
 
-    assert len(sessions) == 1
-    assert sessions[0].id == str(session.id)
-    assert sessions[0].user_id == str(owner_id)
-    assert sessions[0].username == "Alice"
+    assert len(sessions) == 2
+    assert sessions[0].id == str(shared.id)
+    assert sessions[1].id == str(session.id)
+    assert sessions[1].user_id == str(owner_id)
+    assert sessions[1].username == "Alice"
 
 
 @pytest.mark.asyncio
@@ -138,6 +149,10 @@ async def test_creator_can_list_all_sessions(monkeypatch):
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", fake_message_counts)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", fake_unread_counts)
     monkeypatch.setattr(chat_sessions_api, "connection_ctx", lambda: _Ctx())
+    shared = ChatSessionRecord(
+        id=shared_session_id(agent_id), agent_id=agent_id, user_id=creator_id, source_channel="shared", is_primary=True
+    )
+    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", AsyncMock(return_value=shared))
 
     sessions = await chat_sessions_api.list_sessions(
         agent_id=agent_id,
@@ -145,9 +160,10 @@ async def test_creator_can_list_all_sessions(monkeypatch):
         current_user=current_user,
     )
 
-    assert len(sessions) == 1
-    assert sessions[0].user_id == str(other_user_id)
-    assert sessions[0].username == "Bob"
+    assert len(sessions) == 2
+    assert sessions[0].id == str(shared.id)
+    assert sessions[1].user_id == str(other_user_id)
+    assert sessions[1].username == "Bob"
 
 
 @pytest.mark.asyncio
@@ -272,16 +288,17 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_session_returns_web_session_shape(monkeypatch):
+async def test_create_session_returns_shared_session_shape(monkeypatch):
     user_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     now = datetime.now(UTC)
     current_user: Any = SimpleNamespace(id=user_id, role="member", tenant_id=uuid.uuid4())
-    created = SimpleNamespace(
-        id=uuid.uuid4(),
+    created = ChatSessionRecord(
+        id=shared_session_id(agent_id),
         agent_id=agent_id,
         user_id=user_id,
-        source_channel="web",
+        source_channel="shared",
+        is_primary=True,
         title="Session 01-01 00:00",
         created_at=now,
     )
@@ -289,11 +306,12 @@ async def test_create_session_returns_web_session_shape(monkeypatch):
     async def fake_check_agent_access(_user, _agent_id):
         return SimpleNamespace(id=agent_id), "use"
 
-    async def fake_create(*, obj_in):
+    async def fake_create(_agent_id):
         return created
 
     monkeypatch.setattr(chat_sessions_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "create", fake_create)
+    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", fake_create)
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", AsyncMock(return_value={}))
 
     result = await chat_sessions_api.create_session(
         agent_id=agent_id,
@@ -303,8 +321,8 @@ async def test_create_session_returns_web_session_shape(monkeypatch):
 
     assert result.agent_id == str(agent_id)
     assert result.user_id == str(user_id)
-    assert result.source_channel == "web"
-    assert result.is_primary is False
+    assert result.source_channel == "shared"
+    assert result.is_primary is True
     assert result.message_count == 0
 
 

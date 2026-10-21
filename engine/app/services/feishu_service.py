@@ -406,28 +406,18 @@ class FeishuService:
             if member and not member.user_id:
                 _ = await org_member_dao.update(db_obj=member, obj_in={"user_id": user.id})
         else:
-            username = fs_email.split("@")[0] if fs_email else f"feishu_{open_id[:8]}"
-            email = fs_email or f"{username}@feishu.local"
-
-            existing = await user_dao.get_by_identity_username(username)
-            if existing and (tenant_uuid is None or existing.tenant_id == tenant_uuid):
-                import uuid as _uuid
-
-                username = f"{username}_{_uuid.uuid4().hex[:6]}"
-
             from app.services.registration_service import registration_service
 
             identity = await registration_service.find_or_create_identity(
-                email=email,
+                email=fs_email or None,
                 phone=feishu_user.get("mobile"),
-                username=username,
                 password=open_id,
             )
 
             user = await user_dao.create(
                 obj_in={
                     "identity_id": identity.id,
-                    "display_name": fs_name or username,
+                    "display_name": fs_name or fs_email or "User",
                     "avatar_url": fs_avatar or None,
                     "registration_source": "feishu",
                     "tenant_id": tenant_uuid,

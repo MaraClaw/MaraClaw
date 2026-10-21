@@ -65,7 +65,6 @@ def _identity_record(
     return IdentityRecord(
         id=uuid.uuid4(),
         email=email,
-        username="admin",
         phone=None,
         password_hash=hash_password(password),
         is_active=is_active,
@@ -102,7 +101,6 @@ def _identity_ns(
     return SimpleNamespace(
         id=uuid.uuid4(),
         email=email,
-        username="admin",
         phone=None,
         password_hash=hash_password(password),
         is_active=True,
@@ -124,7 +122,6 @@ def _user_ns(identity, *, role="platform_admin"):
         display_name="Admin",
         avatar_url=None,
         email=identity.email,
-        username=identity.username,
         is_active=True,
         is_platform_admin=identity.is_platform_admin,
         must_change_password=identity.must_change_password,
@@ -347,7 +344,6 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     identity = SimpleNamespace(
         id=uuid.uuid4(),
         email="platform@example.com",
-        username="platform",
         is_platform_admin=True,
         is_active=True,
         email_verified=True,
@@ -367,7 +363,6 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(seeder.identity_dao, "is_username_taken", AsyncMock(return_value=False))
     monkeypatch.setattr(seeder, "hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(seeder.identity_dao, "create_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
@@ -645,7 +640,6 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
         return SimpleNamespace(
             id=uuid.uuid4(),
             email=kwargs["email"],
-            username=kwargs.get("username") or "u",
             email_verified=True,
             is_platform_admin=False,
             must_change_password=False,
@@ -671,7 +665,6 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
             title=None,
             primary_mobile=None,
             registration_source="web",
-            username=identity.username,
         )
 
     monkeypatch.setattr("app.dao.identity_dao.get_by_email", AsyncMock(return_value=None))
@@ -701,10 +694,10 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
 
         data: Any = SimpleNamespace(
             email="new@example.com",
-            username="newuser",
             password="password123",
             display_name="New User",
             target_tenant_id=None,
+            invitation_code=None,
         )
         result = await auth_api.register_init(data, AsyncMock(), _dummy_request())
 

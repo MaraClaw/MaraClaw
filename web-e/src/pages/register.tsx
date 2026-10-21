@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, UserRound } from 'lucide-react'
+import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles } from 'lucide-react'
 import { useEffect, useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
@@ -15,10 +15,10 @@ import { useAuth } from '@/hooks/use-auth'
 import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import { isNeedsVerificationDetail } from '@/lib/types/auth'
+import type { SuggestedOrg } from '@/lib/types/auth'
 
 const registerSchema = z.object({
   email: z.string().trim().email('Enter a valid email').max(254),
-  username: z.string().trim().max(64).optional(),
   password: z.string().min(6, 'Use at least 6 characters').max(128),
   invitation_code: z.string().trim().max(128).optional(),
 })
@@ -52,6 +52,10 @@ export function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [inviteRequired, setInviteRequired] = useState(false)
+  const [registrationDestination, setRegistrationDestination] = useState<{
+    readonly to: string
+    readonly state: { readonly email: string; readonly suggested: SuggestedOrg | null | undefined }
+  } | null>(null)
 
   useEffect(() => {
     const expectedOwner = owner
@@ -72,11 +76,11 @@ export function RegisterPage() {
     formState: { errors, isSubmitting },
   } = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { email: '', username: '', password: '', invitation_code: '' },
+    defaultValues: { email: '', password: '', invitation_code: '' },
   })
 
   if (status === 'authenticated') {
-    return <Navigate to={needsOrgConfirm ? '/join' : '/app'} replace />
+    return <Navigate to={registrationDestination?.to ?? (needsOrgConfirm ? '/join' : '/app')} state={registrationDestination?.state} replace />
   }
 
   async function onSubmit(values: RegisterFormValues) {
@@ -86,22 +90,20 @@ export function RegisterPage() {
     try {
       const result = await registerRequest({
         email: values.email,
-        username: values.username?.trim() || values.email.split('@')[0] || 'member',
         password: values.password,
         invitation_code: values.invitation_code?.trim() || undefined,
       }, undefined, expectedOwner)
+      if (!isCurrent(expectedOwner)) return
+      setRegistrationDestination({
+        to: !result.user.email_verified ? '/verify-email'
+          : result.admission_request ? `/app/admissions/${encodeURIComponent(result.admission_request.id)}`
+          : result.needs_org_confirm ? '/join' : '/app',
+        state: { email: values.email, suggested: result.suggested_org },
+      })
       if (!applySession(expectedOwner, result)) return
       const installedOwner = capture()
       if (!isCurrent(installedOwner)) return
       toast.success('Account created')
-      if (!result.user.email_verified) {
-        navigate('/verify-email', { replace: true, state: { email: values.email } })
-        return
-      }
-      navigate(result.needs_org_confirm ? '/join' : '/app', {
-        replace: true,
-        state: { suggested: result.suggested_org },
-      })
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
       if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
@@ -116,7 +118,7 @@ export function RegisterPage() {
     <AuthShell
       headingId={`${formId}-heading`}
       title="Create your account"
-      description="New member accounts join OpenClaw, the default organization. Use an invitation code to join a company instead."
+      description="New member accounts join OpenClaw. An invitation code submits a company admission request for review."
       brandTitle="Start working with digital employees"
       brandBody="Create an account to land in OpenClaw. You can transfer to a company later with an invite or a matching email domain."
       highlights={highlights}
@@ -163,20 +165,6 @@ export function RegisterPage() {
             />
           </div>
           {errors.email ? <p className="text-xs text-destructive">{errors.email.message}</p> : null}
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor={`${formId}-username`}>Username</Label>
-          <div className="relative">
-            <UserRound className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              id={`${formId}-username`}
-              autoComplete="username"
-              placeholder="Optional"
-              className="pl-10"
-              {...register('username')}
-            />
-          </div>
         </div>
 
         <div className="space-y-2">

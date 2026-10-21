@@ -46,6 +46,7 @@ export type ChatSession = {
   user_id: string
   title: string
   source_channel: string
+  is_group?: boolean
   created_at: string
   last_message_at?: string | null
   message_count: number
@@ -521,8 +522,8 @@ export async function updateAgentPermissions(
 
 export async function listPermissionCandidates(
   agentId: string,
-): Promise<Array<{ id: string; name?: string; email?: string; username?: string }>> {
-  const data = await apiRequest<{ users?: Array<{ id: string; name?: string; email?: string; username?: string }> }>(
+): Promise<Array<{ id: string; name?: string; email?: string }>> {
+  const data = await apiRequest<{ users?: Array<{ id: string; name?: string; email?: string }> }>(
     `/api/agents/${agentId}/permissions/candidates`,
   )
   return data.users ?? []

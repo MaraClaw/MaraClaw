@@ -10,6 +10,7 @@ import pytest
 from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache, session_cache
+from app.core.json_types import is_json_object
 from app.core.row_memo import clear_row_memo
 from app.core.security import load_identity_for_password
 from app.records.identity import IdentityRecord
@@ -36,7 +37,6 @@ def _user(**overrides) -> UserRecord:
     ident = IdentityRecord(
         id=uuid4(),
         email="a@example.com",
-        username="alice",
         password_hash="secret-hash",
         is_active=True,
         is_platform_admin=False,
@@ -72,6 +72,31 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
     dumped = str(fake_cache.store)
     assert "secret-hash" not in dumped
     assert "password_hash" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_legacy_snapshot_ignores_retired_field_without_invalidating_session(fake_cache: FakeRedis) -> None:
+    user = _user()
+    assert user.identity is not None
+    user.identity.must_change_password = True
+    payload = session_cache._snapshot(user, "0", "0")
+    identity_payload = payload["identity"]
+    assert is_json_object(identity_payload)
+    identity_payload["username"] = "legacy-handle"
+    await redis_cache.cache_set_json(session_cache._sess_key(user.id), payload, ttl=20)
+
+    loaded = await session_cache.get_cached_user(user.id)
+
+    assert loaded is not None
+    assert (loaded.id, loaded.identity_id, loaded.tenant_id) == (user.id, user.identity_id, user.tenant_id)
+    assert loaded.email == "a@example.com"
+    assert loaded.must_change_password is True
+    assert loaded.identity is not None
+    assert loaded.identity.password_hash is None
+    assert not hasattr(loaded, "username")
+    assert not hasattr(loaded.identity, "username")
+    assert "username" not in str(session_cache._snapshot(loaded, "0", "0"))
+    assert session_cache._sess_key(user.id) in fake_cache.store
 
 
 @pytest.mark.asyncio

@@ -16,10 +16,8 @@ GIB: Final = 1024**3
 REQUIRED_INPUTS: Final[Mapping[str, str]] = {
     "SECRET_KEY": "resource-test-secret",
     "JWT_SECRET_KEY": "resource-test-jwt-secret",
-    "POSTGRES_PASSWORD": "resource-test-postgres",
-    "POSTGRES_PASSWORD_URLENCODED": "resource-test-postgres",
-    "REDIS_PASSWORD": "resource-test-redis",
-    "REDIS_PASSWORD_URLENCODED": "resource-test-redis",
+    "DATABASE_URL": "postgresql://resource_user:p%40ss%25word@pg.remote.example.test:6432/resource_db?sslmode=verify-full",
+    "REDIS_URL": "rediss://resource_user:r%40ss%25word@cache.remote.example.test:6380/7?ssl_cert_reqs=required",
     "PLATFORM_ADMIN_EMAIL": "resources@example.test",
     "PLATFORM_ADMIN_PASSWORD": "resource-test-admin-password",
     "INSTANCE_ID": "resource-test-instance",
@@ -31,7 +29,7 @@ REQUIRED_INPUTS: Final[Mapping[str, str]] = {
 }
 RESOURCE_KEYS: Final = frozenset(
     f"{prefix}_{suffix}"
-    for prefix in ("ENGINE", "BACKGROUND", "BOOTSTRAP", "POSTGRES", "REDIS", "WEB", "INGRESS")
+    for prefix in ("ENGINE", "BACKGROUND", "BOOTSTRAP", "WEB", "INGRESS")
     for suffix in ("CPUS", "MEMORY")
 )
 
@@ -47,8 +45,6 @@ DEFAULTS: Final[Mapping[str, Limits]] = {
     "engine": Limits(1, 2 * GIB, 2),
     "background": Limits(1, 2 * GIB),
     "bootstrap": Limits(1, GIB),
-    "postgres": Limits(1.5, 3 * GIB),
-    "redis": Limits(0.5, GIB),
     "web-a": Limits(0.25, 128 * MIB, 2),
     "web-e": Limits(0.25, 128 * MIB, 2),
     "ingress": Limits(0.5, 256 * MIB),
@@ -120,22 +116,22 @@ class ResourceContracts(unittest.TestCase):
         # Given the steady services (completed bootstrap is excluded).
         # When Compose renders their effective limits and replicas.
         services = render({})
-        # Then aggregate limits are 6.5 CPUs and 10.75 GiB.
-        self.assertEqual(aggregate(services, STEADY_SERVICES), (6.5, 43 * GIB // 4))
+        # Then aggregate limits are 4.5 CPUs and 6.75 GiB.
+        self.assertEqual(aggregate(services, STEADY_SERVICES), (4.5, 27 * GIB // 4))
 
     def test_host_headroom_when_default_replicas_are_running(self) -> None:
         # Given an 8-CPU / 16-GiB host and the steady services.
         # When Compose renders the replica-weighted limits.
         cpus, memory = aggregate(render({}), STEADY_SERVICES)
-        # Then 1.5 CPUs and 5.25 GiB remain outside this stack's limits.
-        self.assertEqual((8 - cpus, 16 * GIB - memory), (1.5, 21 * GIB // 4))
+        # Then 3.5 CPUs and 9.25 GiB remain outside this stack's limits.
+        self.assertEqual((8 - cpus, 16 * GIB - memory), (3.5, 37 * GIB // 4))
 
     def test_startup_aggregate_when_bootstrap_is_the_only_engine_role(self) -> None:
-        # Given bootstrap plus all stores, web replicas and ingress, conservatively.
+        # Given bootstrap plus all web replicas and ingress, conservatively.
         # When Compose renders their limits, without API/background consumers.
         services = render({})
-        # Then this phase's upper bound is 4.5 CPUs and 5.75 GiB.
-        self.assertEqual(aggregate(services, STARTUP_SERVICES), (4.5, 23 * GIB // 4))
+        # Then this phase's upper bound is 2.5 CPUs and 1.75 GiB.
+        self.assertEqual(aggregate(services, STARTUP_SERVICES), (2.5, 7 * GIB // 4))
 
     def test_singleton_defaults_when_only_engine_limits_are_overridden(self) -> None:
         # Given API limits distinct from both singleton defaults.
@@ -165,8 +161,6 @@ class ResourceContracts(unittest.TestCase):
             "ENGINE_CPUS": "1.25", "ENGINE_MEMORY": "2304m",
             "BACKGROUND_CPUS": "0.75", "BACKGROUND_MEMORY": "1792m",
             "BOOTSTRAP_CPUS": "0.625", "BOOTSTRAP_MEMORY": "768m",
-            "POSTGRES_CPUS": "1.75", "POSTGRES_MEMORY": "3584m",
-            "REDIS_CPUS": "0.375", "REDIS_MEMORY": "896m",
             "WEB_CPUS": "0.125", "WEB_MEMORY": "160m",
             "INGRESS_CPUS": "0.875", "INGRESS_MEMORY": "320m",
         }
@@ -177,8 +171,6 @@ class ResourceContracts(unittest.TestCase):
             "engine": Limits(1.25, 2304 * MIB, 2),
             "background": Limits(0.75, 1792 * MIB),
             "bootstrap": Limits(0.625, 768 * MIB),
-            "postgres": Limits(1.75, 3584 * MIB),
-            "redis": Limits(0.375, 896 * MIB),
             "web-a": Limits(0.125, 160 * MIB, 2),
             "web-e": Limits(0.125, 160 * MIB, 2),
             "ingress": Limits(0.875, 320 * MIB),
@@ -189,8 +181,8 @@ class ResourceContracts(unittest.TestCase):
         overrides = {"API_REPLICAS": "3", "ADMIN_REPLICAS": "4", "MEMBER_REPLICAS": "5"}
         # When Compose renders the scaled topology.
         services = render(overrides)
-        # Then per-replica limits produce 8.75 CPUs and 13.375 GiB steady aggregate.
-        self.assertEqual(aggregate(services, STEADY_SERVICES), (8.75, 107 * GIB // 8))
+        # Then per-replica limits produce 6.75 CPUs and 9.375 GiB steady aggregate.
+        self.assertEqual(aggregate(services, STEADY_SERVICES), (6.75, 75 * GIB // 8))
 
     def test_effective_defaults_when_example_resource_controls_are_loaded(self) -> None:
         # Given only the optional resource controls from the shipped env example.

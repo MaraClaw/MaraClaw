@@ -16,7 +16,8 @@ import {
   controlType,
   controlUnlock,
 } from '@/lib/control-api'
-import { listSessions, type AgentOut } from '@/lib/workspace-api'
+import { createSession, listSessions, type AgentOut } from '@/lib/workspace-api'
+import { controlSessionId, isWritableSession } from '@/lib/chat/sessions'
 import { useControlLease } from './use-control-lease'
 
 export function AgentControlPage() {
@@ -24,8 +25,14 @@ export function AgentControlPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const [params, setParams] = useSearchParams()
   const sessions = useQuery({ queryKey: ['sessions', agent.id], queryFn: () => listSessions(agent.id, 'mine') })
+  const sharedSession = useQuery({
+    queryKey: ['shared-session', agent.id], queryFn: () => createSession(agent.id),
+    enabled: sessions.isSuccess && !sessions.data.some((session) => session.source_channel === 'shared'),
+  })
   const [selectedSessionId, setSessionId] = useState(params.get('session') ?? '')
-  const sessionId = selectedSessionId || sessions.data?.[0]?.id || ''
+  const availableSessions = (sessions.data ?? []).filter(isWritableSession)
+  if (sharedSession.data && !availableSessions.some((session) => session.id === sharedSession.data.id)) availableSessions.push(sharedSession.data)
+  const sessionId = controlSessionId(availableSessions, selectedSessionId) ?? ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')
   const control = useControlLease(scope)
   const { lease, screenshot, domain, setDomain, typed, setTyped, busy } = control
@@ -118,9 +125,9 @@ export function AgentControlPage() {
             onChange={scope.effect((event) => setSessionId(event.target.value))}
             disabled={locked}
           >
-            {(sessions.data ?? []).map((session) => (
+            {availableSessions.map((session) => (
               <option key={session.id} value={session.id}>
-                {session.title}
+                {session.source_channel === 'shared' ? 'Shared conversation' : session.title}
               </option>
             ))}
           </Select>

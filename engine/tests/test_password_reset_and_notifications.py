@@ -140,7 +140,6 @@ def configured_system_email() -> system_email_service.SystemEmailConfig:
 def make_user(**overrides):
     values = {
         "id": uuid.uuid4(),
-        "username": "alice",
         "email": "alice@example.com",
         "password_hash": "old-hash",
         "display_name": "Alice",
@@ -393,9 +392,7 @@ async def test_forgot_password_queues_background_email(monkeypatch):
     await drain_background_tasks()
     start_background_tasks()
     assert background_tasks.tasks == []
-    send.assert_awaited_once_with(
-        user.email, user.username, "https://app.example.com/reset-password?token=raw-token", 29
-    )
+    send.assert_awaited_once_with(user.email, user.email, "https://app.example.com/reset-password?token=raw-token", 29)
 
 
 def test_send_system_email_uses_configured_timeout(monkeypatch):

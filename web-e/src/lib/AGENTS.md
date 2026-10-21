@@ -15,6 +15,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `auth-storage.ts` | localStorage `maraclaw-enduser-token` |
 | `auth-api.ts` | `/api/auth/*` and `/api/tenants/*` (login/register/SSO/password/join/switch). Public calls pass `token: null`. |
 | `types/auth.ts` | `UserOut`, `TokenResponse`, `MultiTenantResponse`, `isPlatformAdminUser`, `isTokenResponse` |
+| `company-admissions-api.ts`, `types/company-admissions.ts` | Zod-parsed applicant request summaries/details from `/api/company-admissions/mine` and `/:id`; owner/signal-fenced. Pending join/transfer/register responses reuse the summary schema without installing target membership. |
 | `sso-storage.ts` | sessionStorage `maraclaw-sso-state` / `provider` / `intent` |
 | `auth-highlights.ts` | AuthShell copy for forgot/reset/verify/sso. Login/register inline their own. |
 | `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, schedules, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, notifications, onboarding + `ONBOARDING_SKIP_KEY`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |

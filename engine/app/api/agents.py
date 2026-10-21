@@ -518,7 +518,7 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
 
     if agent.creator_id:
         creator = await user_dao.get_with_identity(agent.creator_id)
-        out["creator_username"] = creator.username if creator else None
+        out["creator_username"] = (creator.display_name or creator.email or "User") if creator else None
 
     effective_tz = agent.timezone
     if effective_tz in (None, "") and agent.tenant_id:
@@ -589,7 +589,7 @@ async def get_agent_permissions(
         }
         ordered_user_ids = [str(uid) for uid in display_user_ids]
         ordered_user_ids.sort(
-            key=lambda sid: (user.display_name or user.username or "") if (user := users_by_id_str.get(sid)) else ""
+            key=lambda sid: (user.display_name or user.email or "User") if (user := users_by_id_str.get(sid)) else ""
         )
         for perm in perms:
             if perm.scope_type != "user" or not perm.scope_id:
@@ -607,8 +607,8 @@ async def get_agent_permissions(
             is_required = access_mode == "custom" and (is_creator or is_admin)
             item: dict[str, object] = {
                 "id": sid,
-                "name": u.display_name or u.username,
-                "username": u.username,
+                "name": u.display_name or u.email or "User",
+                "username": u.display_name or u.email or "User",
                 "email": u.email,
                 "role": u.role,
                 "access_level": "manage" if is_required else access_by_user_id.get(sid, "use"),
@@ -826,8 +826,8 @@ async def get_agent_permission_candidates(
         candidates.append(
             {
                 "id": str(u.id),
-                "name": m.name,
-                "username": u.username if u else None,
+                "name": m.name or u.display_name or u.email or "User",
+                "username": m.name or u.display_name or u.email or "User",
                 "email": m.email or (u.email if u else None),
                 "title": m.title or None,
                 "avatar_url": m.avatar_url or None,

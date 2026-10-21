@@ -4,8 +4,8 @@ import type { DirectoryUser } from '../src/lib/directory-api'
 import { directoryPath, orgDepartment, prepareOrgDepartments } from './org-departments-fixture'
 
 const people = [
-  { id: 'dana', display_name: 'Dana Woods', username: 'dana.woods', email: 'dana@example.test', title: 'Product engineer', role: 'org_admin' },
-  { id: 'rowan', display_name: 'Rowan Chen', username: 'rowan.chen', email: 'rowan@example.test', title: 'Marketing designer', role: 'member' },
+  { id: 'dana', display_name: 'Dana Woods', email: 'dana@example.test', title: 'Product engineer', role: 'org_admin' },
+  { id: 'rowan', display_name: 'Rowan Chen', email: 'rowan@example.test', title: 'Marketing designer', role: 'member' },
 ] satisfies readonly DirectoryUser[]
 
 async function prepareDirectory(page: Page) {
@@ -45,7 +45,7 @@ for (const entry of [
   })
 }
 
-for (const query of ['  DANA  ', 'dana@example', 'dana.woods', 'engineer', 'org_admin']) {
+for (const query of ['  DANA  ', 'dana@example', 'Dana Woods', 'engineer', 'org_admin']) {
   test(`People search matches ${JSON.stringify(query)} without provider requests`, async ({ page }) => {
     const { retiredRequests } = await prepareDirectory(page)
     await page.goto('/app/directory')
@@ -71,6 +71,34 @@ test('People search can recover from no matches', async ({ page }) => {
   await expect(page.getByText('Rowan Chen', { exact: true })).toBeVisible()
   expect(new URL(page.url()).searchParams.has('q')).toBe(false)
   expect(retiredRequests).toEqual([])
+})
+
+test('People uses email when a display name is absent', async ({ page }) => {
+  // Given
+  await prepareDirectory(page)
+  await page.route('**/api/org/users', (route) => route.fulfill({ json: [
+    { id: 'email-only', display_name: '', email: 'email-only@example.test', role: 'member' },
+  ] }))
+  // When
+  await page.goto('/app/directory')
+  // Then
+  await expect(page.locator('[data-slot="card-title"]', { hasText: 'email-only@example.test' })).toBeVisible()
+})
+
+test('People does not render or search retired account usernames', async ({ page }) => {
+  // Given
+  await prepareDirectory(page)
+  await page.route('**/api/org/users', (route) => route.fulfill({ json: [
+    { ...people[0], username: 'retired-account-handle' },
+  ] }))
+  await page.goto('/app/directory')
+  await expect(page.getByText('Dana Woods', { exact: true })).toBeVisible()
+  await expect(page.getByText('retired-account-handle', { exact: false })).toHaveCount(0)
+  // When
+  await page.getByRole('searchbox', { name: 'Search directory' }).fill('retired-account-handle')
+  // Then
+  await expect(page.getByText('Dana Woods', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('No people match', { exact: false })).toBeVisible()
 })
 
 for (const width of [390, 1440]) {

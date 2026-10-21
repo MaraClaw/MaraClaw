@@ -91,7 +91,7 @@ test('agent navigation resets the selected schedule and its accumulated history'
   await page.getByRole('link').filter({ hasText: secondAgent.name }).click()
   await page.getByRole('link', { name: 'Schedules', exact: true }).click()
 
-  await expect(page.getByRole('heading', { name: secondAgent.name, exact: true })).toBeVisible()
+  await expect(page).toHaveURL(`/app/agents/${secondAgent.id}/schedules`)
   await expect(page.getByRole('region', { name: 'Run history' })).toHaveCount(0)
   await page.getByRole('button', { name: 'History', exact: true }).click()
   await expect(page.getByText('No history yet.', { exact: true })).toBeVisible()

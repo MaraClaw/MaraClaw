@@ -15,7 +15,7 @@ from uuid import UUID
 
 from app.core.logging import logger
 from app.dao.gateway_message_dao import gateway_message_dao
-from app.db.session import get_connection
+from app.db.session import connection_ctx, get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
@@ -24,12 +24,14 @@ from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
+from app.services.openclaw_enqueue import insert_prepared_message as _insert_prepared_message
 from app.services.openclaw_hot_cache import (
     get_cached_bundle,
     mark_ensured,
     recently_ensured,
     set_cached_bundle,
 )
+from app.services.shared_chat import shared_session_id
 
 
 def _bundle_usable(bundle: ModelBundle | None) -> bool:
@@ -136,56 +138,6 @@ async def prepare_openclaw_message(
     )
 
 
-async def _insert_prepared_message(
-    prepared: PreparedOpenClawMessage,
-    *,
-    sender_user_id: UUID | None,
-    sender_agent_id: UUID | None,
-    conversation_id: str | None,
-    deduplicate: bool = True,
-) -> GatewayMessageRecord:
-    agent, content = prepared.agent, prepared.content
-    pending = await gateway_message_dao.list_pending(agent.id) if deduplicate and sender_user_id is not None else ()
-    duplicate = next(
-        (
-            row
-            for row in pending
-            if (
-                row.content == content
-                and row.sender_user_id == sender_user_id
-                and sender_user_id is not None
-                and (row.conversation_id or "") == (conversation_id or "")
-            )
-        ),
-        None,
-    )
-    if duplicate is not None:
-        logger.info("[OpenClaw] skip duplicate pending inbox item agent={} id={}", agent.id, duplicate.id)
-        return duplicate
-    created = await gateway_message_dao.create(
-        obj_in={
-            "agent_id": agent.id,
-            "sender_user_id": sender_user_id,
-            "sender_agent_id": sender_agent_id,
-            "conversation_id": conversation_id,
-            "content": content,
-            "status": "pending",
-            "selected_slot": prepared.selected_slot,
-            "guest_model_ref": prepared.guest_model_ref,
-            "complexity": prepared.complexity,
-            "routing_reason": prepared.routing_reason,
-        }
-    )
-    logger.info(
-        "[OpenClaw] queued agent={} slot={} reason={} guest_model={}",
-        agent.id,
-        prepared.selected_slot,
-        prepared.routing_reason,
-        prepared.guest_model_ref,
-    )
-    return created
-
-
 async def enqueue_prepared_openclaw_message(
     prepared: PreparedOpenClawMessage,
     *,
@@ -193,20 +145,23 @@ async def enqueue_prepared_openclaw_message(
     sender_agent_id: UUID | None = None,
     conversation_id: str | None = None,
     deduplicate: bool = True,
+    reply_session_id: UUID | None = None,
 ) -> GatewayMessageRecord:
     """Queue only; wake in a fresh context after the owning transaction commits.
 
     The row and caller's other writes share the owning transaction;
     rollback drops the deferred wake.
     """
-    created = await _insert_prepared_message(
-        prepared,
-        sender_user_id=sender_user_id,
-        sender_agent_id=sender_agent_id,
-        conversation_id=conversation_id,
-        deduplicate=deduplicate,
-    )
-    _schedule_inbox_wake(prepared.agent, prepared.content, created.id)
+    async with connection_ctx():
+        created = await _insert_prepared_message(
+            prepared,
+            sender_user_id=sender_user_id,
+            sender_agent_id=sender_agent_id,
+            conversation_id=conversation_id,
+            deduplicate=deduplicate,
+            reply_session_id=reply_session_id,
+        )
+        _schedule_inbox_wake(prepared.agent, prepared.content, created.id)
     return created
 
 
@@ -219,13 +174,19 @@ async def enqueue_openclaw_message(
     conversation_id: str | None = None,
     history: list[OpenAIMessage] | None = None,
     await_wake: bool = True,
+    reply_session_id: UUID | None = None,
 ) -> GatewayMessageRecord:
     """Prepare and queue a normal turn; optionally wait for its guest wake."""
     prepared = await prepare_openclaw_message(agent=agent, content=content, history=history)
-    created = await _insert_prepared_message(
-        prepared, sender_user_id=sender_user_id, sender_agent_id=sender_agent_id, conversation_id=conversation_id
-    )
-    if await_wake:
+    async with connection_ctx():
+        created = await _insert_prepared_message(
+            prepared,
+            sender_user_id=sender_user_id,
+            sender_agent_id=sender_agent_id,
+            conversation_id=conversation_id,
+            reply_session_id=reply_session_id,
+        )
+    if await_wake and get_connection() is None:
         await _run_inbox_wake(prepared.agent, content, created.id)
     else:
         _schedule_inbox_wake(prepared.agent, content, created.id)
@@ -238,11 +199,26 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
         from app.services.openclaw_inbox import wake_openclaw_inbox
 
         if message_id is not None:
-            claimed = await gateway_message_dao.mark_delivered(message_id, agent.id)
+            async with connection_ctx():
+                requested = await gateway_message_dao.get_for_agent(message_id, agent.id)
+                if requested is not None and requested.conversation_id == str(shared_session_id(agent.id)):
+                    from datetime import UTC, datetime
+
+                    claimed = await gateway_message_dao.claim_shared(
+                        agent.id, shared_session_id(agent.id), now=datetime.now(UTC)
+                    )
+                else:
+                    claimed = await gateway_message_dao.mark_delivered(message_id, agent.id)
             if claimed is None:
                 logger.info("[OpenClaw] inbox message {} already taken or completed for {}", message_id, agent.id)
                 return
-        woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
+            content, message_id = claimed.content, claimed.id
+        if claimed is not None and claimed.conversation_id == str(shared_session_id(agent.id)):
+            from app.services.openclaw_turns import dispatch_shared_turn
+
+            woke = await dispatch_shared_turn(agent, claimed)
+        else:
+            woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
     except Exception as exc:
         logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
         await _release_wake_claim(agent, claimed)
@@ -253,7 +229,7 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
 
 
 async def _release_wake_claim(agent: AgentRecord, claimed: GatewayMessageRecord | None) -> None:
-    if claimed is None:
+    if claimed is None or claimed.conversation_id == str(shared_session_id(agent.id)):
         return
     try:
         _ = await gateway_message_dao.release_delivery(claimed)
@@ -288,8 +264,7 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
         _wake_running.add(agent.id)
         try:
             await _run_inbox_wake(agent, content, message_id)
-            follow = _wake_again.pop(agent.id, None)
-            if follow is not None:
+            while (follow := _wake_again.pop(agent.id, None)) is not None:
                 await _run_inbox_wake(agent, follow[0], follow[1])
         finally:
             _wake_running.discard(agent.id)

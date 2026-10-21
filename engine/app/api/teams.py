@@ -456,6 +456,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             agent=agent_obj,
             channel_type="teams",
             external_user_id=sender_id,
+            is_group=json_as_str_or(conversation.get("conversationType")) in ("groupChat", "channel"),
             extra_info=mapping_from_row({"name": sender_name}),
         )
 
@@ -485,6 +486,11 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
             group_name=group_name,
         )
 
+        channel_conversation = await channel_inbound.bind_channel_conversation(
+            agent=agent_obj, platform_user=platform_user, reply_session=sess, is_group=_is_group_teams
+        )
+        sess = channel_conversation.transcript_session
+
         async def _teams_file_sender(file_path: str | _Path, msg: str = "") -> None:
             _fp = _Path(file_path)
             use_mi = bool(_extra_config(config).get("use_managed_identity", False))
@@ -511,6 +517,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
                 platform_user=platform_user,
                 session=sess,
                 user_text=user_text,
+                reply_session_id=channel_conversation.reply_session.id,
             )
             logger.info(f"[Teams] LLM reply generated: {reply_text[:80]}")
             if channel_inbound.is_queued_channel_reply(reply_text):

@@ -118,7 +118,6 @@ class RecordingDB:
 def _make_identity(
     *,
     email="test@example.com",
-    username="testuser",
     password=DEFAULT_TEST_CREDENTIAL,
     is_active=True,
     email_verified=True,
@@ -127,7 +126,6 @@ def _make_identity(
     return SimpleNamespace(
         id=uuid.uuid4(),
         email=email,
-        username=username,
         phone=None,
         password_hash=hash_password(password),
         is_active=is_active,
@@ -262,7 +260,6 @@ async def test_get_me_returns_user():
     identity = SimpleNamespace(
         id=uuid.uuid4(),
         email="test@example.com",
-        username="testuser",
         password_hash=hash_password(DEFAULT_TEST_CREDENTIAL),
     )
     user: Any = SimpleNamespace(
@@ -339,12 +336,11 @@ async def test_register_init_returns_submitted_email(monkeypatch):
     from app.schemas.schemas import RegisterInitRequest
 
     # Given a fresh identity and a membership without a stored email.
-    data = RegisterInitRequest(username="ada", email="ada@example.com", password="secret1")
+    data = RegisterInitRequest(email="ada@example.com", password="secret1")
     identity = SimpleNamespace(id=uuid.uuid4(), email=None, email_verified=True)
     user = SimpleNamespace(
         id=uuid.uuid4(),
         identity_id=identity.id,
-        username="ada",
         email=None,
         display_name="ada",
         avatar_url=None,

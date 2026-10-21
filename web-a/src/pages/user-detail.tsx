@@ -49,7 +49,7 @@ export function UserDetailPage() {
             <h1 className="font-display text-2xl font-semibold tracking-tight">
               {person.display_name || person.email || 'User'}
             </h1>
-            <p className="mt-2 text-muted-foreground">{person.email || person.username}</p>
+            <p className="mt-2 text-muted-foreground">{person.email || 'No email'}</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Badge variant="secondary">{roleLabel(person.role)}</Badge>
               {person.is_genesis ? <Badge variant="soft">Genesis</Badge> : null}
@@ -71,7 +71,6 @@ export function UserDetailPage() {
               <CardDescription>Account fields returned by the admin users API.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-              <Detail label="Username" value={person.username} />
               <Detail label="Source" value={person.source} />
               <Detail
                 label="Created"

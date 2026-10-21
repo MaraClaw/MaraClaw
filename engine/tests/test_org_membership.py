@@ -73,7 +73,7 @@ async def test_place_new_registration_autojoins_openclaw(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_place_new_registration_invite_autojoins(monkeypatch):
+async def test_place_new_registration_invite_stays_in_openclaw(monkeypatch):
     invited = _tenant()
     openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
     code = SimpleNamespace(tenant_id=invited.id, used_count=0, max_uses=5)
@@ -83,7 +83,7 @@ async def test_place_new_registration_invite_autojoins(monkeypatch):
 
     placed = await membership.place_new_registration(email="x@y.com", invitation_code="ABCD")
     assert placed.needs_org_confirm is False
-    assert placed.tenant_id == invited.id
+    assert placed.tenant_id == openclaw.id
 
 
 @pytest.mark.asyncio
@@ -219,7 +219,9 @@ async def test_create_user_with_identity_copies_tenant_quotas(monkeypatch):
     from app.services.registration_service import RegistrationService
 
     tenant = _tenant(default_message_limit=80, default_max_agents=4)
-    identity: Any = SimpleNamespace(id=uuid.uuid4(), username="ada", email_verified=True, is_platform_admin=False)
+    identity: Any = SimpleNamespace(
+        id=uuid.uuid4(), email="ada@example.com", email_verified=True, is_platform_admin=False
+    )
     created = {}
 
     async def _create(*, obj_in):

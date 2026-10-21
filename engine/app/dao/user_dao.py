@@ -53,7 +53,6 @@ _IDENTITY_COLUMNS = (
     "id",
     "email",
     "phone",
-    "username",
     "password_hash",
     "is_active",
     "is_platform_admin",
@@ -85,7 +84,6 @@ def _user_from_joined_row(row: dict[str, Any]) -> UserRecord:
                 "id": row["i_id"],
                 "email": row.get("i_email"),
                 "phone": row.get("i_phone"),
-                "username": row.get("i_username"),
                 "password_hash": row.get("i_password_hash"),
                 "is_active": row.get("i_is_active"),
                 "is_platform_admin": row.get("i_is_platform_admin"),
@@ -141,16 +139,6 @@ class UserDAO(BaseDAO[UserRecord]):
                 {"identity_id": identity_id},
             )
             return [UserRecord.from_row(row) for row in rows]
-
-    async def get_by_identity_username(self, username: str) -> UserRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list('u')} FROM users u "
-                + "JOIN identities i ON i.id = u.identity_id "
-                + "WHERE i.username = %(username)s LIMIT 1",
-                {"username": username},
-            )
-            return UserRecord.from_row(row) if row is not None else None
 
     async def get_by_email_and_tenant(
         self, email: str, tenant_id: UUID | None, exclude_user_id: UUID | None = None
@@ -382,7 +370,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             name = str_from_row_opt(
                 await db.fetchval(
-                    "SELECT display_name FROM users WHERE id = %(id)s",
+                    "SELECT COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') "
+                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = %(id)s",
                     {"id": user_id},
                 )
             )
@@ -530,7 +519,8 @@ class UserDAO(BaseDAO[UserRecord]):
             return {}
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT id, display_name FROM users WHERE id = ANY(%(ids)s)",
+                "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name "
+                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
             return {uuid_from_row(row["id"]): str_from_row(row.get("display_name")) for row in rows}
@@ -538,7 +528,9 @@ class UserDAO(BaseDAO[UserRecord]):
     async def list_id_name_avatar_for_tenant(self, tenant_id: UUID) -> Sequence[dict[str, Any]]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT id, display_name, avatar_url FROM users WHERE tenant_id = %(tenant_id)s",
+                "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name, "
+                + "u.avatar_url FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                + "WHERE u.tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             return list(rows)
@@ -588,9 +580,7 @@ class UserDAO(BaseDAO[UserRecord]):
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             params["search"] = f"%{escaped}%"
             clauses.append(
-                "(u.display_name ILIKE %(search)s ESCAPE E'\\\\' "
-                "OR i.email ILIKE %(search)s ESCAPE E'\\\\' "
-                "OR i.username ILIKE %(search)s ESCAPE E'\\\\')"
+                "(u.display_name ILIKE %(search)s ESCAPE E'\\\\' OR i.email ILIKE %(search)s ESCAPE E'\\\\')"
             )
         if after is not None:
             params.update({"role_rank": after.role_rank, "user_id": after.user_id})
@@ -616,53 +606,46 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return [_user_from_joined_row(row) for row in rows]
 
-    async def find_by_username_or_display_name(
+    async def find_by_email_or_display_name(
         self, name: str, *, tenant_id: UUID | None = None, include_identity: bool = True
     ) -> UserRecord | None:
-        params: dict[str, Any] = {"name": name}
-        tenant_sql = ""
-        if tenant_id is not None:
-            tenant_sql = " AND u.tenant_id = %(tenant_id)s"
-            params["tenant_id"] = tenant_id
+        params: dict[str, Any] = {"name": name, "tenant_id": tenant_id}
         async with self.session() as db:
-            row = await db.fetchone(
+            rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
                 + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + f"WHERE (i.username = %(name)s OR u.display_name = %(name)s){tenant_sql} "
-                + "LIMIT 1",
+                + "WHERE (lower(i.email) = lower(%(name)s) OR u.display_name = %(name)s) "
+                + "AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 2",
                 params,
             )
-            if row is None:
+            if len(rows) != 1:
                 return None
+            row = rows[0]
             return _user_from_joined_row(row) if include_identity else UserRecord.from_row(row)
 
     async def list_display_names_for_tenant(self, tenant_id: UUID, *, limit: int = 20) -> list[str]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT u.display_name, i.username FROM users u "
+                "SELECT u.display_name, i.email FROM users u "
                 + "LEFT JOIN identities i ON i.id = u.identity_id "
                 + "WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE "
                 + "ORDER BY u.display_name NULLS LAST LIMIT %(limit)s",
                 {"tenant_id": tenant_id, "limit": limit},
             )
-            return [
-                name
-                for name in (str_from_row(row.get("display_name")) or str_from_row(row.get("username")) for row in rows)
-                if name
-            ]
+            return [str_from_row(row.get("display_name")) or str_from_row(row.get("email")) or "User" for row in rows]
 
-    async def usernames_for_ids(self, user_ids: Sequence[UUID]) -> dict[UUID, str | None]:
-        """Map user id -> identity username for batch enrichment."""
+    async def labels_for_ids(self, user_ids: Sequence[UUID]) -> dict[UUID, str | None]:
+        """Map user id to a presentation label for batch enrichment."""
         if not user_ids:
             return {}
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT u.id, i.username "
+                "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS label "
                 + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
                 + "WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
-            return {uuid_from_row(row["id"]): str_from_row_opt(row.get("username")) for row in rows}
+            return {uuid_from_row(row["id"]): str_from_row_opt(row.get("label")) for row in rows}
 
     async def list_active_admin_ids_for_tenant(self, tenant_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:

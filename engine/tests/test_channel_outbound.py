@@ -72,6 +72,9 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     async def lock_openclaw(_agent: AgentRecord) -> AgentRecord:
         return agent
 
+    async def get_for_agent(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
+        return msg if message_id == msg.id and agent_id == agent.id else None
+
     async def complete(_message_id, _agent_id, *, result, now):
         if msg.status == "completed":
             return None
@@ -110,6 +113,7 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(gateway, "connection_ctx", connection_ctx)
     monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", lock_openclaw)
     monkeypatch.setattr(delivery, "connection_ctx", connection_ctx)
+    monkeypatch.setattr(delivery.gateway_message_dao, "get_for_agent", get_for_agent)
     monkeypatch.setattr(gateway.gateway_message_dao, "complete", complete)
     monkeypatch.setattr(gateway.agent_dao, "update", update)
     monkeypatch.setattr(gateway.chat_message_dao, "insert_message", insert_message)

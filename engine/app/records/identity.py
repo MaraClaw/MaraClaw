@@ -37,7 +37,6 @@ class IdentityRecord:
     id: UUID
     email: str | None = None
     phone: str | None = None
-    username: str | None = None
     password_hash: str | None = None
     is_active: bool = True
     is_platform_admin: bool = False
@@ -52,7 +51,6 @@ class IdentityRecord:
             id=uuid_from_row(row["id"]),
             email=str_from_row(row["email"]) or None,
             phone=str_from_row(row["phone"]) or None,
-            username=str_from_row(row["username"]) or None,
             password_hash=str_from_row(row["password_hash"]) or None,
             is_active=bool(row.get("is_active", True)),
             is_platform_admin=bool(row.get("is_platform_admin", False)),

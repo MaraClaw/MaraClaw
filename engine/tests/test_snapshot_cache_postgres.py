@@ -39,7 +39,7 @@ def wire_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeRedis]:
     redis_cache.reset_circuit()
 
 
-@pytest.mark.parametrize(("field", "value"), [("display_name", "Renamed"), ("username", "renamed")])
+@pytest.mark.parametrize(("field", "value"), [("display_name", "Renamed"), ("email", "renamed@example.com")])
 async def test_patch_returns_new_value_when_session_snapshot_is_warm(
     deletion_pg: DeletionPostgres, wire_cache: FakeRedis, field: str, value: str
 ) -> None:
@@ -60,7 +60,7 @@ async def test_patch_returns_new_value_when_session_snapshot_is_warm(
     query, row_id = (
         ("SELECT display_name FROM users WHERE id = %s", deletion_pg.actor.id)
         if field == "display_name"
-        else ("SELECT username FROM identities WHERE id = %s", deletion_pg.actor.identity_id)
+        else ("SELECT email FROM identities WHERE id = %s", deletion_pg.actor.identity_id)
     )
     assert await deletion_pg.rows(query, (row_id,)) == [{field: value}]
     assert key not in wire_cache.store
@@ -111,7 +111,7 @@ async def test_rollback_keeps_sql_and_warm_redis_unchanged_when_dirty_snapshot_i
                 assert await tenant_dao.get(tenant.id) is updated_tenant
             else:
                 if kind == "identity":
-                    await identity_dao.update(db_obj=user.identity, obj_in={"username": "uncommitted"})
+                    await identity_dao.update(db_obj=user.identity, obj_in={"email": "uncommitted@example.com"})
                 else:
                     await user_dao.update(db_obj=user, obj_in={"display_name": "Uncommitted"})
                 updated_user = await user_dao.get_with_identity(user.id, fresh=True)
@@ -150,12 +150,14 @@ async def test_identity_version_alone_bypasses_warm_snapshot_when_members_are_un
     # When
     try:
         async with connection_ctx() as db:
-            await db.execute("UPDATE identities SET username = 'uncommitted' WHERE id = %s", (user.identity_id,))
+            await db.execute(
+                "UPDATE identities SET email = 'uncommitted@example.com' WHERE id = %s", (user.identity_id,)
+            )
             await session_cache.bump_identity_session(user.identity_id)
             loaded = await user_dao.get_with_identity(user.id)
             # Then
             assert loaded is not None
-            assert loaded.username == "uncommitted"
+            assert loaded.email == "uncommitted@example.com"
             assert wire_cache.store == before
             raise RollbackRequestedError
     except RollbackRequestedError:

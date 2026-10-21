@@ -1,7 +1,9 @@
 # Durable gateway report delivery
 
-The winning gateway completion transaction persists the authoritative result, chat
-history and one unique delivery intent per destination. Worker-enabled processes
+The winning gateway completion transaction persists the authoritative result and chat
+history. Legacy destinations are inferred at completion; shared human IM turns persist
+their independent provider intent atomically at enqueue. Claims require a completed
+source message, so accepted pending turns cannot send early. Worker-enabled processes
 run `gateway_report_relay` under `Runtime.tasks`; API-only and connector-only
 processes do not. Runtime cancels and drains the relay before closing PostgreSQL.
 
@@ -9,7 +11,9 @@ PostgreSQL is the queue. Each batch claims at most 20 due intents using row lock
 and skip-locked selection. Claims increment attempts and issue a new token with a
 60-second lease. The bounded batch runs concurrently; each attempt times out after
 45 seconds. Token, strictly unexpired-lease and nonterminal predicates fence locks,
-acknowledgements, retries and terminal writes. Retry delays are deterministic
+acknowledgements, retries and terminal writes. Claim validation also matches the
+persisted message, destination kind/ID and tenant, preventing an in-memory claim
+from redirecting an accepted intent. Retry delays are deterministic
 exponential seconds, capped at 300 seconds, with no attempt ceiling.
 No Redis notification or process-local task is required for recovery.
 
@@ -40,6 +44,9 @@ Acknowledgement occurs afterward with the same lease/token fence.
 The current session channel must still normalize to a registered inbound IM channel
 and have a nonblank external conversation ID. Web, agent, unknown and skill-only
 channels remain retryable failures, never successful no-op acknowledgements.
+The provider session must belong to the source agent (and therefore its revalidated
+tenant), but need not equal the canonical transcript's conversation ID. The accepted
+outbox destination, not the transcript ID, is the authority for where to send.
 
 External delivery is **at least once**, not exactly once. A provider may accept a
 send before the worker crashes or loses its lease, before acknowledgement commits.
@@ -59,7 +66,7 @@ Under a valid claim and stabilized identity reads, the relay commits `terminal_a
 and one bounded `terminal_reason`: `source_agent_unavailable`,
 `source_tenant_changed`, `destination_agent_unavailable`,
 `destination_tenant_changed`, `destination_relationship_changed` (agent sender or
-IM session ownership/conversation mismatch), or `destination_session_unavailable`.
+IM session ownership mismatch), or `destination_session_unavailable`.
 Terminal intents are not reclaimed, retried, revived or rerouted; their lease and
 token are cleared. Raw errors are never stored. These fields belong to the
 fresh-install schema baseline; no migration or upgrade path is provided.

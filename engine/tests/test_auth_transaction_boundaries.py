@@ -62,7 +62,7 @@ async def test_reset_email_waits_for_owning_commit(monkeypatch, failure):
     start_background_tasks()
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
-    identity = SimpleNamespace(id=uuid4(), email="member@example.com", username="member", is_active=True)
+    identity = SimpleNamespace(id=uuid4(), email="member@example.com", is_active=True)
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(system_email_service, "resolve_email_config_async", AsyncMock(return_value=object()))
     monkeypatch.setattr(
@@ -138,7 +138,7 @@ async def test_verification_email_waits_for_owning_commit(monkeypatch, failure):
     start_background_tasks()
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
-    identity = IdentityRecord(id=uuid4(), email="member@example.com", username="member")
+    identity = IdentityRecord(id=uuid4(), email="member@example.com")
     user = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity)
     monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
     monkeypatch.setattr(system_email_service, "resolve_email_config_async", AsyncMock(return_value=object()))

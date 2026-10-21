@@ -7,8 +7,7 @@ from typing import TypedDict
 
 
 MEMORY = {"engine": ("ENGINE_MEMORY", "768m"), "background": ("BACKGROUND_MEMORY", "768m"),
-          "bootstrap": ("BOOTSTRAP_MEMORY", "768m"), "postgres": ("POSTGRES_MEMORY", "768m"),
-          "redis": ("REDIS_MEMORY", "128m"), "web-a": ("WEB_MEMORY", "128m"),
+          "bootstrap": ("BOOTSTRAP_MEMORY", "768m"), "web-a": ("WEB_MEMORY", "128m"),
           "web-e": ("WEB_MEMORY", "128m"), "ingress": ("INGRESS_MEMORY", "128m")}
 REPLICAS = {"engine": "API_REPLICAS", "web-a": "ADMIN_REPLICAS", "web-e": "MEMBER_REPLICAS"}
 CPU = {name: ("WEB_CPUS" if name.startswith("web-") else name.upper() + "_CPUS") for name in MEMORY}

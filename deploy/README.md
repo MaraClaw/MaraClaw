@@ -1,28 +1,20 @@
 # Single-host production deployment
 
 For explicit reduced-resource development and macOS Docker Desktop, see
-[Local Development Startup](./DEVELOPMENT.md). Production defaults below are unchanged.
+[Local Development Startup](./DEVELOPMENT.md). Both modes require externally
+provisioned PostgreSQL and Redis; Compose does not create or manage stores.
 
-Run commands from the repository root. Docker Engine on **Linux** and Docker
-Compose v2.24+, Python 3.14+ and running systemd are required. This is not Swarm and is
-not high availability: replicas share one host, database, Redis, ingress and disk.
+Run commands from the repository root. Rootful local Docker Engine on **Linux**,
+Docker Compose v2.24+, Python 3.14+ and running systemd are required. This is not Swarm and is
+not high availability: replicas share one application host, ingress and disk,
+and depend on the configured external stores' availability.
 The existing engine and frontend Dockerfiles are built unchanged and pin their
-build/runtime releases. The latest stable releases verified as of **October 13,
-2026** are pinned explicitly: `postgres:18.6-alpine`, `redis:8.10.2-alpine` and
-`haproxy:3.4.6-alpine`. `POSTGRES_TAG`, `REDIS_TAG` and `HAPROXY_TAG` are configurable;
-validate overrides before rollout. Patch tags can still be rebuilt: pin validated
-digests for immutable production rollouts. Never deploy floating `latest` images.
-
-Official sources: [PostgreSQL releases](https://www.postgresql.org/), Docker Official
-Images tag manifests for [PostgreSQL](https://github.com/docker-library/official-images/blob/master/library/postgres),
-[Redis](https://github.com/docker-library/official-images/blob/master/library/redis) and
-[HAProxy](https://github.com/docker-library/official-images/blob/master/library/haproxy).
-PostgreSQL 19beta4 is a prerelease, **not a production default**.
-
-The [official PostgreSQL 18 Alpine Dockerfile](https://github.com/docker-library/postgres/blob/e00e1bd34ec5c8a8e7ad89b273b3d42efaf6d5bc/18/alpine3.24/Dockerfile)
-sets `PGDATA=/var/lib/postgresql/18/docker` and declares `/var/lib/postgresql` as
-its volume. Compose therefore mounts `postgres_data` at **`/var/lib/postgresql`**,
-not `/var/lib/postgresql/data`, so the actual database directory is persisted.
+build/runtime releases. Ingress defaults to `haproxy:3.4.6-alpine`;
+`HAPROXY_TAG` is configurable. Validate overrides before rollout. Patch tags can
+still be rebuilt: pin validated digests for immutable production rollouts. Never
+deploy floating `latest` images. The [official HAProxy image manifest](https://github.com/docker-library/official-images/blob/master/library/haproxy)
+lists image releases. Store versions, persistence, backups, access controls and
+availability are the operator's responsibility, outside this Compose deployment.
 
 ## Readiness and routing
 
@@ -43,8 +35,9 @@ generates each process's identity; only bootstrap receives genesis credentials.
 
 1. Copy `deploy/.env.example` to `deploy/.env` and restrict it to the operator
    (`chmod 600 deploy/.env`). Fill **every blank** with production values.
-   Generate independent strong `SECRET_KEY`, `JWT_SECRET_KEY`, database/Redis
-   passwords and the initial platform-admin password. Do not use example secrets.
+   Generate independent strong `SECRET_KEY`, `JWT_SECRET_KEY` and the initial
+   platform-admin password. Set complete `DATABASE_URL` and `REDIS_URL` values for
+   already-provisioned external stores in this file. Do not use example secrets.
 2. Set three distinct DNS names, without scheme, port, slash or wildcard:
    `API_DOMAIN`, `ADMIN_DOMAIN`, `MEMBER_DOMAIN`. Point their A/AAAA records at
    this host. HTTPS origins and the member public URL are derived from them.
@@ -64,20 +57,35 @@ generates each process's identity; only bootstrap receives genesis credentials.
    On amd64, the operator must build a compatible guest image using the engine
    OpenClaw build instructions. Do not assume the engine build produces guests.
 
-### Passwords with special characters
+### External-store connection URLs
 
-`POSTGRES_PASSWORD` and `REDIS_PASSWORD` are the original passwords used by the
-servers. Their required `_URLENCODED` partners must be exactly the same passwords
-percent-encoded with **no safe characters** for the engine URLs. Do not encode
-the entire URL and do not use `quote_plus` (spaces must become `%20`, not `+`).
-Compute each encoded value locally without putting the password in shell history:
+The selected protected mode-0600 env file must contain both canonical keys,
+`DATABASE_URL` and `REDIS_URL`, with complete client URLs. Production uses
+`deploy/.env`. The launcher deliberately filters ambient exported shell secrets
+so startup and persistent supervision use the same file-backed configuration;
+exporting the URLs in a shell is not sufficient. URLs are not assembled from
+separate store password variables.
+
+Use hosts reachable from the engine/bootstrap containers, not `localhost` or
+`127.0.0.1`, which refer to the container itself. Provision the PostgreSQL database
+and Redis instance before launch, with access needed by bootstrap and serving
+roles. Configure TLS through each client's supported URL scheme/options, including
+PostgreSQL SSL parameters or `rediss://` for Redis, and validate certificate trust
+and hostname verification from the containers. Compose provides no store ports,
+private database network or store healthchecks.
+
+Percent-encode only the username and password components, separately, with
+**no safe characters**. Don't encode the entire URL or its separators and don't
+use `quote_plus` (spaces must become `%20`, not `+`). Compute each credential
+component locally without putting it in shell history:
 
 ```sh
 python3 -c 'import getpass; from urllib.parse import quote; print(quote(getpass.getpass("Password: "), safe=""))'
 ```
 
-Copy the result into its matching variable. A mismatch fails authentication.
-In the dotenv file single-quote values containing `$` or `#`; escape any embedded
+Insert the encoded component into the complete URL; apply the same encoding to a
+username when needed. In the dotenv file single-quote values containing literal
+`$` or `#` so Compose doesn't interpolate them; escape any embedded
 single quote according to Compose dotenv syntax. Rendered Compose config contains
 secrets: never post it, log it, or commit it. Optional engine Settings for LLMs,
 channels and storage may be added to this env file; only engine processes load
@@ -93,9 +101,10 @@ docker compose --env-file deploy/.env ps -a
 docker compose --env-file deploy/.env logs --tail=100 bootstrap engine background ingress
 ```
 
-Missing/empty mandatory variables fail before containers are created. Compose
-does not validate domain syntax, absolute paths or password-encoding equivalence;
-the operator must check these before launch. Missing bind paths fail closed.
+Missing/empty mandatory variables fail before containers are created. Rendering
+does not prove URL authentication, reachability, TLS, store version compatibility,
+domain syntax or valid host paths; check these before launch. Missing bind paths
+fail closed.
 `bootstrap` must exit 0 before API/background start: the original entrypoint runs
 schema DDL, then `/deployment/bootstrap.py` runs `Runtime.start({'bootstrap'})`
 and always `Runtime.stop()`, including partial startup failures. Only bootstrap
@@ -117,17 +126,19 @@ Docker DNS into 16 slots per backend. `/api`, `/ws`, `/p` use the API pool on
 every public host. HTTP redirects known hosts to HTTPS; unknown hosts are rejected.
 
 Public endpoints: `https://$API_DOMAIN/api/health`, the admin site and member site.
-HAProxy health is loopback-only at port 8404; private callbacks at 8000 and
-PostgreSQL/Redis are never published. Verify real HTTPS routing, websocket chat,
-uploads and guest callbacks after rollout; config tests are not runtime proof.
+HAProxy health is loopback-only at port 8404; private callbacks use port 8000.
+Protect external-store endpoints with their own network/access policy. Verify
+real HTTPS routing, websocket chat, uploads and guest callbacks after rollout;
+config tests are not runtime proof.
 
 ## Scaling and resource controls
 
-The controller adjusts each routed pool independently within **1–16 replicas**.
+The controller adjusts each routed pool independently within **1..16 replicas**.
 Do not use plain Compose `up` to reduce replicas: its victim selection bypasses
 proxy-first retirement. Pause the controller before manual maintenance (see
 [operations](AUTOSCALING.md)). Do not scale `background`,
-`bootstrap`, ingress, PostgreSQL or Redis. Persistent defaults can be set using
+`bootstrap` or ingress. External stores are outside the controller's lifecycle.
+Persistent defaults can be set using
 `API_REPLICAS`, `ADMIN_REPLICAS`, `MEMBER_REPLICAS` (all default 2).
 Optional controls: `HTTP_PORT=80`, `HTTPS_PORT=443`, `DOCKER_NETWORK=maraclaw_network`,
 `RELEASE_TAG=local`. Nonstandard HTTPS host ports require adjusted public URLs and
@@ -143,39 +154,78 @@ in `deploy/.env.example`:
 | API | `ENGINE_CPUS=1` | `ENGINE_MEMORY=2g` | 2 |
 | Background | `BACKGROUND_CPUS=1` | `BACKGROUND_MEMORY=2g` | 1 |
 | Bootstrap | `BOOTSTRAP_CPUS=1` | `BOOTSTRAP_MEMORY=1g` | 1, one-shot |
-| PostgreSQL | `POSTGRES_CPUS=1.5` | `POSTGRES_MEMORY=3g` | 1 |
-| Redis | `REDIS_CPUS=0.5` | `REDIS_MEMORY=1g` | 1 |
 | Admin/member web | `WEB_CPUS=0.25` | `WEB_MEMORY=128m` | 2 each |
 | Ingress | `INGRESS_CPUS=0.5` | `INGRESS_MEMORY=256m` | 1 |
 
 Background and bootstrap have independent limits: changing `ENGINE_*` controls
 does not enlarge their singleton budgets. With bootstrap completed, default
-replicas total **6.5 CPUs / 10.75 GiB**, leaving **1.5 CPUs / 5.25 GiB** to reserve
-for the OS, Docker and externally created OpenClaw guests. Guest workloads are
-outside these Compose limits; keep their combined demand within that headroom.
+replicas total **4.5 CPUs / 6.75 GiB**. On a 16-GiB daemon, admission reserves
+2.4 GiB for the host and at least 2 GiB for guests/external containers, leaving an
+11.6-GiB stack budget and 4.85 GiB beyond the steady default limits. Known external
+hard limits replace the 2-GiB floor when larger; unlimited external allocations
+fail closed unless explicitly budgeted by policy. Stores running on the same
+Docker daemon count as external containers. Off-host stores need separate capacity
+planning. The 3.5 CPUs outside the stack limits are not a CPU reservation or
+guarantee.
 
 While bootstrap is the only engine role running (API/background have not started),
-the conservative aggregate is **4.5 CPUs / 5.75 GiB**, counting PostgreSQL, Redis,
-all four web replicas and ingress even if some start later. After any override or
-scaling change, recalculate **sum(per-container limit × replicas)** for each phase,
+the conservative aggregate is **2.5 CPUs / 1.75 GiB**, counting all four web
+replicas and ingress even if some start later. If bootstrap overlaps running
+serving roles during an update, its 1-GiB limit is additional; the default
+steady-plus-bootstrap sum is 7.75 GiB. After any override or scaling change,
+recalculate **sum(per-container limit × replicas)** for each phase,
 account for guests separately and preserve host headroom. Autoscaling admits hard
 memory limits against the actual Docker host, not a fixed 16-GiB ceiling; CPU
 contention and actual working sets still require monitoring.
 
-Redis's container budget is not an eviction policy; monitor AOF/memory and queue
-growth. Logs rotate at 10 MB × 3 per container. Services restart unless stopped,
+An 8-GiB daemon still fails production admission: the 2-GiB host reserve and
+2-GiB external floor leave only 4 GiB for the stack, below the 6.75-GiB steady
+default (and 7.75-GiB overlap). Removing managed stores does not remove reserves.
+
+Monitor external Redis persistence, memory policy and queue growth independently.
+Logs rotate at 10 MB × 3 per container. Services restart unless stopped,
 use a 60-second graceful-stop window; bootstrap never restarts automatically.
 Frontends use read-only roots with nginx runtime paths on `/tmp` tmpfs.
 
 ## Releases, certificates and recovery
 
-**Existing PostgreSQL 17 volumes require a major-version migration** before using
-these defaults. Changing only the image tag or mount path does not upgrade the
-database. Back up and test a [dump/restore or `pg_upgrade` migration](https://www.postgresql.org/docs/18/upgrading.html)
-into the PostgreSQL 18 layout, preserving the original volume for recovery.
-Do not delete volumes to make the new image start. These defaults target fresh
-deployments or already-migrated PostgreSQL 18 data; the commands below are not a
-17-to-18 migration procedure.
+### Cut over an existing managed-store installation
+
+There is no automatic store or data migration. Removing store services from
+Compose does not copy their data to the URLs you configure. Plan and approve the
+cutover before launching the new topology:
+
+1. Schedule maintenance, stop the controller and wait for shutdown. Stop inbound
+   traffic and safely drain or stop API/background, connector activity, guests
+   and any other writers to the database, Redis or agent files. Keep writers
+   stopped throughout the final backup and transfer; avoid writes to both old and
+   new stores.
+2. Take verified PostgreSQL, Redis and agent-file backups and test restoration
+   before changing endpoints. Restore/migrate PostgreSQL into the external
+   database using a version-compatible procedure. PostgreSQL major upgrades need
+   a tested dump/restore or `pg_upgrade` plan. Transfer Redis state with a supported
+   backup/restore or migration procedure, preserving queued/in-flight work as
+   appropriate for the application's recovery plan. Don't silently discard queues.
+3. Put the complete external URLs in the selected mode-0600 env file. Validate
+   connectivity from containers, compatible store versions, TLS trust/hostname
+   checks and required database/Redis access. Follow the existing input-fingerprint
+   and maintenance rules; never fabricate a checkpoint to accept changed inputs.
+4. Explicitly run bootstrap against the migrated external stores with writers
+   still stopped. Require exit 0 for schema/runtime/genesis setup, then start the
+   serving roles. Check `/api/ready`, background readiness and application/queue
+   behavior before admitting traffic. Keep a tested rollback plan and the source
+   state until the operator accepts the cutover.
+
+Legacy PostgreSQL/Redis containers become Compose orphans; keep them and their
+old volumes intact for recovery. The new launcher does not manage or retire them.
+Do not use blanket `--remove-orphans`, `down -v` or volume/container pruning during
+cutover. Retirement is a manual operator action only after backups are verified
+and cutover is accepted. Legacy containers that remain running with hard limits
+count as external allocations under the existing admission budget; their memory
+is not free just because the services disappeared from Compose. Unlimited ones
+still require explicit external accounting or cause refusal.
+
+### Routine upgrades and backups
 
 Before every upgrade, back up and schedule a maintenance window. Bootstrap is
 one-shot: an already-completed container is not a reliable release migration job.
@@ -194,21 +244,20 @@ docker compose --env-file deploy/.env up -d --no-deps --force-recreate --scale "
 sudo systemctl start maraclaw-autoscaler.service
 ```
 
-Postgres and Redis must already be healthy for `--no-deps`. On first install use
-normal `up`, not this shortcut. On a failed bootstrap, investigate its logs and
-fix the cause before restarting; never enable migration-failure bypass. Seeds
+External PostgreSQL and Redis must already be provisioned and reachable for every
+startup, including `--no-deps`; Compose never starts them. On first install use
+the starter, not this upgrade shortcut. On a failed bootstrap, investigate its logs
+and fix the cause before restarting; never enable migration-failure bypass. Seeds
 are idempotent, not an admin-password rotation mechanism. Database rollback needs
 a compatible backup, not simply the previous engine image.
 
-Back up PostgreSQL with `docker compose --env-file deploy/.env exec -T postgres
-pg_dump -U maraclaw -d maraclaw > backup.sql` into an operator-protected directory.
-Back up `${DATA_DIR}/agents` with permissions preserved while writers and guests
-are stopped. Back up Redis AOF volume consistently (stop Redis for a filesystem
-snapshot, or use the Redis-supported backup procedure). Encrypt backups, keep
-off-host copies and test restore into a separate host/project. Named volumes
-`postgres_data` and `redis_data` survive `down`; **never use `down -v`** unless
-intentionally destroying state. Compose does not stop/remove Docker-created guest
-containers: account for them during maintenance, backup and decommissioning.
+Use the external PostgreSQL service's supported backup procedure and compatible
+client tooling. Back up Redis consistently using its supported persistence/backup
+procedure, with a recovery plan for queued work. Back up `${DATA_DIR}/agents` with
+permissions preserved while writers and guests are stopped. Encrypt backups, keep
+off-host copies and test restore into isolated stores and a separate application
+project. Compose does not back up external stores or stop/remove Docker-created
+guest containers: account for them during maintenance, backup and decommissioning.
 
 Renew certificates outside the stack. Replace the PEM securely, validate its SANs
 and chain, then **recreate** ingress (a bind-mounted file can retain the old inode
@@ -236,8 +285,9 @@ are not `privileged`; engine intentionally cannot use `no-new-privileges` becaus
 its setuid sandbox setup needs it. Unsafe fallback is disabled. Use a dedicated
 trusted host, tightly restrict admins, patch Docker/kernel and monitor guests.
 This topology is unsuitable for hostile mutually untrusted tenants without a
-stronger host/VM isolation boundary. The private DB network is internal; app and
-guest networks permit required egress. Protect `.env`, socket access and TLS keys.
+stronger host/VM isolation boundary. App and guest networks permit required egress;
+external-store firewalls, TLS and access controls are operator-managed. Protect
+`.env`, socket access and TLS keys.
 
 Run standard-library deployment checks without starting containers:
 
@@ -249,3 +299,9 @@ They render actual Compose models, exercise missing-variable refusal and ensure
 bootstrap cleanup on successful/failed startup. They do not prove image pulls,
 builds, Linux sandbox setup, healthchecks or HTTPS runtime behavior. Validate
 those on the target architecture; registry or build failures are release blockers.
+
+All earlier deployment QA receipt JSON files, including
+[`DEVELOPMENT-QA.json`](./DEVELOPMENT-QA.json), are historical managed-store
+evidence, not qualification of the external-store topology. See the
+[disposable external-store acceptance procedure](./DEVELOPMENT.md#reproducible-disposable-qualification)
+for the required opt-in inputs; no new runtime qualification is claimed here.

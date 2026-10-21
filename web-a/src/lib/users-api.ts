@@ -12,7 +12,6 @@ export type UserAgent = {
 }
 
 export type UserDetail = AdminUser & {
-  username: string | null
   quota_message_limit?: number
   quota_message_period?: string
   quota_messages_used?: number
@@ -23,7 +22,6 @@ export type UserDetail = AdminUser & {
 
 export type AdminUser = {
   id: string
-  username: string | null
   email: string | null
   display_name: string | null
   role: string
@@ -68,7 +66,6 @@ export function agentStatusLabel(status: string, expired: boolean): string {
 export function asAdminUser(admin: PlatformAdmin): AdminUser {
   return {
     id: admin.id,
-    username: null,
     email: admin.email,
     display_name: admin.display_name,
     role: admin.role || 'platform_admin',
@@ -88,7 +85,7 @@ export async function listUsers(tenantId?: string, signal?: AbortSignal): Promis
 
 const usersPageSchema = z.object({
   items: z.array(z.object({
-    id: z.string(), username: z.string().nullable(), email: z.string().nullable(),
+    id: z.string(), email: z.string().nullable(),
     display_name: z.string().nullable(), role: z.string(), is_active: z.boolean(),
     is_genesis: z.boolean().optional(), tenant_id: z.string().nullable(),
     agents_count: z.number(), created_at: z.string().nullable(), source: z.string(),
@@ -147,7 +144,6 @@ export async function setOrgAdminActive(userId: string, isActive: boolean): Prom
   })
   return {
     id: updated.id,
-    username: null,
     email: updated.email,
     display_name: updated.display_name,
     role: updated.role,

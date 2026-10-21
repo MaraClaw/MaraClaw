@@ -29,7 +29,7 @@ from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import channel_user_service
+from app.services.channels import inbound as channel_inbound
 
 router = APIRouter(tags=["discord"])
 
@@ -295,10 +295,11 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             _display = _discord_username or f"Discord User {sender_id[:8]}"
             _extra_info = mapping_from_row({"name": _display})
 
-            _platform_user = await channel_user_service.resolve_channel_user(
+            _platform_user = await channel_inbound.resolve_sender_user(
                 agent=agent_obj,
                 channel_type="discord",
                 external_user_id=sender_id,
+                is_group=_is_group_discord,
                 extra_info=_extra_info,
             )
 
@@ -323,6 +324,10 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
                 is_group=_is_group_discord,
                 group_name=f"Discord Channel {channel_id[:8]}" if _is_group_discord else None,
             )
+            conversation = await channel_inbound.bind_channel_conversation(
+                agent=agent_obj, platform_user=_platform_user, reply_session=sess, is_group=_is_group_discord
+            )
+            sess = conversation.transcript_session
             session_conv_id = str(sess.id)
 
             history_msgs = await chat_message_dao.list_recent(
@@ -332,22 +337,11 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
             )
             history = _conv(history_msgs)
 
-            _ = await chat_message_dao.insert_message(
-                agent_id=agent_id,
-                user_id=platform_user_id,
-                role="user",
-                content=user_text,
-                conversation_id=session_conv_id,
-            )
-            _ = await chat_session_dao.update(db_obj=sess, obj_in={"last_message_at": datetime.now(UTC)})
-
             _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
 
             cfg = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
             _bot_token_bg = cfg.app_secret if cfg else ""
             _app_id_bg = cfg.app_id if cfg else ""
-
-            from app.services.channels import inbound as channel_inbound
 
             reply_text = await channel_inbound.generate_channel_reply(
                 agent_id=agent_id,
@@ -355,6 +349,8 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
                 history=history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
+                reply_session_id=conversation.reply_session.id,
+                user_message_content=user_text,
                 agent_model=_agent_model,
                 llm_model=_llm_model,
                 fallback_model=_fallback_model,

@@ -14,12 +14,12 @@ export const replacementCompany = {
   id: 'e9c9d722-3f86-4ae1-b829-435079266026', name: 'Fencing Replacement Company', slug: 'fencing-replacement',
 } as const
 export const originalUser: UserOut = {
-  id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db', username: 'original-member',
+  id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db',
   email: 'original@fencing.test', display_name: 'Original fencing member', role: 'member',
   tenant_id: originalCompany.id, email_verified: true, must_change_password: false, is_platform_admin: false,
 }
 export const replacementUser: UserOut = {
-  ...originalUser, id: '49926b42-c074-4aa1-9aa1-54f0adbf70b9', username: 'replacement-member',
+  ...originalUser, id: '49926b42-c074-4aa1-9aa1-54f0adbf70b9',
   email: 'replacement@fencing.test', display_name: 'Replacement fencing member', tenant_id: replacementCompany.id,
 }
 export const originalAgent: AgentOut = {
@@ -39,6 +39,11 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
   // The fake changes its server-side identity on switch, including same-token reissuance.
   let switched = false
   let tickets = 0
+  const delayedSession = {
+    id: '31bccbda-b487-4da0-bb4f-7ab6800a9433', agent_id: delayedAgent.id, user_id: originalUser.id,
+    title: 'Shared conversation', source_channel: 'shared', is_primary: true,
+    created_at: '2030-01-01T00:00:00Z', message_count: 0,
+  }
   await page.addInitScript(({ tokenKey, originalToken }) => {
     localStorage.setItem(tokenKey, originalToken)
   }, { tokenKey, originalToken })
@@ -86,8 +91,11 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         return
       case '/api/agents/templates':
       case '/api/auth/providers':
-      case `/api/agents/${delayedAgent.id}/sessions`:
+      case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages`:
         await route.fulfill({ json: [] })
+        return
+      case `/api/agents/${delayedAgent.id}/sessions`:
+        await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })
         return
       case `/api/agents/${delayedAgent.id}`:
         await route.fulfill({ json: delayedAgent })

@@ -16,7 +16,6 @@ _IDENTITY_COLUMNS = (
     "id",
     "email",
     "phone",
-    "username",
     "password_hash",
     "is_active",
     "is_platform_admin",
@@ -42,7 +41,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         return updated
 
     async def get_by_login_identifier(self, identifier: str) -> IdentityRecord | None:
-        """Find identity by email, phone, or username."""
+        """Find identity by case-insensitive email only."""
         value = (identifier or "").strip()
         if not value:
             return None
@@ -50,7 +49,6 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM identities "
                 + "WHERE lower(email) = lower(%(identifier)s) "
-                + "OR phone = %(identifier)s OR username = %(identifier)s "
                 + "LIMIT 1",
                 {"identifier": value},
             )
@@ -59,16 +57,8 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     async def get_by_email(self, email: str) -> IdentityRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM identities WHERE email = %(email)s LIMIT 1",
+                f"SELECT {self._select_list()} FROM identities WHERE lower(email) = lower(%(email)s) LIMIT 1",
                 {"email": email},
-            )
-            return IdentityRecord.from_row(row) if row is not None else None
-
-    async def get_by_username(self, username: str) -> IdentityRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM identities WHERE username = %(username)s LIMIT 1",
-                {"username": username},
             )
             return IdentityRecord.from_row(row) if row is not None else None
 
@@ -84,7 +74,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     async def tombstone_orphans(self, identity_ids: Sequence[UUID]) -> int:
         """Clear unique login fields on identities that no longer have a membership.
 
-        Frees email / username / phone so the addresses can be reused after a
+        Frees email / phone so the addresses can be reused after a
         company is deleted. Login is also impossible once ``is_active`` is false
         and the password hash is cleared.
         """
@@ -92,7 +82,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             return 0
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE identities SET email = NULL, phone = NULL, username = NULL, "
+                "UPDATE identities SET email = NULL, phone = NULL, "
                 + "password_hash = NULL, is_active = FALSE, is_platform_admin = FALSE, "
                 + "updated_at = now() "
                 + "WHERE id = ANY(%(ids)s) AND NOT EXISTS ("
@@ -104,20 +94,11 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
                 await bump_identity_session(uuid_from_row(row["id"]))
             return len(rows)
 
-    async def is_username_taken(self, username: str) -> bool:
-        async with self.session() as db:
-            value = await db.fetchval(
-                "SELECT 1 FROM identities WHERE username = %(username)s LIMIT 1",
-                {"username": username},
-            )
-            return value is not None
-
     async def create_identity(
         self,
         *,
         email: str | None = None,
         phone: str | None = None,
-        username: str | None = None,
         password_hash: str | None = None,
         is_platform_admin: bool = False,
         email_verified: bool = False,
@@ -129,7 +110,6 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             obj_in={
                 "email": email,
                 "phone": normalized_phone,
-                "username": username,
                 "password_hash": password_hash,
                 "is_platform_admin": is_platform_admin,
                 "email_verified": email_verified,

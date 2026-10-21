@@ -19,8 +19,8 @@ from app.services.chat_submissions import ChatSubmission
 pytest_plugins = ("test_chat_submission_postgres",)
 
 
-async def test_socket_receipt_reconnect_history_conflict_and_delete(receipt_db, monkeypatch):
-    db = receipt_db
+async def test_socket_receipt_reconnect_history_conflict_and_delete(writable_receipt_db, monkeypatch):
+    db = writable_receipt_db
     binding = chat_tickets.ChatTicketBinding(
         user_id=db.user.id,
         tenant_id=uuid4(),
@@ -32,6 +32,7 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(receipt_db, 
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(db.user, db.agent, "manage")))
     monkeypatch.setattr(websocket.manager, "connect", AsyncMock())
     monkeypatch.setattr(websocket.manager, "disconnect", AsyncMock())
+    monkeypatch.setattr(websocket.manager, "send_to_session", AsyncMock())
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -77,15 +78,14 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(receipt_db, 
             assert [(row["message_id"], row["client_submission_id"]) for row in rows] == [
                 (accepted["message_id"], submission_id)
             ]
-            assert client.delete(session_path).status_code == 204
+            assert client.delete(session_path).status_code == 409
             socket.send_json(envelope)
-            assert socket.receive_json()["type"] == "error"
-            assert socket.receive()["code"] == 4003
-        assert client.get(session_path + "/messages").status_code == 404
+            assert socket.receive_json() == accepted
+        assert client.get(session_path + "/messages").status_code == 200
 
 
-async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(receipt_db, monkeypatch):
-    db = receipt_db
+async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(writable_receipt_db, monkeypatch):
+    db = writable_receipt_db
     original_enqueue = chat_submissions.enqueue_prepared_openclaw_message
 
     async def fail_after_enqueue(prepared, *, sender_user_id, conversation_id, deduplicate):
@@ -119,6 +119,9 @@ async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(rec
 async def test_failed_session_delete_retains_receipt_and_parent(receipt_db, monkeypatch):
     db = receipt_db
     async with transaction(db.first):
+        await db.first.execute(
+            "UPDATE chat_sessions SET source_channel = 'agent' WHERE id = %(id)s", {"id": db.session_id}
+        )
         accepted = await chat_submissions.accept_submission(
             ChatSubmission(client_submission_id=uuid4(), content="hello"),
             user=db.user,

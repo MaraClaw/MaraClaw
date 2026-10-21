@@ -13,7 +13,7 @@ const base = server.resolvedUrls.local[0]
 const counts = { ok: true, users_notified: 7, agents_notified: 3, emails_sent: 5 }
 const details = { 400: 'System email is not configured. Please configure it in Platform Settings.', 403: 'Only org admins can send broadcasts', 503: 'Synthetic service unavailable' }
 const admin = {
-  id: 'operator', identity_id: 'identity', username: 'operator', email: 'operator@example.test', display_name: 'Operator',
+  id: 'operator', identity_id: 'identity', email: 'operator@example.test', display_name: 'Operator',
   avatar_url: null, role: 'org_admin', is_platform_admin: false, tenant_id: 'tenant-a', title: null, primary_mobile: null,
   registration_source: null, is_active: true, email_verified: true, must_change_password: false, created_at: '2026-10-20T00:00:00Z',
 }
@@ -203,7 +203,7 @@ try {
     state.user = { ...admin, id: 'replacement', tenant_id: 'tenant-b' }
     if (!sameToken) state.token = 'synthetic-next-token'
     await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-    await page.getByLabel('Email, phone, or username').fill('replacement@example.test')
+    await page.getByLabel('Email', { exact: true }).fill('replacement@example.test')
     await page.getByLabel('Password', { exact: true }).fill('synthetic-password')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
     const title = page.getByLabel('Title', { exact: true })

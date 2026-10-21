@@ -253,7 +253,7 @@ async def _get_user_name(user_id: uuid.UUID | str | None) -> str | None:
 
         _u = await user_dao.get_with_identity(resolved_id)
         if _u:
-            return _u.display_name or _u.username
+            return _u.display_name or _u.email or "User"
         # Check Agent name fallback (A2A / agent-as-user paths)
         _a = await agent_dao.get(resolved_id)
         if _a:
@@ -524,7 +524,7 @@ async def call_llm(
     elif turn and turn.user_name not in (None, ""):
         _user_name = turn.user_name
     elif turn and turn.user is not None:
-        _user_name = getattr(turn.user, "display_name", None) or getattr(turn.user, "username", None)
+        _user_name = turn.user.display_name or turn.user.email or "User"
     else:
         _user_name = await _get_user_name(user_id)
 

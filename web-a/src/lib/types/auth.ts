@@ -4,7 +4,6 @@ export type IdentityOut = {
   id: string
   email: string | null
   phone: string | null
-  username: string | null
   is_active: boolean
   is_platform_admin: boolean
   email_verified: boolean
@@ -16,7 +15,6 @@ export type IdentityOut = {
 export type UserOut = {
   id: string
   identity_id: string | null
-  username: string | null
   email: string | null
   display_name: string
   avatar_url: string | null
@@ -109,4 +107,8 @@ export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
 
 export function canSendBroadcast(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user)
+}
+
+export function canReviewAdmissions(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && user.is_genesis === true
 }

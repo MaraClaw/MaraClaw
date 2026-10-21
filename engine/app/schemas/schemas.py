@@ -4,9 +4,10 @@ import uuid
 from datetime import datetime
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.json_types import JsonObject
+from app.schemas.company_admission import RequestSummary
 
 # ─── Auth ───────────────────────────────────────────────
 
@@ -14,7 +15,6 @@ from app.core.json_types import JsonObject
 class RegisterInitRequest(BaseModel):
     """Step 1: Initialize registration with account credentials."""
 
-    username: str = Field(min_length=1, max_length=100)
     email: EmailStr
     password: str = Field(min_length=6, max_length=128)
     display_name: str | None = None
@@ -41,12 +41,18 @@ class RegisterInitResponse(BaseModel):
     target_tenant_id: uuid.UUID | None = None
     needs_org_confirm: bool = False
     suggested_org: SuggestedOrg | None = None
+    admission_request: RequestSummary | None = None
 
 
 class UserLogin(BaseModel):
-    login_identifier: str = Field(description="Email address for login")
+    login_identifier: EmailStr = Field(description="Email address for login")
     password: str
     tenant_id: uuid.UUID | None = None  # Optional: when set, restrict login to users of this tenant
+
+    @field_validator("login_identifier", mode="before")
+    @classmethod
+    def trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -122,7 +128,6 @@ class IdentityOut(BaseModel):
     id: uuid.UUID
     email: str | None = None
     phone: str | None = None
-    username: str | None = None
     is_active: bool
     is_platform_admin: bool
     email_verified: bool
@@ -136,7 +141,6 @@ class IdentityOut(BaseModel):
 class UserOut(BaseModel):
     id: uuid.UUID
     identity_id: uuid.UUID | None = None
-    username: str | None = None
     email: str | None = None
     display_name: str
     avatar_url: str | None = None
@@ -193,7 +197,6 @@ class IdentityUnbindRequest(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    username: str | None = None
     email: EmailStr | None = None
     display_name: str | None = None
     avatar_url: str | None = None
@@ -603,6 +606,7 @@ class GatewayMessageOut(BaseModel):
     history: list[GatewayHistoryItem] = []
     model: str | None = None
     model_slot: str | None = None
+    runtime_session_key: str | None = None
 
 
 class GatewayPollResponse(BaseModel):

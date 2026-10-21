@@ -15,7 +15,7 @@ from app.services.registration_service import registration_service
 
 
 def _user(tenant_id: uuid.UUID | None, role: str = "member") -> UserRecord:
-    identity = IdentityRecord(id=uuid.uuid4(), email="before@example.com", username="before", phone="100")
+    identity = IdentityRecord(id=uuid.uuid4(), email="before@example.com", phone="100")
     return UserRecord(
         id=uuid.uuid4(),
         identity_id=identity.id,
@@ -100,7 +100,7 @@ async def test_patch_hides_foreign_targets_from_org_admin(monkeypatch, tenantles
 
 
 @pytest.mark.parametrize("protection", ["platform_role", "platform_identity", "genesis", "genesis_self"])
-@pytest.mark.parametrize("field", ["email", "username", "primary_mobile"])
+@pytest.mark.parametrize("field", ["email", "primary_mobile"])
 async def test_patch_rejects_entire_request_for_protected_identities(monkeypatch, protection, field):
     actor = _user(uuid.uuid4(), "org_admin")
     target = actor if protection == "genesis_self" else _user(actor.tenant_id)
@@ -158,11 +158,11 @@ async def test_patch_allows_normal_identity_fields_and_preserves_contact_checks(
     phone_check = AsyncMock(return_value=False)
     monkeypatch.setattr(identity_dao, "is_email_taken_in_tenant", email_check)
     monkeypatch.setattr(identity_dao, "is_phone_taken_in_tenant", phone_check)
-    data = UserUpdate.model_validate({"email": "after@example.com", "username": "after", "primary_mobile": "200"})
+    data = UserUpdate.model_validate({"email": "after@example.com", "primary_mobile": "200"})
 
     result = await organization.admin_update_user(target.id, data, actor)
 
-    assert (result.email, result.username, result.primary_mobile) == ("after@example.com", "after", "200")
+    assert (result.email, result.primary_mobile) == ("after@example.com", "200")
     identity_write.assert_awaited_once()
     email_check.assert_awaited_once_with("after@example.com", target.tenant_id, exclude_user_id=target.id)
     phone_check.assert_awaited_once_with("200", target.tenant_id, exclude_user_id=target.id)
