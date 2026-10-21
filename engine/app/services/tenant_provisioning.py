@@ -108,9 +108,6 @@ async def create_tenant_with_org_admin(
     slug = slugify_tenant_name(name)
     password_hash = await hash_password_async(admin_password)
     local_part = email.split("@", 1)[0][:100] or "org-admin"
-    username = local_part
-    if await identity_dao.is_username_taken(username):
-        username = f"{local_part}_{secrets.token_hex(3)}"[:100]
 
     display_name = (admin_display_name or "").strip() or local_part
 
@@ -120,7 +117,6 @@ async def create_tenant_with_org_admin(
 
             identity = await identity_dao.create_identity(
                 email=email,
-                username=username,
                 password_hash=password_hash,
                 is_platform_admin=False,
                 email_verified=True,
@@ -185,16 +181,12 @@ async def attach_genesis_org_admin(
 
     password_hash = await hash_password_async(admin_password)
     local_part = email.split("@", 1)[0][:100] or "org-admin"
-    username = local_part
-    if await identity_dao.is_username_taken(username):
-        username = f"{local_part}_{secrets.token_hex(3)}"[:100]
     display_name = (admin_display_name or "").strip() or local_part
 
     try:
         async with connection_ctx():
             identity = await identity_dao.create_identity(
                 email=email,
-                username=username,
                 password_hash=password_hash,
                 is_platform_admin=False,
                 email_verified=True,

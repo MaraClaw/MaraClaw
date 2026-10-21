@@ -19,8 +19,6 @@ Security rules:
 
 from __future__ import annotations
 
-import secrets
-
 from app.config import get_settings
 from app.core.logging import logger
 from app.core.security import hash_password_async, verify_password_async
@@ -34,23 +32,6 @@ from app.services.system_org_seeder import MARACLAW_SLUG
 
 class PlatformAdminSeedError(RuntimeError):
     """Fatal bootstrap failure when the genesis platform admin cannot be ensured."""
-
-
-def _username_from_email(email: str) -> str:
-    local = email.split("@", 1)[0].strip().lower() or "platform-admin"
-    return local[:100]
-
-
-async def _unique_username(email: str) -> str:
-    base = _username_from_email(email)
-    candidate = base
-    if not await identity_dao.is_username_taken(candidate):
-        return candidate
-    for _ in range(8):
-        candidate = f"{base}_{secrets.token_hex(3)}"[:100]
-        if not await identity_dao.is_username_taken(candidate):
-            return candidate
-    return f"{base}_{secrets.token_hex(8)}"[:100]
 
 
 async def _require_maraclaw() -> TenantRecord:
@@ -178,10 +159,8 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
                 f"Cannot attach PLATFORM_ADMIN_EMAIL {email} to the genesis platform admin; "
                 + "that email already belongs to another identity."
             )
-        username = await _unique_username(email)
         identity = await identity_dao.create_identity(
             email=email,
-            username=username,
             password_hash=password_hash,
             is_platform_admin=True,
             email_verified=True,
@@ -298,10 +277,8 @@ async def ensure_platform_admin() -> UserRecord:
             return user
 
         password_hash = await hash_password_async(password)
-        username = await _unique_username(email)
         identity = await identity_dao.create_identity(
             email=email,
-            username=username,
             password_hash=password_hash,
             is_platform_admin=True,
             email_verified=True,

@@ -91,7 +91,7 @@ async def _notify_mentions(
     for u in users:
         if u.id == author_id:
             continue
-        name = (u.display_name or u.username or "").lower()
+        name = (u.display_name or u.email or "User").lower()
         if name:
             user_map[name] = u
 

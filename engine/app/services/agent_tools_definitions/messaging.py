@@ -114,7 +114,7 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
                 "properties": {
                     "username": {
                         "type": "string",
-                        "description": "Username or display name of the recipient (must be a registered platform user)",
+                        "description": "Email or unambiguous display name of a registered platform user",
                     },
                     "message": {
                         "type": "string",

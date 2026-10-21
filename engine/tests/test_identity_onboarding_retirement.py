@@ -5,6 +5,7 @@ import pytest
 
 from app.config import get_settings
 from app.records.identity import IdentityProviderRecord, IdentityRecord
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import onboarding, platform_admin_seeder as seeder
 from app.services.auth_provider import BaseAuthProvider, ExternalUserInfo, FeishuAuthProvider
@@ -148,16 +149,26 @@ async def test_provider_profile_update_keeps_real_identity_and_membership_persis
 async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
     # Given
     identity = IdentityRecord(id=uuid4(), email="ada@example.com")
-    user = UserRecord(id=uuid4(), identity_id=identity.id)
+    fallback = TenantRecord(id=uuid4(), name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    user = UserRecord(id=uuid4(), identity_id=identity.id, tenant_id=fallback.id)
+    updated = UserRecord(id=user.id, identity_id=identity.id, tenant_id=fallback.id, registration_source="feishu")
     info = ExternalUserInfo(provider_type="feishu", provider_union_id="union-123", email="ada@example.com", name="Ada")
     create = AsyncMock(return_value=user)
+    update = AsyncMock(return_value=updated)
     with (
         patch(
             "app.services.registration_service.registration_service.find_or_create_identity",
             AsyncMock(return_value=identity),
         ),
-        patch("app.services.auth_provider.identity_dao.is_username_taken", AsyncMock(return_value=False)),
+        patch("app.services.sso_company_admission.user_dao.get_by_identity_id", AsyncMock(return_value=[])),
+        patch("app.dao.identity_dao.identity_dao.get", AsyncMock(return_value=identity)),
+        patch("app.services.org_membership.tenant_dao.get_default_end_user_org", AsyncMock(return_value=fallback)),
+        patch("app.services.registration_service.tenant_dao.get", AsyncMock(return_value=fallback)),
+        patch("app.services.registration_service.resolve_email_config_async", AsyncMock(return_value=None)),
+        patch("app.services.registration_service.registration_service.bind_org_member", AsyncMock()),
+        patch("app.services.registration_service.participant_dao.create_for_user", AsyncMock()),
         patch("app.services.auth_provider.user_dao.create", create),
+        patch("app.services.sso_company_admission.user_dao.update", update),
     ):
         # When
         result = await FeishuAuthProvider()._create_new_user(info, None)
@@ -167,4 +178,7 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
     fields = create.await_args.kwargs["obj_in"]
     assert fields["identity_id"] == identity.id
     assert fields["role"] == "member"
-    assert fields["registration_source"] == "feishu"
+    assert fields["tenant_id"] == fallback.id
+    update.assert_awaited_once_with(
+        db_obj=user, obj_in={"registration_source": "feishu", "avatar_url": None, "is_active": True}
+    )

@@ -114,7 +114,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                     )
                     owner_id = matches[0].id if matches else None
             elif owner_type == "user" and ag.tenant_id:
-                user = await user_dao.find_by_username_or_display_name(owner_name_hint, tenant_id=ag.tenant_id)
+                user = await user_dao.find_by_email_or_display_name(owner_name_hint, tenant_id=ag.tenant_id)
                 owner_id = user.id if user else None
                 if not owner_id:
                     members = await org_member_dao.list_active_filtered(

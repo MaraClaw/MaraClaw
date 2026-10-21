@@ -1508,7 +1508,7 @@ async def _invite_users(
         )
 
         invite_url = f"{base_url}/login?code={code_str}&email={email}"
-        inviter_name = current_user.display_name or current_user.username or "Admin"
+        inviter_name = current_user.display_name or current_user.email or "Admin"
 
         email_task = BackgroundTask(
             send_company_invitation_email,

@@ -169,10 +169,8 @@ async def place_new_registration(
     email: str | None = None,
     invitation_code: str | None = None,
 ) -> NewUserPlacement:
-    """Invites attach now; every other new member joins OpenClaw (the default Org)."""
+    """New members stay in OpenClaw while company admission is reviewed."""
     resolution = await resolve_registration_org(email=email, invitation_code=invitation_code)
-    if resolution.source == "invite" and resolution.matched is not None:
-        return NewUserPlacement(tenant_id=resolution.matched.id, suggested=None, needs_org_confirm=False)
     return NewUserPlacement(tenant_id=resolution.fallback.id, suggested=None, needs_org_confirm=False)
 
 

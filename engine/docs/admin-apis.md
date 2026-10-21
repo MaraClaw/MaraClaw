@@ -8,7 +8,7 @@ In product language:
 
 | Product term | Code role | Scope |
 |--------------|-----------|--------|
-| **Platform admin** | `platform_admin` | Cross-tenant; platform metrics/settings; assign users to companies |
+| **Platform admin** | `platform_admin` | Cross-tenant; platform metrics/settings; no company-admission override |
 | **Tenant admin** | `org_admin` | Company admin for the caller’s `tenant_id` |
 
 Also accepted in some gates: `identity.is_platform_admin` elevates like `platform_admin` when that role is allowed.
@@ -16,6 +16,24 @@ Also accepted in some gates: `identity.is_platform_admin` elevates like `platfor
 ---
 
 ## Auth model
+
+Password login accepts `{ login_identifier, password, tenant_id? }`. The wire key
+`login_identifier` is retained, but its value is trimmed and validated as an email
+address at the HTTP boundary. Email lookup is case-insensitive; phone numbers and
+account handles are not password-login identifiers. Registration requires only
+`email` and `password`, with optional `display_name` defaulting to the email local
+part. Account responses, profile edits, and availability checks have no username
+field.
+
+Fresh schemas omit `identities.username` and its index. An existing nullable
+column is left untouched and is neither read nor written by the engine; no live
+database migration is required by this source change. Existing session-cache
+payloads ignore the removed field without a cache wipe. Provider IDs and external
+service handles remain independent. Presentation-only aliases such as chat
+`username` and task `creator_username` contain display names, email addresses, or
+a neutral label, never an account handle. Messaging tools retain the `username`
+argument as an email/display-name alias, require an unambiguous match, and keep
+the caller's exact tenant scope (including no tenant).
 
 | Mechanism | Location | Behavior |
 |-----------|----------|----------|
@@ -89,7 +107,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 |--------|------|------|---------|------------------|
 | `GET` | `/api/tenants/` | platform_admin | - | `TenantOut[]` all tenants |
 | `POST` | `/api/tenants/` | platform_admin | `{ name, admin_email, admin_password, admin_display_name? }` | **201** `{ tenant: TenantOut, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin. Duplicate admin email → **409**. Replaces `POST /api/tenants/self-create`. |
-| `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }`. Cannot assign `org_admin`. Cannot reassign genesis or the last *active* admin. Clears `identity.is_platform_admin` when moving a PA. |
+| `PUT` | `/api/tenants/{tenant_id}/assign-user/{user_id}` | platform_admin | Query: `role` ∈ `agent_admin` \| `member` (default `member`) | `{ status, user_id, tenant_id, role }`. Same-company role changes only; company changes return **409** and require admission approval. Cannot assign `org_admin`, reassign genesis, or demote the last active admin. Clears `identity.is_platform_admin` when demoting a PA. |
 | `POST` | `/api/tenants/{tenant_id}/genesis-org-admin` | genesis platform_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** attach a genesis OA when the tenant has none. **409** if one already exists or the email is taken. |
 
 **SSO note:** On `PUT /api/tenants/{tenant_id}`, platform admins **cannot** set `sso_enabled` / `sso_domain` (stripped server-side). SSO is managed by the company’s own org admin via Enterprise settings / identity providers.
@@ -129,9 +147,9 @@ is_system, is_default_end_user_org, can_disable
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/join` | Invite code join. Requires an **active** user (`get_current_user`). Always `member`. **409** if the user already belongs to another organization. Invalid invites are **400**. |
-| `POST` | `/api/tenants/transfer` | Move a member to another org. Body `{ password, invitation_code? , tenant_id? }`. Password required. Invite or **verified** email-domain / OpenClaw target. Genesis / platform admin blocked. |
-| `POST` | `/api/tenants/join-suggested` | Confirm the **verified** email-domain match. Active user required. Genesis / platform admin blocked. |
+| `POST` | `/api/tenants/join` | Invite-code company admission request, **202** pending for active OpenClaw or unassigned users. Company members must use `/transfer` (**409**). Invalid invites are **400**. |
+| `POST` | `/api/tenants/transfer` | Body `{ password, invitation_code?, tenant_id? }`. Password required. Company targets return **202** pending; OpenClaw remains immediate. Invite or verified email-domain / OpenClaw target. Protected admins blocked. |
+| `POST` | `/api/tenants/join-suggested` | Verified email-domain company admission request, **202** pending for active OpenClaw or unassigned users. Company members must use `/transfer` (**409**). Protected admins blocked. |
 | `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
 | `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
 | `GET` | `/api/tenants/registration-config` | Public. Always `{ tenant_creation: "platform_admin_only" }`. |
@@ -140,6 +158,51 @@ is_system, is_default_end_user_org, can_disable
 | `GET` | `/api/tenants/me` | Any member; company + default model |
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |
 | `GET` | `/api/tenants/{tenant_id}/logo` | Public asset by UUID |
+
+#### Company admission approval
+
+Company join, join-suggested and transfer return **202**
+`{ status: "pending", request: RequestSummary }`. A request does not create target
+membership: the applicant keeps their source organization until approval.
+Repeated requests for the same pending target return the same request without a
+second notification; a different pending target returns **409**.
+
+Invitation registration returns **201** with `admission_request: RequestSummary | null`;
+its user and token still represent OpenClaw (or the existing source membership).
+Fresh SSO and OAuth tenant selection also stage admission rather than writing a
+company membership. New authenticated SSO users are active even when SMTP email
+verification is configured; existing disabled accounts remain disabled.
+Already-admitted SSO users and genesis provisioning remain
+unchanged. IM lazy registration cannot create company members; applicants must
+complete web admission first. Admin assign-user only changes roles within the
+existing company and cannot move users between companies.
+
+| Method | Path | Access / response |
+|--------|------|-------------------|
+| `GET` | `/api/company-admissions/mine?limit=50&offset=0` | Applicant's `RequestSummary[]` |
+| `GET` | `/api/company-admissions/review?status=pending&limit=50&offset=0` | Active persisted target genesis org admin only; `RequestDetail[]` |
+| `GET` | `/api/company-admissions/{id}` | Applicant or target genesis org admin; `RequestDetail` |
+| `POST` | `/api/company-admissions/{id}/decision` | Target genesis org admin only; `{ decision: "approved" | "rejected", reason: string | null }`; `RequestDetail` |
+
+`RequestSummary` contains `id`, `status` (`pending`, `approved`, `rejected`), nullable
+`source_tenant_id`, `target_tenant: { id, name }`, `method` (`invitation`,
+`verified_domain`, `sso`), `created_at`, nullable `decided_at`, and nullable
+`decision_reason`. `RequestDetail` adds `applicant: { id, email }`, nullable
+`source_tenant: { id, name }`, and nullable `decided_by_user_id`.
+
+Additional org admins and platform admins cannot review or decide. Decisions
+re-read active persisted genesis authorization after tenant-first locks. Approval
+atomically moves membership through the membership service, validates and consumes
+the invitation when applicable, resolves the request and notifies the applicant.
+Source drift blocks approval (**409**) but still permits rejection. Repeating the
+same decision is idempotent; a conflicting final decision returns **409**.
+
+Notifications participate in the same transaction. Both types belong to the
+`approval` category: `company_admission_pending` links the genesis admin to
+`/admission-approvals/{id}`; `company_admission_resolved` links the applicant to
+`/app/admissions/{id}`. Fresh schema baseline includes the request table and a
+partial unique index enforcing one pending request per applicant; this change
+does not include an existing-database migration.
 
 ### B2. Users - `/api/users/*`
 
@@ -160,7 +223,7 @@ is_system, is_default_end_user_org, can_disable
 #### `UserOut` (users router)
 
 ```text
-id, username, email, display_name, role, is_active, is_genesis, tenant_id,
+id, email, display_name, role, is_active, is_genesis, tenant_id,
 quota_message_limit, quota_message_period, quota_messages_used,
 quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 ```
@@ -186,7 +249,7 @@ Members may belong to multiple org departments. Department agent grants are the 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/org/users` | any auth; admins may pass `tenant_id` | Query: `tenant_id?` | Active users, display-name ordered |
-| `PATCH` | `/api/org/users/{user_id}` | admin (`get_current_admin`) | `UserUpdate`: `username?`, `email?`, `display_name?`, `avatar_url?`, `title?`, `primary_mobile?` | Uniqueness checks; updates shared org-member contact |
+| `PATCH` | `/api/org/users/{user_id}` | admin (`get_current_admin`) | `UserUpdate`: `email?`, `display_name?`, `avatar_url?`, `title?`, `primary_mobile?` | Uniqueness checks; updates shared org-member contact |
 
 ### B4. Enterprise suite - `/api/enterprise/*`
 
@@ -379,7 +442,7 @@ These are **not** dedicated admin routers; admins receive wider access:
 |------------|----------------|----------------------------|
 | List / create / toggle all companies | Yes | No |
 | Platform metrics & platform-settings flags | Yes | No |
-| Assign user to any tenant | Yes | No |
+| Change user role within their current company | Yes | No |
 | Cross-tenant list/update (users, tools, IDPs, models via `tenant_id`) | Yes | Own tenant only |
 | Company settings, logo, delete company | Any company | Own company |
 | User list / quota / role | Any tenant (list); genesis PA may mint `platform_admin` | Own tenant; only genesis OA may mint `org_admin` |

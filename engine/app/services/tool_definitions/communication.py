@@ -35,7 +35,7 @@ COMMUNICATION_TOOLS: list[dict[str, Any]] = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "username": {"type": "string", "description": "Recipient username or display name"},
+                "username": {"type": "string", "description": "Recipient email or unambiguous display name"},
                 "message": {"type": "string", "description": "Message content"},
             },
             "required": ["username", "message"],

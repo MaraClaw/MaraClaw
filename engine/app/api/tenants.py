@@ -24,6 +24,7 @@ from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.schemas.company_admission import PendingAdmissionResponse
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminGuardError,
@@ -268,7 +269,16 @@ def _require_join_allowed(current_user: UserRecord) -> None:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-@router.post("/join", response_model=JoinResponse)
+async def _require_admission_join_source(current_user: UserRecord) -> None:
+    _require_join_allowed(current_user)
+    if current_user.tenant_id is None:
+        return
+    source = await tenant_dao.get(current_user.tenant_id)
+    if source is None or not source.is_default_end_user_org:
+        raise HTTPException(status_code=409, detail="Use /api/tenants/transfer to leave your current organization")
+
+
+@router.post("/join", response_model=JoinResponse, responses={202: {"model": PendingAdmissionResponse}})
 async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get_current_user)):
     """Join an existing company using an invitation code.
 
@@ -302,8 +312,20 @@ async def join_company(data: JoinRequest, current_user: UserRecord = Depends(get
     if not tenant or not tenant.is_active:
         raise HTTPException(status_code=400, detail="Company not found or is disabled")
 
-    if current_user.tenant_id is not None and current_user.tenant_id != tenant.id:
-        raise HTTPException(status_code=409, detail="You already belong to an organization")
+    if not tenant.is_default_end_user_org and not tenant.is_system:
+        from fastapi.responses import JSONResponse
+
+        from app.records.company_admission import AdmissionMethod
+        from app.schemas.company_admission import PendingAdmissionResponse
+        from app.services.company_admissions import submit_request, summarize
+
+        await _require_admission_join_source(current_user)
+        request = await submit_request(
+            current_user, tenant.id, AdmissionMethod.INVITATION, invitation_code=data.invitation_code
+        )
+        return JSONResponse(
+            status_code=202, content=PendingAdmissionResponse(request=await summarize(request)).model_dump(mode="json")
+        )
 
     try:
         attached = await attach_user_to_org(current_user, tenant)
@@ -348,7 +370,7 @@ async def lookup_org_by_email(email: str):
     )
 
 
-@router.post("/join-suggested", response_model=JoinOrgResponse)
+@router.post("/join-suggested", response_model=JoinOrgResponse, responses={202: {"model": PendingAdmissionResponse}})
 async def join_suggested_org(
     data: SuggestedJoinRequest,
     current_user: UserRecord = Depends(get_current_user),
@@ -361,14 +383,24 @@ async def join_suggested_org(
         lookup_tenant_for_verified_email,
     )
 
-    if current_user.tenant_id is not None:
-        raise HTTPException(status_code=409, detail="You already belong to an organization")
     _require_join_allowed(current_user)
     suggested = await lookup_tenant_for_verified_email(current_user)
     if suggested is None:
         raise HTTPException(status_code=400, detail="No organization is suggested for this account")
     if data.tenant_id is not None and data.tenant_id != suggested.id:
         raise HTTPException(status_code=400, detail="That organization is not the suggested match")
+    if not suggested.is_default_end_user_org and not suggested.is_system:
+        from fastapi.responses import JSONResponse
+
+        from app.records.company_admission import AdmissionMethod
+        from app.schemas.company_admission import PendingAdmissionResponse
+        from app.services.company_admissions import submit_request, summarize
+
+        await _require_admission_join_source(current_user)
+        request = await submit_request(current_user, suggested.id, AdmissionMethod.VERIFIED_DOMAIN)
+        return JSONResponse(
+            status_code=202, content=PendingAdmissionResponse(request=await summarize(request)).model_dump(mode="json")
+        )
     try:
         attached = await attach_user_to_org(current_user, suggested)
     except AlreadyInOrgError as exc:
@@ -408,7 +440,7 @@ async def join_default_org(current_user: UserRecord = Depends(get_current_user))
     )
 
 
-@router.post("/transfer", response_model=JoinOrgResponse)
+@router.post("/transfer", response_model=JoinOrgResponse, responses={202: {"model": PendingAdmissionResponse}})
 async def transfer_organization(
     data: TransferRequest,
     current_user: UserRecord = Depends(get_current_user),
@@ -472,6 +504,19 @@ async def transfer_organization(
 
     if target.id == current_user.tenant_id:
         raise HTTPException(status_code=400, detail="You already belong to that organization")
+
+    if not target.is_default_end_user_org and not target.is_system:
+        from fastapi.responses import JSONResponse
+
+        from app.records.company_admission import AdmissionMethod
+        from app.schemas.company_admission import PendingAdmissionResponse
+        from app.services.company_admissions import submit_request, summarize
+
+        method = AdmissionMethod.INVITATION if bool(data.invitation_code) else AdmissionMethod.VERIFIED_DOMAIN
+        request = await submit_request(current_user, target.id, method, invitation_code=data.invitation_code)
+        return JSONResponse(
+            status_code=202, content=PendingAdmissionResponse(request=await summarize(request)).model_dump(mode="json")
+        )
 
     try:
         attached = await transfer_user_to_org(current_user, target)

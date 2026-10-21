@@ -13,7 +13,7 @@ _MISSING = object()
 
 def _objects():
     agent = SimpleNamespace(id=uuid.uuid4(), creator_id=uuid.uuid4(), tenant_id=uuid.uuid4())
-    target = SimpleNamespace(id=uuid.uuid4(), username="alex", display_name="Alex")
+    target = SimpleNamespace(id=uuid.uuid4(), email="alex@example.com", display_name="Alex")
     relationship = SimpleNamespace(agent_id=agent.id, member_id=uuid.uuid4())
     session = SimpleNamespace(id=uuid.uuid4(), last_message_at=None)
     return agent, target, relationship, session
@@ -79,13 +79,13 @@ def _patch(
     monkeypatch.setattr(platform_messaging.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(
         platform_messaging.user_dao,
-        "find_by_username_or_display_name",
+        "find_by_email_or_display_name",
         AsyncMock(return_value=target),
     )
     monkeypatch.setattr(
         platform_messaging.user_dao,
         "list_display_names_for_tenant",
-        AsyncMock(return_value=names or ["alex"]),
+        AsyncMock(return_value=names or ["Alex"]),
     )
     monkeypatch.setattr(
         platform_messaging.agent_relationship_dao,
@@ -117,7 +117,7 @@ async def test_validation_happens_before_opening_a_session(monkeypatch):
 
     result = await platform_messaging._send_platform_message(uuid.uuid4(), arguments)
 
-    assert result == "❌ Please provide recipient username and message content"
+    assert result == "❌ Please provide recipient email or display name and message content"
     get_agent.assert_not_awaited()
     assert arguments == {"username": " ", "message": "hello"}
 
@@ -126,7 +126,7 @@ async def test_missing_agent_returns_before_recipient_lookup(monkeypatch):
     events = []
     _patch(monkeypatch, events, agent=None, target=None, relationship=None)
 
-    result = await platform_messaging._send_platform_message(uuid.uuid4(), {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(uuid.uuid4(), {"username": "Alex", "message": "hello"})
 
     assert result == "❌ Agent not found"
 
@@ -137,7 +137,7 @@ async def test_relationship_bootstrap_is_invoked(monkeypatch, changed, expect_en
     agent, target, relationship, session = _objects()
     _patch(monkeypatch, events, agent=agent, target=target, relationship=relationship, session=session, changed=changed)
 
-    await platform_messaging._send_platform_message(agent.id, {"username": "alex", "message": "hello"})
+    await platform_messaging._send_platform_message(agent.id, {"username": "Alex", "message": "hello"})
 
     assert ("ensure" in events) is expect_ensure
 
@@ -145,11 +145,11 @@ async def test_relationship_bootstrap_is_invoked(monkeypatch, changed, expect_en
 async def test_missing_recipient_lists_available_users(monkeypatch):
     events = []
     agent, _target, _relationship, session = _objects()
-    _patch(monkeypatch, events, agent=agent, target=None, session=session, names=["alex"])
+    _patch(monkeypatch, events, agent=agent, target=None, session=session, names=["Alex"])
 
     result = await platform_messaging._send_platform_message(agent.id, {"username": "missing", "message": "hello"})
 
-    assert result == "❌ No user named 'missing' found in your organization. Available users: alex"
+    assert result == "❌ No unique user matching 'missing' found in your organization. Available users: Alex"
 
 
 @pytest.mark.parametrize(
@@ -176,7 +176,7 @@ async def test_relationship_permissions_block_persistence(monkeypatch, relations
         status=status,
     )
 
-    result = await platform_messaging._send_platform_message(agent.id, {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(agent.id, {"username": "Alex", "message": "hello"})
 
     assert result == expected
     assert "insert" not in events
@@ -187,7 +187,9 @@ async def test_persists_before_websocket_and_preserves_success_text(monkeypatch)
     agent, target, relationship, session = _objects()
     _patch(monkeypatch, events, agent=agent, target=target, relationship=relationship, session=session)
 
-    result = await platform_messaging._send_platform_message(agent.id, {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(
+        agent.id, {"username": "alex@example.com", "message": "hello"}
+    )
 
     assert result == "✅ Message sent to Alex on web platform. It has been saved to their chat history."
     assert events[-5:] == ["primary", "insert", "session_update", "read", "websocket"]
@@ -207,7 +209,7 @@ async def test_insert_failure_prevents_websocket_dispatch(monkeypatch):
         insert_fails=True,
     )
 
-    result = await platform_messaging._send_platform_message(agent.id, {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(agent.id, {"username": "Alex", "message": "hello"})
 
     assert result == "❌ Web message send error: commit failed"
     assert "insert" in events
@@ -220,7 +222,7 @@ async def test_read_and_websocket_failures_are_swallowed_after_persistence(monke
     agent, target, relationship, session = _objects()
     _patch(monkeypatch, events, agent=agent, target=target, relationship=relationship, session=session, fail=fail)
 
-    result = await platform_messaging._send_platform_message(agent.id, {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(agent.id, {"username": "Alex", "message": "hello"})
 
     assert result.startswith("✅ Message sent to Alex")
     assert "insert" in events
@@ -233,6 +235,6 @@ async def test_outer_error_is_truncated_to_200_characters(monkeypatch):
     monkeypatch.setattr(platform_messaging.agent_dao, "get", fail_get)
     monkeypatch.setattr(platform_messaging, "logger", SimpleNamespace(exception=lambda *_args: None))
 
-    result = await platform_messaging._send_platform_message(uuid.uuid4(), {"username": "alex", "message": "hello"})
+    result = await platform_messaging._send_platform_message(uuid.uuid4(), {"username": "Alex", "message": "hello"})
 
     assert result == f"❌ Web message send error: {'x' * 200}"

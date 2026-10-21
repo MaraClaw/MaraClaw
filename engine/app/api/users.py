@@ -49,10 +49,6 @@ class UserActiveUpdate(BaseModel):
 
 class UserOut(BaseModel):
     id: uuid.UUID
-    # username/email/display_name can be None for SSO-created users whose Identity
-    # was created without explicit values (e.g., DingTalk/Feishu OAuth flow).
-    # The frontend should handle None gracefully.
-    username: str | None = None
     email: str | None = None
     display_name: str | None = None
     role: str
@@ -93,9 +89,8 @@ class _UsersPageCursor(BaseModel):
 def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
     return UserOut(
         id=u.id,
-        username=u.username or u.email or f"{u.registration_source or 'user'}_{str(u.id)[:8]}",
         email=u.email or "",
-        display_name=u.display_name or u.username or "",
+        display_name=u.display_name or u.email or "User",
         role=u.role,
         is_active=u.is_active,
         is_genesis=bool(getattr(u, "is_genesis", False)),

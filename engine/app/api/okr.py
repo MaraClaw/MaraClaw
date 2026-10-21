@@ -1226,7 +1226,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
         msgs = await chat_message_dao.list_recent_for_agent_user(agent_id=okr_agent.id, user_id=target_user_id, limit=3)
         return [(m.role, m.content, created) for m in msgs if (created := m.created_at) is not None]
 
-    admin_username = await user_dao.display_name_for_id(user.id) or str(user.id)
+    admin_username = await user_dao.display_name_for_id(user.id) or user.email or "User"
 
     members_to_contact: list[str] = []
     index = 1
@@ -1247,7 +1247,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
             if platform_uid:
                 channel_hint += "  (They also have a Platform account, but prefer channel message here)"
         elif platform_uid:
-            channel_hint = 'send_platform_message(username="<their_username>", message=...)'
+            channel_hint = 'send_platform_message(username="<email_or_display_name>", message=...)'
         else:
             channel_hint = "No channel available - note this in your summary"
 

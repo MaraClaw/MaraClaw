@@ -1,10 +1,12 @@
 from copy import deepcopy
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
 from tests.test_google_workspace_transactions import GoogleFlow, callback, google_flow
 
 from app.dao import identity_provider_dao, org_member_dao, user_dao
+from app.db.connection import DbConnection
 from app.records.org import OrgMemberRecord
 from app.services.auth_provider import BaseAuthProvider, ExternalUserInfo, GoogleWorkspaceAuthProvider
 from app.services.registration_service import registration_service
@@ -54,9 +56,11 @@ async def test_sso_checks_fresh_account_after_real_resolution(
     async def web_provider(*_args, **_kwargs):
         return google_flow.provider
 
+    user_lookup = AsyncMock(side_effect=get_user)
+    monkeypatch.setattr(DbConnection, "fetchone", AsyncMock(return_value=None))
     monkeypatch.setattr(GoogleWorkspaceAuthProvider, "find_or_create_user", BaseAuthProvider.find_or_create_user)
     monkeypatch.setattr(GoogleWorkspaceAuthProvider, "get_user_info", user_info)
-    monkeypatch.setattr(user_dao, "get_with_identity", get_user)
+    monkeypatch.setattr(user_dao, "get_with_identity", user_lookup)
     monkeypatch.setattr(identity_provider_dao, "get_preferred", preferred)
     monkeypatch.setattr(org_member_dao, "find_active_by_provider_field", find_member)
     monkeypatch.setattr(org_member_dao, "get_by_user_and_provider", find_member)
@@ -65,6 +69,7 @@ async def test_sso_checks_fresh_account_after_real_resolution(
 
     response = await callback(google_flow)
 
+    assert user_lookup.await_args_list == [call(cached_user.id), call(cached_user.id, fresh=True)]
     if change == "active":
         assert "successful" in response.text
         assert google_flow.committed == ["member", "member", "scan"]

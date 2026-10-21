@@ -275,10 +275,7 @@ async def save_relationships(
                         "tenant_id": _agent.tenant_id,
                         "user_id": platform_user.id,
                         "external_id": f"platform:{platform_user.id}",
-                        "name": platform_user.display_name
-                        or platform_user.username
-                        or platform_user.email
-                        or str(platform_user.id),
+                        "name": platform_user.display_name or platform_user.email or "User",
                         "email": platform_user.email,
                         "avatar_url": platform_user.avatar_url,
                         "title": platform_user.title or "",

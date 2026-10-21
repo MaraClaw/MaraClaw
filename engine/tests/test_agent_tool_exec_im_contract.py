@@ -49,7 +49,7 @@ async def test_channel_platform_user_reroutes_once_through_the_facade(monkeypatc
         agent_id=uuid.uuid4(),
         member_id=uuid.uuid4(),
     )
-    platform_user = SimpleNamespace(display_name="Alex", username="alex", identity=None)
+    platform_user = SimpleNamespace(display_name="Alex", email="alex@example.com", identity=None)
     calls = []
 
     async def list_rels(_agent_id):
@@ -80,14 +80,14 @@ async def test_channel_platform_user_reroutes_once_through_the_facade(monkeypatc
         list_rels,
     )
     monkeypatch.setattr(channel_messaging, "evaluate_human_relationship_status", status)
-    monkeypatch.setattr(channel_messaging.user_dao, "get", get_user)
+    monkeypatch.setattr(channel_messaging.user_dao, "get_with_identity", get_user)
 
     assert (
         await channel_messaging._send_channel_message(uuid.uuid4(), {"member_name": "Alex", "message": " hello "})
         == "rerouted"
     )
     assert len(calls) == 1
-    assert calls[0][1] == {"username": "Alex", "message": "hello"}
+    assert calls[0][1] == {"username": "alex@example.com", "message": "hello"}
 
 
 @pytest.mark.parametrize("name", ["send_platform_message", "send_channel_message", "send_channel_file"])

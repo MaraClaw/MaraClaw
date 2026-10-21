@@ -463,7 +463,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                         JOIN identities i ON i.id = u.identity_id
                         WHERE (
                             u.display_name ILIKE %(pattern)s
-                            OR i.username ILIKE %(pattern)s
+                            OR i.email ILIKE %(pattern)s
                         )
                           AND u.tenant_id = %(tenant_id)s
                         LIMIT 1
@@ -478,7 +478,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                         JOIN identities i ON i.id = u.identity_id
                         WHERE (
                             u.display_name ILIKE %(pattern)s
-                            OR i.username ILIKE %(pattern)s
+                            OR i.email ILIKE %(pattern)s
                         )
                         LIMIT 1
                         """,

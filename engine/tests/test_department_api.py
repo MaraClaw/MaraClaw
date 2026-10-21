@@ -228,7 +228,7 @@ def test_roster_is_minimal_own_tenant_and_read_only(directory, monkeypatch, role
     client, actor, subject, first, _, assignments, bumped, *rest = directory
     actor.role = role
     subject.display_name = display_name
-    subject.identity = IdentityRecord(id=uuid4(), username="private-login", email="private@example.test")
+    subject.identity = IdentityRecord(id=uuid4(), email="private@example.test")
     before = dict(rest[-1])
     mutations = AsyncMock(side_effect=AssertionError("Roster reads must not mutate or resolve grants"))
     for name in ("create", "update", "replace_assignments", "grant_agents_for_user", "list_assignments"):

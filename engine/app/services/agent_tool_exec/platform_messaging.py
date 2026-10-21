@@ -14,11 +14,11 @@ from .registry import ToolArgumentMapping
 
 async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping) -> str:
     """Send a proactive message to a first-party platform user."""
-    username = _string_argument(args, "username")
+    recipient = _string_argument(args, "username")
     message_text = _string_argument(args, "message")
 
-    if not username or not message_text:
-        return "❌ Please provide recipient username and message content"
+    if not recipient or not message_text:
+        return "❌ Please provide recipient email or display name and message content"
 
     try:
         agent = await agent_dao.get(agent_id)
@@ -26,26 +26,25 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
             return "❌ Agent not found"
         _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=agent.creator_id)
 
-        # 1. Look up target user by username or display_name within tenant
-        target_user = await user_dao.find_by_username_or_display_name(
-            username, tenant_id=agent.tenant_id, include_identity=True
+        target_user = await user_dao.find_by_email_or_display_name(
+            recipient, tenant_id=agent.tenant_id, include_identity=True
         )
         if not target_user:
             names: list[str] = []
             if agent.tenant_id:
                 names = await user_dao.list_display_names_for_tenant(agent.tenant_id, limit=20)
             return (
-                f"❌ No user named '{username}' found in your organization. "
+                f"❌ No unique user matching '{recipient}' found in your organization. "
                 + f"Available users: {', '.join(names) if names else 'none'}"
             )
 
         rel = await agent_relationship_dao.get_for_agent_and_user(agent_id, target_user.id)
         if not rel:
-            return f"❌ {target_user.display_name or target_user.username} is not in your active relationship network"
+            return f"❌ {target_user.display_name or target_user.email or 'User'} is not in your active relationship network"
         status_info = await evaluate_human_relationship_status(rel, source_agent=agent)
         if status_info["access_status"] != "active":
             return (
-                f"❌ Relationship to {target_user.display_name or target_user.username} "
+                f"❌ Relationship to {target_user.display_name or target_user.email or 'User'} "
                 + f"is not active ({status_info['access_status_reason'] or 'restricted'})"
             )
 
@@ -91,7 +90,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         except Exception:
             logger.debug("Platform message websocket notification failed")
 
-        display = target_user.display_name or target_user.username
+        display = target_user.display_name or target_user.email or "User"
         return f"✅ Message sent to {display} on web platform. It has been saved to their chat history."
 
     except Exception as e:

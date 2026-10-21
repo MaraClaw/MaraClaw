@@ -40,18 +40,22 @@ async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(mon
         email="member2@example.com",
     )
 
-    identity_1 = SimpleNamespace(username="member_one", email="member1@example.com")
+    identity_1 = SimpleNamespace(email="member1@example.com")
     user_1 = SimpleNamespace(
         id=member_1_user_id,
         identity=identity_1,
         tenant_id=tenant_id,
-        username="member_one",
+        display_name="Member One",
         email="member1@example.com",
     )
 
-    identity_2 = SimpleNamespace(username="member_two", email="member2@example.com")
+    identity_2 = SimpleNamespace(email="member2@example.com")
     user_2 = SimpleNamespace(
-        id=uuid.uuid4(), identity=identity_2, tenant_id=tenant_id, username="member_two", email="member2@example.com"
+        id=uuid.uuid4(),
+        identity=identity_2,
+        tenant_id=tenant_id,
+        display_name="Member Two",
+        email="member2@example.com",
     )
 
     async def fake_list_permission_candidates(*, tenant_id, search=None, limit=50):
@@ -79,6 +83,6 @@ async def test_get_agent_permission_candidates_resolves_and_lazy_load_safety(mon
 
     assert len(result["users"]) == 2
     assert result["users"][0]["name"] == "Member One"
-    assert result["users"][0]["username"] == "member_one"
+    assert result["users"][0]["username"] == "Member One"
     assert result["users"][1]["name"] == "Member Two"
-    assert result["users"][1]["username"] == "member_two"
+    assert result["users"][1]["username"] == "Member Two"

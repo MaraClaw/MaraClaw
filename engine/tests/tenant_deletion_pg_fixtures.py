@@ -175,12 +175,10 @@ async def deletion_pg(
                             "INSERT INTO tenants (id, name, slug) VALUES (%s, %s, %s)", (tid, name, name.lower())
                         )
                         await db.execute(
-                            "INSERT INTO identities (id, email, username, phone, password_hash) "
-                            "VALUES (%s, %s, %s, %s, 'hash')",
+                            "INSERT INTO identities (id, email, phone, password_hash) VALUES (%s, %s, %s, 'hash')",
                             (
                                 iid,
                                 "owner@example.test" if iid == identity_id else "other@example.test",
-                                name.lower(),
                                 name.lower(),
                             ),
                         )

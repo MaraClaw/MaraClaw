@@ -16,7 +16,7 @@
 
 ## What This Module Owns Today
 
-The module owns username/password registration, login, email verification, password reset, tenant switching, OAuth/SSO authorization, OAuth callbacks, identity binding, and account updates:
+The module owns email/password registration, login, email verification, password reset, tenant switching, OAuth/SSO authorization, OAuth callbacks, identity binding, and account updates:
 
 - Registration config and duplicate checks at lines 48-116.
 - `register_init()` at lines 140-254 and normal registration helper at lines 305-413.

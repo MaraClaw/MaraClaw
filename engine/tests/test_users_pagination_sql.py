@@ -54,7 +54,7 @@ async def test_escapes_wildcards_when_searching_literal_substring(connection: _Q
     query, params = connection.queries[0]
     expected = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     assert params["search"] == expected
-    for column in ("u.display_name", "i.email", "i.username"):
+    for column in ("u.display_name", "i.email"):
         assert f"{column} ILIKE %(search)s ESCAPE E'\\\\'" in query
     assert "WHERE u.tenant_id = %(tenant_id)s AND (" in query
 
@@ -87,14 +87,13 @@ async def test_preserves_identity_flags_when_projecting_joined_rows(connection: 
             "registration_source": "web",
             "i_id": UUID(int=6),
             "i_email": "alice@example.com",
-            "i_username": "alice",
             "i_must_change_password": True,
             "i_is_platform_admin": True,
         }
     ]
     result = await user_dao.list_for_tenant_page(TENANT)
-    assert [(user.email, user.username, user.must_change_password, user.is_platform_admin) for user in result] == [
-        ("alice@example.com", "alice", True, True)
+    assert [(user.email, user.must_change_password, user.is_platform_admin) for user in result] == [
+        ("alice@example.com", True, True)
     ]
 
 
@@ -114,3 +113,25 @@ async def test_skips_count_query_when_page_is_empty(connection: _QueryConnection
     counts = await agent_dao.count_active_for_creators([])
     assert counts == {}
     assert connection.queries == []
+
+
+@pytest.mark.parametrize("tenant_id", [None, TENANT])
+@pytest.mark.parametrize("match_count", [0, 1, 2])
+async def test_recipient_lookup_requires_unique_match_in_exact_tenant(
+    connection: _QueryConnection,
+    tenant_id: UUID | None,
+    match_count: int,
+):
+    connection.rows = [
+        {"id": UUID(int=index + 1), "tenant_id": tenant_id, "display_name": "Alice"} for index in range(match_count)
+    ]
+
+    result = await user_dao.find_by_email_or_display_name("alice@example.com", tenant_id=tenant_id)
+
+    assert (result.id if result else None) == (UUID(int=1) if match_count == 1 else None)
+    query, params = connection.queries[0]
+    assert params == {"name": "alice@example.com", "tenant_id": tenant_id}
+    assert "lower(i.email) = lower(%(name)s) OR u.display_name = %(name)s" in query
+    assert "u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s" in query
+    assert "LIMIT 2" in query
+    assert "username" not in query

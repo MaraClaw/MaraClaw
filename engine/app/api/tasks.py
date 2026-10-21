@@ -21,7 +21,7 @@ async def _enrich_task_out(task: TaskRecord) -> TaskOut:
     if task.created_by:
         user = await user_dao.get_with_identity(task.created_by)
         if user:
-            out.creator_username = user.username
+            out.creator_username = user.display_name or user.email or "User"
     return out
 
 
@@ -36,7 +36,7 @@ async def list_tasks(
     _ = await check_agent_access(current_user, agent_id)
     tasks_list = await task_dao.list_for_agent(agent_id, status=status_filter, type=type_filter)
     creator_ids = {t.created_by for t in tasks_list if t.created_by}
-    creator_map = await user_dao.usernames_for_ids(list(creator_ids)) if creator_ids else {}
+    creator_map = await user_dao.labels_for_ids(list(creator_ids)) if creator_ids else {}
     out_list: list[TaskOut] = []
     for t in tasks_list:
         t_out = TaskOut.model_validate(t)

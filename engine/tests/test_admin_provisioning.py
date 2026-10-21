@@ -184,7 +184,6 @@ async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
     create_identity = AsyncMock(return_value=identity)
     create_user = AsyncMock(return_value=user)
     monkeypatch.setattr(provisioning.identity_dao, "get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(provisioning.identity_dao, "is_username_taken", AsyncMock(return_value=False))
     monkeypatch.setattr(provisioning, "hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(provisioning.identity_dao, "create_identity", create_identity)
     monkeypatch.setattr(provisioning.user_dao, "create", create_user)
@@ -348,7 +347,10 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
     assert exc.value.status_code == 403
 
     identity = SimpleNamespace(id=uuid.uuid4(), is_platform_admin=True)
-    peer = _user(role="platform_admin", identity=identity, is_active=True)
+    peer = _user(role="platform_admin", identity=identity, is_active=True, tenant_id=tenant_id)
+    monkeypatch.setattr(provisioning.user_dao, "get_with_identity", AsyncMock(return_value=peer))
+    monkeypatch.setattr("app.core.acl_locks.lock_tenants", AsyncMock())
+    monkeypatch.setattr("app.core.acl_locks.lock_user", AsyncMock())
     monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
     update_identity = AsyncMock()
     monkeypatch.setattr(provisioning.identity_dao, "update", update_identity)
@@ -395,7 +397,6 @@ async def test_create_additional_org_admin_unique_violation(monkeypatch):
         default_agent_ttl_hours=0,
     )
     monkeypatch.setattr(provisioning.identity_dao, "get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(provisioning.identity_dao, "is_username_taken", AsyncMock(return_value=False))
     monkeypatch.setattr(provisioning, "hash_password_async", AsyncMock(return_value="h"))
     monkeypatch.setattr(provisioning.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(

@@ -103,23 +103,18 @@ async def get_registration_config() -> dict[str, bool]:
 @router.get("/check-duplicate")
 async def check_duplicate(
     email: str | None = Query(None, description="Email to check"),
-    username: str | None = Query(None, description="Username to check"),
 ) -> dict[str, Any]:
-    """Check if email or username already exists."""
+    """Check if an email already exists."""
     conflicts: list[dict[str, str]] = []
     email_exists = bool(email and await identity_dao.get_by_email(email))
-    username_exists = bool(username and await identity_dao.get_by_username(username))
     if email_exists:
         conflicts.append({"type": "email", "scope": "global", "message": "Email already registered"})
-    if username_exists:
-        conflicts.append({"type": "username", "scope": "global", "message": "Username already taken"})
     result: dict[str, Any] = {
         "email_exists": email_exists,
-        "username_exists": username_exists,
         "conflicts": conflicts,
     }
 
-    result["has_conflict"] = result["email_exists"] or result["username_exists"]
+    result["has_conflict"] = email_exists
     return result
 
 
@@ -163,7 +158,7 @@ async def _send_verification_email_task(
         schedule_background_task(
             email_verification_service.send_verification_email(
                 identity.email,
-                user.display_name or identity.username or "User",
+                user.display_name or identity.email or "User",
                 raw_code,
                 expiry_minutes,
                 verification_url,
@@ -289,13 +284,13 @@ async def register_init(
     identity = await identity_dao.get_by_email(data.email)
     if identity:
         # Defense-in-depth: verify the returned identity actually belongs to the submitted email.
-        if identity.email not in (None, "") and identity.email != data.email:
+        if identity.email not in (None, "") and identity.email.casefold() != data.email.casefold():
             logger.warning(
                 f"[REGISTER_INIT] Identity email mismatch: submitted={data.email} returned={identity.email} - rejecting"
             )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Username already taken. Please choose a different username.",
+                detail="Email already registered with another identity.",
             )
 
         # Reject registration if the identity exists but has no password set (SSO/synced users)
@@ -314,7 +309,6 @@ async def register_init(
     async with connection_ctx():
         identity = await registration_service.find_or_create_identity(
             email=data.email,
-            username=data.username,
             password=data.password,
             is_platform_admin=False,
             email_config=email_config,
@@ -324,11 +318,10 @@ async def register_init(
         from app.services.org_membership import (
             DefaultOrgUnavailableError,
             InvitationError,
-            consume_invitation_code,
             place_new_registration,
         )
 
-        invite_code = getattr(data, "invitation_code", None)
+        invite_code = data.invitation_code
         try:
             placement = await place_new_registration(email=data.email, invitation_code=invite_code)
         except InvitationError as exc:
@@ -338,26 +331,41 @@ async def register_init(
 
         existing_users = await user_dao.get_by_identity_id(identity.id)
         user = existing_users[0] if existing_users else None
-        attached_via_invite = False
+        admission_request = None
 
         if not user:
             user = await registration_service.create_user_with_identity(
                 identity=identity,
-                display_name=data.display_name or data.username,
+                display_name=data.display_name or data.email.split("@", 1)[0],
                 role="member",
                 tenant_id=placement.tenant_id,
             )
-            attached_via_invite = bool(invite_code and placement.tenant_id is not None)
         elif user.tenant_id is None and placement.tenant_id is not None:
             from app.services.org_membership import attach_user_to_org
 
             placed = await tenant_dao.get(placement.tenant_id)
             if placed is not None:
                 user = await attach_user_to_org(user, placed)
-                attached_via_invite = bool(invite_code)
         user.identity = identity
-        if attached_via_invite:
-            await consume_invitation_code(invite_code)
+        if bool(invite_code):
+            from app.records.company_admission import AdmissionMethod
+            from app.services.company_admissions import submit_request, summarize
+            from app.services.org_membership import require_active_invitation
+
+            invitation = await require_active_invitation(invite_code)
+            if data.target_tenant_id is not None and data.target_tenant_id != invitation.tenant_id:
+                raise HTTPException(403, "Invitation does not match the target company")
+            if invitation.tenant_id is None:
+                raise HTTPException(400, "Invitation has no company")
+            admission_request = await summarize(
+                await submit_request(
+                    user,
+                    invitation.tenant_id,
+                    AdmissionMethod.INVITATION,
+                    invitation_code=invite_code,
+                    newly_registered=not existing_users,
+                )
+            )
         if not identity.email_verified:
             await _send_verification_email_task(user, background_tasks, settings, request)
 
@@ -375,12 +383,13 @@ async def register_init(
         needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
         suggested_org=_suggested_org(placement.suggested),
         target_tenant_id=data.target_tenant_id,
+        admission_request=admission_request,
     )
 
 
 @router.post("/login", response_model=Any)
 async def login(data: UserLogin, background_tasks: BackgroundTasks, request: Request):
-    """Login with email/phone/username and password. Supports multi-tenant selection."""
+    """Login with email and password. Supports multi-tenant selection."""
     # 1. Query Identity
     identity = await identity_dao.get_by_login_identifier(data.login_identifier)
 
@@ -553,7 +562,7 @@ async def forgot_password(
             reset_url = await build_password_reset_url(raw_token, request)
             expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
             schedule_background_task(
-                send_password_reset_email(identity.email, identity.username or "User", reset_url, expiry_minutes),
+                send_password_reset_email(identity.email, identity.email or "User", reset_url, expiry_minutes),
                 description="password reset email",
             )
     except PublicBaseUrlNotConfiguredError:
@@ -613,12 +622,6 @@ async def update_me(
         if not user or not user.identity:
             raise HTTPException(status_code=404, detail="User not found")
 
-        username = json_as_str(update_data.get("username"))
-        if username is not None and username != user.identity.username:
-            existing = await user_dao.get_by_identity_username(username)
-            if existing:
-                raise HTTPException(status_code=409, detail="Username already taken")
-
         email = json_as_str(update_data.get("email"))
         if email is not None and email != user.identity.email:
             taken = await identity_dao.get_by_email(email)
@@ -645,9 +648,7 @@ async def update_me(
         identity_fields: dict[str, object] = {}
         user_fields: dict[str, object] = {}
         for field, value in update_data.items():
-            if field == "username":
-                identity_fields["username"] = value
-            elif field == "email":
+            if field == "email":
                 identity_fields["email"] = value
                 identity_fields["email_verified"] = False
             elif field == "primary_mobile":
@@ -944,7 +945,7 @@ async def oauth_callback(
             user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=chosen_tenant)
             if not user:
                 raise HTTPException(status_code=500, detail="Failed to create user")
-            user = await _check_oauth_user(user, chosen_tenant)
+            user = await _check_oauth_user(user)
 
         jwt_token = create_access_token(str(user.id), user.role)
         return TokenResponse(

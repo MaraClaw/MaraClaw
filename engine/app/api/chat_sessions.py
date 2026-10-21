@@ -117,7 +117,7 @@ async def list_sessions(
         if user_ids:
             async with connection_ctx() as conn:
                 rows = await conn.fetchall(
-                    "SELECT u.id, COALESCE(u.display_name, i.username) AS display "
+                    "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display "
                     + "FROM users u JOIN identities i ON u.identity_id = i.id "
                     + "WHERE u.id = ANY(%(ids)s)",
                     {"ids": user_ids},

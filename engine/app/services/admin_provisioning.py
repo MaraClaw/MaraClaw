@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -45,17 +44,6 @@ async def is_genesis_org_admin(user: UserRecord) -> bool:
     )
 
 
-def _username_from_email(email: str, *, fallback: str) -> str:
-    return email.split("@", 1)[0][:100] or fallback
-
-
-async def _unique_username(email: str, *, fallback: str) -> str:
-    base = _username_from_email(email, fallback=fallback)
-    if not await identity_dao.is_username_taken(base):
-        return base
-    return f"{base}_{secrets.token_hex(3)}"[:100]
-
-
 async def create_additional_platform_admin(
     *,
     admin_email: str,
@@ -68,14 +56,12 @@ async def create_additional_platform_admin(
         raise AdminEmailTakenError(email)
 
     password_hash = await hash_password_async(admin_password)
-    username = await _unique_username(email, fallback="platform-admin")
-    display_name = (admin_display_name or "").strip() or username
+    display_name = (admin_display_name or "").strip() or email.split("@", 1)[0]
 
     try:
         async with connection_ctx():
             identity = await identity_dao.create_identity(
                 email=email,
-                username=username,
                 password_hash=password_hash,
                 is_platform_admin=True,
                 email_verified=True,
@@ -121,14 +107,12 @@ async def create_additional_org_admin(
         raise ValueError("tenant not found")
 
     password_hash = await hash_password_async(admin_password)
-    username = await _unique_username(email, fallback="org-admin")
-    display_name = (admin_display_name or "").strip() or username
+    display_name = (admin_display_name or "").strip() or email.split("@", 1)[0]
 
     try:
         async with connection_ctx():
             identity = await identity_dao.create_identity(
                 email=email,
-                username=username,
                 password_hash=password_hash,
                 is_platform_admin=False,
                 email_verified=True,
@@ -269,7 +253,7 @@ async def apply_user_assignment(
     role: str,
     ip_address: str | None = None,
 ) -> UserRecord:
-    """Move a user into a tenant. Cannot touch genesis or last-active admins."""
+    """Assign a same-company role without bypassing company admission."""
     if role not in ("agent_admin", "member"):
         raise AdminGuardError(400, "Invalid role")
     if _flag(target, "is_genesis"):
@@ -279,9 +263,20 @@ async def apply_user_assignment(
     elif target.role == "org_admin":
         await _assert_not_last_active_admin(target, leaving_role="org_admin")
 
+    if target.tenant_id != tenant_id:
+        raise AdminGuardError(409, "Company changes require an admission request and genesis approval")
+
     previous_role = target.role
     previous_tenant = target.tenant_id
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        from app.core.acl_locks import lock_tenants, lock_user
+
+        await lock_tenants(db, (tenant_id,))
+        await lock_user(db, target.id, tenant_id)
+        current = await user_dao.get_with_identity(target.id, fresh=True)
+        if current is None or current.is_genesis:
+            raise AdminGuardError(403, "Cannot reassign a genesis admin")
+        target = current
         if target.role == "platform_admin":
             await _sync_platform_admin_flag(target, is_platform_admin=False)
         updated = (
