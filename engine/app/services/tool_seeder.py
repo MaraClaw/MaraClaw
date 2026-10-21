@@ -10,11 +10,12 @@ from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.services import tool_definitions
+from app.services.tool_definition_types import BuiltinToolDefinition as BuiltinToolDefinition
 
 AGENTBAY_TOOLS = tool_definitions.AGENTBAY_TOOLS
-BUILTIN_TOOLS: Sequence[object] = tool_definitions.BUILTIN_TOOLS
-DEPLOY_BUILTIN_TOOLS: Sequence[object] = tool_definitions.DEPLOY_BUILTIN_TOOLS
-OKR_BUILTIN_TOOLS: Sequence[object] = tool_definitions.OKR_BUILTIN_TOOLS
+BUILTIN_TOOLS: Sequence[BuiltinToolDefinition] = tool_definitions.BUILTIN_TOOLS
+DEPLOY_BUILTIN_TOOLS: Sequence[BuiltinToolDefinition] = tool_definitions.DEPLOY_BUILTIN_TOOLS
+OKR_BUILTIN_TOOLS: Sequence[BuiltinToolDefinition] = tool_definitions.OKR_BUILTIN_TOOLS
 
 SYNC_IS_DEFAULT_TOOL_NAMES = {
     "finish",
@@ -78,18 +79,6 @@ class AtlassianRovoConfigTool(TypedDict):
     parameters_schema: ToolParameterSchema
     config: JsonObject
     config_schema: AtlassianRovoConfigSchema
-
-
-class BuiltinToolDefinition(TypedDict):
-    name: str
-    display_name: str
-    description: str
-    category: str
-    icon: str
-    is_default: bool
-    parameters_schema: ToolParameterSchema
-    config: JsonObject
-    config_schema: ToolConfigSchema
 
 
 def _is_json_value(value: object) -> TypeIs[JsonValue]:

@@ -797,7 +797,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             return str_from_row_opt(value)
 
-    async def message_stats_for_conversation(self, conversation_id: str) -> tuple[int, Any]:
+    async def message_stats_for_conversation(self, conversation_id: str) -> tuple[int, datetime | None]:
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COUNT(*) AS cnt, MAX(created_at) AS last_at "
@@ -806,7 +806,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             if row is None:
                 return 0, None
-            return int_from_row(row.get("cnt")), row.get("last_at")
+            return int_from_row(row.get("cnt")), datetime_from_row(row.get("last_at"))
 
     async def delete_for_conversation(self, conversation_id: str) -> None:
         async with self.session() as db:

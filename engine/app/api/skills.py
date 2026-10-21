@@ -5,7 +5,7 @@ import io
 import uuid as _uuid
 import zipfile
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +21,20 @@ from app.db.session import connection_ctx, optional_connection_ctx
 from app.db.types import as_jsonb
 from app.records.skill import SkillRecord
 from app.records.user import UserRecord
+from app.schemas.content_response_catalog import (
+    ClawhubSearchProjection,
+    ClawhubSkillInstallResponse,
+    OkAcknowledgement,
+    SavedSkillResult,
+    SkillBrowserContent,
+    SkillBrowserEntry,
+    SkillCatalogEntry,
+    SkillDetailResponse,
+    SkillIdentityResponse,
+    SkillImportPreview,
+    SkillTokenStatus,
+    UrlSkillInstallResponse,
+)
 from app.services.skill_provider import (
     MAX_SKILL_SIZE,
     ClawHubModeration,
@@ -45,19 +59,6 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 
 class TenantTokenPayload(TypedDict):
     token: str
-
-
-class SavedSkillResult(TypedDict):
-    id: str
-    name: str
-    folder_name: str
-    tier: NotRequired[int]
-    is_suspicious: NotRequired[bool]
-    moderation_summary: NotRequired[str]
-    has_scripts: NotRequired[bool]
-    file_count: NotRequired[int]
-    source: NotRequired[str]
-    archive_source: NotRequired[str]
 
 
 async def _get_tenant_setting(tenant_id: str | None, key: str) -> str:
@@ -304,8 +305,8 @@ async def _save_skill_to_db(
 # ─── ClawHub Integration ─────────────────────────────
 
 
-@router.get("/clawhub/search")
-async def search_clawhub(q: str, current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
+@router.get("/clawhub/search", response_model=list[dict[str, object]])
+async def search_clawhub(q: str, current_user: UserRecord = Depends(get_current_user)) -> list[ClawhubSearchProjection]:
     """Proxy search requests to the ClawHub API."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     api_key = await _get_clawhub_key(tenant_id)
@@ -328,8 +329,8 @@ async def search_clawhub(q: str, current_user: UserRecord = Depends(get_current_
     ]
 
 
-@router.get("/clawhub/detail/{slug}")
-async def clawhub_detail(slug: str, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/clawhub/detail/{slug}", response_model=None)
+async def clawhub_detail(slug: str, current_user: UserRecord = Depends(get_current_user)) -> ClawHubPayload:
     """Fetch full metadata for a skill from ClawHub."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     api_key = await _get_clawhub_key(tenant_id)
@@ -342,8 +343,10 @@ async def clawhub_detail(slug: str, current_user: UserRecord = Depends(get_curre
         raise HTTPException(502, f"Failed to connect to ClawHub: {e}") from e
 
 
-@router.post("/clawhub/install")
-async def install_from_clawhub(body: ClawhubInstallIn, current_user: UserRecord = Depends(get_current_user)):
+@router.post("/clawhub/install", response_model=None)
+async def install_from_clawhub(
+    body: ClawhubInstallIn, current_user: UserRecord = Depends(get_current_user)
+) -> ClawhubSkillInstallResponse:
     """Install a skill from ClawHub into the global registry."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     slug = body.slug
@@ -413,18 +416,22 @@ async def install_from_clawhub(body: ClawhubInstallIn, current_user: UserRecord 
             tenant_id=tenant_id,
         )
 
-    result["tier"] = tier
-    result["is_suspicious"] = is_suspicious
-    result["moderation_summary"] = moderation_summary
-    result["has_scripts"] = has_scripts
-    result["file_count"] = len(files)
-    result["source"] = "clawhub"
-    result["archive_source"] = archive_base
-    return result
+    return {
+        **result,
+        "tier": tier,
+        "is_suspicious": is_suspicious,
+        "moderation_summary": moderation_summary,
+        "has_scripts": has_scripts,
+        "file_count": len(files),
+        "source": "clawhub",
+        "archive_source": archive_base,
+    }
 
 
-@router.post("/import-from-url")
-async def import_from_url(body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)):
+@router.post("/import-from-url", response_model=None)
+async def import_from_url(
+    body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)
+) -> UrlSkillInstallResponse:
     """Import a skill from any GitHub URL into the global registry."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     token = await _get_github_token(tenant_id)
@@ -469,14 +476,13 @@ async def import_from_url(body: UrlImportIn, current_user: UserRecord = Depends(
             tenant_id=tenant_id,
         )
 
-    result["tier"] = tier
-    result["file_count"] = len(files)
-    result["source"] = "url"
-    return result
+    return {**result, "tier": tier, "file_count": len(files), "source": "url"}
 
 
-@router.post("/import-from-url/preview")
-async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
+@router.post("/import-from-url/preview", response_model=dict[str, object])
+async def preview_url_import(
+    body: UrlImportIn, current_user: UserRecord = Depends(get_current_user)
+) -> SkillImportPreview:
     """Preview what will be imported from a GitHub URL without saving."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     token = await _get_github_token(tenant_id)
@@ -510,8 +516,8 @@ async def preview_url_import(body: UrlImportIn, current_user: UserRecord = Depen
 # ─── Standard CRUD ────────────────────────────────────
 
 
-@router.get("/")
-async def list_skills(current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
+@router.get("/", response_model=list[dict[str, object]])
+async def list_skills(current_user: UserRecord = Depends(get_current_user)) -> list[SkillCatalogEntry]:
     """List global skills scoped by tenant (builtin + tenant-specific)."""
     skills = await skill_dao.list_for_tenant_scope(current_user.tenant_id)
     return [
@@ -530,8 +536,8 @@ async def list_skills(current_user: UserRecord = Depends(get_current_user)) -> l
     ]
 
 
-@router.get("/{skill_id}")
-async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_current_user)) -> dict[str, Any]:
+@router.get("/{skill_id}", response_model=dict[str, object])
+async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_current_user)) -> SkillDetailResponse:
     """Get a skill with its files."""
     skill = await skill_dao.get_for_tenant_scope(
         skill_id,
@@ -553,8 +559,10 @@ async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_curren
     }
 
 
-@router.post("/")
-async def create_skill(body: SkillCreateIn, current_user: UserRecord = Depends(get_current_admin)):
+@router.post("/", response_model=None)
+async def create_skill(
+    body: SkillCreateIn, current_user: UserRecord = Depends(get_current_admin)
+) -> SkillIdentityResponse:
     """Create a custom skill."""
     async with optional_connection_ctx():
         skill = await skill_dao.create(
@@ -595,8 +603,10 @@ class SkillUpdateIn(BaseModel):
     files: list[SkillFileIn] | None = None
 
 
-@router.put("/{skill_id}")
-async def update_skill(skill_id: str, body: SkillUpdateIn, current_user: UserRecord = Depends(get_current_admin)):
+@router.put("/{skill_id}", response_model=None)
+async def update_skill(
+    skill_id: str, body: SkillUpdateIn, current_user: UserRecord = Depends(get_current_admin)
+) -> SkillIdentityResponse:
     """Update a skill's metadata and/or files."""
     async with optional_connection_ctx():
         skill = await skill_dao.get_for_tenant_scope(
@@ -627,8 +637,8 @@ async def update_skill(skill_id: str, body: SkillUpdateIn, current_user: UserRec
     return {"id": str(skill.id), "name": skill.name}
 
 
-@router.delete("/{skill_id}")
-async def delete_skill(skill_id: str, current_user: UserRecord = Depends(get_current_admin)):
+@router.delete("/{skill_id}", response_model=None)
+async def delete_skill(skill_id: str, current_user: UserRecord = Depends(get_current_admin)) -> OkAcknowledgement:
     """Delete a skill (not builtin)."""
     async with optional_connection_ctx():
         skill = await skill_dao.get_for_tenant_scope(
@@ -680,10 +690,10 @@ def _mask_token(token: str) -> str:
     return "****" if token else ""
 
 
-@router.get("/settings/token")
+@router.get("/settings/token", response_model=dict[str, object])
 async def get_skill_token_status(
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
-) -> dict[str, Any]:
+) -> SkillTokenStatus:
     """Check if GitHub token and ClawHub key are configured for this tenant."""
     tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     gh_token = await _get_github_token(tenant_id)
@@ -697,11 +707,11 @@ async def get_skill_token_status(
     }
 
 
-@router.put("/settings/token")
+@router.put("/settings/token", response_model=None)
 async def set_skill_token(
     body: SkillSettingsIn,
     current_user: UserRecord = Depends(require_role("org_admin", "platform_admin")),
-):
+) -> OkAcknowledgement:
     """Save GitHub token and/or ClawHub key for this tenant.
 
     Accessible by org_admin (to manage their own company's credentials) and
@@ -722,8 +732,8 @@ async def set_skill_token(
 # ─── Path-based browse endpoints for FileBrowser ───────────
 
 
-@router.get("/browse/list")
-async def browse_list(path: str = "", current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, Any]]:
+@router.get("/browse/list", response_model=list[dict[str, object]])
+async def browse_list(path: str = "", current_user: UserRecord = Depends(get_current_user)) -> list[SkillBrowserEntry]:
     """List skill folders (root) or files/subdirs within a skill folder."""
     if not path or path == "/":
         skills = await skill_dao.list_for_tenant_scope(current_user.tenant_id)
@@ -742,7 +752,7 @@ async def browse_list(path: str = "", current_user: UserRecord = Depends(get_cur
 
     sub = clean[len(folder) :].strip("/")
 
-    items: list[dict[str, Any]] = []
+    items: list[SkillBrowserEntry] = []
     seen_dirs: set[str] = set()
     for f in skill.files:
         if sub:
@@ -765,8 +775,8 @@ async def browse_list(path: str = "", current_user: UserRecord = Depends(get_cur
     return items
 
 
-@router.get("/browse/read")
-async def browse_read(path: str, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/browse/read", response_model=None)
+async def browse_read(path: str, current_user: UserRecord = Depends(get_current_user)) -> SkillBrowserContent:
     """Read a file from a skill folder."""
     parts = path.strip("/").split("/", 1)
     if len(parts) < 2:
@@ -791,8 +801,8 @@ class BrowseWriteIn(BaseModel):
     content: str
 
 
-@router.put("/browse/write")
-async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(get_current_admin)):
+@router.put("/browse/write", response_model=None)
+async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(get_current_admin)) -> OkAcknowledgement:
     """Write a file in a skill folder. Creates the skill if the folder doesn't exist."""
     parts = body.path.strip("/").split("/", 1)
     if len(parts) < 2:
@@ -833,8 +843,8 @@ async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(g
     return {"ok": True}
 
 
-@router.delete("/browse/delete")
-async def browse_delete(path: str, current_user: UserRecord = Depends(get_current_admin)):
+@router.delete("/browse/delete", response_model=None)
+async def browse_delete(path: str, current_user: UserRecord = Depends(get_current_admin)) -> OkAcknowledgement:
     """Delete a file or an entire skill folder."""
     parts = path.strip("/").split("/", 1)
     folder = parts[0]

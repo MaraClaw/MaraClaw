@@ -10,6 +10,7 @@ from app.dao.task_dao import task_dao, task_log_dao
 from app.dao.user_dao import user_dao
 from app.records.task import TaskRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import TaskTriggerResponse
 from app.schemas.schemas import TaskCreate, TaskLogCreate, TaskLogOut, TaskOut, TaskUpdate
 
 router = APIRouter(prefix="/agents/{agent_id}/tasks", tags=["tasks"])
@@ -46,7 +47,9 @@ async def list_tasks(
 
 
 @router.post("/", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
-async def create_task(agent_id: uuid.UUID, data: TaskCreate, current_user: UserRecord = Depends(get_current_user)):
+async def create_task(
+    agent_id: uuid.UUID, data: TaskCreate, current_user: UserRecord = Depends(get_current_user)
+) -> TaskOut:
     """Create a new task for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     task = await task_dao.create(
@@ -79,7 +82,7 @@ async def create_task(agent_id: uuid.UUID, data: TaskCreate, current_user: UserR
 @router.patch("/{task_id}", response_model=TaskOut)
 async def update_task(
     agent_id: uuid.UUID, task_id: uuid.UUID, data: TaskUpdate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> TaskOut:
     """Update a task."""
     _ = await check_agent_access(current_user, agent_id)
     task = await task_dao.get_for_agent(task_id, agent_id)
@@ -91,7 +94,9 @@ async def update_task(
 
 
 @router.get("/{task_id}/logs", response_model=list[TaskLogOut])
-async def get_task_logs(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_task_logs(
+    agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[TaskLogOut]:
     """Get progress logs for a task."""
     _ = await check_agent_access(current_user, agent_id)
     logs = await task_log_dao.list_for_task(task_id)
@@ -101,7 +106,7 @@ async def get_task_logs(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: U
 @router.post("/{task_id}/logs", response_model=TaskLogOut, status_code=status.HTTP_201_CREATED)
 async def add_task_log(
     agent_id: uuid.UUID, task_id: uuid.UUID, data: TaskLogCreate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> TaskLogOut:
     """Add a progress log entry to a task."""
     _ = await check_agent_access(current_user, agent_id)
     # Ensure task belongs to agent
@@ -112,8 +117,10 @@ async def add_task_log(
     return TaskLogOut.model_validate(log)
 
 
-@router.post("/{task_id}/trigger")
-async def trigger_task(agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.post("/{task_id}/trigger", response_model=None)
+async def trigger_task(
+    agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> TaskTriggerResponse:
     """Manually trigger a supervision task execution (for testing)."""
     from app.core.permissions import is_agent_expired
 

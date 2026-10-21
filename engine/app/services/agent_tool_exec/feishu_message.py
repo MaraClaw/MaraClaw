@@ -21,7 +21,7 @@ from app.services.channel_user_service import get_platform_user_by_org_member
 @dataclass(frozen=True, slots=True)
 class _OutgoingFeishuMessage:
     agent_id: uuid.UUID
-    member: OrgMemberRecord | object
+    member: OrgMemberRecord
     feishu_user_id: str
     member_name: str
     message_text: str
@@ -100,15 +100,16 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
                     receive_id_type="user_id",
                 )
                 if response.get("code") == 0:
-                    await _save_outgoing_to_feishu_session(
-                        _OutgoingFeishuMessage(
-                            agent_id=agent_id,
-                            member=direct_relationship.member,
-                            feishu_user_id=direct_user_id,
-                            member_name=member_name,
-                            message_text=message_text,
-                        ),
-                    )
+                    if direct_relationship.member is not None:
+                        await _save_outgoing_to_feishu_session(
+                            _OutgoingFeishuMessage(
+                                agent_id=agent_id,
+                                member=direct_relationship.member,
+                                feishu_user_id=direct_user_id,
+                                member_name=member_name,
+                                message_text=message_text,
+                            ),
+                        )
                     return f"✅ 消息已发送（user_id: {direct_user_id}）"
                 return f"❌ 发送失败：{response.get('msg')} (code {response.get('code')})"
             except feishu_service_module.FeishuAPIError as user_id_error:

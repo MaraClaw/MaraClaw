@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-PAGES_TOOLS: list[dict[str, Any]] = [
+PAGES_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "publish_page",
         "display_name": "Publish Page",

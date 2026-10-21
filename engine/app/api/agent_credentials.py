@@ -8,9 +8,10 @@ using AES-256-CBC and are NEVER returned in API responses.
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from typing_extensions import TypedDict
 
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_loads_value, object_mapping_from
@@ -63,8 +64,10 @@ def _to_response(cred: AgentCredentialRecord) -> AgentCredentialPayload:
     }
 
 
-@router.get("/")
-async def list_credentials(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/", response_model=None)
+async def list_credentials(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[AgentCredentialPayload]:
     """List all credentials for an agent (sensitive data excluded)."""
     # Verify the user has manage-level access to this agent
     _agent, access_level = await check_agent_access(current_user, agent_id)
@@ -78,10 +81,10 @@ async def list_credentials(agent_id: uuid.UUID, current_user: UserRecord = Depen
     return [_to_response(c) for c in credentials]
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=None)
 async def create_credential(
     agent_id: uuid.UUID, data: AgentCredentialCreate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> AgentCredentialPayload:
     """Create a new credential for an agent.
 
     Sensitive fields (cookies_json) are encrypted before storage.
@@ -124,13 +127,13 @@ async def create_credential(
     return _to_response(cred)
 
 
-@router.put("/{credential_id}")
+@router.put("/{credential_id}", response_model=None)
 async def update_credential(
     agent_id: uuid.UUID,
     credential_id: uuid.UUID,
     data: AgentCredentialUpdate,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> AgentCredentialPayload:
     """Update an existing credential.
 
     Only provided fields are updated. Sensitive fields are re-encrypted.
@@ -187,7 +190,7 @@ async def update_credential(
 @router.delete("/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_credential(
     agent_id: uuid.UUID, credential_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> None:
     """Delete a credential."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level not in ("manage",) and current_user.role not in ("platform_admin", "org_admin"):

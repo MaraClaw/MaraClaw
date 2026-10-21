@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.core.json_types import json_as_str, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.services.channels.types import normalize_channel_type
+from app.services.service_contracts import TeamsMessageActivity
 
 WEB_OR_AGENT_CHANNELS = frozenset({"web", "agent", ""})
 
@@ -142,12 +141,14 @@ async def _deliver_teams(agent: AgentRecord, external: str, content: str, *, str
             raise ValueError("Teams config is missing")
         logger.warning("[Outbound] no Teams config for agent %s", agent.id)
         return
-    activity: dict[str, Any] = {
+    activity: TeamsMessageActivity = {
         "type": "message",
         "text": content,
         "conversation": {"id": external},
     }
-    await _send_teams_message(config, external, activity, strict=strict)
+    await _send_teams_message(
+        config, external, {**activity, "conversation": {**activity["conversation"]}}, strict=strict
+    )
 
 
 async def _deliver_google_chat(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:

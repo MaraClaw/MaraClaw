@@ -6,8 +6,9 @@ from collections.abc import Sequence
 from typing import Any, ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import int_from_row, uuid_list_from_rows
+from app.core.json_types import int_from_row, str_from_row, uuid_list_from_rows
 from app.dao.base import BaseDAO
+from app.dao.tool_assignment_metadata import ToolAssignmentMetadata
 from app.records.tool import AgentToolRecord, ToolRecord
 
 _TOOL_COLUMNS = (
@@ -336,7 +337,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
 
     async def get_assignment_with_tool_by_name(
         self, agent_id: UUID, tool_name: str
-    ) -> tuple[AgentToolRecord, dict[str, Any]] | None:
+    ) -> tuple[AgentToolRecord, ToolAssignmentMetadata] | None:
         """Return (assignment, tool row fields) for an agent+tool name join."""
         async with self.session() as db:
             row = await db.fetchone(
@@ -352,11 +353,11 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
             if row is None:
                 return None
             assignment = AgentToolRecord.from_row({col: row[col] for col in self.columns if col in row})
-            tool_fields: dict[str, Any] = {
+            tool_fields: ToolAssignmentMetadata = {
                 "config": row.get("tool_config") or {},
                 "config_schema": row.get("tool_config_schema") or {},
-                "source": row.get("tool_source") or "builtin",
-                "name": row.get("tool_name") or tool_name,
+                "source": str_from_row(row.get("tool_source") or "builtin"),
+                "name": str_from_row(row.get("tool_name") or tool_name),
             }
             return assignment, tool_fields
 

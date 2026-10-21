@@ -11,7 +11,6 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 from app.core.json_types import json_loads_value
 from app.core.logging import logger
@@ -160,14 +159,14 @@ async def load_agent_model_bundle(
         )
         if mid and loaded is None
     ]
-    loaded: dict[Any, LLMModelRecord] = {}
+    loaded: dict[uuid.UUID, LLMModelRecord] = {}
     if missing_ids:
         loaded = {row.id: row for row in await llm_model_dao.get_many(missing_ids)}
-    if primary is None and getattr(agent, "primary_model_id", None):
+    if primary is None and getattr(agent, "primary_model_id", None) and agent.primary_model_id:
         primary = loaded.get(agent.primary_model_id)
-    if secondary is None and getattr(agent, "secondary_model_id", None):
+    if secondary is None and getattr(agent, "secondary_model_id", None) and agent.secondary_model_id:
         secondary = loaded.get(agent.secondary_model_id)
-    if fallback is None and getattr(agent, "fallback_model_id", None):
+    if fallback is None and getattr(agent, "fallback_model_id", None) and agent.fallback_model_id:
         fallback = loaded.get(agent.fallback_model_id)
     from app.services.enterprise_llm import owned_model_or_none
 

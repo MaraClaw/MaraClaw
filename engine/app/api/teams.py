@@ -25,6 +25,8 @@ from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import WebhookUrlResponse
+from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channels.teams_auth import (
     TeamsAuthenticationError,
@@ -290,7 +292,7 @@ async def _send_teams_message_single_chunk(
 @router.post("/agents/{agent_id}/teams-channel", response_model=ChannelConfigOut, status_code=201)
 async def configure_teams_channel(
     agent_id: uuid.UUID, data: TeamsChannelPayload, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     """Configure Microsoft Teams bot for an agent. Fields: app_id, app_secret."""
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -345,7 +347,9 @@ async def configure_teams_channel(
 
 
 @router.get("/agents/{agent_id}/teams-channel", response_model=ChannelConfigOut)
-async def get_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_teams_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     """Get Microsoft Teams channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
@@ -354,12 +358,12 @@ async def get_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
     return ChannelConfigOut.model_validate(config)
 
 
-@router.get("/agents/{agent_id}/teams-channel/webhook-url")
+@router.get("/agents/{agent_id}/teams-channel/webhook-url", response_model=None)
 async def get_teams_webhook_url(
     agent_id: uuid.UUID,
     request: Request,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> WebhookUrlResponse:
     """Get the Microsoft Teams webhook URL for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     from app.services.platform_service import platform_service
@@ -368,8 +372,8 @@ async def get_teams_webhook_url(
     return {"webhook_url": f"{public_base}/api/channel/teams/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/teams-channel", status_code=204)
-async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/teams-channel", status_code=204, response_model=None)
+async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     """Delete Microsoft Teams channel configuration for an agent."""
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -383,8 +387,8 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 # ─── Event Webhook ──────────────────────────────────────
 
 
-@router.post("/channel/teams/{agent_id}/webhook")
-async def teams_event_webhook(agent_id: uuid.UUID, request: Request):
+@router.post("/channel/teams/{agent_id}/webhook", response_model=None)
+async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | OkAcknowledgement:
     """Handle Microsoft Teams Bot Framework callbacks."""
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
     if not config:

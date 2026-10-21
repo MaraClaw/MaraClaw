@@ -9,7 +9,6 @@ import shutil
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File as FastFile, HTTPException, UploadFile as UploadFileType, status
@@ -27,6 +26,20 @@ from app.db.session import connection_ctx, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.records.workspace import WorkspaceFileRevisionRecord
+from app.schemas.content_response_files import (
+    AgentSkillImportAcknowledgement,
+    EnterpriseFileContent,
+    EnterpriseFileEntry,
+    FileLockAcknowledgement,
+    FilePathAcknowledgement,
+    FilePreview,
+    FilePreviewKind,
+    FileRevisionResponse,
+    FileUploadResponse,
+    FileWriteAcknowledgement,
+    NamedAgentSkillImportAcknowledgement,
+    SpreadsheetFilePreview,
+)
 from app.services import file_download_tickets, workspace_collaboration as workspace
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
@@ -447,7 +460,9 @@ async def list_files(
 
 
 @router.get("/content", response_model=FileContent)
-async def read_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)):
+async def read_file(
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
+) -> FileContent:
     """Read the content of a file."""
     _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
@@ -484,7 +499,7 @@ def _entry_version_token(entry: StorageEntry) -> str | None:
     return None
 
 
-def _file_kind(path: str) -> str:
+def _file_kind(path: str) -> FilePreviewKind:
     file_path = Path(path)
     ext = file_path.suffix.lower()
     name = file_path.name.lower()
@@ -495,7 +510,7 @@ def _file_kind(path: str) -> str:
     if ext in {".html", ".htm"}:
         return "html"
     office_kind = preview_kind(file_path.name)
-    if office_kind is not None:
+    if office_kind in ("pdf", "xlsx", "docx", "pptx"):
         return office_kind
     if ext in {".txt", ".log", ".json"} or ext in TEXT_PREVIEW_EXTENSIONS or name in TEXT_PREVIEW_FILENAMES:
         return "text"
@@ -657,10 +672,10 @@ def _parse_csv_rows(text: str) -> list[list[str]]:
     return normalized
 
 
-@router.get("/preview")
+@router.get("/preview", response_model=dict[str, object])
 async def preview_file(
     agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> FilePreview:
     """Return a browser-friendly preview payload for Workspace files."""
     _ = await check_agent_access(current_user, agent_id)
     storage = get_storage_backend()
@@ -672,7 +687,7 @@ async def preview_file(
     mime_type = mimetypes.guess_type(Path(path).name)[0] or "application/octet-stream"
     download_url = f"/api/agents/{agent_id}/files/download?path={path}"
 
-    if kind in {"markdown", "html", "text"}:
+    if kind in ("markdown", "html", "text"):
         content = await storage.read_text(key, encoding="utf-8", errors="replace")
         return {
             "path": path,
@@ -746,7 +761,7 @@ async def preview_file(
                 text = await _extract_document_text(target, Path(path).name)
                 if text.startswith("Preview extraction failed") and sheets_error:
                     text = sheets_error
-            payload: dict[str, Any] = {
+            payload: SpreadsheetFilePreview = {
                 "path": path,
                 "kind": kind,
                 "mime_type": mime_type,
@@ -766,7 +781,7 @@ async def preview_file(
                 "text": f"Preview extraction failed: {str(exc)[:200]}",
                 "download_url": download_url,
             }
-    if kind in {"docx", "pptx"}:
+    if kind in ("docx", "pptx"):
         companion_content, companion_rel = await _read_storage_companion(
             storage,
             lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
@@ -878,13 +893,13 @@ async def download_file(
     return await _download_response(key, path, inline)
 
 
-@router.put("/content")
+@router.put("/content", response_model=dict[str, object])
 async def write_file(
     agent_id: uuid.UUID,
     path: str,
     data: FileWrite,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> FileWriteAcknowledgement:
     """Write content to a file (create or overwrite)."""
     agent, _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
@@ -915,12 +930,12 @@ async def write_file(
     return {"status": "ok", "path": result.path, "revision_id": result.revision_id}
 
 
-@router.post("/locks")
+@router.post("/locks", response_model=None)
 async def lock_file(
     agent_id: uuid.UUID,
     data: FileLockBody,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> FileLockAcknowledgement:
     """Acquire or refresh a short-lived human editing lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(data.path):
@@ -935,18 +950,20 @@ async def lock_file(
     return {"status": "ok", "path": lock.path, "expires_at": lock.expires_at.isoformat()}
 
 
-@router.delete("/locks")
-async def unlock_file(agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/locks", response_model=None)
+async def unlock_file(
+    agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
+) -> FilePathAcknowledgement:
     """Release the current user's edit lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
     await release_edit_lock(agent_id=agent_id, path=path, user_id=current_user.id)
     return {"status": "ok", "path": path}
 
 
-@router.get("/revisions")
+@router.get("/revisions", response_model=list[dict[str, object]])
 async def get_file_revisions(
     agent_id: uuid.UUID, path: str, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[FileRevisionResponse]:
     """List version history for the currently opened Workspace file."""
     _ = await check_agent_access(current_user, agent_id)
     if is_focus_file_path(path):
@@ -971,12 +988,12 @@ async def get_file_revisions(
     ]
 
 
-@router.post("/restore")
+@router.post("/restore", response_model=dict[str, object])
 async def restore_file_revision(
     agent_id: uuid.UUID,
     data: RestoreRevisionBody,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> FileWriteAcknowledgement:
     """Restore a file to a previous revision's after-content."""
     agent, _ = await check_agent_access(current_user, agent_id)
     revision = await workspace_file_revision_dao.get_for_agent(data.revision_id, agent_id)
@@ -998,13 +1015,13 @@ async def restore_file_revision(
     return {"status": "ok", "path": revision.path, "revision_id": restored.revision_id}
 
 
-@router.delete("/content")
+@router.delete("/content", response_model=None)
 async def delete_file(
     agent_id: uuid.UUID,
     path: str,
     expected_version_token: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> FilePathAcknowledgement:
     """Delete a file."""
     agent = await _require_agent_file_delete_access(current_user, agent_id)
     if is_focus_file_path(path):
@@ -1033,10 +1050,10 @@ class ImportSkillBody(BaseModel):
     skill_id: str
 
 
-@router.post("/import-skill")
+@router.post("/import-skill", response_model=dict[str, object])
 async def import_skill_to_agent(
     agent_id: uuid.UUID, body: ImportSkillBody, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> NamedAgentSkillImportAcknowledgement:
     """Import a global skill into this agent's skills/ workspace folder.
 
     Copies all files from the global skill registry into
@@ -1085,13 +1102,13 @@ upload_router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
 DEFAULT_UPLOAD_DIR = "workspace/uploads"
 
 
-@upload_router.post("/upload")
+@upload_router.post("/upload", response_model=dict[str, object])
 async def upload_file_to_workspace(
     agent_id: uuid.UUID,
     file: UploadFileType = FastFile(...),
     path: str = "workspace/knowledge_base",
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> FileUploadResponse:
     """Upload a binary file to agent workspace."""
     agent, _ = await check_agent_access(current_user, agent_id)
 
@@ -1168,11 +1185,11 @@ def _enterprise_storage_key(tenant_id: str, rel_path: str = "") -> str:
     return f"{prefix}/{rel}" if rel else prefix
 
 
-@enterprise_kb_router.get("/files")
+@enterprise_kb_router.get("/files", response_model=list[dict[str, object]])
 async def list_enterprise_kb_files(
     path: str = "",
     current_user: UserRecord = Depends(get_current_user),
-) -> list[dict[str, Any]]:
+) -> list[EnterpriseFileEntry]:
     """List files in enterprise knowledge base (tenant-scoped)."""
     if not current_user.tenant_id:
         return []
@@ -1181,7 +1198,7 @@ async def list_enterprise_kb_files(
     if not await storage.exists(storage_key) or not await storage.is_dir(storage_key):
         return []
 
-    items: list[dict[str, Any]] = []
+    items: list[EnterpriseFileEntry] = []
     for entry in await storage.list_dir(storage_key):
         if entry.name == ".gitkeep":
             continue
@@ -1198,12 +1215,12 @@ async def list_enterprise_kb_files(
     return items
 
 
-@enterprise_kb_router.post("/upload")
+@enterprise_kb_router.post("/upload", response_model=dict[str, object])
 async def upload_enterprise_kb_file(
     file: UploadFileType = FastFile(...),
     sub_path: str = "",
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> FileUploadResponse:
     """Upload a file to enterprise knowledge base (tenant-scoped)."""
     # Only admin can upload to enterprise KB
     if current_user.role not in ("platform_admin", "org_admin"):
@@ -1242,11 +1259,11 @@ async def upload_enterprise_kb_file(
     }
 
 
-@enterprise_kb_router.get("/content")
+@enterprise_kb_router.get("/content", response_model=None)
 async def read_enterprise_file(
     path: str,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> EnterpriseFileContent:
     """Read content of an enterprise knowledge base file (tenant-scoped)."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="No tenant associated")
@@ -1263,12 +1280,12 @@ async def read_enterprise_file(
         return {"path": path, "content": f"[Binary file: {Path(path).name}, {stat.size} bytes]"}
 
 
-@enterprise_kb_router.put("/content")
+@enterprise_kb_router.put("/content", response_model=None)
 async def write_enterprise_file(
     path: str,
     data: FileWrite,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> FilePathAcknowledgement:
     """Write content to an enterprise file (tenant-scoped)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Only admins can edit enterprise knowledge base")
@@ -1280,11 +1297,11 @@ async def write_enterprise_file(
     return {"status": "ok", "path": path}
 
 
-@enterprise_kb_router.delete("/content")
+@enterprise_kb_router.delete("/content", response_model=None)
 async def delete_enterprise_file(
     path: str,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> FilePathAcknowledgement:
     """Delete an enterprise knowledge base file (tenant-scoped)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Only admins can delete enterprise knowledge base files")
@@ -1315,10 +1332,10 @@ class UrlImportBody(BaseModel):
     url: str
 
 
-@router.post("/import-from-clawhub")
+@router.post("/import-from-clawhub", response_model=dict[str, object])
 async def agent_import_from_clawhub(
     agent_id: uuid.UUID, body: ClawhubImportBody, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> NamedAgentSkillImportAcknowledgement:
     """Import a skill from ClawHub directly into this agent's skills/ workspace."""
     agent, _ = await check_agent_access(current_user, agent_id)
 
@@ -1372,10 +1389,10 @@ async def agent_import_from_clawhub(
     }
 
 
-@router.post("/import-from-url")
+@router.post("/import-from-url", response_model=dict[str, object])
 async def agent_import_from_url(
     agent_id: uuid.UUID, body: UrlImportBody, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> AgentSkillImportAcknowledgement:
     """Import a skill from a GitHub URL directly into this agent's skills/ workspace."""
     agent, _ = await check_agent_access(current_user, agent_id)
 

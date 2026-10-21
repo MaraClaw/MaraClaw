@@ -16,6 +16,7 @@ from app.services.channels.inbound import (
     is_queued_channel_reply,
     routing_history_limit,
 )
+from app.services.llm.types import OpenAIMessage
 
 
 def test_queued_stub_is_recognized() -> None:
@@ -182,7 +183,7 @@ async def test_generate_channel_reply_wakes_in_background(monkeypatch: pytest.Mo
         )
 
     monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", fake_enqueue)
-    history = [{"role": "user", "content": f"turn-{index}"} for index in range(20)]
+    history: list[OpenAIMessage] = [{"role": "user", "content": f"turn-{index}"} for index in range(20)]
 
     reply = await generate_channel_reply(
         agent_id=agent.id,

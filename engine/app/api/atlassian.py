@@ -6,16 +6,15 @@ the agent uses Jira, Confluence, and Compass via the Atlassian Rovo MCP server.
 """
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.json_types import JsonValue
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
+from app.schemas.operator_response_tools import AtlassianChannelResponse, AtlassianTestResponse
 from app.services.atlassian_mcp_tools import (
     ATLASSIAN_MCP_URL,
     _preview_atlassian_tools,
@@ -28,10 +27,10 @@ router = APIRouter(tags=["atlassian"])
 # ─── Config CRUD ────────────────────────────────────────
 
 
-@router.post("/agents/{agent_id}/atlassian-channel", status_code=201)
+@router.post("/agents/{agent_id}/atlassian-channel", status_code=201, response_model=None)
 async def configure_atlassian_channel(
     agent_id: uuid.UUID, data: dict[str, str], current_user: UserRecord = Depends(get_current_user)
-):
+) -> AtlassianChannelResponse:
     """Configure Atlassian Rovo MCP for an agent.
 
     Required field: api_key (Bearer token starting with ATSTT, or Basic base64(email:token)).
@@ -83,8 +82,10 @@ async def configure_atlassian_channel(
     return _serialize(config)
 
 
-@router.get("/agents/{agent_id}/atlassian-channel")
-async def get_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/agents/{agent_id}/atlassian-channel", response_model=None)
+async def get_atlassian_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> AtlassianChannelResponse:
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
     if not config:
@@ -92,8 +93,8 @@ async def get_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = 
     return _serialize(config)
 
 
-@router.delete("/agents/{agent_id}/atlassian-channel", status_code=204)
-async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/atlassian-channel", status_code=204, response_model=None)
+async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
@@ -103,10 +104,10 @@ async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord
     _ = await channel_config_dao.delete(id=config.id)
 
 
-@router.post("/agents/{agent_id}/atlassian-channel/test")
+@router.post("/agents/{agent_id}/atlassian-channel/test", response_model=dict[str, object])
 async def check_atlassian_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> AtlassianTestResponse:
     """Test connectivity to Atlassian Rovo MCP and list available tools."""
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
@@ -129,7 +130,7 @@ async def check_atlassian_channel(
         return {"ok": False, "error": str(e)[:300]}
 
 
-def _serialize(config: ChannelConfigRecord) -> dict[str, JsonValue]:
+def _serialize(config: ChannelConfigRecord) -> AtlassianChannelResponse:
     return {
         "id": str(config.id),
         "agent_id": str(config.agent_id),

@@ -1,5 +1,5 @@
 {
-  "include": ["app"],
+  "include": ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"],
   "extraPaths": ["."],
   "typeCheckingMode": "standard",
   "pythonVersion": "3.14",

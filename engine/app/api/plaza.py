@@ -15,6 +15,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.content_response_catalog import DeletedAcknowledgement, PlazaLikeResponse, PlazaStatsResponse
 
 router = APIRouter(prefix="/api/plaza", tags=["plaza"])
 
@@ -148,14 +149,14 @@ async def _assert_company_agent_author(
 # ── Routes ──────────────────────────────────────────
 
 
-@router.get("/posts")
+@router.get("/posts", response_model=None)
 async def list_posts(
     limit: int = 20,
     offset: int = 0,
     since: str | None = None,
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[PostOut]:
     """List plaza posts, newest first. Filtered by tenant_id from JWT for data isolation.
 
     System agent posts are excluded from the feed - system agents (is_system=True)
@@ -177,15 +178,24 @@ async def list_posts(
     return [PostOut.model_validate(p) for p in posts]
 
 
-@router.get("/stats")
-async def plaza_stats(tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/stats", response_model=None)
+async def plaza_stats(
+    tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
+) -> PlazaStatsResponse:
     """Get plaza statistics scoped by tenant_id from JWT."""
     effective_tenant_id = _effective_tenant_id(current_user, tenant_id)
-    return await plaza_post_dao.get_stats(tenant_id=effective_tenant_id)
+    stats = await plaza_post_dao.get_stats(tenant_id=effective_tenant_id)
+    result: PlazaStatsResponse = {
+        "total_posts": stats["total_posts"],
+        "total_comments": stats["total_comments"],
+        "today_posts": stats["today_posts"],
+        "top_contributors": stats["top_contributors"],
+    }
+    return result
 
 
 @router.post("/posts", response_model=PostOut)
-async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_current_user)):
+async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_current_user)) -> PostOut:
     """Create a new plaza post. Requires authentication; tenant_id enforced from JWT."""
     if len(body.content.strip()) == 0:
         raise HTTPException(400, "Content cannot be empty")
@@ -211,7 +221,7 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
 
 
 @router.get("/posts/{post_id}", response_model=PostDetail)
-async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> PostDetail:
     """Get a single post with its comments. Enforces tenant isolation."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     post = await plaza_post_dao.get_post(post_id)
@@ -237,8 +247,10 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
     return PostDetail.model_validate(post).model_copy(update={"comments": comments})
 
 
-@router.delete("/posts/{post_id}")
-async def delete_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/posts/{post_id}", response_model=None)
+async def delete_post(
+    post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> DeletedAcknowledgement:
     """Delete a plaza post. Admins can delete any post; authors can delete their own. Enforces tenant isolation."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     post = await plaza_post_dao.get_post(post_id)
@@ -260,7 +272,9 @@ async def delete_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get
 
 
 @router.post("/posts/{post_id}/comments", response_model=CommentOut)
-async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: UserRecord = Depends(get_current_user)):
+async def create_comment(
+    post_id: uuid.UUID, body: CommentCreate, current_user: UserRecord = Depends(get_current_user)
+) -> CommentOut:
     """Add a comment to a post. Requires authentication; enforces tenant isolation."""
     if len(body.content.strip()) == 0:
         raise HTTPException(400, "Content cannot be empty")
@@ -357,13 +371,13 @@ async def create_comment(post_id: uuid.UUID, body: CommentCreate, current_user: 
     return CommentOut.model_validate(comment)
 
 
-@router.post("/posts/{post_id}/like")
+@router.post("/posts/{post_id}/like", response_model=None)
 async def like_post(
     post_id: uuid.UUID,
     author_id: uuid.UUID,
     author_type: str = "human",
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> PlazaLikeResponse:
     """Like a post (toggle). Requires authentication; enforces tenant isolation."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     post = await plaza_post_dao.get_post(post_id)

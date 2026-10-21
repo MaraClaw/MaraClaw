@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,8 +17,14 @@ from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.template import AgentTemplateRecord
 from app.records.user import UserRecord
+from app.schemas.collaboration_response_metrics import AgentHandoverResponse, AgentMetricsResponse
 from app.services.audit_logger import write_audit_log
-from app.services.collaboration import collaboration_service
+from app.services.collaboration import (
+    CollaboratorSummary,
+    DelegatedTaskResult,
+    MessageDeliveryResult,
+    collaboration_service,
+)
 
 router = APIRouter(tags=["advanced"])
 
@@ -38,19 +44,21 @@ class InterAgentMessage(BaseModel):
     msg_type: str = "notify"  # notify | consult
 
 
-@router.get("/agents/{agent_id}/collaborators")
-async def list_collaborators(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/agents/{agent_id}/collaborators", response_model=None)
+async def list_collaborators(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> list[CollaboratorSummary]:
     """List agents that can collaborate with this agent."""
     _ = await check_agent_access(current_user, agent_id)
     return await collaboration_service.list_collaborators(agent_id)
 
 
-@router.post("/agents/{agent_id}/collaborate/delegate")
+@router.post("/agents/{agent_id}/collaborate/delegate", response_model=None)
 async def delegate_task(
     agent_id: uuid.UUID,
     data: DelegateRequest,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> DelegatedTaskResult:
     """Delegate a task from one agent to another."""
     _ = await check_agent_access(current_user, agent_id)
     try:
@@ -61,12 +69,12 @@ async def delegate_task(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/agents/{agent_id}/collaborate/message")
+@router.post("/agents/{agent_id}/collaborate/message", response_model=None)
 async def send_inter_agent_message(
     agent_id: uuid.UUID,
     data: InterAgentMessage,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> MessageDeliveryResult:
     """Send a message between agents."""
     _ = await check_agent_access(current_user, agent_id)
     return await collaboration_service.send_message_between_agents(
@@ -118,14 +126,14 @@ def _template_out(t: AgentTemplateRecord) -> TemplateOut:
 
 
 @router.get("/templates", response_model=list[TemplateOut])
-async def list_templates(category: str | None = None):
+async def list_templates(category: str | None = None) -> list[TemplateOut]:
     """List available agent templates."""
     templates = await agent_template_dao.list_ordered_by_name(category=category)
     return [_template_out(t) for t in templates]
 
 
 @router.get("/templates/{template_id}", response_model=TemplateOut)
-async def get_template(template_id: uuid.UUID):
+async def get_template(template_id: uuid.UUID) -> TemplateOut:
     """Get template details."""
     template = await agent_template_dao.get(template_id)
     if not template:
@@ -134,7 +142,7 @@ async def get_template(template_id: uuid.UUID):
 
 
 @router.post("/templates", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
-async def create_template(data: TemplateCreate, current_user: UserRecord = Depends(get_current_user)):
+async def create_template(data: TemplateCreate, current_user: UserRecord = Depends(get_current_user)) -> TemplateOut:
     """Create a new agent template (share to template market)."""
     template = await agent_template_dao.create(
         obj_in={
@@ -152,8 +160,8 @@ async def create_template(data: TemplateCreate, current_user: UserRecord = Depen
     return _template_out(template)
 
 
-@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_template(template_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)):
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_template(template_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)) -> None:
     """Delete a template within the admin's scope."""
     template = await agent_template_dao.get(template_id)
     if not template:
@@ -176,10 +184,10 @@ class HandoverRequest(BaseModel):
     new_creator_id: uuid.UUID
 
 
-@router.post("/agents/{agent_id}/handover")
+@router.post("/agents/{agent_id}/handover", response_model=None)
 async def handover_agent(
     agent_id: uuid.UUID, data: HandoverRequest, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> AgentHandoverResponse:
     """Transfer ownership of a digital employee to another user."""
     from app.core.permissions import is_agent_creator
 
@@ -214,10 +222,10 @@ async def handover_agent(
 # ─── Observability ──────────────────────────────────────
 
 
-@router.get("/agents/{agent_id}/metrics")
+@router.get("/agents/{agent_id}/metrics", response_model=None)
 async def get_agent_metrics(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> AgentMetricsResponse:
     """Get observability metrics for an agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
 

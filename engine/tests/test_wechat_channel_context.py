@@ -32,6 +32,7 @@ def test_update_wechat_context_cache_prunes_old_entries():
         )
 
     cache = extra[WECHAT_CONTEXT_CACHE_KEY]
+    assert isinstance(cache, dict)
     assert len(cache) == WECHAT_CONTEXT_CACHE_LIMIT
     assert get_wechat_context_entry(extra, from_user_id="wx_user_0") is None
     assert get_wechat_context_entry(extra, from_user_id=f"wx_user_{WECHAT_CONTEXT_CACHE_LIMIT + 4}") is not None

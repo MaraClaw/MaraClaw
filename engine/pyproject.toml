@@ -165,7 +165,7 @@ docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
 [tool.pyright]
-include = ["app"]
+include = ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"]
 extraPaths = ["."]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
@@ -175,7 +175,7 @@ reportUnannotatedClassAttribute = "error"
 reportAny = "error"
 
 [tool.basedpyright]
-include = ["app"]
+include = ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"]
 extraPaths = ["."]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
@@ -196,10 +196,12 @@ error-on-warning = false
 [tool.ty.src]
 include = [
     "app",
+    "scripts",
     "tests",
     "check_agentbay_config.py",
     "remove_old_tool.py",
     "seed.py",
+    "test_sandbox_config.py",
     "update_schema.py",
 ]
 exclude = [
@@ -217,6 +219,14 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+filterwarnings = [
+    # pypinyin 0.55.0: remove when upstream replaces codecs.open in both dictionary loaders.
+    'ignore:^codecs\.open\(\) is deprecated\. Use open\(\) instead\.$:DeprecationWarning:^pypinyin\.pinyin_dict$',
+    'ignore:^codecs\.open\(\) is deprecated\. Use open\(\) instead\.$:DeprecationWarning:^pypinyin\.phrases_dict$',
+    # lark-oapi 1.7.5: remove after a release fixes https://github.com/larksuite/oapi-sdk-python/issues/145
+    # Upstream fixes: https://github.com/larksuite/oapi-sdk-python/pull/147 and /pull/154.
+    'ignore:^datetime\.datetime\.utcfromtimestamp\(\) is deprecated and scheduled for removal in a future version\. Use timezone-aware objects to represent datetimes in UTC\x3a datetime\.datetime\.fromtimestamp\(timestamp, datetime\.UTC\)\.$:DeprecationWarning:^lark_oapi\.ws\.pb\.google\.protobuf\.internal\.well_known_types$',
+]
 
 [tool.coverage.run]
 branch = true

@@ -1,8 +1,7 @@
 """Composed builtin tool definitions."""
 
-from typing import Any
-
 from app.services.llm.finish import FINISH_TOOL_SEED
+from app.services.tool_definition_types import BuiltinToolDefinition
 from app.services.tool_definitions.agentbay import AGENTBAY_TOOLS
 from app.services.tool_definitions.aware import AWARE_TOOLS
 from app.services.tool_definitions.code import CODE_TOOLS
@@ -22,7 +21,7 @@ from app.services.tool_definitions.skills import SKILL_TOOLS
 from app.services.tool_definitions.social import SOCIAL_TOOLS
 
 # Builtin tool definitions - these map to the hardcoded AGENT_TOOLS
-BUILTIN_TOOLS: list[dict[str, Any]] = [
+BUILTIN_TOOLS: list[BuiltinToolDefinition] = [
     FINISH_TOOL_SEED,
     *FILE_TOOLS,
     *AWARE_TOOLS,

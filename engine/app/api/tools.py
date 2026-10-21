@@ -27,6 +27,20 @@ from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.records.tool import AgentToolRecord, ToolRecord
 from app.records.user import UserRecord
+from app.schemas.operator_response_tools import (
+    AgentInstalledToolResponse,
+    AgentToolConfigResponse,
+    AgentToolResponse,
+    AgentToolWithConfigResponse,
+    CategoryConfigResponse,
+    CategoryTestPassthrough,
+    EmailProviderHelp,
+    MCPServerUpdatedResponse,
+    MCPTestResponse,
+    ToolAcknowledgement,
+    ToolCatalogResponse,
+    ToolCreatedResponse,
+)
 from app.services.email_service import EmailConfig, EmailConnectionResult
 from app.services.tool_config import (
     decrypt_sensitive_fields,
@@ -143,10 +157,10 @@ class CategoryConfigUpdate(BaseModel):
 
 
 # ─── Global Tool CRUD ──────────────────────────────────────
-@router.get("")
+@router.get("", response_model=list[dict[str, object]])
 async def list_tools(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[ToolCatalogResponse]:
     """List platform tools scoped by tenant (builtin + tenant-specific)."""
     target_tenant_id = _resolve_target_tenant_id(current_user, tenant_id)
     tools = await tool_dao.list_platform_for_tenant(target_tenant_id)
@@ -154,7 +168,7 @@ async def list_tools(
         target_tenant_id,
         [t for t in tools if t.source == "builtin"],
     )
-    response: list[dict[str, object]] = []
+    response: list[ToolCatalogResponse] = []
     for t in tools:
         if t.source == "builtin":
             raw_config = builtin_configs.get(t.name, {})
@@ -185,8 +199,8 @@ async def list_tools(
     return response
 
 
-@router.post("")
-async def create_tool(data: ToolCreate, current_user: UserRecord = Depends(get_current_user)):
+@router.post("", response_model=None)
+async def create_tool(data: ToolCreate, current_user: UserRecord = Depends(get_current_user)) -> ToolCreatedResponse:
     """Create a new tool (typically MCP).
 
     The tool is scoped to the target tenant, which defaults to the caller's
@@ -231,8 +245,10 @@ class BulkToolUpdateItem(BaseModel):
     enabled: bool
 
 
-@router.put("/bulk")
-async def update_tools_bulk(updates: list[BulkToolUpdateItem], current_user: UserRecord = Depends(get_current_user)):
+@router.put("/bulk", response_model=None)
+async def update_tools_bulk(
+    updates: list[BulkToolUpdateItem], current_user: UserRecord = Depends(get_current_user)
+) -> ToolAcknowledgement:
     """Bulk update the enabled status of multiple tools."""
     _require_catalog_manager(current_user)
     tool_ids = [uuid.UUID(u.tool_id) for u in updates]
@@ -256,10 +272,10 @@ class MCPServerUpdate(BaseModel):
     tenant_id: str | None = None
 
 
-@router.put("/mcp-server")
+@router.put("/mcp-server", response_model=dict[str, object])
 async def update_mcp_server(
     data: MCPServerUpdate, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, object]:
+) -> MCPServerUpdatedResponse:
     """Bulk-update the Server URL and API Key for all tools from an MCP server.
 
     All tools sharing the same mcp_server_name under the target tenant are
@@ -293,8 +309,10 @@ async def update_mcp_server(
     return {"ok": True, "updated": len(tools)}
 
 
-@router.put("/{tool_id}")
-async def update_tool(tool_id: uuid.UUID, data: ToolUpdate, current_user: UserRecord = Depends(get_current_user)):
+@router.put("/{tool_id}", response_model=None)
+async def update_tool(
+    tool_id: uuid.UUID, data: ToolUpdate, current_user: UserRecord = Depends(get_current_user)
+) -> ToolAcknowledgement:
     """Update a tool."""
     _require_catalog_manager(current_user)
     tool = await tool_dao.get(tool_id)
@@ -323,8 +341,8 @@ async def update_tool(tool_id: uuid.UUID, data: ToolUpdate, current_user: UserRe
     return {"ok": True}
 
 
-@router.delete("/{tool_id}")
-async def delete_tool(tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/{tool_id}", response_model=None)
+async def delete_tool(tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> ToolAcknowledgement:
     """Delete a tool (only non-builtin)."""
     _require_catalog_manager(current_user)
     tool = await tool_dao.get(tool_id)
@@ -342,10 +360,10 @@ async def delete_tool(tool_id: uuid.UUID, current_user: UserRecord = Depends(get
 
 
 # ─── Per-Agent Tool Assignment ─────────────────────────────
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", response_model=list[dict[str, object]])
 async def get_agent_tools(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentToolResponse]:
     """Get tools for a specific agent with their enabled status."""
     from app.services.agent_tools import _agent_has_feishu
 
@@ -378,7 +396,7 @@ async def get_agent_tools(
         if backfilled:
             logger.info(f"[Tools] Backfilled {backfilled} AgentTool records for agent={agent_id}")
 
-    result: list[dict[str, object]] = []
+    result: list[AgentToolResponse] = []
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
@@ -412,10 +430,10 @@ async def get_agent_tools(
     return result
 
 
-@router.put("/agents/{agent_id}")
+@router.put("/agents/{agent_id}", response_model=None)
 async def update_agent_tools(
     agent_id: uuid.UUID, updates: list[AgentToolUpdate], current_user: UserRecord = Depends(get_current_user)
-):
+) -> ToolAcknowledgement:
     """Update tool assignments for an agent."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
@@ -447,11 +465,11 @@ class MCPTestRequest(BaseModel):
     api_key: str | None = None
 
 
-@router.post("/test-mcp")
+@router.post("/test-mcp", response_model=dict[str, object])
 async def check_mcp_connection(
     data: MCPTestRequest,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, object]:
+) -> MCPTestResponse:
     """Test connection to an MCP server and list available tools.
 
     Supports two authentication modes:
@@ -475,14 +493,14 @@ async def check_mcp_connection(
 # ─── Agent-installed Tools Management (admin) ───────────────
 
 
-@router.get("/agent-installed")
+@router.get("/agent-installed", response_model=list[dict[str, object]])
 async def list_agent_installed_tools(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentInstalledToolResponse]:
     """Admin endpoint: list user-installed tools scoped by tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     rows = await agent_tool_dao.list_agent_installed(tid)
-    out: list[dict[str, object]] = []
+    out: list[AgentInstalledToolResponse] = []
     for row in rows:
         mapping = object_mapping_from(row)
         installed_at = datetime_from_row(mapping.get("installed_at"))
@@ -511,8 +529,10 @@ async def list_agent_installed_tools(
     return out
 
 
-@router.delete("/agent-tool/{agent_tool_id}")
-async def delete_agent_tool(agent_tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agent-tool/{agent_tool_id}", response_model=None)
+async def delete_agent_tool(
+    agent_tool_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ToolAcknowledgement:
     """Admin: remove an agent-tool assignment. Also deletes the tool record if no other agents use it."""
     at = await agent_tool_dao.get(agent_tool_id)
     if not at:
@@ -534,12 +554,12 @@ class AgentToolConfigUpdate(BaseModel):
     config: JsonObject
 
 
-@router.get("/agents/{agent_id}/tool-config/{tool_id}")
+@router.get("/agents/{agent_id}/tool-config/{tool_id}", response_model=dict[str, object])
 async def get_agent_tool_config(
     agent_id: uuid.UUID,
     tool_id: uuid.UUID,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, object]:
+) -> AgentToolConfigResponse:
     """Get merged tool config (global defaults + agent overrides) and config_schema.
 
     Both configs are decrypted before returning. Global sensitive fields are
@@ -567,13 +587,13 @@ async def get_agent_tool_config(
     }
 
 
-@router.put("/agents/{agent_id}/tool-config/{tool_id}")
+@router.put("/agents/{agent_id}/tool-config/{tool_id}", response_model=None)
 async def update_agent_tool_config(
     agent_id: uuid.UUID,
     tool_id: uuid.UUID,
     data: AgentToolConfigUpdate,
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> ToolAcknowledgement:
     """Save per-agent config override for a tool."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage" and current_user.role not in {"platform_admin", "org_admin"}:
@@ -609,10 +629,10 @@ async def update_agent_tool_config(
     return {"ok": True}
 
 
-@router.get("/agents/{agent_id}/with-config")
+@router.get("/agents/{agent_id}/with-config", response_model=list[dict[str, object]])
 async def get_agent_tools_with_config(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentToolWithConfigResponse]:
     """Get agent's enabled tools with per-agent config info and config_schema for settings UI.
 
     Both global_config and agent_config are decrypted before returning.
@@ -639,7 +659,7 @@ async def get_agent_tools_with_config(
     system_keys_cache: dict[str, str] = {}
     system_settings_tool_map: dict[str, tuple[str, str]] = {}
 
-    result: list[dict[str, object]] = []
+    result: list[AgentToolWithConfigResponse] = []
     for t in all_tools:
         if t.category == "feishu" and not has_feishu:
             continue
@@ -715,10 +735,10 @@ async def check_email_connection(
         return {"ok": False, "error": str(e)[:300]}
 
 
-@router.get("/email-providers")
+@router.get("/email-providers", response_model=dict[str, object])
 async def get_email_providers(
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, object]:
+) -> dict[str, EmailProviderHelp]:
     """Get list of supported email provider presets with help text."""
     from app.services.email_service import EMAIL_PROVIDERS
 
@@ -735,10 +755,10 @@ async def get_email_providers(
 # ─── Tool Category Sharing Config (Generic ChannelConfig) ───
 
 
-@router.get("/agents/{agent_id}/category-config/{category}")
+@router.get("/agents/{agent_id}/category-config/{category}", response_model=dict[str, object])
 async def get_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, object]:
+) -> CategoryConfigResponse:
     """Get shared configuration for a tool category.
 
     Returns both global_config (company-level, from Tool.config) and
@@ -797,10 +817,10 @@ async def get_category_config(
     }
 
 
-@router.post("/agents/{agent_id}/category-config/{category}")
+@router.post("/agents/{agent_id}/category-config/{category}", response_model=None)
 async def update_category_config(
     agent_id: uuid.UUID, category: str, data: CategoryConfigUpdate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ToolAcknowledgement:
     """Update or create shared configuration for a tool category."""
     from app.core.permissions import check_agent_access, is_agent_creator
 
@@ -847,10 +867,10 @@ async def update_category_config(
     return {"ok": True}
 
 
-@router.delete("/agents/{agent_id}/category-config/{category}", status_code=204)
+@router.delete("/agents/{agent_id}/category-config/{category}", status_code=204, response_model=None)
 async def delete_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
-):
+) -> None:
     """Remove shared configuration for a tool category."""
     from app.core.permissions import check_agent_access, is_agent_creator
 
@@ -863,10 +883,10 @@ async def delete_category_config(
         _ = await channel_config_dao.delete(id=existing.id)
 
 
-@router.post("/agents/{agent_id}/category-config/{category}/test")
+@router.post("/agents/{agent_id}/category-config/{category}/test", response_model=Mapping[str, object])
 async def check_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
-) -> Mapping[str, object]:
+) -> CategoryTestPassthrough:
     if category == "atlassian":
         from app.api.atlassian import check_atlassian_channel
 

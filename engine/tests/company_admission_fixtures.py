@@ -18,6 +18,7 @@ from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.records.user import UserRecord
+from app.schemas.company_admission import PendingAdmissionResponse
 
 
 @dataclass
@@ -44,7 +45,7 @@ class AdmissionScenario:
             "/api/tenants/join", json={"invitation_code": "JOIN"}, headers=self.headers(self.applicant)
         )
         assert response.status_code == 202, response.text
-        return response.json()["request"]["id"]
+        return str(PendingAdmissionResponse.model_validate_json(response.content).request.id)
 
 
 @pytest.fixture

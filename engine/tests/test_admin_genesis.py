@@ -18,6 +18,7 @@ from app.core import security as security_mod
 from app.core.security import hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+from app.schemas.schemas import TokenResponse
 
 
 def _dummy_request() -> Request:
@@ -149,7 +150,9 @@ async def test_login_returns_must_change_password(monkeypatch):
         tenant_id=None,
     )
     result = await auth_api.login(data, AsyncMock(), _dummy_request())
+    assert isinstance(result, TokenResponse)
     assert result.must_change_password is True
+    assert result.user is not None
     assert result.user.must_change_password is True
     assert result.access_token
 

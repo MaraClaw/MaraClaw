@@ -8,11 +8,12 @@ from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
-from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_list_from_rows
+from app.core.json_types import int_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_list_from_rows
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL as AGENT_DELETE_CLEANUP_SQL
 from app.dao.base import BaseDAO
 from app.dao.deletion_cleanup import execute_cleanup
+from app.dao.projection_contracts import AgentNameAvatarProjection
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
 _AGENT_POLICY_COLUMNS = frozenset({"access_mode", "company_access_level", "creator_id", "tenant_id"})
@@ -567,7 +568,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return [AgentRecord.from_row(row) for row in rows]
 
-    async def list_id_name_avatar_active_nonsystem(self, tenant_id: UUID) -> Sequence[dict[str, Any]]:
+    async def list_id_name_avatar_active_nonsystem(self, tenant_id: UUID) -> Sequence[AgentNameAvatarProjection]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id, name, avatar_url FROM agents "
@@ -575,7 +576,14 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 + "AND NOT (status = ANY(%(exclude_statuses)s))",
                 {"tenant_id": tenant_id, "exclude_statuses": ["stopped", "error"]},
             )
-            return list(rows)
+            return [
+                AgentNameAvatarProjection(
+                    id=uuid_from_row(row["id"]),
+                    name=str_from_row(row["name"]),
+                    avatar_url=str_from_row_opt(row.get("avatar_url")),
+                )
+                for row in rows
+            ]
 
     async def list_by_names_for_tenant(
         self,

@@ -34,6 +34,7 @@ from app.dao.task_dao import task_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.channels.llm_bridge import _load_agent_and_model
@@ -393,7 +394,7 @@ async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResp
 @router.post("/agents/{agent_id}/channel", response_model=ChannelConfigOut, status_code=status.HTTP_201_CREATED)
 async def configure_channel(
     agent_id: uuid.UUID, data: ChannelConfigCreate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     """Configure Feishu bot credentials for a digital employee (wizard step 5)."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
@@ -454,7 +455,9 @@ async def configure_channel(
 
 
 @router.get("/agents/{agent_id}/channel", response_model=ChannelConfigOut)
-async def get_channel_config(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_channel_config(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     """Get Feishu channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
@@ -463,8 +466,8 @@ async def get_channel_config(agent_id: uuid.UUID, current_user: UserRecord = Dep
     return ChannelConfigOut.model_validate(config)
 
 
-@router.get("/agents/{agent_id}/channel/webhook-url")
-async def get_webhook_url(agent_id: uuid.UUID, request: Request) -> dict[str, str]:
+@router.get("/agents/{agent_id}/channel/webhook-url", response_model=None)
+async def get_webhook_url(agent_id: uuid.UUID, request: Request) -> WebhookUrlResponse:
     """Get the webhook URL for this agent's Feishu bot."""
     from app.services.platform_service import platform_service
 
@@ -472,8 +475,8 @@ async def get_webhook_url(agent_id: uuid.UUID, request: Request) -> dict[str, st
     return {"webhook_url": f"{public_base}/api/channel/feishu/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/channel", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/channel", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     """Remove Feishu bot configuration for an agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):

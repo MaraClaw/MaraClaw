@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-SEARCH_TOOLS: list[dict[str, Any]] = [
+SEARCH_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "read_webpage",
         "display_name": "Read Webpage",
@@ -72,7 +72,7 @@ SEARCH_TOOLS: list[dict[str, Any]] = [
             "base_url": "",
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "model",
                     "label": "Model",
@@ -94,7 +94,7 @@ SEARCH_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Default: https://api.x.ai/v1",
                 },
-            ]
+            )
         },
     },
 ]

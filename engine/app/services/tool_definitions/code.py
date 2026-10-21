@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-CODE_TOOLS: list[dict[str, Any]] = [
+CODE_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "execute_code",
         "display_name": "Code Executor",
@@ -32,7 +32,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
             "max_timeout": 60,
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "cpu_limit",
                     "label": "CPU Limit",
@@ -70,7 +70,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
                     "min": 10,
                     "max": 3600,
                 },
-            ]
+            )
         },
     },
     {
@@ -100,7 +100,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
             "max_timeout": 60,
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "api_key",
                     "label": "E2B API Key",
@@ -125,7 +125,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
                     "min": 10,
                     "max": 3600,
                 },
-            ]
+            )
         },
     },
     {
@@ -146,7 +146,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
         },
         "config": {"private_key": "", "url_endpoint": ""},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "private_key",
                     "label": "ImageKit Private Key",
@@ -161,7 +161,7 @@ CODE_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "https://ik.imagekit.io/your_imagekit_id",
                 },
-            ]
+            )
         },
     },
 ]

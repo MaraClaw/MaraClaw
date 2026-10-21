@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-FEISHU_SEED_TOOLS: list[dict[str, Any]] = [
+FEISHU_SEED_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "send_feishu_message",
         "display_name": "Feishu Message",

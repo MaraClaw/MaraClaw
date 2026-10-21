@@ -3,7 +3,6 @@
 import re
 import uuid
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -17,6 +16,11 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.activity_responses import (
+    AgentActivityResponse,
+    AgentConversationResponse,
+    ConversationMessageResponse,
+)
 
 router = APIRouter(tags=["activity"])
 
@@ -38,7 +42,7 @@ def _group_count(row: dict[str, object]) -> int:
 @router.get("/agents/{agent_id}/activity")
 async def get_agent_activity(
     agent_id: uuid.UUID, limit: int = Query(50, le=200), current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[AgentActivityResponse]:
     """Get recent activity logs for an agent."""
     _ = await check_agent_access(current_user, agent_id)
 
@@ -63,11 +67,11 @@ async def get_agent_activity(
 @router.get("/agents/{agent_id}/chat-history/conversations")
 async def list_conversations(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, Any]]:
+) -> list[AgentConversationResponse]:
     """List all conversation partners for this agent (web users + other agents)."""
     _ = await check_agent_access(current_user, agent_id)
 
-    conversations: list[dict[str, Any]] = []
+    conversations: list[AgentConversationResponse] = []
 
     # 1. Web chat conversations (from ChatMessage table, grouped by user)
     web_groups = await chat_message_dao.conversation_groups_for_agent(agent_id, group_by_user=True)
@@ -194,11 +198,11 @@ async def get_conversation_messages(
     conv_id: str,
     limit: int = Query(100, le=500),
     current_user: UserRecord = Depends(get_current_user),
-) -> list[dict[str, Any]]:
+) -> list[ConversationMessageResponse]:
     """Get messages for a specific conversation."""
     _ = await check_agent_access(current_user, agent_id)
 
-    messages: list[dict[str, Any]] = []
+    messages: list[ConversationMessageResponse] = []
 
     if conv_id.startswith(("web_", "feishu_", "slack_", "discord_")):
         rows = await chat_message_dao.list_for_agent_conversation(

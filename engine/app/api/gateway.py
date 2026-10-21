@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -23,6 +22,12 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
+from app.schemas.channel_response_contracts import (
+    GatewayHeartbeatResponse,
+    GatewaySendMessageResponse,
+    GatewaySetupGuideResponse,
+    StatusAcknowledgement,
+)
 from app.schemas.schemas import (
     GatewayHistoryItem,
     GatewayMessageOut,
@@ -163,8 +168,10 @@ async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipIte
 # ─── Report results ─────────────────────────────────────
 
 
-@router.post("/report")
-async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key")) -> dict[str, str]:
+@router.post("/report", response_model=None)
+async def report_result(
+    body: GatewayReportRequest, x_api_key: str = Header(None, alias="X-Api-Key")
+) -> StatusAcknowledgement:
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
@@ -189,8 +196,8 @@ async def report_result(body: GatewayReportRequest, x_api_key: str = Header(None
 # ─── Heartbeat ──────────────────────────────────────────
 
 
-@router.post("/heartbeat")
-async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")):
+@router.post("/heartbeat", response_model=None)
+async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")) -> GatewayHeartbeatResponse:
     """Pure heartbeat ping - keeps the OpenClaw agent marked as online."""
     agent = await _get_agent_by_key(x_api_key)
     if await agent_dao.touch_openclaw(agent) is None:
@@ -201,10 +208,10 @@ async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")):
 # ─── Send message ───────────────────────────────────────
 
 
-@router.post("/send-message")
+@router.post("/send-message", response_model=None)
 async def send_message(
     body: GatewaySendMessageRequest, x_api_key: str = Header(..., alias="X-Api-Key")
-) -> dict[str, Any]:
+) -> GatewaySendMessageResponse:
     """OpenClaw agent sends a message to a person or another agent.
 
     Routes automatically based on target type:
@@ -353,8 +360,10 @@ async def send_message(
 # ─── Setup guide ────────────────────────────────────────
 
 
-@router.get("/setup-guide/{agent_id}")
-async def get_setup_guide(agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key")):
+@router.get("/setup-guide/{agent_id}", response_model=None)
+async def get_setup_guide(
+    agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key")
+) -> GatewaySetupGuideResponse:
     """Return the pre-filled Skill file and Heartbeat instruction for this agent."""
     agent = await _get_agent_by_key(x_api_key)
     if agent.id != agent_id:

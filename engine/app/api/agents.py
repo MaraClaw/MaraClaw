@@ -26,6 +26,28 @@ from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
+from app.schemas.collaboration_response_agents import (
+    AgentApiKeyResponse,
+    AgentApprovalResolvedResponse,
+    AgentApprovalResponse,
+    AgentClampedField,
+    AgentCreatedResponse,
+    AgentDetailResponse,
+    AgentGatewayMessageResponse,
+    AgentPermissionsResponse,
+    AgentTemplateResponse,
+    AgentUpdatedResponse,
+    DepartmentAccess,
+    PermissionCandidate,
+    PermissionCandidatesResponse,
+    PermissionCandidatesWithoutTenantResponse,
+    PermissionDepartmentFields,
+    PermissionDepartmentsResponse,
+    PermissionScopeName,
+    PermissionUserAccess,
+    agent_model_dump,
+)
+from app.schemas.collaboration_response_relationships import CollaborationAcknowledgement
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 from app.services.agent_manager import agent_manager
@@ -148,8 +170,8 @@ async def _persist_agent_runtime(agent: AgentRecord) -> AgentRecord:
     )
 
 
-@router.get("/templates")
-async def list_templates(current_user: UserRecord = Depends(get_current_user)) -> list[dict[str, object]]:
+@router.get("/templates", response_model=None)
+async def list_templates(current_user: UserRecord = Depends(get_current_user)) -> list[AgentTemplateResponse]:
     """List all available agent templates."""
     _ = current_user
     templates = await agent_template_dao.list_all_ordered()
@@ -176,7 +198,7 @@ async def list_agents(
     tenant_id: uuid.UUID | None = None,
     limit: int = Query(100, ge=1, le=500),
     current_user: UserRecord = Depends(get_current_user),
-):
+) -> list[AgentOut]:
     """List all agents the current user has access to."""
     if tenant_id and tenant_id != current_user.tenant_id:
         raise HTTPException(
@@ -201,10 +223,10 @@ async def list_agents(
     return out
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=None)
 async def create_agent(
     data: AgentCreate, background_tasks: BackgroundTasks, current_user: UserRecord = Depends(get_current_user)
-):
+) -> AgentCreatedResponse:
     """Create a new digital employee (any authenticated user)."""
     try:
         await check_agent_creation_quota(current_user.id)
@@ -375,20 +397,18 @@ async def create_agent(
         await persist_agent_setup(agent, data, raw_key)
     await flush_request_transaction()
 
-    out = (await _agent_to_out(agent, current_user.id)).model_dump()
-    out["api_key"] = raw_key
-    out["access_level"] = "manage"
-    return out
+    return AgentCreatedResponse(
+        **agent_model_dump(await _agent_to_out(agent, current_user.id)), api_key=raw_key, access_level="manage"
+    )
 
 
-@router.get("/{agent_id}")
-async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.get("/{agent_id}", response_model=None)
+async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentDetailResponse:
     """Get agent details."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     _ = await _lazy_reset_token_counters(agent)
     out_model = await _agent_to_out(agent, current_user.id)
-    out = out_model.model_dump()
-    out["access_level"] = access_level
+    out = agent_model_dump(out_model)
 
     if agent.creator_id:
         creator = await user_dao.get_with_identity(agent.creator_id)
@@ -399,15 +419,13 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
         tenant = await tenant_dao.get(agent.tenant_id)
         if tenant:
             effective_tz = tenant.timezone or "UTC"
-    out["effective_timezone"] = effective_tz or "UTC"
-
-    return out
+    return AgentDetailResponse(**out, access_level=access_level, effective_timezone=effective_tz or "UTC")
 
 
-@router.get("/{agent_id}/permissions")
+@router.get("/{agent_id}/permissions", response_model=None)
 async def get_agent_permissions(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, object]:
+) -> AgentPermissionsResponse:
     """Get agent permission scope."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     perms = list(await agent_permission_dao.list_for_agent(agent_id))
@@ -417,10 +435,10 @@ async def get_agent_permissions(
 
     department_ids = {p.scope_id for p in perms if p.scope_type == "department" and p.scope_id}
     departments = await org_department_dao.get_many(list(department_ids)) if department_ids else []
-    department_access = [
+    department_access: list[DepartmentAccess] = [
         {"id": str(d.id), "name": d.name, "access_level": "use"} for d in departments if d.tenant_id == agent.tenant_id
     ]
-    department_fields = {
+    department_fields: PermissionDepartmentFields = {
         "department_ids": [item["id"] for item in department_access],
         "department_access": department_access,
     }
@@ -445,8 +463,8 @@ async def get_agent_permissions(
         "use",
     )
 
-    scope_names: list[dict[str, object]] = []
-    user_access: list[dict[str, object]] = []
+    scope_names: list[PermissionScopeName] = []
+    user_access: list[PermissionUserAccess] = []
     display_user_ids = {uuid.UUID(sid) for sid in scope_ids}
     if access_mode == "custom":
         if agent.creator_id:
@@ -479,7 +497,7 @@ async def get_agent_permissions(
             is_creator = agent.creator_id == u.id
             is_admin = u.role in ("platform_admin", "org_admin")
             is_required = access_mode == "custom" and (is_creator or is_admin)
-            item: dict[str, object] = {
+            item: PermissionUserAccess = {
                 "id": sid,
                 "name": u.display_name or u.email or "User",
                 "username": u.display_name or u.email or "User",
@@ -506,10 +524,10 @@ async def get_agent_permissions(
     }
 
 
-@router.put("/{agent_id}/permissions")
+@router.put("/{agent_id}/permissions", response_model=None)
 async def update_agent_permissions(
     agent_id: uuid.UUID, data: AgentPermissionUpdate, current_user: UserRecord = Depends(get_current_user)
-):
+) -> CollaborationAcknowledgement:
     async with optional_connection_ctx() as db:
         agent, _ = await check_agent_access(current_user, agent_id)
         if db is not None:
@@ -527,7 +545,9 @@ async def update_agent_permissions(
         return await _update_agent_permissions_locked(agent_id, data, actor)
 
 
-async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermissionUpdate, current_user: UserRecord):
+async def _update_agent_permissions_locked(
+    agent_id: uuid.UUID, data: AgentPermissionUpdate, current_user: UserRecord
+) -> CollaborationAcknowledgement:
     """Update agent permission scope (owner or platform_admin only)."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
@@ -646,10 +666,10 @@ async def _update_agent_permissions_locked(agent_id: uuid.UUID, data: AgentPermi
     return {"status": "ok"}
 
 
-@router.get("/{agent_id}/permissions/departments")
+@router.get("/{agent_id}/permissions/departments", response_model=None)
 async def get_agent_permission_departments(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, object]:
+) -> PermissionDepartmentsResponse:
     agent, level = await check_agent_access(current_user, agent_id)
     if level != "manage":
         raise HTTPException(403, "Only manager can list sharing departments")
@@ -657,10 +677,10 @@ async def get_agent_permission_departments(
     return {"departments": [{"id": str(d.id), "name": d.name} for d in departments]}
 
 
-@router.get("/{agent_id}/permissions/candidates")
+@router.get("/{agent_id}/permissions/candidates", response_model=None)
 async def get_agent_permission_candidates(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> dict[str, list[dict[str, object]]]:
+) -> PermissionCandidatesResponse | PermissionCandidatesWithoutTenantResponse:
     """Return org members that can be granted custom access."""
     from app.services.channel_user_service import get_platform_user_by_org_member
 
@@ -683,7 +703,7 @@ async def get_agent_permission_candidates(
         uid: u for uid, u in users_by_id.items() if current_agent_tenant_id() is None or u.tenant_id == agent.tenant_id
     }
 
-    candidates: list[dict[str, object]] = []
+    candidates: list[PermissionCandidate] = []
     for m in members:
         if m.user_id:
             u = users_by_id.get(m.user_id)
@@ -715,7 +735,9 @@ async def get_agent_permission_candidates(
 
 
 @router.patch("/{agent_id}", response_model=AgentOut)
-async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: UserRecord = Depends(get_current_user)):
+async def update_agent(
+    agent_id: uuid.UUID, data: AgentUpdate, current_user: UserRecord = Depends(get_current_user)
+) -> AgentUpdatedResponse:
     """Update agent settings (creator or admin)."""
     agent, _access = await check_agent_access(current_user, agent_id)
 
@@ -759,7 +781,7 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
             update_data["is_expired"] = False
             update_data["status"] = "idle"
 
-    clamped_fields = []
+    clamped_fields: list[AgentClampedField] = []
     tenant = None
     if current_user.tenant_id and (
         "heartbeat_interval_minutes" in update_data
@@ -824,14 +846,14 @@ async def update_agent(agent_id: uuid.UUID, data: AgentUpdate, current_user: Use
                 _ = await participant_dao.update(db_obj=p, obj_in=p_updates)
 
     out_model = await _agent_to_out(agent, current_user.id)
-    out = out_model.model_dump()
+    out = AgentUpdatedResponse(**agent_model_dump(out_model))
     if clamped_fields:
         out["_clamped_fields"] = clamped_fields
     return out
 
 
-@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     """Delete a digital employee (creator only)."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in (
@@ -854,7 +876,7 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
 
 
 @router.post("/{agent_id}/start", response_model=AgentOut)
-async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentOut:
     """Start an agent's container."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
@@ -868,7 +890,7 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
 
 
 @router.post("/{agent_id}/stop", response_model=AgentOut)
-async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentOut:
     """Stop an agent's container."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
@@ -879,10 +901,10 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
     return await _agent_to_out(agent, current_user.id)
 
 
-@router.get("/{agent_id}/approvals")
+@router.get("/{agent_id}/approvals", response_model=None)
 async def list_agent_approvals(
     agent_id: uuid.UUID, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentApprovalResponse]:
     """List approval requests for a specific agent. Only creator or admin can view."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
@@ -906,13 +928,13 @@ async def list_agent_approvals(
     ]
 
 
-@router.post("/{agent_id}/approvals/{approval_id}/resolve")
+@router.post("/{agent_id}/approvals/{approval_id}/resolve", response_model=None)
 async def resolve_agent_approval(
     agent_id: uuid.UUID,
     approval_id: uuid.UUID,
     data: AgentApprovalResolveRequest,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, object]:
+) -> AgentApprovalResolvedResponse:
     """Approve or reject a pending approval for a specific agent."""
     _ = await check_agent_access(current_user, agent_id)
 
@@ -930,8 +952,10 @@ async def resolve_agent_approval(
     }
 
 
-@router.post("/{agent_id}/api-key")
-async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.post("/{agent_id}/api-key", response_model=None)
+async def generate_or_reset_api_key(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> AgentApiKeyResponse:
     """Generate or regenerate API key for an OpenClaw agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent) and current_user.role not in ("platform_admin", "org_admin"):
@@ -951,10 +975,10 @@ async def generate_or_reset_api_key(agent_id: uuid.UUID, current_user: UserRecor
     return {"api_key": raw_key, "message": "Key configured successfully."}
 
 
-@router.get("/{agent_id}/gateway-messages")
+@router.get("/{agent_id}/gateway-messages", response_model=None)
 async def list_gateway_messages(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentGatewayMessageResponse]:
     """List recent gateway messages for an OpenClaw agent."""
     _ = await check_agent_access(current_user, agent_id)
 

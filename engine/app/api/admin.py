@@ -5,13 +5,20 @@ and control platform-level settings.
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
-from app.core.json_types import int_from_row, json_as_bool, object_mapping_from, str_from_row
+from app.core.json_types import (
+    date_from_row,
+    int_from_row,
+    json_as_bool,
+    object_mapping_from,
+    str_from_row,
+    str_from_row_opt,
+)
 from app.core.security import require_role
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.admin_audit_dao import admin_audit_log_dao
@@ -22,6 +29,16 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.admin_metrics import (
+    AdminAgentLeaderboardEntry,
+    AdminChannelDistributionEntry,
+    AdminChurnWarning,
+    AdminCompanyLeaderboardEntry,
+    AdminEnhancedMetricsResponse,
+    AdminLeaderboardsResponse,
+    AdminTimeseriesPoint,
+    AdminToolCategoryEntry,
+)
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminActivationError,
@@ -385,29 +402,31 @@ async def toggle_company(
 # ─── Platform Metrics Dashboard ─────────────────────────
 
 
-@router.get("/metrics/timeseries", response_model=list[dict[str, Any]])
+@router.get("/metrics/timeseries", response_model=list[AdminTimeseriesPoint])
 async def get_platform_timeseries(
     start_date: datetime, end_date: datetime, current_user: UserRecord = Depends(require_role("platform_admin"))
-) -> list[dict[str, Any]]:
+) -> list[AdminTimeseriesPoint]:
     """Get daily platform metrics within a date range.
 
     Returns per-day: companies, users, tokens (existing) +
     sessions, DAU, WAU, MAU (new).
     """
-    companies_by_day: dict[Any, int] = await tenant_dao.counts_by_created_day(start_date, end_date)
-    users_by_day: dict[Any, int] = await user_dao.counts_by_created_day(start_date, end_date)
+    companies_by_day: dict[date | str, int] = {**await tenant_dao.counts_by_created_day(start_date, end_date)}
+    users_by_day: dict[date | str, int] = {**await user_dao.counts_by_created_day(start_date, end_date)}
     tokens_by_day = await agent_activity_log_dao.tokens_by_day(start_date, end_date)
     cache_by_day = await agent_activity_log_dao.cache_read_by_day(start_date, end_date)
     sessions_by_day = await chat_session_dao.counts_by_created_day(start_date, end_date)
     dau_by_day = await chat_session_dao.dau_by_created_day(start_date, end_date)
-    wau_by_day, mau_by_day = await chat_session_dao.wau_mau_by_day(
+    wau_by_day_raw, mau_by_day_raw = await chat_session_dao.wau_mau_by_day(
         range_start=start_date - timedelta(days=30),
         range_end=end_date,
         series_start=start_date.date(),
         series_end=end_date.date(),
     )
+    wau_by_day = {date_from_row(day): count for day, count in wau_by_day_raw.items()}
+    mau_by_day = {date_from_row(day): count for day, count in mau_by_day_raw.items()}
 
-    result: list[dict[str, Any]] = []
+    result: list[AdminTimeseriesPoint] = []
     current_d = start_date.date()
     end_d = end_date.date()
 
@@ -454,13 +473,13 @@ async def get_platform_timeseries(
     return result
 
 
-@router.get("/metrics/leaderboards")
+@router.get("/metrics/leaderboards", response_model=AdminLeaderboardsResponse)
 async def get_platform_leaderboards(
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> dict[str, list[dict[str, Any]]]:
+) -> AdminLeaderboardsResponse:
     """Get Top 20 token consuming companies and agents."""
     top_companies_raw = await agent_dao.top_token_companies(limit=20)
-    top_companies: list[dict[str, Any]] = []
+    top_companies: list[AdminCompanyLeaderboardEntry] = []
     for row in top_companies_raw:
         mapping = object_mapping_from(row)
         total = int_from_row(mapping.get("total"))
@@ -475,7 +494,7 @@ async def get_platform_leaderboards(
         )
 
     top_agents_raw = await agent_dao.top_token_agents(limit=20)
-    top_agents: list[dict[str, Any]] = []
+    top_agents: list[AdminAgentLeaderboardEntry] = []
     for row in top_agents_raw:
         mapping = object_mapping_from(row)
         total = int_from_row(mapping.get("tokens"))
@@ -493,8 +512,10 @@ async def get_platform_leaderboards(
     return {"top_companies": top_companies, "top_agents": top_agents}
 
 
-@router.get("/metrics/enhanced")
-async def get_enhanced_metrics(current_user: UserRecord = Depends(require_role("platform_admin"))) -> dict[str, Any]:
+@router.get("/metrics/enhanced", response_model=AdminEnhancedMetricsResponse)
+async def get_enhanced_metrics(
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> AdminEnhancedMetricsResponse:
     """Enhanced platform metrics: retention, avg tokens/session,
     channel distribution, tool categories, and churn warnings.
     """
@@ -508,9 +529,26 @@ async def get_enhanced_metrics(current_user: UserRecord = Depends(require_role("
     last_week_total, retained = await chat_session_dao.retention_7d()
     retention_rate = 0.0 if not last_week_total else round(retained * 100.0 / last_week_total, 1)
 
-    channel_distribution = await chat_session_dao.channel_distribution_since(thirty_days_ago)
-    tool_category_top10 = await tool_dao.top_enabled_categories(limit=10)
-    churn_warnings = await chat_session_dao.churn_warnings()
+    channel_distribution_raw = await chat_session_dao.channel_distribution_since(thirty_days_ago)
+    tool_category_top10_raw = await tool_dao.top_enabled_categories(limit=10)
+    churn_warnings_raw = await chat_session_dao.churn_warnings()
+    channel_distribution: list[AdminChannelDistributionEntry] = [
+        {"channel": str_from_row(row["channel"]), "count": int_from_row(row["count"])}
+        for row in map(object_mapping_from, channel_distribution_raw)
+    ]
+    tool_category_top10: list[AdminToolCategoryEntry] = [
+        {"category": str_from_row(row["category"]), "count": int_from_row(row["count"])}
+        for row in map(object_mapping_from, tool_category_top10_raw)
+    ]
+    churn_warnings: list[AdminChurnWarning] = [
+        {
+            "name": str_from_row(row["name"]),
+            "total_tokens": int_from_row(row["total_tokens"]),
+            "last_active": str_from_row_opt(row["last_active"]),
+            "days_inactive": None if row["days_inactive"] is None else int_from_row(row["days_inactive"]),
+        }
+        for row in map(object_mapping_from, churn_warnings_raw)
+    ]
 
     return {
         "avg_tokens_per_session_30d": avg_tokens_per_session,

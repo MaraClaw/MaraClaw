@@ -37,6 +37,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
+from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 from app.services.auth_registry import auth_provider_registry
 from app.services.platform_service import platform_service
@@ -177,7 +178,7 @@ _VERIFY_FILENAME_RE = re.compile(r"^WW_verify_[A-Za-z0-9_]{1,64}\.txt$")
 
 
 @router.get("/wecom-verify/{filename}")
-async def serve_wecom_verify_file(filename: str):
+async def serve_wecom_verify_file(filename: str) -> Response:
     """Serve a WeCom domain verification file.
 
     Looks across all active WeCom IdentityProviders for one whose config
@@ -210,7 +211,7 @@ async def serve_wecom_verify_file(filename: str):
 @router.post("/agents/{agent_id}/wecom-channel", response_model=ChannelConfigOut, status_code=201)
 async def configure_wecom_channel(
     agent_id: uuid.UUID, data: WeComChannelPayload, current_user: UserRecord = Depends(get_current_user)
-):
+) -> ChannelConfigOut:
     """Configure WeCom bot for an agent.
 
     Supports two modes:
@@ -295,7 +296,9 @@ async def configure_wecom_channel(
 
 
 @router.get("/agents/{agent_id}/wecom-channel", response_model=ChannelConfigOut)
-async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def get_wecom_channel(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
     if not config:
@@ -310,14 +313,14 @@ async def get_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depe
     return config_out
 
 
-@router.get("/agents/{agent_id}/wecom-channel/webhook-url")
-async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request):
+@router.get("/agents/{agent_id}/wecom-channel/webhook-url", response_model=None)
+async def get_wecom_webhook_url(agent_id: uuid.UUID, request: Request) -> WebhookUrlResponse:
     public_base = await platform_service.get_public_base_url(request)
     return {"webhook_url": f"{public_base}/api/channel/wecom/{agent_id}/webhook"}
 
 
-@router.delete("/agents/{agent_id}/wecom-channel", status_code=204)
-async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+@router.delete("/agents/{agent_id}/wecom-channel", status_code=204, response_model=None)
+async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
@@ -334,7 +337,7 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 @router.get("/channel/wecom/{agent_id}/webhook")
 async def wecom_verify_webhook(
     agent_id: uuid.UUID, msg_signature: str = "", timestamp: str = "", nonce: str = "", echostr: str = ""
-):
+) -> Response:
     """Handle WeCom callback URL verification (GET request)."""
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
     if not config:
@@ -361,7 +364,7 @@ async def wecom_verify_webhook(
 @router.post("/channel/wecom/{agent_id}/webhook")
 async def wecom_event_webhook(
     agent_id: uuid.UUID, request: Request, msg_signature: str = "", timestamp: str = "", nonce: str = ""
-):
+) -> Response:
     """Handle WeCom message callback (POST request with encrypted XML)."""
     body_bytes = await request.body()
 

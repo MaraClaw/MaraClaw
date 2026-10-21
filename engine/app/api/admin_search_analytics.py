@@ -2,21 +2,56 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from typing import overload
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import get_settings
 from app.core.security import require_role
+from app.dao.analytics_projection_contracts import (
+    SearchAnalyticsExportStatusProjection,
+    SearchAnalyticsSummaryProjection,
+)
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.records.user import UserRecord
+from app.schemas.operator_response_analytics import (
+    SearchAnalyticsExportConfig,
+    SearchAnalyticsExportStatusPassthrough,
+    SearchAnalyticsExportStatusPayload,
+    SearchAnalyticsOrgsPassthrough,
+    SearchAnalyticsSummary,
+    SearchAnalyticsSummaryPassthrough,
+    SearchAnalyticsSummaryScope,
+    SearchAnalyticsTimeseriesPassthrough,
+    SearchAnalyticsTrendingPassthrough,
+)
 from app.services.linkup.export import analytics_bucket, analytics_prefix
 
 router = APIRouter(prefix="/admin/search-analytics", tags=["admin"])
 
 _MAX_RANGE = timedelta(days=90)
 _DEFAULT_RANGE = timedelta(days=7)
+
+
+@overload
+def _add_response_fields(
+    payload: SearchAnalyticsSummaryProjection, fields: SearchAnalyticsSummaryScope
+) -> SearchAnalyticsSummary: ...
+
+
+@overload
+def _add_response_fields(
+    payload: SearchAnalyticsExportStatusProjection, fields: SearchAnalyticsExportConfig
+) -> SearchAnalyticsExportStatusPayload: ...
+
+
+def _add_response_fields(payload: Mapping[str, object], fields: Mapping[str, object]) -> Mapping[str, object]:
+    if isinstance(payload, dict):
+        payload.update(fields)
+    return payload
 
 
 def _window(start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
@@ -34,45 +69,44 @@ def _window(start: datetime | None, end: datetime | None) -> tuple[datetime, dat
     return resolved_start, resolved_end
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=dict[str, object])
 async def get_search_analytics_summary(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     tenant_id: UUID | None = None,
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> dict[str, object]:
+) -> SearchAnalyticsSummaryPassthrough:
     del current_user
     window_start, window_end = _window(start, end)
     payload = await web_search_event_dao.summary(start=window_start, end=window_end, tenant_id=tenant_id)
-    payload["scope"] = "org" if tenant_id is not None else "system"
-    return payload
+    return _add_response_fields(payload, {"scope": "org" if tenant_id is not None else "system"})
 
 
-@router.get("/timeseries")
+@router.get("/timeseries", response_model=list[dict[str, object]])
 async def get_search_analytics_timeseries(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     tenant_id: UUID | None = None,
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> list[dict[str, object]]:
+) -> SearchAnalyticsTimeseriesPassthrough:
     del current_user
     window_start, window_end = _window(start, end)
     return await web_search_event_dao.timeseries(start=window_start, end=window_end, tenant_id=tenant_id)
 
 
-@router.get("/orgs")
+@router.get("/orgs", response_model=list[dict[str, object]])
 async def get_search_analytics_orgs(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> list[dict[str, object]]:
+) -> SearchAnalyticsOrgsPassthrough:
     del current_user
     window_start, window_end = _window(start, end)
     return await web_search_event_dao.top_orgs(start=window_start, end=window_end, limit=limit)
 
 
-@router.get("/trending")
+@router.get("/trending", response_model=list[dict[str, object]])
 async def get_search_analytics_trending(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -80,7 +114,7 @@ async def get_search_analytics_trending(
     scope: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> list[dict[str, object]]:
+) -> SearchAnalyticsTrendingPassthrough:
     del current_user
     del scope
     window_start, window_end = _window(start, end)
@@ -93,16 +127,20 @@ async def get_search_analytics_trending(
     )
 
 
-@router.get("/export-status")
+@router.get("/export-status", response_model=dict[str, object])
 async def get_search_analytics_export_status(
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> dict[str, object]:
+) -> SearchAnalyticsExportStatusPassthrough:
     del current_user
     settings = get_settings()
     status = await web_search_event_dao.export_status()
-    status["export_enabled"] = settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED
-    status["include_raw"] = settings.WEB_SEARCH_ANALYTICS_INCLUDE_RAW
-    status["capture_enabled"] = settings.WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED
-    status["bucket"] = analytics_bucket() or None
-    status["prefix"] = analytics_prefix()
-    return status
+    return _add_response_fields(
+        status,
+        {
+            "export_enabled": settings.WEB_SEARCH_ANALYTICS_EXPORT_ENABLED,
+            "include_raw": settings.WEB_SEARCH_ANALYTICS_INCLUDE_RAW,
+            "capture_enabled": settings.WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED,
+            "bucket": analytics_bucket() or None,
+            "prefix": analytics_prefix(),
+        },
+    )

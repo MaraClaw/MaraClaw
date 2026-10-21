@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-MEDIA_TOOLS: list[dict[str, Any]] = [
+MEDIA_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "generate_image_siliconflow",
         "display_name": "Generate Image (SiliconFlow)",
@@ -25,7 +25,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
             "base_url": "",
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "model",
                     "label": "Model",
@@ -47,7 +47,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Default: https://api.siliconflow.cn/v1",
                 },
-            ]
+            )
         },
     },
     {
@@ -72,7 +72,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
             "base_url": "",
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "model",
                     "label": "Model",
@@ -94,7 +94,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Default: https://api.openai.com/v1",
                 },
-            ]
+            )
         },
     },
     {
@@ -119,7 +119,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
             "base_url": "",
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "model",
                     "label": "Model",
@@ -141,7 +141,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Can be Vertex API URL: https://aiplatform.googleapis.com/...",
                 },
-            ]
+            )
         },
     },
     {
@@ -169,7 +169,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
             "base_url": "",
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "model",
                     "label": "Model",
@@ -191,7 +191,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Default: https://api.x.ai/v1",
                 },
-            ]
+            )
         },
     },
     {
@@ -221,7 +221,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
             "timeout_seconds": 120,
         },
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "api_key",
                     "label": "API Key",
@@ -284,7 +284,7 @@ MEDIA_TOOLS: list[dict[str, Any]] = [
                     "max": 600,
                     "advanced": True,
                 },
-            ]
+            )
         },
     },
 ]

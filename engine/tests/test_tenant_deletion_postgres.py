@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 import json
 from dataclasses import replace
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -14,7 +17,9 @@ from app.db.errors import ForeignKeyViolationError
 from app.db.session import bind_crud_connection, connection_ctx
 from app.services.admin_audit import write_admin_audit
 from deletion_content_pg import seed_deletion_content
-from tenant_deletion_pg_fixtures import DeletionPostgres
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
 
 pytest_plugins = ("tenant_deletion_pg_fixtures",)
 

@@ -5,6 +5,9 @@ import uuid
 from collections import deque
 from types import SimpleNamespace
 
+import pytest
+
+from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.feishu_service import FeishuAPIError
 
@@ -145,14 +148,18 @@ async def test_send_feishu_message_reports_missing_feishu_config(monkeypatch) ->
     assert sender.calls == []
 
 
-async def test_send_feishu_message_direct_user_id_success_saves_history(monkeypatch) -> None:
+@pytest.mark.parametrize("use_record", [False, True])
+async def test_send_feishu_message_direct_user_id_success_saves_history(
+    monkeypatch: pytest.MonkeyPatch, use_record: bool
+) -> None:
     target = _message_module()
     sender = _FeishuSender([{"code": 0, "msg": "ok"}])
+    member = OrgMemberRecord(id=uuid.uuid4(), name="Alice", external_id="ou_alice") if use_record else _member()
     platform_calls, session_calls, message_inserts = _patch_dependencies(
         monkeypatch,
         target,
         config=_config(),
-        direct_relationship=_relationship(),
+        direct_relationship=_relationship(member=member),
         sender=sender,
     )
 
@@ -162,6 +169,7 @@ async def test_send_feishu_message_direct_user_id_success_saves_history(monkeypa
     assert sender.calls[0][2] == "ou_direct"
     assert sender.calls[0][5] == "user_id"
     assert len(platform_calls) == 1
+    assert platform_calls[0][0] is member
     assert session_calls[0]["external_conv_id"] == "feishu_p2p_ou_direct"
     assert message_inserts[0]["content"] == "hello"
     assert message_inserts[0]["role"] == "assistant"
@@ -190,14 +198,18 @@ async def test_send_feishu_message_direct_user_id_rejects_inactive_relationship(
     assert sender.calls == []
 
 
-async def test_send_feishu_message_named_member_success_saves_history(monkeypatch) -> None:
+@pytest.mark.parametrize("use_record", [False, True])
+async def test_send_feishu_message_named_member_success_saves_history(
+    monkeypatch: pytest.MonkeyPatch, use_record: bool
+) -> None:
     target = _message_module()
     sender = _FeishuSender([{"code": 0, "msg": "ok"}])
+    member = OrgMemberRecord(id=uuid.uuid4(), name="Alice", external_id="ou_alice") if use_record else _member()
     platform_calls, session_calls, message_inserts = _patch_dependencies(
         monkeypatch,
         target,
         config=_config(),
-        named_relationships=[_relationship()],
+        named_relationships=[_relationship(member=member)],
         sender=sender,
     )
 
@@ -206,6 +218,7 @@ async def test_send_feishu_message_named_member_success_saves_history(monkeypatc
     assert result == "✅ Successfully sent message to Alice"
     assert sender.calls[0][2] == "ou_alice"
     assert len(platform_calls) == 1
+    assert platform_calls[0][0] is member
     assert session_calls[0]["external_conv_id"] == "feishu_p2p_ou_alice"
     assert message_inserts[0]["content"] == "hello"
 

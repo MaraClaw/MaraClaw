@@ -1,7 +1,6 @@
 """Notification API - list, count, mark-read, and broadcast."""
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -11,6 +10,12 @@ from app.dao.agent_dao import agent_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.notification_responses import (
+    NotificationBroadcastResponse,
+    NotificationReadResponse,
+    NotificationResponse,
+    NotificationUnreadCountResponse,
+)
 from app.services.system_email_service import BroadcastEmailRecipient, deliver_broadcast_emails
 
 router = APIRouter(tags=["notifications"])
@@ -37,7 +42,7 @@ async def list_notifications(
     unread_only: bool = Query(False),
     category: str | None = Query(None),
     current_user: UserRecord = Depends(get_current_user),
-) -> list[dict[str, Any]]:
+) -> list[NotificationResponse]:
     """List notifications for the current user, newest first."""
     notifications = await notification_dao.list_for_user(
         current_user.id,
@@ -63,7 +68,9 @@ async def list_notifications(
 
 
 @router.get("/notifications/unread-count")
-async def get_unread_count(category: str | None = Query(None), current_user: UserRecord = Depends(get_current_user)):
+async def get_unread_count(
+    category: str | None = Query(None), current_user: UserRecord = Depends(get_current_user)
+) -> NotificationUnreadCountResponse:
     """Get the number of unread notifications for the current user."""
     count = await notification_dao.count_unread_for_user(
         current_user.id,
@@ -73,14 +80,16 @@ async def get_unread_count(category: str | None = Query(None), current_user: Use
 
 
 @router.post("/notifications/{notification_id}/read")
-async def mark_read(notification_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
+async def mark_read(
+    notification_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
     """Mark a single notification as read."""
     await notification_dao.mark_read_for_user(notification_id, current_user.id)
     return {"ok": True}
 
 
 @router.post("/notifications/read-all")
-async def mark_all_read(current_user: UserRecord = Depends(get_current_user)):
+async def mark_all_read(current_user: UserRecord = Depends(get_current_user)) -> NotificationReadResponse:
     """Mark all notifications as read for the current user."""
     await notification_dao.mark_all_read_for_user(current_user.id)
     return {"ok": True}
@@ -100,7 +109,7 @@ async def broadcast_notification(
     req: BroadcastRequest,
     background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> NotificationBroadcastResponse:
     """Send a notification to all users and agents in the current tenant.
     Requires org_admin or platform_admin role."""
     if current_user.role not in ("platform_admin", "org_admin"):

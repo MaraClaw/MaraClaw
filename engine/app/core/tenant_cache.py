@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.config import get_settings
+from app.core.cache_contracts import TenantSnapshot
 from app.core.json_types import (
     is_json_object,
     json_as_bool,
@@ -61,7 +62,7 @@ def _parse_dt(value: object) -> datetime | None:
     return None
 
 
-def _dump(tenant: TenantRecord, ver: str) -> dict[str, object]:
+def _dump(tenant: TenantRecord, ver: str) -> TenantSnapshot:
     return {
         "ver": ver,
         "id": str(tenant.id),

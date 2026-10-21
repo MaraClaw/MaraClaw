@@ -16,6 +16,7 @@ from app.api.admin_search_analytics import (
     get_search_analytics_trending,
     router,
 )
+from app.records.user import UserRecord
 
 
 def _pa() -> Any:
@@ -198,7 +199,7 @@ async def test_search_analytics_forbid_org_admin() -> None:
     from app.core.security import require_role
 
     checker = require_role("platform_admin")
-    org_admin = SimpleNamespace(role="org_admin", identity=None)
+    org_admin = UserRecord(id=uuid4(), role="org_admin", identity=None)
     with pytest.raises(HTTPException) as exc:
         await checker(current_user=org_admin)
     assert exc.value.status_code == 403

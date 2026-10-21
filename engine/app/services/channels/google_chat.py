@@ -34,6 +34,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
+from app.services.service_contracts import GoogleChatMessage
 
 CHAT_CERTS_URL = "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com"
 CHAT_API_BASE = "https://chat.googleapis.com/v1"
@@ -253,12 +254,12 @@ def is_group_space(event: GoogleChatInbound) -> bool:
     return bool(event.space_name.startswith("spaces/") and event.space_type == "")
 
 
-def sync_text_response(text: str, *, thread_name: str | None = None) -> dict[str, Any]:
+def sync_text_response(text: str, *, thread_name: str | None = None) -> dict[str, object]:
     """Build a synchronous Chat app response body."""
-    payload: dict[str, Any] = {"text": text}
+    payload: GoogleChatMessage = {"text": text}
     if thread_name not in (None, ""):
         payload["thread"] = {"name": thread_name}
-    return payload
+    return dict(payload)
 
 
 def chunk_text(text: str, *, limit: int = CHAT_MSG_CHUNK) -> list[str]:
@@ -385,7 +386,7 @@ async def send_google_chat_message(
     chunks = chunk_text(text)
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         for chunk in chunks:
-            body: dict[str, Any] = {"text": chunk}
+            body: GoogleChatMessage = {"text": chunk}
             params: dict[str, str] = {}
             if thread_name not in (None, ""):
                 body["thread"] = {"name": thread_name}

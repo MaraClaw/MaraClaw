@@ -6,29 +6,14 @@ Templates come from ``agent_templates/<slug>/``: each folder ships
 """
 
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
 
 import yaml
 
-from app.core.json_types import JsonObject
+from app.core.json_types import yaml_load_object
 from app.core.logging import logger
 from app.dao import agent_template_dao
 from app.db.session import connection_ctx
-
-
-class TemplateSeed(TypedDict):
-    name: str
-    description: str
-    icon: str
-    category: str
-    is_builtin: bool
-    capability_bullets: list[str]
-    bootstrap_content: str | None
-    soul_template: str
-    default_skills: list[str]
-    default_autonomy_policy: JsonObject
-    default_mcp_servers: NotRequired[list[str]]
-
+from app.services.service_contracts import TemplateSeed
 
 # Each folder under ``agent_templates/`` ships:
 #   meta.yaml       - name, description, icon, category, capability_bullets,
@@ -65,8 +50,8 @@ def _load_folder_templates() -> list[TemplateSeed]:
             continue
 
         try:
-            meta_raw = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
-            meta: dict[str, Any] = dict[str, Any](meta_raw) if isinstance(meta_raw, dict) else {}
+            meta_raw = yaml_load_object(meta_path.read_text(encoding="utf-8")) or {}
+            meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
         except yaml.YAMLError as exc:
             logger.error(f"[TemplateSeeder] {slug_dir.name}/meta.yaml parse error: {exc}")
             continue

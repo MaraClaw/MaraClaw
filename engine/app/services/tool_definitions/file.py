@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-FILE_TOOLS: list[dict[str, Any]] = [
+FILE_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "list_files",
         "display_name": "List Files",
@@ -43,9 +43,9 @@ FILE_TOOLS: list[dict[str, Any]] = [
         },
         "config": {"max_file_size_kb": 500},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {"key": "max_file_size_kb", "label": "Max file size (KB)", "type": "number", "default": 500},
-            ]
+            )
         },
     },
     {

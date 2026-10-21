@@ -8,15 +8,17 @@ import secrets
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import NotRequired, Protocol, TypedDict, runtime_checkable
 from uuid import UUID
 
 import httpx
 from anyio.to_thread import run_sync
 
 from app.config import get_settings
+from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.records.agent import AgentRecord
+from app.services.service_contracts import OpenClawHeartbeat, OpenClawInboxConfig
 
 HOOKS_TOKEN_FILENAME = ".openclaw-hooks-token"  # noqa: S105
 GATEWAY_TOKEN_FILENAME = ".openclaw-gateway-token"  # noqa: S105
@@ -129,9 +131,9 @@ def write_maraclaw_sync_skill(agent_dir: Path) -> Path:
     return dest
 
 
-def inbox_config_block(hooks_token: str, gateway_token: str) -> dict[str, Any]:
+def inbox_config_block(hooks_token: str, gateway_token: str) -> JsonObject:
     """OpenClaw.json extras so the guest listens for a wake and checks the inbox."""
-    return {
+    block: OpenClawInboxConfig = {
         "gateway": {
             "mode": "local",
             "bind": "lan",
@@ -146,13 +148,18 @@ def inbox_config_block(hooks_token: str, gateway_token: str) -> dict[str, Any]:
             "allowedSessionKeyPrefixes": ["hook:", "agent:main:hook:maraclaw:"],
         },
     }
-
-
-def heartbeat_block() -> dict[str, Any]:
     return {
+        "gateway": {**block["gateway"], "auth": {**block["gateway"]["auth"]}},
+        "hooks": {**block["hooks"], "allowedSessionKeyPrefixes": [*block["hooks"]["allowedSessionKeyPrefixes"]]},
+    }
+
+
+def heartbeat_block() -> JsonObject:
+    block: OpenClawHeartbeat = {
         "every": "30s",
         "prompt": "Check the MaraClaw inbox with the maraclaw-sync skill and process every pending message.",
     }
+    return {"every": block["every"], "prompt": block["prompt"]}
 
 
 def wake_urls(agent: AgentRecord) -> list[str]:

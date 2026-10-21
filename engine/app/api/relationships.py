@@ -1,7 +1,6 @@
 """Agent relationship management API - human + agent-to-agent."""
 
 import uuid
-from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,6 +18,13 @@ from app.dao import agent_agent_relationship_dao, agent_dao, agent_relationship_
 from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
+from app.schemas.collaboration_response_relationships import (
+    AgentRelationshipResponse,
+    CollaborationAcknowledgement,
+    HumanRelationshipCandidate,
+    HumanRelationshipResponse,
+    VisibleRelationshipAgent,
+)
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 
 router = APIRouter(prefix="/agents/{agent_id}/relationships", tags=["relationships"])
@@ -84,22 +90,6 @@ class RelationshipBatchIn(BaseModel):
     relationships: list[RelationshipIn]
 
 
-class HumanRelationshipCandidate(TypedDict):
-    id: str
-    name: str | None
-    email: str | None
-    title: str | None
-    department_path: str | None
-    avatar_url: str | None
-    external_id: str | None
-    provider_id: str | None
-    provider_name: str | None
-    provider_type: str | None
-    user_id: str | None
-    is_platform_user: bool
-    platform_access_level: str | None
-
-
 class AgentRelationshipIn(BaseModel):
     target_agent_id: str
     relation: str = "collaborator"
@@ -132,10 +122,10 @@ def _dedupe_agent_relationships(items: list[AgentRelationshipIn], agent_id: uuid
 # ─── Human Relationships (existing) ───────────────────
 
 
-@router.get("/")
+@router.get("/", response_model=None)
 async def get_relationships(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[HumanRelationshipResponse]:
     """Get all human relationships for this agent."""
     source_agent, _access_level = await check_agent_access(current_user, agent_id)
     if await ensure_access_granted_platform_relationships(
@@ -145,7 +135,7 @@ async def get_relationships(
         await _regenerate_relationships_file(agent_id)
 
     rows = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
-    out: list[dict[str, object]] = []
+    out: list[HumanRelationshipResponse] = []
     for r in rows:
         linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
         out.append(
@@ -174,10 +164,10 @@ async def get_relationships(
     return out
 
 
-@router.get("/member-candidates")
+@router.get("/member-candidates", response_model=None)
 async def search_human_relationship_candidates(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-):
+) -> list[HumanRelationshipCandidate]:
     """Search org members that are eligible for this agent's human relationships."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -244,10 +234,10 @@ async def search_human_relationship_candidates(
     return sorted(org_member_candidates, key=lambda candidate: (candidate["name"] or "").lower())[:100]
 
 
-@router.put("/")
+@router.put("/", response_model=None)
 async def save_relationships(
     agent_id: uuid.UUID, data: RelationshipBatchIn, current_user: UserRecord = Depends(get_current_user)
-):
+) -> CollaborationAcknowledgement:
     """Replace all human relationships for this agent."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -309,10 +299,10 @@ async def save_relationships(
     return {"status": "ok"}
 
 
-@router.delete("/{rel_id}")
+@router.delete("/{rel_id}", response_model=None)
 async def delete_relationship(
     agent_id: uuid.UUID, rel_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> CollaborationAcknowledgement:
     """Delete a single human relationship."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -328,10 +318,10 @@ async def delete_relationship(
 # ─── Agent-to-Agent Relationships (new) ───────────────
 
 
-@router.get("/agent-candidates")
+@router.get("/agent-candidates", response_model=None)
 async def search_visible_agents(
     agent_id: uuid.UUID, search: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[VisibleRelationshipAgent]:
     """Search manageable agent candidates for relationship creation."""
     source_agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -359,14 +349,14 @@ async def search_visible_agents(
     ]
 
 
-@router.get("/agents")
+@router.get("/agents", response_model=None)
 async def get_agent_relationships(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[AgentRelationshipResponse]:
     """Get all agent-to-agent relationships."""
     _ = await check_agent_access(current_user, agent_id)
     rels = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
-    out: list[dict[str, object]] = []
+    out: list[AgentRelationshipResponse] = []
     for r in rels:
         status_info = await evaluate_agent_relationship_status(r, current_user_id=current_user.id)
         out.append(
@@ -391,10 +381,10 @@ async def get_agent_relationships(
     return out
 
 
-@router.get("/agents/candidates")
+@router.get("/agents/candidates", response_model=None)
 async def get_agent_relationship_candidates(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> list[dict[str, object]]:
+) -> list[VisibleRelationshipAgent]:
     """Backward-compatible alias for searchable agent candidates."""
     return await search_visible_agents(
         agent_id=agent_id,
@@ -403,10 +393,10 @@ async def get_agent_relationship_candidates(
     )
 
 
-@router.put("/agents")
+@router.put("/agents", response_model=None)
 async def save_agent_relationships(
     agent_id: uuid.UUID, data: AgentRelationshipBatchIn, current_user: UserRecord = Depends(get_current_user)
-):
+) -> CollaborationAcknowledgement:
     """Replace all agent-to-agent relationships."""
     source_agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -450,10 +440,10 @@ async def save_agent_relationships(
     return {"status": "ok"}
 
 
-@router.delete("/agents/{rel_id}")
+@router.delete("/agents/{rel_id}", response_model=None)
 async def delete_agent_relationship(
     agent_id: uuid.UUID, rel_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-):
+) -> CollaborationAcknowledgement:
     """Delete a single agent-to-agent relationship."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if not _can_manage_relationships(current_user, access_level):
@@ -469,6 +459,6 @@ async def delete_agent_relationship(
 # ─── relationships.md Generation ──────────────────────
 
 
-async def _regenerate_relationships_file(agent_id: uuid.UUID):
+async def _regenerate_relationships_file(agent_id: uuid.UUID) -> None:
     """Obsolete. relationships.md is no longer generated as relationships are read directly from the database."""
     _ = agent_id

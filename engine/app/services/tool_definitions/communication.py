@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-COMMUNICATION_TOOLS: list[dict[str, Any]] = [
+COMMUNICATION_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "send_channel_file",
         "display_name": "Send File",

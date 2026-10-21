@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-MCP_TOOLS: list[dict[str, Any]] = [
+MCP_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "discover_resources",
         "display_name": "Resource Discovery",
@@ -23,7 +23,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
         },
         "config": {},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "smithery_api_key",
                     "label": "Smithery API Key",
@@ -38,7 +38,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Get your token at modelscope.cn → Home → Access Tokens",
                 },
-            ]
+            )
         },
     },
     {
@@ -64,7 +64,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
         },
         "config": {},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "smithery_api_key",
                     "label": "Smithery API Key",
@@ -79,7 +79,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "placeholder": "Get your token at modelscope.cn → Home → Access Tokens",
                 },
-            ]
+            )
         },
     },
 ]
