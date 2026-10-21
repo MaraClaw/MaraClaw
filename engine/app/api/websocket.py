@@ -33,6 +33,8 @@ from app.services.quota_guard import (
     check_agent_expired,
 )
 from app.services.realtime import realtime_router
+from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, is_shared_target
+from app.services.shared_chat import is_shared_session, require_writable_session
 
 router = APIRouter(tags=["websocket"])
 
@@ -97,6 +99,8 @@ class ConnectionManager:
             if user_id is not None and uid != user_id:
                 continue
             try:
+                if not await authorize_chat_delivery(ws, agent_id, sid):
+                    continue
                 await ws.send_json(payload)
             except Exception as error:
                 logger.warning(f"[WS] Failed to send message to connected client: {error}")
@@ -119,12 +123,12 @@ class ConnectionManager:
         wanted = (session_id or "").strip().lower()
         local = self._local_connections(agent_id)
         session_hits = [(ws, sid, uid) for ws, sid, uid in local if (sid or "").strip().lower() == wanted]
-        if session_hits:
+        if session_hits or is_shared_target(agent_id, wanted):
             await realtime_router.route_message(
                 agent_id=agent_id,
                 message=message,
                 local_connections=session_hits,
-                session_id=None,
+                session_id=wanted,
             )
             return
         if user_id not in (None, ""):
@@ -184,7 +188,7 @@ async def maybe_mark_session_read_for_active_viewer(
     except ValueError, TypeError:
         return False
     session = await chat_session_dao.get(sid)
-    if not session:
+    if not session or is_shared_session(session):
         return False
 
     if guard is not None:
@@ -278,6 +282,7 @@ class WebSocketChatHandler:
     async def setup(self) -> bool:
         self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
         await chat_tickets.authorized_session(self.binding)
+        self.websocket.state.chat_binding = self.binding
         self.conv_id = str(self.binding.session_id)
         self.agent_name = self.agent.name
         self.agent_type = self.agent.agent_type or ""
@@ -361,6 +366,13 @@ class WebSocketChatHandler:
 
             if await self._handle_onboarding_trigger_guard():
                 continue
+            session = await chat_session_dao.get_for_agent(self.binding.session_id, self.agent_id)
+            if session is None:
+                raise HTTPException(403, "Session unavailable")
+            require_writable_session(session)
+            if is_shared_session(session):
+                await self._load_history()
+                self.conversation = self._build_conversation_context()
             content = "Please begin the onboarding."
 
             self.current_user_text = content
@@ -379,6 +391,10 @@ class WebSocketChatHandler:
 
             try:
                 async with connection_ctx():
+                    session = await chat_session_dao.lock_for_agent(self.binding.session_id, self.agent_id)
+                    if session is None:
+                        raise HTTPException(403, "Session unavailable")
+                    require_writable_session(session)
                     if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
                         await self.websocket.send_json({"type": "onboarded", "agent_id": str(self.agent_id)})
                         continue
@@ -446,6 +462,19 @@ class WebSocketChatHandler:
             if not accepted.replayed:
                 self.current_user_text = submission.content
                 self.conversation.append({"role": "user", "content": submission.content})
+                if is_shared_target(str(self.agent_id), self.conv_id):
+                    await manager.send_to_session(
+                        str(self.agent_id),
+                        self.conv_id,
+                        {
+                            "type": "done",
+                            "role": "user",
+                            "content": accepted.message.content,
+                            "message_id": str(accepted.message.id),
+                            "client_submission_id": str(submission.client_submission_id),
+                            "session_id": self.conv_id,
+                        },
+                    )
                 await self.websocket.send_json({"type": "status", "content": "thinking"})
             return True
         await self.websocket.send_json(rejection)

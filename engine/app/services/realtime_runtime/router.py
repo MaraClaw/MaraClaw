@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
+from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery
 from app.services.realtime_runtime.subscription import AcknowledgedPubSub
 
 settings = get_settings()
@@ -122,6 +123,8 @@ class RealtimeRouter:
             if user_id is not None and local_user_id != user_id:
                 continue
             try:
+                if not await authorize_chat_delivery(ws, agent_id, local_session_id):
+                    continue
                 await ws.send_json(message)
                 local_sent += 1
             except Exception as exc:

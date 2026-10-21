@@ -19,6 +19,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions, chat_tickets, openclaw_routing as routing
 from app.services.quota_guard import AgentExpired
+from app.services.shared_chat import shared_session_id
 from test_db_session import _FakePool, _FakeRawConnection
 
 
@@ -67,6 +68,7 @@ class TurnConnection(_FakeRawConnection):
 @pytest.fixture
 async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState, TurnConnection]]:
     state = TurnState()
+    state.session_id = str(shared_session_id(state.agent.id))
     raw = TurnConnection(state)
     token = session._conn_ctx.set(None)
     monkeypatch.setattr(session, "get_pool", lambda: _FakePool(raw))
@@ -125,7 +127,21 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         assert session.get_connection() is not None
         if not state.session_exists:
             return None
-        return ChatSessionRecord(id=session_id, agent_id=agent_id, user_id=state.user.id)
+        return ChatSessionRecord(
+            id=session_id, agent_id=agent_id, user_id=state.agent.creator_id, source_channel="shared"
+        )
+
+    async def get_session(session_id, agent_id):
+        return ChatSessionRecord(
+            id=session_id, agent_id=agent_id, user_id=state.agent.creator_id, source_channel="shared"
+        )
+
+    async def recent(**_kwargs):
+        return [
+            ChatMessageRecord(
+                id=uuid4(), agent_id=state.agent.id, user_id=state.user.id, role="assistant", content="prior"
+            )
+        ]
 
     async def lookup(candidate):
         assert session.get_connection() is not None
@@ -147,6 +163,9 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         return candidate
 
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "get_for_agent", get_session)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", recent)
+    monkeypatch.setattr(ws_api.manager, "send_to_session", AsyncMock())
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", lookup)
     monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)

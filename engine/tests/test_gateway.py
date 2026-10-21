@@ -326,11 +326,19 @@ class _DeliveryStore:
         self.intents[key] = record
         return record
 
-    async def requeue_stale_deliveries(self, agent_id: uuid.UUID, *, stale_before: datetime) -> list[uuid.UUID]:
+    async def claim_shared(
+        self, agent_id: uuid.UUID, session_id: uuid.UUID, *, now: datetime
+    ) -> GatewayMessageRecord | None:
+        return None
+
+    async def requeue_stale_deliveries(
+        self, agent_id: uuid.UUID, *, stale_before: datetime, exclude_conversation: str | None = None
+    ) -> list[uuid.UUID]:
         requeued = []
         for row in self.rows.values():
             if (
                 row.agent_id == agent_id
+                and (exclude_conversation is None or row.conversation_id != exclude_conversation)
                 and row.status == "delivered"
                 and (row.delivered_at is None or row.delivered_at < stale_before)
             ):
@@ -339,10 +347,16 @@ class _DeliveryStore:
         await asyncio.sleep(0)
         return requeued
 
-    async def claim_pending(self, agent_id: uuid.UUID, *, now: datetime) -> list[GatewayMessageRecord]:
+    async def claim_pending(
+        self, agent_id: uuid.UUID, *, now: datetime, exclude_conversation: str | None = None
+    ) -> list[GatewayMessageRecord]:
         claimed = []
         for row in self.rows.values():
-            if row.agent_id == agent_id and row.status == "pending":
+            if (
+                row.agent_id == agent_id
+                and row.status == "pending"
+                and (exclude_conversation is None or row.conversation_id != exclude_conversation)
+            ):
                 row.status, row.delivered_at = "delivered", now
                 claimed.append(replace(row))
         await asyncio.sleep(0)
@@ -365,7 +379,7 @@ class _DeliveryStore:
 @pytest.fixture
 def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
     store = _DeliveryStore()
-    for name in ("claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
+    for name in ("claim_shared", "claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
     monkeypatch.setattr(delivery, "get_settings", lambda: SimpleNamespace(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=60))

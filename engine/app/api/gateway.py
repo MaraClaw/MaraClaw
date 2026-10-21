@@ -33,6 +33,8 @@ from app.schemas.schemas import (
 )
 from app.services.openclaw_gateway_delivery import claim_poll_batch, publish_report, record_report
 from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
+from app.services.openclaw_turns import completed_history, runtime_session_key
+from app.services.shared_chat import shared_session_id
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -80,7 +82,9 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
         # Fetch conversation history (last 10 messages) for context
         history = []
-        if msg.conversation_id not in (None, ""):
+        if msg.conversation_id == str(shared_session_id(agent.id)):
+            history = await completed_history(msg)
+        elif msg.conversation_id not in (None, ""):
             hist_msgs = await chat_message_dao.list_for_session(
                 conversation_id=msg.conversation_id,
                 limit=10,
@@ -113,6 +117,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
                 history=history,
                 model=guest_model,
                 model_slot=guest_slot,
+                runtime_session_key=runtime_session_key(msg),
             )
         )
 

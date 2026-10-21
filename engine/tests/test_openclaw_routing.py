@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +20,19 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.services import agent_manager as agent_manager_module, openclaw_routing
 from app.services.agent_manager import AgentManager, guest_model_ref
 from app.services.llm.turn import ModelBundle
+
+
+@pytest.fixture(autouse=True)
+def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    @asynccontextmanager
+    async def connection() -> AsyncIterator[None]:
+        yield None
+
+    async def get_message(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
+        return None
+
+    monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "get_for_agent", get_message)
 
 
 def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> Any:

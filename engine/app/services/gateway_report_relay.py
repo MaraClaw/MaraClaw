@@ -110,7 +110,7 @@ async def _im_destination(claim: GatewayReportDeliveryRecord, message: GatewayMe
     session = await chat_session_dao.get(claim.destination_id)
     if session is None:
         raise _IdentityError("destination_session_unavailable")
-    if session.agent_id != message.agent_id or message.conversation_id != str(session.id):
+    if session.agent_id != message.agent_id:
         raise _IdentityError("destination_relationship_changed")
     channel = CHANNEL_TYPES.get(normalize_channel_type(session.source_channel) or "")
     if channel is None or not channel.supports_inbound or not (session.external_conv_id or "").strip():

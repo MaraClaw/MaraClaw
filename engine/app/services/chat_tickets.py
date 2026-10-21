@@ -17,6 +17,7 @@ from app.dao.chat_dao import chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.chat_session_service import ensure_primary_platform_session
+from app.services.shared_chat import is_shared_session
 
 
 class ChatTicketRequest(BaseModel):
@@ -60,7 +61,7 @@ async def authorized_session(binding: ChatTicketBinding) -> None:
     session = await chat_session_dao.get_for_agent(binding.session_id, binding.agent_id)
     if session is None:
         raise HTTPException(403, "Session unavailable")
-    if session.source_channel != "agent" and session.user_id != binding.user_id:
+    if not is_shared_session(session) and session.source_channel != "agent" and session.user_id != binding.user_id:
         raise HTTPException(403, "Not authorized for this session")
 
 

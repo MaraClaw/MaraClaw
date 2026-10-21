@@ -31,7 +31,7 @@ def invalidate(store: RelayStore, reason: TerminalReason) -> None:
             store.destination.tenant_id = uuid4()
         case "destination_relationship_changed":
             store.message.sender_agent_id = uuid4()
-            store.message.conversation_id = str(uuid4())
+            store.session.agent_id = uuid4()
         case "destination_session_unavailable":
             store.session.id = uuid4()
 

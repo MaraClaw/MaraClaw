@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Any, cast
 
 from app.core.json_types import JsonObject
@@ -13,14 +12,16 @@ from app.core.logging import logger
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
 from app.records.chat import ChatSessionRecord
+from app.services.shared_chat import ensure_shared_session, is_shared_session, shared_session_id
 
 
 async def get_primary_platform_session(
     agent_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ChatSessionRecord | None:
-    """Return the current primary first-party session for a user+agent pair, if any."""
-    return await chat_session_dao.get_primary_platform(agent_id=agent_id, user_id=user_id)
+    """Return the canonical first-party session, without promoting private history."""
+    session = await chat_session_dao.get_for_agent(shared_session_id(agent_id), agent_id)
+    return session if session is not None and is_shared_session(session) else None
 
 
 async def ensure_primary_platform_session(
@@ -28,37 +29,11 @@ async def ensure_primary_platform_session(
     user_id: uuid.UUID,
     guard: Callable[[], None] | None = None,
 ) -> ChatSessionRecord:
-    """Return a guaranteed primary platform session for a given user+agent pair.
-
-    The upgrade strategy is intentionally lazy:
-    - Reuse the existing primary session when it exists.
-    - Otherwise promote the most relevant existing web session.
-    - Only create a brand new primary session when the pair has never talked on-platform.
-    """
-
-    primary = await get_primary_platform_session(agent_id, user_id)
-    if primary:
-        return primary
-
-    existing = await chat_session_dao.find_best_web_session(agent_id=agent_id, user_id=user_id)
-    if existing:
-        if guard is not None:
-            guard()
-        return await chat_session_dao.update(db_obj=existing, obj_in={"is_primary": True})
-
-    now = datetime.now(UTC)
+    """Resolve the agent's shared human session; user_id remains caller provenance only."""
     if guard is not None:
         guard()
-    return await chat_session_dao.create(
-        obj_in={
-            "agent_id": agent_id,
-            "user_id": user_id,
-            "title": f"Session {now.strftime('%m-%d %H:%M')}",
-            "source_channel": "web",
-            "is_primary": True,
-            "created_at": now,
-        }
-    )
+        return await ensure_shared_session(agent_id, guard=guard)
+    return await ensure_shared_session(agent_id)
 
 
 async def save_tool_call_log(

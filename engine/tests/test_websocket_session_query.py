@@ -1,6 +1,6 @@
 import uuid
-from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import WebSocket
@@ -8,44 +8,25 @@ from starlette.datastructures import State
 from starlette.types import Message, Scope
 
 from app.api import websocket
-from app.services import chat_tickets
+from app.records.chat import ChatSessionRecord
+from app.services import chat_session_service, chat_tickets
+from app.services.shared_chat import shared_session_id
 
 
 async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
-    calls = {}
-
-    async def get_primary_platform(*, agent_id, user_id):
-        calls["get_primary"] = {"agent_id": agent_id, "user_id": user_id}
-        return
-
-    async def find_web_session(*, agent_id, user_id):
-        calls["ensure"] = {"agent_id": agent_id, "user_id": user_id}
-        return
-
-    async def create_session(*, obj_in):
-        calls["created"] = obj_in
-        return SimpleNamespace(id=uuid.uuid4())
-
-    monkeypatch.setattr(
-        websocket.chat_session_dao,
-        "get_primary_platform",
-        get_primary_platform,
-    )
-    monkeypatch.setattr(websocket.chat_session_dao, "find_best_web_session", find_web_session)
-    monkeypatch.setattr(websocket.chat_session_dao, "create", create_session)
-
     agent_id = uuid.uuid4()
     user_id = uuid.uuid4()
+    shared = ChatSessionRecord(
+        id=shared_session_id(agent_id), agent_id=agent_id, user_id=user_id, source_channel="shared", is_primary=True
+    )
+    ensure = AsyncMock(return_value=shared)
+    monkeypatch.setattr(chat_session_service, "ensure_shared_session", ensure)
 
     conv_id = await chat_tickets.resolve_session(chat_tickets.ChatTicketRequest(agent_id=agent_id), user_id)
 
-    assert conv_id is not None
-    assert calls["get_primary"]["agent_id"] == agent_id
-    assert calls["get_primary"]["user_id"] == user_id
-    assert calls["ensure"]["agent_id"] == agent_id
-    assert calls["ensure"]["user_id"] == user_id
-    assert calls["created"]["source_channel"] == "web"
-    assert calls["created"]["is_primary"] is True
+    assert conv_id == shared.id
+    assert not shared.is_group
+    ensure.assert_awaited_once_with(agent_id)
 
 
 @pytest.mark.asyncio

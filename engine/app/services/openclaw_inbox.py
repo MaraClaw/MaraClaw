@@ -8,7 +8,7 @@ import secrets
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 from uuid import UUID
 
 import httpx
@@ -56,7 +56,9 @@ API key: environment `MARACLAW_GATEWAY_API_KEY`
 `GET {base_url}/api/gateway/poll`
 Header: `X-Api-Key: $MARACLAW_GATEWAY_API_KEY`
 
-Process every item in `messages` using `model` (do not pick a cheaper model).
+Run `node /home/node/.openclaw/.maraclaw-poll.mjs` to poll and dispatch each
+item into its explicit runtime session. Never answer inbox items in the heartbeat
+session. The child session reports its own result; do not report on its behalf.
 
 ## Report
 
@@ -115,6 +117,9 @@ def write_workspace_bootstrap_md(agent_dir: Path, content: str | None = None) ->
 def write_maraclaw_sync_skill(agent_dir: Path) -> Path:
     """Write the inbox skill into the bind-mounted workspace."""
     write_workspace_bootstrap_md(agent_dir)
+    from app.services.openclaw_poll import write_poll_dispatcher
+
+    write_poll_dispatcher(agent_dir, guest_engine_base_url())
     dest = agent_dir / "workspace" / "skills" / SKILL_FOLDER / "SKILL.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = _SKILL_TEMPLATE.format(base_url=guest_engine_base_url())
@@ -137,6 +142,8 @@ def inbox_config_block(hooks_token: str, gateway_token: str) -> dict[str, Any]:
             "enabled": True,
             "path": "/hooks",
             "token": hooks_token,
+            "allowRequestSessionKey": True,
+            "allowedSessionKeyPrefixes": ["hook:", "agent:main:hook:maraclaw:"],
         },
     }
 
@@ -158,27 +165,40 @@ def wake_urls(agent: AgentRecord) -> list[str]:
     return urls
 
 
-def inbox_cli_argv(message: str) -> list[str]:
+def inbox_cli_argv(message: str, *, session_key: str | None = None) -> list[str]:
     """Embedded one-shot turn. ``--agent main`` is required; ``--local`` skips the gateway."""
-    return [
+    argv = [
         "openclaw",
         "agent",
         "--agent",
         "main",
         "--local",
         "--message",
-        message[:2000],
+        message,
     ]
+    if session_key is not None:
+        argv.extend(["--session-key", session_key])
+    return argv
 
 
-def _wake_body(content: str, message_id: UUID | None = None) -> dict[str, str]:
+class WakeBody(TypedDict):
+    message: str
+    wakeMode: str
+    name: str
+    sessionKey: NotRequired[str]
+    sessionMode: NotRequired[str]
+    idempotencyKey: NotRequired[str]
+    deliver: NotRequired[bool]
+
+
+def _wake_body(content: str, message_id: UUID | None = None, *, session_key: str | None = None) -> WakeBody:
     if message_id is not None:
         prompt = (
             "Answer the MaraClaw user now. Then POST "
             + f"{guest_engine_base_url()}/api/gateway/report "
             + "header X-Api-Key=$MARACLAW_GATEWAY_API_KEY JSON "
             + f'{{"message_id":"{message_id}","result":"<reply>"}}.\n\n'
-            + content[:4000]
+            + content
         )
     else:
         prompt = (
@@ -186,7 +206,13 @@ def _wake_body(content: str, message_id: UUID | None = None) -> dict[str, str]:
             + "poll, answer, and report.\n\n"
             + content[:4000]
         )
-    return {"message": prompt, "wakeMode": "now", "name": "MaraClaw"}
+    body: WakeBody = {"message": prompt, "wakeMode": "now", "name": "MaraClaw"}
+    if session_key is not None:
+        body["sessionKey"] = session_key
+        body["sessionMode"] = "persistent"
+        body["idempotencyKey"] = str(message_id)
+        body["deliver"] = False
+    return body
 
 
 def _container_ref(agent: AgentRecord) -> str | None:
@@ -271,7 +297,7 @@ def _mark_hooks_up(agent_id: UUID) -> None:
 _HTTP_WAKE_TIMEOUT = httpx.Timeout(1.5, connect=0.25)
 
 
-async def _http_hooks_wake(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str | None:
+async def _http_hooks_wake(agent: AgentRecord, agent_dir: Path, body: WakeBody) -> str | None:
     """POST the guest hooks endpoint from the engine. None means the gateway accepted."""
     _gateway_token, hooks_token = ensure_openclaw_tokens(agent_dir)
     errors: list[str] = []
@@ -288,10 +314,14 @@ async def _http_hooks_wake(agent: AgentRecord, agent_dir: Path, body: dict[str, 
                 )
             except httpx.HTTPError as exc:
                 errors.append(f"{url}: {exc}")
+                if "sessionKey" in body and not isinstance(exc, httpx.ConnectError):
+                    return f"{url}: {type(exc).__name__}"
                 continue
             if response.is_success:
                 return None
             errors.append(f"{url}: HTTP {response.status_code}")
+            if "sessionKey" in body:
+                return errors[-1]
     return "; ".join(errors) if errors else "no hook URLs"
 
 
@@ -330,7 +360,7 @@ def _wait_for_guest_gateway(agent: AgentRecord) -> bool:
     return False
 
 
-def _exec_in_guest_hooks(agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str | None:
+def _exec_in_guest_hooks(agent: AgentRecord, agent_dir: Path, body: WakeBody) -> str | None:
     """POST hooks from inside the guest. None means the gateway accepted."""
     _ensure_wake_script(agent_dir)
     agent_dir.joinpath(WAKE_PAYLOAD_FILENAME).write_text(json.dumps(body), encoding="utf-8")
@@ -355,6 +385,7 @@ async def wake_openclaw_inbox(
     *,
     content: str,
     message_id: UUID | None = None,
+    session_key: str | None = None,
 ) -> bool:
     """Ask the running guest to process the MaraClaw inbox now."""
     from app.services.agent_manager import agent_manager
@@ -366,7 +397,14 @@ async def wake_openclaw_inbox(
     _ = ensure_openclaw_tokens(agent_dir)
     write_maraclaw_sync_skill(agent_dir)
     logger.info("[OpenClaw] waking inbox for {} message={}", agent.id, message_id)
-    body = _wake_body(content, message_id=message_id)
+    body = _wake_body(content, message_id=message_id, session_key=session_key)
+    if session_key is not None:
+        error = await _http_hooks_wake(agent, agent_dir, body)
+        if error is None:
+            return True
+        if not _hooks_unreachable(error):
+            return False
+        return await run_sync(_docker_execute, agent, inbox_cli_argv(body["message"], session_key=session_key)) is None
     last_error: str | None = None
     skip_hooks = _hooks_recently_refused(agent.id)
     attempts = 1 if skip_hooks else _HOOK_RETRY_ATTEMPTS

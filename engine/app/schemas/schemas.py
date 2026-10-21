@@ -606,6 +606,7 @@ class GatewayMessageOut(BaseModel):
     history: list[GatewayHistoryItem] = []
     model: str | None = None
     model_slot: str | None = None
+    runtime_session_key: str | None = None
 
 
 class GatewayPollResponse(BaseModel):
