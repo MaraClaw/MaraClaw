@@ -3,7 +3,6 @@
 import uuid
 from copy import copy, deepcopy
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -28,6 +27,15 @@ from app.dao import identity_dao, identity_provider_dao, system_setting_dao, ten
 from app.db.session import optional_connection_ctx as connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.schemas.auth_responses import (
+    AuthProviderResponse,
+    CheckDuplicateResponse,
+    EmailConflict,
+    ForgotPasswordResponse,
+    RegistrationConfigResponse,
+    ResendVerificationResponse,
+    ResetPasswordResponse,
+)
 from app.schemas.schemas import (
     ForgotPasswordRequest,
     IdentityBindRequest,
@@ -94,27 +102,27 @@ class OAuthPendingCache(BaseModel):
 
 
 @router.get("/registration-config")
-async def get_registration_config() -> dict[str, bool]:
+async def get_registration_config() -> RegistrationConfigResponse:
     """Public endpoint - returns registration requirements (no auth needed)."""
     enabled = await system_setting_dao.is_invitation_code_enabled()
     return {"invitation_code_required": enabled}
 
 
-@router.get("/check-duplicate")
+@router.get("/check-duplicate", response_model=None)
 async def check_duplicate(
     email: str | None = Query(None, description="Email to check"),
-) -> dict[str, Any]:
+) -> CheckDuplicateResponse:
     """Check if an email already exists."""
-    conflicts: list[dict[str, str]] = []
+    conflicts: list[EmailConflict] = []
     email_exists = bool(email and await identity_dao.get_by_email(email))
     if email_exists:
         conflicts.append({"type": "email", "scope": "global", "message": "Email already registered"})
-    result: dict[str, Any] = {
+    result: CheckDuplicateResponse = {
         "email_exists": email_exists,
         "conflicts": conflicts,
+        "has_conflict": email_exists,
     }
 
-    result["has_conflict"] = email_exists
     return result
 
 
@@ -387,8 +395,10 @@ async def register_init(
     )
 
 
-@router.post("/login", response_model=Any)
-async def login(data: UserLogin, background_tasks: BackgroundTasks, request: Request):
+@router.post("/login", response_model=TokenResponse | MultiTenantResponse)
+async def login(
+    data: UserLogin, background_tasks: BackgroundTasks, request: Request
+) -> TokenResponse | MultiTenantResponse:
     """Login with email and password. Supports multi-tenant selection."""
     # 1. Query Identity
     identity = await identity_dao.get_by_login_identifier(data.login_identifier)
@@ -533,7 +543,7 @@ async def forgot_password(
     data: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
     request: Request,
-) -> dict[str, Any]:
+) -> ForgotPasswordResponse:
     """Request a password reset link for a global Identity."""
     from app.services.system_email_service import resolve_email_config_async
 
@@ -545,7 +555,7 @@ async def forgot_password(
             detail="Password reset is currently unavailable (no mail server configured).",
         )
 
-    generic_response: dict[str, Any] = {
+    generic_response: ForgotPasswordResponse = {
         "ok": True,
         "message": "If an account with that email exists, a password reset email has been sent.",
     }
@@ -574,7 +584,7 @@ async def forgot_password(
 
 
 @router.post("/reset-password")
-async def reset_password(data: ResetPasswordRequest):
+async def reset_password(data: ResetPasswordRequest) -> ResetPasswordResponse:
     """Reset a password using a valid single-use token."""
     from app.services.password_reset_service import consume_password_reset_token
 
@@ -811,10 +821,10 @@ async def change_password(
 # ─── SSO/OAuth Endpoints ─────────────────────────────────────────────
 
 
-@router.get("/providers")
+@router.get("/providers", response_model=None)
 async def list_providers(
     tenant_id: uuid.UUID | None = Query(None, description="Optional tenant ID"),
-) -> list[dict[str, Any]]:
+) -> list[AuthProviderResponse]:
     """List all available identity providers."""
     from app.services.auth_registry import auth_provider_registry
 
@@ -889,11 +899,11 @@ async def authorize(
     return OAuthAuthorizeResponse(authorization_url=auth_url)
 
 
-@router.post("/{provider}/callback", response_model=Any)
+@router.post("/{provider}/callback", response_model=TokenResponse | MultiTenantResponse)
 async def oauth_callback(
     provider: str,
     data: OAuthCallbackRequest,
-):
+) -> TokenResponse | MultiTenantResponse:
     """Handle OAuth callback - supports a two-step flow for multi-tenant selection.
 
     Step 1 (code provided): exchange code with provider, detect multiple tenants,
@@ -1166,18 +1176,18 @@ async def verify_email(data: VerifyEmailRequest):
     )
 
 
-@router.post("/resend-verification")
+@router.post("/resend-verification", response_model=None)
 async def resend_verification(
     data: ResendVerificationRequest,
     background_tasks: BackgroundTasks,
     request: Request,
-) -> dict[str, Any]:
+) -> ResendVerificationResponse:
     """Resend email verification link."""
     from app.config import get_settings
     from app.services.system_email_service import resolve_email_config_async
 
     # Always return success to prevent email enumeration
-    generic_response: dict[str, Any] = {
+    generic_response: ResendVerificationResponse = {
         "ok": True,
         "message": "If an account with that email exists, a verification email has been sent.",
     }

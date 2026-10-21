@@ -327,6 +327,7 @@ async def test_oauth_callback_passes_redirect_uri():
         result = await auth_api.oauth_callback("google", data)
 
     provider.exchange_code_for_token.assert_awaited_once_with("oauth-code", "https://example.com/oauth/callback/google")
+    assert isinstance(result, DummyTokenResponse)
     assert result.access_token == "jwt-token"
 
 
