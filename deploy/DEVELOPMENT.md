@@ -67,6 +67,12 @@ a unique `DOCKER_NETWORK`, data directory and ports. Never reuse an existing
 production project to obtain smaller limits: adoption is refused, including for
 stopped production containers. Existing development routed counts are preserved,
 including stopped members; reruns never silently reset them to one.
+The first successful memory admission persists those targets in private
+`replicas.json`; subsequent startups restore shortages and refuse excess before
+unsafe Compose scale-down. Failed Compose startup retains the admitted targets.
+The same durable-authority, staged-retirement and recovery rules apply in both
+modes; see [autoscaling operations](./AUTOSCALING.md). Direct recording requires
+settled authority rather than inferring intent from currently visible replicas.
 
 ## Effective Settings And Capacity
 
@@ -118,6 +124,8 @@ later invocations and LaunchAgent restarts without needing to re-export them.
 Missing or changed effective state, changed input files, endpoint, order, selected
 env file (including store URLs) or contradictory new overrides cause refusal.
 Do not edit or fabricate the checkpoint or effective file to bypass admission.
+Replica authority also marks existing development state even if no checkpoint
+was ever recorded; a missing effective override cannot be regenerated over it.
 For configuration changes,
 stop the controller and plan a new isolated project/state or deliberate migration
 with backups; never delete effective state underneath a running stack.
