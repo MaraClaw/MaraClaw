@@ -1,13 +1,13 @@
 """OKR builtin tool definitions."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
 # ── OKR Tools ────────────────────────────────────────────────────────────────
 # These three tools are global builtins available to ALL agents.
 # OKR Agent-exclusive management tools (create_objective, create_key_result, etc.)
 # are injected separately via agent_seeder when the OKR Agent is created.
 
-OKR_BUILTIN_TOOLS: list[dict[str, Any]] = [
+OKR_BUILTIN_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "get_okr",
         "display_name": "Get OKR",

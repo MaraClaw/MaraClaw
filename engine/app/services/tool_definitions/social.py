@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-SOCIAL_TOOLS: list[dict[str, Any]] = [
+SOCIAL_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "plaza_get_new_posts",
         "display_name": "Plaza: Browse",

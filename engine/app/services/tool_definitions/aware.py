@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-AWARE_TOOLS: list[dict[str, Any]] = [
+AWARE_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "set_trigger",
         "display_name": "Set Trigger",

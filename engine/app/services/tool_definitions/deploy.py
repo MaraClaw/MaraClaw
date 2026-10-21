@@ -1,8 +1,8 @@
 """Deployment builtin tool definitions."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
+DEPLOY_BUILTIN_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "vercel_deploy",
         "display_name": "Deploy to Vercel",
@@ -44,7 +44,7 @@ DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
         },
         "config": {"vercel_token": ""},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "vercel_token",
                     "label": "Vercel Access Token",
@@ -52,7 +52,7 @@ DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "help_text": "Get from https://vercel.com/account/tokens",
                 }
-            ]
+            )
         },
     },
     {
@@ -158,7 +158,7 @@ DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
         },
         "config": {"neon_api_key": ""},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "neon_api_key",
                     "label": "Neon API Key",
@@ -166,7 +166,7 @@ DEPLOY_BUILTIN_TOOLS: list[dict[str, Any]] = [
                     "default": "",
                     "help_text": "Get from https://console.neon.tech/app/settings/api-keys",
                 }
-            ]
+            )
         },
     },
 ]

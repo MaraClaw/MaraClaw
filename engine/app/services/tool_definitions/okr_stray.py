@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-OKR_STRAY_TOOLS: list[dict[str, Any]] = [
+OKR_STRAY_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "update_kr_content",
         "display_name": "Update KR Content",

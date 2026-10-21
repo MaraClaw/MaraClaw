@@ -9,6 +9,7 @@ from typing import Any
 from app.core.json_types import is_str_dict, json_loads_object
 from app.core.tool_types import ToolDefinition
 from app.services.llm.types import LLMToolCall
+from app.services.tool_definition_types import BuiltinToolDefinition
 
 FINISH_TOOL_NAME = "finish"
 
@@ -34,7 +35,7 @@ FINISH_TOOL_DEFINITION: ToolDefinition = {
     },
 }
 
-FINISH_TOOL_SEED: dict[str, Any] = {
+FINISH_TOOL_SEED: BuiltinToolDefinition = {
     "name": FINISH_TOOL_NAME,
     "display_name": "Finish",
     "description": FINISH_TOOL_DEFINITION["function"]["description"],

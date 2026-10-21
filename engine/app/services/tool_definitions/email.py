@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
-EMAIL_TOOLS: list[dict[str, Any]] = [
+EMAIL_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "send_email",
         "display_name": "Send Email",
@@ -27,7 +27,7 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
         },
         "config": {},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "email_provider",
                     "label": "Email Provider",
@@ -118,7 +118,7 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                     "default": 465,
                     "depends_on": {"email_provider": ["custom"]},
                 },
-            ]
+            )
         },
     },
     {

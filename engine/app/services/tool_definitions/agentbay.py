@@ -1,10 +1,10 @@
 """AgentBay builtin tool definitions."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition, builtin_tool_config_fields
 
 # ── AgentBay Tools ──────────────────────────────────────────────────────────
 
-AGENTBAY_TOOLS: list[dict[str, Any]] = [
+AGENTBAY_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "agentbay_browser_navigate",
         "display_name": "AgentBay: Browser Navigate",
@@ -22,7 +22,7 @@ AGENTBAY_TOOLS: list[dict[str, Any]] = [
         },
         "config": {},
         "config_schema": {
-            "fields": [
+            "fields": builtin_tool_config_fields(
                 {
                     "key": "api_key",
                     "label": "API Key",
@@ -41,7 +41,7 @@ AGENTBAY_TOOLS: list[dict[str, Any]] = [
                     ],
                     "description": "Operating system for AgentBay cloud desktop (computer tools only)",
                 },
-            ],
+            ),
         },
     },
     {

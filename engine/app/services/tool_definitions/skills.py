@@ -1,8 +1,8 @@
 """Seed rows extracted from builtin.py. Data only."""
 
-from typing import Any
+from app.services.tool_definition_types import BuiltinToolDefinition
 
-SKILL_TOOLS: list[dict[str, Any]] = [
+SKILL_TOOLS: list[BuiltinToolDefinition] = [
     {
         "name": "search_clawhub",
         "display_name": "Search ClawHub",
