@@ -19,6 +19,7 @@ from app.core.tool_types import ToolConfigSchema
 from app.db.session import connection_ctx
 from app.db.types import as_jsonb
 from app.records.tool import ToolRecord
+from app.services.service_contracts import TenantToolSettings
 
 SENSITIVE_FIELD_KEYS = {"api_key", "private_key", "auth_code", "password", "secret"}
 TENANT_TOOL_CONFIG_PREFIX = "tool_config:"
@@ -102,7 +103,7 @@ async def get_tenant_tool_config(
             {"tenant_id": tenant_id, "key": tenant_tool_config_key(tool_name)},
         )
     value_raw = row.get("value") if row is not None else None
-    value_map: dict[str, Any] = dict[str, Any](value_raw) if isinstance(value_raw, dict) else {}
+    value_map: dict[str, object] = dict[str, object](value_raw) if isinstance(value_raw, dict) else {}
     raw = value_map.get("config")
     if not isinstance(raw, dict):
         return {}
@@ -132,7 +133,7 @@ async def get_tenant_tool_configs(
         if not isinstance(name, str) or not name:
             continue
         setting_raw = by_key.get(tenant_tool_config_key(name)) or {}
-        setting_map: dict[str, Any] = dict[str, Any](setting_raw) if isinstance(setting_raw, dict) else {}
+        setting_map: dict[str, object] = dict[str, object](setting_raw) if isinstance(setting_raw, dict) else {}
         raw = setting_map.get("config")
         if not isinstance(raw, dict):
             result[name] = {}
@@ -148,7 +149,7 @@ async def set_tenant_tool_config(
     config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
 ) -> None:
     encrypted = encrypt_sensitive_fields(meaningful_config(config), config_schema)
-    stored_value: JsonObject = {"config": encrypted}
+    stored_value: TenantToolSettings = {"config": encrypted}
     key = tenant_tool_config_key(tool_name)
     async with connection_ctx() as conn:
         existing = await conn.fetchone(
@@ -176,7 +177,7 @@ async def delete_tenant_tool_config(tenant_id: uuid.UUID, tool_name: str) -> Non
         )
 
 
-async def get_tool_company_config(tool: ToolRecord | Any, tenant_id: uuid.UUID | None) -> JsonObject:
+async def get_tool_company_config(tool: ToolRecord, tenant_id: uuid.UUID | None) -> JsonObject:
     """Return company config for a tool without leaking builtin config across tenants."""
     if getattr(tool, "source", None) == "builtin":
         return await get_tenant_tool_config(tenant_id, tool.name, getattr(tool, "config_schema", None))
