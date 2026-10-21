@@ -13,9 +13,9 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Callable
-from typing import Any, ClassVar, TextIO
+from typing import ClassVar, TextIO
 
+from app.core.internal_contracts import Sink
 from app.core.logging.agentbay import disable_agentbay_logger_override
 from app.core.logging.context import get_trace_id
 from app.core.logging.formatters import Formatter, JsonFormatter, TextFormatter
@@ -25,8 +25,6 @@ from app.core.logging.record import LogRecord
 _SHUTDOWN = object()
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
-
-type Sink = Callable[[str], None]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -132,7 +130,7 @@ class LoggingService:
         self._enqueue: bool = enqueue
         self._queue_size: int = max(1, queue_size)
         self._color: bool = color
-        self._sink: Sink | Any = sink or sys.stdout.write
+        self._sink: Sink = sink or sys.stdout.write
         self._queue: queue.Queue[object] = queue.Queue(maxsize=self._queue_size)
         self._thread: threading.Thread | None = None
         self._started: bool = False

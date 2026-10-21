@@ -4,10 +4,8 @@ import asyncio
 import base64
 import os
 import uuid
-from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypedDict, cast
 
 import bcrypt
 from Crypto.Cipher import AES
@@ -17,6 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.config import get_settings
+from app.core.internal_contracts import AccessTokenClaims, AccessTokenPayload, RoleChecker
 from app.dao import identity_dao, user_dao
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -28,12 +27,6 @@ security = HTTPBearer()
 
 # Thread pool for CPU-intensive bcrypt operations (avoids blocking the event loop)
 _bcrypt_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bcrypt")
-
-
-class AccessTokenPayload(TypedDict):
-    sub: str
-    role: str
-    exp: int
 
 
 def hash_password(password: str) -> str:
@@ -130,12 +123,12 @@ def decrypt_data(ciphertext: str, key: str) -> str:
 def create_access_token(user_id: str, role: str, expires_delta: timedelta | None = None) -> str:
     """Create a JWT access token."""
     expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode: dict[str, Any] = {
+    to_encode: AccessTokenClaims = {
         "sub": user_id,
         "role": role,
         "exp": expire,
     }
-    return cast(str, jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM))
+    return str(jwt.encode(dict(to_encode), settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM))
 
 
 def decode_access_token(token: str) -> AccessTokenPayload:
@@ -261,7 +254,7 @@ async def get_current_admin(current_user: UserRecord = Depends(get_current_user)
 ROLE_HIERARCHY = ["member", "agent_admin", "org_admin", "platform_admin"]
 
 
-def require_role(*allowed_roles: str) -> Callable[..., Coroutine[Any, Any, UserRecord]]:
+def require_role(*allowed_roles: str) -> RoleChecker:
     """Factory to create a dependency that checks if the user has one of the allowed roles.
 
     Usage:
