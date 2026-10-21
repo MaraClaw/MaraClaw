@@ -6,6 +6,7 @@ from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_credential import AgentCredentialRecord
 from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.channel_config import ChannelConfigRecord
+from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.enterprise_info import EnterpriseInfoRecord
 from app.records.focus import AgentFocusItemRecord
@@ -44,6 +45,7 @@ __all__ = [
     "AgentToolRecord",
     "AgentTriggerRecord",
     "ChannelConfigRecord",
+    "ChannelEventReceiptRecord",
     "ChatMessageRecord",
     "ChatSessionRecord",
     "EnterpriseInfoRecord",

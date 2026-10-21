@@ -927,6 +927,17 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 
 CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id);
 
+CREATE TABLE IF NOT EXISTS channel_event_receipts (
+    config_id UUID NOT NULL REFERENCES channel_configs (id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    agent_id UUID NOT NULL,
+    tenant_id UUID,
+    fingerprint TEXT NOT NULL CHECK (fingerprint ~ '^v1:[0-9a-f]{64}$'),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    PRIMARY KEY (config_id, provider, event_key)
+);
+
 CREATE TABLE IF NOT EXISTS chat_messages (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
@@ -1074,9 +1085,18 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     terminal_reason TEXT CHECK (terminal_reason IN (
         'source_agent_unavailable', 'source_tenant_changed',
         'destination_agent_unavailable', 'destination_tenant_changed',
-        'destination_relationship_changed', 'destination_session_unavailable'
+        'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected'
     )),
     terminal_at TIMESTAMP WITH TIME ZONE,
+    im_plan JSONB,
+    next_chunk INTEGER NOT NULL DEFAULT 0 CHECK (next_chunk >= 0),
+    CHECK (im_plan IS NOT NULL OR next_chunk = 0),
+    CHECK (im_plan IS NULL OR (
+        destination_kind = 'im' AND jsonb_typeof(im_plan) = 'object'
+        AND im_plan->>'version' = '1' AND jsonb_typeof(im_plan->'chunks') = 'array'
+        AND jsonb_array_length(im_plan->'chunks') > 0
+        AND next_chunk <= jsonb_array_length(im_plan->'chunks')
+    ) IS TRUE),
     CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL)),
     CHECK (terminal_at IS NULL OR delivered_at IS NULL),
     UNIQUE (message_id, destination_kind, destination_id)
