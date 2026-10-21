@@ -11,9 +11,9 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from app.core.logging import logger, new_trace_id
+from app.core.tool_types import ToolDefinition
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.storage import agent_storage_key, get_storage_backend
@@ -302,7 +302,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
             return
 
         tool_catalog = await get_agent_tools_for_llm(agent_id)
-        tools_for_llm: list[Any] = list(tool_catalog)
+        tools_for_llm: list[ToolDefinition] = list(tool_catalog)
 
         reply = ""
         plaza_posts_made = 0  # hard limit: 1 new post per heartbeat
@@ -692,7 +692,7 @@ async def run_agent_oneshot(
             return ""
 
         tool_catalog = await get_agent_tools_for_llm(agent_id)
-        tools_for_llm: list[Any] = list(tool_catalog)
+        tools_for_llm: list[ToolDefinition] = list(tool_catalog)
         llm_messages = [
             LLMMessage(role="system", content=static_prompt, dynamic_content=dynamic_prompt),
             LLMMessage(role="user", content=prompt),
