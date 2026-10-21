@@ -20,6 +20,10 @@ ALLOWLIST_PATH = ROOT / "scripts" / "sqlalchemy_import_allowlist.txt"
 FORBIDDEN_PREFIXES = ("app/db/",)
 
 
+class _Arguments(argparse.Namespace):
+    write_allowlist: bool = False
+
+
 def _rel(path: Path) -> str:
     return path.resolve().relative_to(ROOT).as_posix()
 
@@ -51,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Rewrite the allowlist from the current tree (migration maintenance only).",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv, namespace=_Arguments())
 
     current = files_importing_sqlalchemy()
     if args.write_allowlist:
