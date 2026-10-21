@@ -42,15 +42,21 @@ async def test_webhook_echoes_challenge(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_process_feishu_event_skips_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_process_feishu_event_rechecks_config_despite_redis_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
+    config = AsyncMock(return_value=None)
+    model = AsyncMock()
+    monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", config)
+    monkeypatch.setattr(feishu_api, "_load_agent_and_model", model)
 
     result = await feishu_api.process_feishu_event(
         AGENT_ID,
         {"header": {"event_id": "evt-1", "event_type": "im.message.receive_v1"}},
     )
 
-    assert result == {"code": 0, "msg": "already processed"}
+    assert result == {"code": 1, "msg": "Channel not found"}
+    config.assert_awaited_once()
+    model.assert_not_awaited()
 
 
 @pytest.mark.asyncio
