@@ -5,6 +5,7 @@ from deploy.autoscale_docker import Container, Service
 from deploy.autoscale_lifecycle import ContainerControl, Retirement, topology
 from deploy.autoscale_policy import POOLS, Demand, Policy, admit, decision
 from deploy.autoscale_proxy import Snapshot
+from deploy.autoscale_state import Authority
 
 
 class Runtime(ContainerControl, Protocol):
@@ -40,6 +41,15 @@ class Controller:
     def tick(self, now: float) -> str:
         self.docker.validate_files()
         containers = self.docker.containers()
+        authority = self.docker.authority.load()
+        if authority.operation is not None and authority.operation.phase == "releasing":
+            self.retirement.recover()
+            self.invalidate()
+            return "recovered"
+        if (any(len(self.docker.owned(containers, name)) != count for name, count in authority.counts.items())
+                or (authority.operation is not None and (authority.operation.phase != "draining"
+                    or authority.operation.victim != self.retirement.intent))):
+            raise ValueError("replica counts or retirement disagree with authority")
         ingress = self.docker.owned(containers, "ingress")
         if len(ingress) != 1 or not ingress[0].running or not ingress[0].healthy:
             raise ValueError("ingress topology unavailable")
@@ -85,6 +95,8 @@ class Controller:
                 limit = self.docker.services[name].memory
                 if limit <= 0 or not admit(total, stack + limit, external, self.policy):
                     continue
+                self.docker.authority.settled()
+                self.docker.authority.save(Authority(authority.counts | {name: len(members) + 1}))
                 self.docker.grow(name, len(members) + 1)
                 self.next_at = now + self.policy.cooldown_seconds
             elif change < 0 and mapping is not None:

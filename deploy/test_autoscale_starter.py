@@ -10,6 +10,7 @@ import uuid
 from deploy.test_resources import DEFAULTS, GIB
 from deploy.autoscale_docker import Docker
 from deploy.autoscale_policy import Policy
+from deploy.autoscale_state import Authority
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,8 +143,10 @@ class StarterTests(unittest.TestCase):
         def compose(arguments: list[str]) -> None:
             subprocess.run(docker.compose + arguments, capture_output=True, text=True, check=True, timeout=60)
         try:
+            docker.startup(Policy())
             compose(["up", "-d", "--no-build", "--pull", "never"])
             docker.remember_startup()
+            docker.authority.save(Authority(docker.authority.settled().counts | {"web-a": 3}))
             docker.grow("web-a", 3)
             before = docker.owned(docker.containers(), "bootstrap")[0]
             counts = docker.startup(Policy())

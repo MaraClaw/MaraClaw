@@ -9,6 +9,7 @@ from typing import NotRequired, TypedDict
 
 from deploy.autoscale_policy import GIB, POOLS, Policy, StartupMemoryError, admit
 from deploy.autoscale_development import validate
+from deploy.autoscale_state import Authority, Binding, ReplicaState, atomic_write
 
 
 class HealthRecord(TypedDict):
@@ -90,8 +91,8 @@ class Docker:
     def __init__(self, root: Path, files: tuple[Path, ...], state_dir: Path | None = None):
         self.root = root
         self.startup_reusable = False
-        self.startup_counts: dict[str, int] | None = None
         env_file, *compose_files = files
+        self.env_file = env_file
         self.files = tuple(compose_files)
         self.development = None
         for source in self.files:
@@ -142,6 +143,19 @@ class Docker:
     def owned(self, containers: tuple[Container, ...], service: str) -> tuple[Container, ...]:
         return tuple(item for item in containers if item.project == self.project
                      and item.service == service and not item.oneoff)
+
+    @property
+    def authority(self) -> ReplicaState:
+        from deploy.starter_host import endpoint
+        host = endpoint()
+        os.environ["DOCKER_HOST"] = host
+        os.environ.pop("DOCKER_CONTEXT", None)
+        return ReplicaState(Binding(str(self.root.resolve()), self.project, str(self.state_dir.resolve()),
+                            host, str(self.env_file.resolve()), tuple(str(path.resolve()) for path in self.files)))
+
+    def reconcile(self, containers: tuple[Container, ...]) -> Authority:
+        return self.authority.reconcile({name: len(self.owned(containers, name)) for name in POOLS},
+            {item.identity for name in POOLS for item in self.owned(containers, name)})
 
     def memory(self, containers: tuple[Container, ...], policy: Policy) -> tuple[int, int, int | None]:
         total = int(run(["docker", "info", "--format", "{{.MemTotal}}" ]))
@@ -203,7 +217,7 @@ class Docker:
         bootstrap = self.owned(containers, "bootstrap")
         if len(bootstrap) != 1 or bootstrap[0].running or bootstrap[0].exit_code != 0:
             raise ValueError("bootstrap has not completed successfully")
-        counts = self.startup_counts or {name: len(self.owned(containers, name)) for name in POOLS}
+        counts = self.authority.settled().counts
         if any(not policy.minimum <= count <= policy.maximum for count in counts.values()):
             raise ValueError("serving replica count outside supported bounds")
         expected = {**counts, "background": 1, "ingress": 1}
@@ -216,9 +230,7 @@ class Docker:
         fingerprint = self.startup_fingerprint(containers)
         if fingerprint is None:
             raise ValueError("deployed containers differ from startup configuration")
-        temporary = self.state_dir / "startup.sha256.tmp"
-        temporary.write_text(fingerprint)
-        temporary.replace(self.state_dir / "startup.sha256")
+        atomic_write(self.state_dir / "startup.sha256", fingerprint)
 
     def startup(self, policy: Policy) -> dict[str, int]:
         self.validate_files()
@@ -229,7 +241,12 @@ class Docker:
         if any(item.project == self.project and not item.oneoff and not item.memory for item in containers):
             raise ValueError("unlimited project container")
         total, running_stack, external = self.memory(containers, policy)
-        counts = {name: len(self.owned(containers, name)) or self.services[name].replicas for name in POOLS}
+        state = self.authority
+        authority = self.reconcile(containers) if state.path.exists() else None
+        counts = authority.counts if authority is not None else {
+            name: len(self.owned(containers, name)) or self.services[name].replicas for name in POOLS}
+        if any(len(self.owned(containers, name)) > count for name, count in counts.items()):
+            raise ValueError("existing replicas exceed admitted targets; refusing unsafe Compose scale-down")
         if any(not policy.minimum <= count <= policy.maximum for count in counts.values()):
             raise ValueError("startup replica count outside policy")
         limits = {name: max([spec.memory, *(item.memory for item in self.owned(containers, name))])
@@ -255,5 +272,6 @@ class Docker:
             required = max(required, steady + bootstrap)
         if not admit(total, required, external, policy):
             raise StartupMemoryError(total, required, external, policy)
-        self.startup_counts = counts.copy()
+        if authority is None:
+            state.save(Authority(counts))
         return counts

@@ -22,6 +22,10 @@ class AdmissionEntrypointTests(unittest.TestCase):
         self.policy = self.root / "policy.toml"
         self.policy.write_text("")
         self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
+        endpoint = patch.dict(os.environ, {"DOCKER_HOST": "unix:///fixture/docker.sock"})
+        endpoint.start()
+        self.addCleanup(endpoint.stop)
         manager = patch("deploy.starter_handoff.manager_directory", return_value=self.root / "supervisor")
         manager.start()
         self.addCleanup(manager.stop)

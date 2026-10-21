@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from deploy.autoscale_docker import Container, Docker
 from deploy.autoscale_policy import GIB, Policy
 from deploy.test_resources import DEFAULTS
+from deploy.autoscale_state import Authority
 
 
 def model() -> str:
@@ -23,8 +25,13 @@ def container(service: str = "engine") -> Container:
 
 class DockerTests(unittest.TestCase):
     def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        endpoint = patch.dict(os.environ, {"DOCKER_HOST": "unix:///fixture/docker.sock"})
+        endpoint.start()
+        self.addCleanup(endpoint.stop)
         with patch("deploy.autoscale_docker.run", return_value=model()):
-            self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")))
+            self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")), Path(temporary.name))
 
     def test_growth_when_admitted_uses_only_target_without_recreation(self) -> None:
         with patch("deploy.autoscale_docker.run") as command:
@@ -133,6 +140,9 @@ class DockerTests(unittest.TestCase):
 
 class BootstrapRerunTests(unittest.TestCase):
     def setUp(self) -> None:
+        endpoint = patch.dict(os.environ, {"DOCKER_HOST": "unix:///fixture/docker.sock"})
+        endpoint.start()
+        self.addCleanup(endpoint.stop)
         with patch("deploy.autoscale_docker.run", return_value=model()):
             self.docker = Docker(Path("/repo"), (Path("/inputs.env"), Path("/compose.yaml")))
         services = [(name, limits.memory) for name, limits in DEFAULTS.items()
@@ -157,6 +167,8 @@ class BootstrapRerunTests(unittest.TestCase):
         inspection.start()
         self.addCleanup(commands.stop)
         self.addCleanup(inspection.stop)
+        with patch.object(self.docker, "memory", return_value=(16 * GIB, int(6.75 * GIB), 0)):
+            self.docker.startup(Policy())
         self.docker.remember_startup()
 
     def command(self, arguments: list[str], timeout: int = 30) -> str:
@@ -173,6 +185,8 @@ class BootstrapRerunTests(unittest.TestCase):
 
     def test_startup_when_autoscaling_changed_routed_counts_preserves_them_without_bootstrap(self) -> None:
         member = next(item for item in self.members if item.service == "web-a")
+        authority = self.docker.authority.load()
+        self.docker.authority.save(Authority(authority.counts | {"web-a": 3}))
         self.members += (replace(member, identity="f" * 64),)
         self.assertEqual(self.docker.startup(Policy())["web-a"], 3)
         self.assertTrue(self.docker.startup_reusable)
@@ -241,6 +255,7 @@ class BootstrapRerunTests(unittest.TestCase):
                     member = next(item for item in original if item.service == service)
                     self.members = tuple(item for item in original if item != member) if count == 1 else (
                         *original, replace(member, identity="f" * 64))
+                    self.docker.authority.save(Authority({"engine": 2, "web-a": 2, "web-e": 2} | {service: count}))
                     self.docker.remember_startup()
                     self.assertEqual(len(self.docker.owned(self.members, service)), count)
 
