@@ -85,6 +85,9 @@ class StartupSequenceTests(unittest.TestCase):
         self.events: list[str] = []
         self.docker.startup.side_effect = lambda policy: self.events.append("admit") or {"engine": 1}
         self.docker.remember_startup.side_effect = lambda policy: self.events.append("record")
+        recovery = patch.object(starter.Retirement, "recover")
+        recovery.start()
+        self.addCleanup(recovery.stop)
 
     def invoke(self, options: list[str]) -> int:
         args = ["starter", "--state-dir", str(self.state), *options]
@@ -235,3 +238,12 @@ with patch.object(sys, 'argv', ['starter', '--state-dir', str(state)]), \
             original_install(*args, **kwargs)
         with patch.object(self, "install", side_effect=install):
             self.assertEqual(self.invoke([]), 0)
+
+    def test_failed_proxy_cleanup_after_readiness_never_records_or_installs(self) -> None:
+        def recover() -> None:
+            self.check_lock("controller.lock", held=True)
+            self.assertEqual(self.events, ["stop", "build", "admit", "up"])
+            raise OSError("proxy unavailable")
+        with patch.object(starter.Retirement, "recover", side_effect=recover):
+            self.assertEqual(self.invoke([]), 1)
+        self.assertEqual(self.events, ["stop", "build", "admit", "up"])

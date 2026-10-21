@@ -13,6 +13,9 @@ from deploy.autoscale_policy import Policy, StartupMemoryError
 from deploy import starter_service
 from deploy.starter_host import execute, prerequisites, private_directory
 from deploy.starter_handoff import foreground, handoff
+from deploy.autoscale_lifecycle import Retirement
+from deploy.autoscale_proxy import Proxy
+from deploy.autoscale_transport import ExecProxy
 
 
 def main() -> int:
@@ -85,7 +88,9 @@ def main() -> int:
             if docker.startup_reusable:
                 options += ["--no-deps", *(name for name in docker.services if name != "bootstrap")]
             execute(docker.compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
-                                     "--wait-timeout", "240", *options], 1800)
+                                      "--wait-timeout", "240", *options], 1800)
+            proxy = ExecProxy(docker) if darwin else Proxy(state / "admin.sock")
+            Retirement(state, proxy, docker).recover()
             docker.remember_startup(policy)
             command = [str(Path(sys.executable).absolute()), "-m", "deploy.autoscale", "--root", str(root),
                        "--env-file", str(env_file), "--state-dir", str(state), "--policy", str(policy_path),

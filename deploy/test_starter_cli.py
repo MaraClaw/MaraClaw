@@ -70,3 +70,24 @@ class StarterCliTests(unittest.TestCase):
         recovered = self.invoke()
         self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
         self.assertTrue((self.root / "loaded.plist").exists())
+
+    def test_real_cli_when_compose_fails_keeps_admitted_targets_without_successor(self) -> None:
+        self.host.fixture["fail_up"] = True
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        authority = json.loads((self.state / "replicas.json").read_text())
+        self.assertEqual(authority["counts"], {"engine": 2, "web-a": 3, "web-e": 1})
+        self.assertFalse((self.state / "startup.sha256").exists())
+        self.assertFalse((self.root / "loaded.plist").exists())
+
+    def test_real_cli_when_restored_replica_never_appears_cannot_record_or_start_successor(self) -> None:
+        self.assertEqual(self.invoke().returncode, 0)
+        checkpoint = self.state / "startup.sha256"
+        previous = checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns
+        members = self.host.fixture["containers"]
+        victim = next(item for item in members if item["Config"]["Labels"]["com.docker.compose.service"] == "engine")
+        self.host.fixture["containers"] = [item for item in members if item is not victim]
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns), previous)
+        self.assertFalse((self.root / "loaded.plist").exists())
