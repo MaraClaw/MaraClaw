@@ -6,6 +6,7 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 
 - Backends implement async primitives from `base.py`: `exists`, `is_file`, `is_dir`, `list_dir`, `read_bytes`, `write_bytes`, `delete`, `delete_tree`, and `stat`.
 - Helper APIs include `read_text`, `write_text`, `get_version`, `write_bytes_if_match`, `delete_if_match`, `local_path_for`, and `presign_download_url`.
+- `read_bytes_bounded(key, max_bytes)` measures actual bytes, including growth, with at most one overflow byte. It raises `StorageReadLimitExceededError` or `FileNotFoundError` without a full read/hash/version preflight. Blocking workers own open/GET, read, and close even if the awaiter is cancelled. Fallback bounds both promotion and the primary winner; legacy stays read only.
 - `StorageVersion.token` precedence is `version_id`, then `etag`, then `content_hash`, then modified-time/size.
 - Conditional write/delete conflicts return `ConditionalWriteResult`; version conflicts are normal outcomes, not exceptions.
 - `create_bytes_if_absent(key, data, content_type=None)` atomically publishes complete bytes without replacement. `ok=True` owns the key; `conflict=True` means an occupied key. A conflict need not include `current_version`.

@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,7 +77,7 @@ def delete_runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delete_runtime):
+async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delete_runtime, tmp_path: Path):
     creator = make_user()
     agent = make_agent(creator.id)
     executed: list[str] = []
@@ -90,6 +91,9 @@ async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delet
         executed.append("DELETE FROM agents WHERE id = %(aid)s")
 
     class FakeAgentManager:
+        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
+            return tmp_path / str(agent_id)
+
         async def remove_container(self, _agent):
             return None
 
@@ -113,7 +117,9 @@ async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delet
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(monkeypatch, delete_runtime):
+async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(
+    monkeypatch, delete_runtime, tmp_path: Path
+):
     creator = make_user()
     agent = make_agent(creator.id)
     called_with: list[uuid.UUID] = []
@@ -125,6 +131,9 @@ async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(m
         called_with.append(agent_id)
 
     class FakeAgentManager:
+        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
+            return tmp_path / str(agent_id)
+
         async def remove_container(self, _agent):
             return None
 
@@ -169,7 +178,9 @@ async def test_delete_agent_propagates_required_cleanup_failure_without_committi
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_ignores_expected_container_and_archive_failures(monkeypatch, delete_runtime):
+async def test_delete_agent_ignores_expected_container_and_archive_failures(
+    monkeypatch, delete_runtime, tmp_path: Path
+):
     creator = make_user()
     agent = make_agent(creator.id)
     deleted: list[uuid.UUID] = []
@@ -181,6 +192,9 @@ async def test_delete_agent_ignores_expected_container_and_archive_failures(monk
         deleted.append(agent_id)
 
     class FailingAgentManager:
+        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
+            return tmp_path / str(agent_id)
+
         async def remove_container(self, _agent):
             raise DockerException(["docker", "rm"], 1, b"not found", b"container unavailable")
 
@@ -242,7 +256,11 @@ async def test_archive_agent_task_history_writes_json_snapshot(monkeypatch, tmp_
     monkeypatch.setattr(
         agent_stops,
         "agent_manager",
-        SimpleNamespace(remove_container=AsyncMock(), archive_agent_files=AsyncMock(return_value=archive_dir)),
+        SimpleNamespace(
+            remove_container=AsyncMock(),
+            archive_agent_files=AsyncMock(return_value=archive_dir),
+            _agent_dir=lambda agent_id: tmp_path / str(agent_id),
+        ),
     )
     snapshots = await agent_stops.snapshot_agent_teardown([make_agent(uuid.uuid4(), id=agent_id)])
     assert not (archive_dir / "task_history.json").exists()
@@ -278,7 +296,13 @@ async def test_delete_agent_waits_for_owning_request_commit(monkeypatch, delete_
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda user, record: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", AsyncMock())
     monkeypatch.setattr(
-        agent_stops, "agent_manager", SimpleNamespace(remove_container=remove, archive_agent_files=archive)
+        agent_stops,
+        "agent_manager",
+        SimpleNamespace(
+            remove_container=remove,
+            archive_agent_files=archive,
+            _agent_dir=lambda agent_id: tmp_path / str(agent_id),
+        ),
     )
     owner = session.bind_crud_connection()
     assert isinstance(owner, AsyncGenerator)

@@ -79,6 +79,14 @@ class CreationStore:
     async def update_agent(self, *, db_obj: AgentRecord, obj_in: Mapping[str, object]) -> AgentRecord:
         return replace(db_obj, api_key_hash=str(obj_in["api_key_hash"]))
 
+    async def persist_setup(self, agent: AgentRecord, data: AgentCreate, raw_key: str) -> None:
+        assert self.in_transaction
+        assert agent.setup_pending
+        assert agent.api_key_hash == "test-hash"
+        assert raw_key == "test-key"
+        await self.setup(agent, data, raw_key)
+        self.events.append("setup")
+
 
 @pytest.fixture
 async def creation(monkeypatch):
@@ -111,7 +119,7 @@ async def creation(monkeypatch):
     monkeypatch.setattr(agents, "mint_openclaw_gateway_key", mint_key)
     monkeypatch.setattr(agents, "write_gateway_api_key", write_key)
     monkeypatch.setattr(agents, "flush_request_transaction", flush)
-    monkeypatch.setattr(agents, "_background_agent_setup", setup)
+    monkeypatch.setattr(agents, "persist_agent_setup", store.persist_setup)
     monkeypatch.setattr(onboarding, "is_onboarded", AsyncMock(return_value=False))
     app = FastAPI()
     app.include_router(agents.router, prefix="/api")
@@ -148,7 +156,18 @@ async def test_create_custom_departments_are_deduplicated_use_only_with_creator_
     assert set(store.lookups[0]) == set(store.departments)
     assert len(store.lookups[0]) == 2
     assert all(str(row.agent_id) == response.json()["id"] for row in store.grants)
-    assert store.events == ["begin", "agent", "participant", "user", "department", "department", "commit"]
+    assert store.events == ["begin", "agent", "participant", "user", "department", "department", "setup", "commit"]
+
+
+@pytest.mark.parametrize("action", ["start", "api-key"])
+async def test_pending_setup_rejects_start_and_key_rotation(creation, monkeypatch, action):
+    store, client = creation
+    agent = AgentRecord(id=uuid4(), name="Pending", creator_id=store.actor.id, setup_pending=True)
+    monkeypatch.setattr(agents, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    response = await client.post(f"/api/agents/{agent.id}/{action}")
+    assert response.status_code == 409
+    store.mint_key.assert_not_called()
+    store.write_key.assert_not_called()
 
 
 @pytest.mark.parametrize("invalid_kind", ["missing", "foreign"])
@@ -273,3 +292,28 @@ async def test_department_insert_failure_rolls_back_agent_participant_and_all_gr
     assert store.events == ["begin", "agent", "participant", "user", "department", "rollback"]
     store.mint_key.assert_not_called()
     store.setup.assert_not_awaited()
+
+
+async def test_setup_persistence_failure_rolls_back_creation_before_first_commit(creation):
+    store, client = creation
+    store.setup.side_effect = RuntimeError("Setup insert failed")
+    with pytest.raises(RuntimeError, match="Setup insert failed"):
+        await client.post("/api/agents/", json={"name": "Durable agent"})
+    assert store.agent_rows == store.participants == store.grants == []
+    assert store.events == ["begin", "agent", "participant", "company", "rollback"]
+    store.flush.assert_not_awaited()
+    store.write_key.assert_not_called()
+
+
+async def test_create_returns_one_time_key_without_running_setup_in_request(creation):
+    store, client = creation
+    response = await client.post("/api/agents/", json={"name": "Durable agent"})
+    assert response.status_code == 201
+    assert response.json()["api_key"] == "test-key"
+    assert response.json()["status"] == "idle"
+    assert response.json()["access_level"] == "manage"
+    assert "setup_pending" not in response.json()
+    assert response.json()["api_key_hash"] == "test-hash"
+    assert store.events == ["begin", "agent", "participant", "company", "setup", "commit"]
+    store.setup.assert_awaited_once()
+    store.write_key.assert_not_called()

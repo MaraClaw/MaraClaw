@@ -1,4 +1,5 @@
 import argparse
+from contextlib import ExitStack
 import fcntl
 import json
 import os
@@ -11,6 +12,7 @@ from deploy.autoscale_docker import Docker, run
 from deploy.autoscale_policy import Policy, StartupMemoryError
 from deploy import starter_service
 from deploy.starter_host import execute, prerequisites, private_directory
+from deploy.starter_handoff import foreground, handoff
 
 
 def main() -> int:
@@ -24,6 +26,8 @@ def main() -> int:
     parser.add_argument("--foreground", action="store_true", help="supervise here without installing a service")
     parser.add_argument("--no-install", action="store_true", help="start and record only; never touch host services")
     parser.add_argument("--no-build", action="store_true", help="require already cached images instead of building")
+    parser.add_argument("--approve-legacy-unit", action="store_true",
+                        help="approve only the unchanged shipped legacy production systemd unit")
     arguments = parser.parse_args()
     try:
         os.umask(0o077)
@@ -43,10 +47,17 @@ def main() -> int:
         initial = Docker(root, files)
         state = (arguments.state_dir or (Path.home() / "Library/Application Support/MaraClaw/autoscaler"
                  if darwin else initial.state_dir)).absolute()
+        policy_path = (arguments.policy or root / "deploy/autoscaler.toml").resolve()
+        if arguments.approve_legacy_unit and (not install or darwin or arguments.development
+                or files != (root / "deploy/.env", root / "compose.yaml")
+                or policy_path != root / "deploy/autoscaler.toml"
+                or state != Path("/var/lib/maraclaw-autoscaler")):
+            raise ValueError("legacy approval requires the shipped production inputs and state")
         private_directory(state)
-        with (state / "controller.lock").open("a") as lock:
+        with handoff(state, install), ExitStack() as controller:
             if install:
-                starter_service.stop(darwin, root, state)
+                starter_service.stop(darwin, root, state, approve_legacy=arguments.approve_legacy_unit)
+            lock = controller.enter_context((state / "controller.lock").open("a"))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if arguments.development:
                 existing = initial.containers()
@@ -64,7 +75,6 @@ def main() -> int:
                              if item["target"] == "/run/maraclaw-autoscaler")
                 if mount["source"] != str(state):
                     raise ValueError("host state must match ingress socket bind")
-            policy_path = (arguments.policy or root / "deploy/autoscaler.toml").resolve()
             policy = Policy.load(policy_path)
             if arguments.no_build:
                 run(["docker", "image", "inspect", *sorted(set(docker.images.values()))])
@@ -76,7 +86,7 @@ def main() -> int:
                 options += ["--no-deps", *(name for name in docker.services if name != "bootstrap")]
             execute(docker.compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
                                      "--wait-timeout", "240", *options], 1800)
-            docker.remember_startup()
+            docker.remember_startup(policy)
             command = [str(Path(sys.executable).absolute()), "-m", "deploy.autoscale", "--root", str(root),
                        "--env-file", str(env_file), "--state-dir", str(state), "--policy", str(policy_path),
                        "--docker-host", os.environ["DOCKER_HOST"],
@@ -84,11 +94,11 @@ def main() -> int:
                        "--socket-transport", "exec" if darwin else "unix",
                        *(word for source in files[1:] for word in ("--compose-file", str(source)))]
             print(f"startup recorded project={docker.project} counts={counts} state={state}", flush=True)
-        if install:
-            starter_service.install(command, root, state)
-        elif arguments.foreground:
-            os.chdir(root)
-            os.execv(command[0], command)
+            controller.close()
+            if install:
+                starter_service.install(command, root, state, approve_legacy=arguments.approve_legacy_unit)
+            elif arguments.foreground:
+                return foreground(command, root)
         return 0
     except StartupMemoryError as error:
         print(str(error), file=sys.stderr)

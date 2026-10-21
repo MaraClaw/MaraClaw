@@ -149,7 +149,7 @@ async def test_invalid_role_has_no_runtime_side_effects(monkeypatch: pytest.Monk
 async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     # Given
     from app.process_roles import parse_process_roles, role_enabled
-    from app.services import audit_logger, gateway_report_relay, scheduler, scheduler_tasks, trigger_daemon
+    from app.services import agent_setup, audit_logger, gateway_report_relay, scheduler, scheduler_tasks, trigger_daemon
     from app.services.linkup import export
 
     events: list[str] = []
@@ -190,6 +190,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     monkeypatch.setattr(lifecycle.realtime_router, "start", realtime)
     monkeypatch.setattr(audit_logger, "write_audit_log", audit)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
+    monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
@@ -227,6 +228,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
         expected.append("realtime")
     assert events == [*expected, "database", "redis", "llm", "logging"]
     assert ("trigger_daemon" in names) == role_enabled(roles, "worker")
+    assert ("agent_setup" in names) == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
     assert ("gateway_report_relay" in names) == role_enabled(roles, "worker")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
@@ -309,3 +311,40 @@ async def test_route_drain_precedes_manager_and_resource_cleanup(monkeypatch, dr
         "llm",
         "logging",
     ]
+
+
+async def test_setup_shutdown_drains_write_before_database_closes(monkeypatch) -> None:
+    from app.services.agent_setup_lock import drain_on_cancel
+
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = True
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def write() -> None:
+        started.set()
+        await release.wait()
+        events.append("setup-write-finished")
+
+    async def setup() -> None:
+        try:
+            await drain_on_cancel(write())
+        except asyncio.CancelledError:
+            events.append("setup-released")
+            raise
+
+    async def drain_routes() -> None:
+        cancelled.set()
+
+    monkeypatch.setattr(lifecycle, "drain_background_tasks", drain_routes)
+    runtime.tasks.start("agent_setup", setup(), requirement="loop")
+    await started.wait()
+    stop = asyncio.create_task(runtime.stop())
+    await cancelled.wait()
+    assert "database" not in events
+    release.set()
+    await asyncio.wait_for(stop, 2)
+    assert events[:3] == ["setup-write-finished", "setup-released", "database"]

@@ -90,6 +90,7 @@ class Docker:
     def __init__(self, root: Path, files: tuple[Path, ...], state_dir: Path | None = None):
         self.root = root
         self.startup_reusable = False
+        self.startup_counts: dict[str, int] | None = None
         env_file, *compose_files = files
         self.files = tuple(compose_files)
         self.development = None
@@ -196,11 +197,22 @@ class Docker:
         digest.update((self.root / "deploy/bootstrap.py").read_bytes())
         return digest.hexdigest()
 
-    def remember_startup(self) -> None:
+    def remember_startup(self, policy: Policy = Policy()) -> None:
+        self.validate_files()
         containers = self.containers()
         bootstrap = self.owned(containers, "bootstrap")
         if len(bootstrap) != 1 or bootstrap[0].running or bootstrap[0].exit_code != 0:
             raise ValueError("bootstrap has not completed successfully")
+        counts = self.startup_counts or {name: len(self.owned(containers, name)) for name in POOLS}
+        if any(not policy.minimum <= count <= policy.maximum for count in counts.values()):
+            raise ValueError("serving replica count outside supported bounds")
+        expected = {**counts, "background": 1, "ingress": 1}
+        if not expected.keys() <= self.services.keys():
+            raise ValueError("serving roles are missing from configuration")
+        if any(len(self.owned(containers, name)) != expected.get(name, spec.replicas)
+               or not all(item.running and item.healthy for item in self.owned(containers, name))
+               for name, spec in self.services.items() if name != "bootstrap"):
+            raise ValueError("serving roles are missing, incorrectly counted, stopped or unhealthy")
         fingerprint = self.startup_fingerprint(containers)
         if fingerprint is None:
             raise ValueError("deployed containers differ from startup configuration")
@@ -243,4 +255,5 @@ class Docker:
             required = max(required, steady + bootstrap)
         if not admit(total, required, external, policy):
             raise StartupMemoryError(total, required, external, policy)
+        self.startup_counts = counts.copy()
         return counts

@@ -21,7 +21,7 @@ Read [production operations](./README.md), [development startup](./DEVELOPMENT.m
 ## Runtime contract
 
 - Production is single-host Linux with systemd and rootful local Docker at `unix:///var/run/docker.sock`; it is neither Swarm nor host/store/ingress HA. Python 3.14+ and Compose 2.24+ are required.
-- The no-flag Linux shell launcher retains that production path. Flags or Darwin dispatch to `deploy.starter`; reduced limits require explicit `--development`. macOS uses Docker Desktop as the normal user, without sudo.
+- Every shell invocation, including no-flag Linux startup, dispatches to `deploy.starter`. Production prerequisites remain unchanged; reduced limits require explicit `--development`. macOS uses Docker Desktop as the normal user, without sudo.
 - Accept only local absolute Unix Docker endpoints, never remote TCP/SSH. The Python launcher pins the resolved endpoint and Docker executable. macOS uses the shared socket-volume overlay and bounded exec transport, with no admin TCP listener.
 - Both production and development require externally provisioned PostgreSQL and Redis. The selected protected mode-0600 env file (`deploy/.env` in production) must contain complete canonical `DATABASE_URL` and `REDIS_URL` values. Ambient exported shell secrets are deliberately filtered for persistent-supervisor parity; shell exports alone are not sufficient. Compose does not provision, migrate, back up or manage stores.
 - Store hosts must be container-reachable, not `localhost`. Percent-encode only username/password components, single-quote dotenv values containing literal `$`, and configure TLS through supported client URL schemes/options. Validate versions, connectivity, TLS trust/hostname checks and access before startup.
@@ -40,6 +40,7 @@ Read [production operations](./README.md), [development startup](./DEVELOPMENT.m
 - Require two valid quiet observations with zero sessions, queue and exposed connection counters. Freshly revalidate topology, identity, ingress generation and quiescence before `docker stop --time 60 FULL_ID`, then `docker rm FULL_ID`. Use the exact full 64-character ID, never force removal or Compose victim selection.
 - Invalid stats, counter resets or generation changes invalidate history and prohibit removal. Timeout/cancellation restores eligibility; recovery never resumes an unverified removal. Preserve the private exclusive controller lock.
 - Existing streams drain; process-local WebSocket/session state does not migrate. Do not promise session continuity beyond existing reconnect behavior or change backend multiplexing without revisiting retirement guarantees.
+- Starter handoff locks serialize verified supervisor shutdown through deployment, readiness, checkpointing and successor installation. Acquire `controller.lock` only after predecessor shutdown and release it before successor startup. `--no-install` and foreground never change host services; foreground retains its state handoff while its child controller runs. Never use legacy approval as force takeover; see the production guide for its installed/loaded-definition checks.
 
 ## Operational safety
 

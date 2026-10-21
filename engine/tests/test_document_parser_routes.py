@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -15,7 +16,8 @@ from app.api import files as files_api, upload as upload_api
 from app.services.agent_tool_exec import document_reading, documents
 from app.services.agent_tool_exec._agent_tool_exec_storage import read_document
 from app.services.document_parser import MAX_INPUT_BYTES
-from app.services.storage_runtime.base import StorageVersion
+from app.services.storage_runtime.bounded import BoundedReader
+from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "anydoc"
@@ -494,28 +496,23 @@ async def test_read_document_from_storage_when_enterprise_office_then_parses(
 
 
 async def test_read_document_from_storage_when_between_materialize_and_parser_budget_then_parses(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     agent_id = uuid.uuid4()
-    payload = _fixture("supported.docx")
+    storage = LocalStorageBackend(str(tmp_path))
+    target = tmp_path / str(agent_id) / "workspace/uploads/big.docx"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(_fixture("supported.docx"))
+    with ZipFile(target, "a") as archive:
+        archive.writestr("padding.bin", b"x" * (11 * 1024 * 1024), compress_type=ZIP_STORED)
+    assert 10 * 1024 * 1024 < target.stat().st_size < MAX_INPUT_BYTES
 
-    class MidSizeStorage:
-        async def is_dir(self, key: str) -> bool:
-            del key
-            return False
+    async def forbidden(*_args):
+        pytest.fail("document reads must not use full-read/hash/version preflights")
 
-        async def is_file(self, key: str) -> bool:
-            del key
-            return True
-
-        async def get_version(self, key: str) -> StorageVersion:
-            return StorageVersion(key=key, exists=True, is_dir=False, size=11 * 1024 * 1024)
-
-        async def read_bytes(self, key: str) -> bytes:
-            del key
-            return payload
-
-    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: MidSizeStorage())
+    for operation in ("read_bytes", "get_version", "stat"):
+        monkeypatch.setattr(storage, operation, forbidden)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
 
     result = await documents._read_document_from_storage(
         agent_id,
@@ -527,29 +524,47 @@ async def test_read_document_from_storage_when_between_materialize_and_parser_bu
     assert "File not found" not in result
 
 
+@pytest.mark.parametrize("source", ["local", "legacy"])
 async def test_read_document_from_storage_when_over_parser_budget_then_too_large(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str
 ) -> None:
+    from app.services.storage_runtime import local
+
     agent_id = uuid.uuid4()
-    reads: list[str] = []
+    backend = LocalStorageBackend(str(tmp_path / "source"))
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    target = tmp_path / "source" / str(agent_id) / "workspace/uploads/huge.docx"
+    target.parent.mkdir(parents=True)
+    with target.open("wb") as stream:
+        stream.truncate(MAX_INPUT_BYTES * 4)
+    storage = backend if source == "local" else FallbackStorageBackend(primary, backend)
+    consumed = 0
+    streams = []
+    original = local.read_bounded
 
-    class HugeStorage:
-        async def is_dir(self, key: str) -> bool:
-            del key
-            return False
+    class Reader:
+        def __init__(self, stream: BoundedReader):
+            self.stream = stream
 
-        async def is_file(self, key: str) -> bool:
-            del key
-            return True
+        def read(self, size: int) -> bytes:
+            nonlocal consumed
+            chunk = self.stream.read(size)
+            consumed += len(chunk)
+            return chunk
 
-        async def get_version(self, key: str) -> StorageVersion:
-            return StorageVersion(key=key, exists=True, is_dir=False, size=MAX_INPUT_BYTES + 1)
+    def observe(stream, max_bytes):
+        streams.append(stream)
+        return original(Reader(stream), max_bytes)
 
-        async def read_bytes(self, key: str) -> bytes:
-            reads.append(key)
-            return b"should-not-read"
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("oversized documents must not be fully read, hashed, parsed or promoted")
 
-    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: HugeStorage())
+    for store in (backend, primary):
+        for operation in ("read_bytes", "get_version", "stat", "create_bytes_if_absent"):
+            monkeypatch.setattr(store, operation, forbidden)
+    monkeypatch.setattr(local, "read_bounded", observe)
+    monkeypatch.setattr(document_reading, "convert_document_isolated_async", forbidden)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
 
     result = await documents._read_document_from_storage(
         agent_id,
@@ -558,7 +573,43 @@ async def test_read_document_from_storage_when_over_parser_budget_then_too_large
         tenant_id=None,
     )
     assert "too large to read safely" in result
-    assert reads == []
+    assert consumed == MAX_INPUT_BYTES + 1
+    assert streams
+    assert all(stream.closed for stream in streams)
+    assert target.stat().st_size == MAX_INPUT_BYTES * 4
+    assert not (tmp_path / "primary").exists()
+
+
+@pytest.mark.parametrize(("max_chars", "accepted"), [(1, 1), (100, 100), (90_000, 20_000)])
+async def test_storage_document_retains_output_limit_with_bounded_input(tmp_path, monkeypatch, max_chars, accepted):
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path))
+    await storage.write_bytes(f"{agent_id}/workspace/report.txt", b"x" * 40_000)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
+
+    result = await documents._read_document_from_storage(agent_id, "workspace/report.txt", max_chars=max_chars)
+
+    assert result == "x" * accepted + "\n\n...[truncated, 40000 chars total]"
+
+
+@pytest.mark.parametrize(
+    ("fixture", "message"),
+    [
+        ("malformed.docx", "missing a required part (word/document.xml)"),
+        ("encrypted.odt", "encrypted or password-protected"),
+        ("resource_limited.ods", "exceeded a parser safety limit (max_expansion)"),
+        ("scanned.pdf", "OCR"),
+    ],
+)
+async def test_storage_document_retains_typed_parser_errors(tmp_path, monkeypatch, fixture, message):
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path))
+    await storage.write_bytes(f"{agent_id}/workspace/{fixture}", _fixture(fixture))
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
+
+    result = await documents._read_document_from_storage(agent_id, f"workspace/{fixture}")
+
+    assert message in result
 
 
 async def test_agent_upload_when_markdown_exists_then_does_not_clobber(

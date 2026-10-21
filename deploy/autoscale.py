@@ -52,7 +52,7 @@ def main() -> int:
             print(options)
             return 0
         if arguments.record_startup:
-            docker.remember_startup()
+            docker.remember_startup(policy)
             return 0
         directory = arguments.state_dir or docker.state_dir
         with (directory / "controller.lock").open("a") as lock:

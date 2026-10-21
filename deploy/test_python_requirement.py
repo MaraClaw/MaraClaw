@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -42,19 +43,17 @@ class PythonRequirementTests(unittest.TestCase):
                         call(["docker", "info", "--format", "{{.OSType}}"]),
                     ])
 
-    def test_linux_shell_version_command_when_python_crosses_minimum(self) -> None:
-        command = next(line for line in (ROOT / "start-docker-compose.sh").read_text().splitlines()
-                       if "sys.version_info" in line)
+    def test_shell_when_invoked_without_or_with_flags_dispatches_to_canonical_python_starter(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             python = Path(temporary) / "python3"
             environment = dict(os.environ, PATH=temporary + os.pathsep + os.environ["PATH"])
-            for minor, expected_status in ((11, 1), (12, 1), (13, 1), (14, 0), (15, 0)):
-                with self.subTest(minor=minor):
-                    python.write_text(f"#!{sys.executable}\nimport sys\n"
-                                      f"sys.version_info = (3, {minor}, 0)\nexec(sys.argv[2])\n")
-                    python.chmod(0o700)
-
-                    result = subprocess.run(["bash", "-c", command], env=environment,
+            python.write_text(f"#!{sys.executable}\nimport json,os,sys\n"
+                              "print(json.dumps([sys.argv[1:], os.getcwd()]))\nsys.exit(17)\n")
+            python.chmod(0o700)
+            for options in ([], ["--development", "--no-install"]):
+                with self.subTest(options=options):
+                    result = subprocess.run(["bash", str(ROOT / "start-docker-compose.sh"), *options],
+                                            cwd=temporary, env=environment,
                                             capture_output=True, text=True, timeout=35, check=False)
-
-                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    self.assertEqual(result.returncode, 17, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), [["-m", "deploy.starter", *options], str(ROOT)])

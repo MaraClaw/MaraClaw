@@ -107,7 +107,7 @@ remains refused. Store removal does not reduce either reserve.
 
 ### Troubleshoot Startup Memory Refusal
 
-Both launcher paths report the observed daemon/effective capacity, host reserve,
+The canonical launcher reports the observed daemon/effective capacity, host reserve,
 required stack, external reserve, remaining stack budget and shortfall on stderr.
 Values include exact bytes; GiB values are rounded. These are the same snapshot
 and limits used for admission, not host physical/free memory or container RSS.
@@ -139,6 +139,15 @@ on a 16-GiB host without reserving a completed bootstrap as active. The starter
 explicitly excludes bootstrap and dependency traversal on that verified no-change
 path; ordinary `compose up` would restart even a successful completed bootstrap.
 Autoscaled routed counts are preserved and do not invalidate the checkpoint.
+The recorder itself enforces successful bootstrap and running/healthy serving
+roles, including direct `python3 -m deploy.autoscale --record-startup` use. Within
+a launcher it requires exactly the admitted routed counts. A direct recorder
+uses the current owned routed counts within the selected policy, allowing prior
+autoscaling, but rejects absent pools, stopped/unhealthy members and non-singleton
+background/ingress. Foreign-project and one-off containers cannot fill a missing
+role. Failed validation never replaces an existing checkpoint. Direct recording
+does not perform a supervisor handoff: stop the controller and serialize manual
+maintenance before using it; never use it to bypass admission.
 
 A missing checkpoint, changed image/config/script, failed bootstrap or incomplete
 running topology retains bootstrap-overlap admission. This includes adopting this

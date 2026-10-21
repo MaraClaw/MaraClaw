@@ -24,12 +24,12 @@ class StarterTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         (self.root / "deploy").mkdir()
         (self.root / "bin").mkdir()
-        (self.root / "state").mkdir()
+        (self.root / "state").mkdir(mode=0o700)
         shutil.copy2(ROOT / "start-docker-compose.sh", self.root)
-        for source in (ROOT / "deploy").glob("autoscale*"):
+        for source in (*(ROOT / "deploy").glob("autoscale*"), *(ROOT / "deploy").glob("starter*.py")):
             if source.is_file():
                 shutil.copy2(source, self.root / "deploy" / source.name)
-        for filename in ("__init__.py", "bootstrap.py", "maraclaw-autoscaler.service"):
+        for filename in ("__init__.py", "bootstrap.py", "maraclaw-autoscaler.service", "autoscaler.toml"):
             shutil.copy2(ROOT / "deploy" / filename, self.root / "deploy" / filename)
         for name in ("docker", "systemctl", "python3"):
             target = self.root / "bin" / name
@@ -52,6 +52,8 @@ class StarterTests(unittest.TestCase):
         self.fixture = {"model": {"name": "fixture", "services": services,
                                    "networks": {"app": {"name": "fixture_app"}}},
                         "containers": containers, "memory": 24 * GIB, "fail_up": False}
+        (self.root / "deploy/.env").touch(mode=0o600)
+        (self.root / "compose.yaml").write_text("{}")
 
     def execute(self) -> subprocess.CompletedProcess[str]:
         (self.root / "fixture.json").write_text(json.dumps(self.fixture))
@@ -61,6 +63,7 @@ class StarterTests(unittest.TestCase):
                    "--tmpfs", "/etc/systemd/system", "--mount", f"type=bind,source={self.root},target=/fixture",
                    "--entrypoint", "/bin/bash", "maraclaw-engine:local", "-c",
                    "mkdir -p /run/systemd/system; export PATH=/fixture/bin:$PATH; "
+                   "if [ -f /fixture/controller.service ]; then cp /fixture/controller.service /etc/systemd/system/maraclaw-autoscaler.service; fi; "
                    "export PYTHONDONTWRITEBYTECODE=1; cd /fixture; bash ./start-docker-compose.sh"]
         try:
             return subprocess.run(command, text=True, capture_output=True, timeout=90, check=False)
@@ -81,7 +84,7 @@ class StarterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         events = self.events()
         stop = next(index for index, event in enumerate(events) if event[0] == "systemctl" and "stop" in event[1])
-        admission = next(index for index, event in enumerate(events) if "--check-startup" in event[1])
+        admission = next(index for index, event in enumerate(events) if "{{.MemTotal}}" in event[1])
         start = next(index for index, event in enumerate(events) if event[0] == "docker" and "up" in event[1])
         enable = next(index for index, event in enumerate(events) if event[0] == "systemctl" and "enable" in event[1])
         self.assertLess(stop, admission)
@@ -90,6 +93,7 @@ class StarterTests(unittest.TestCase):
         arguments = events[start][1]
         self.assertIn("--no-deps", arguments)
         self.assertNotIn("bootstrap", arguments)
+        self.assertIn("--wait", arguments)
         self.assertEqual([arguments[index + 1] for index, word in enumerate(arguments) if word == "--scale"],
                          ["engine=2", "web-a=3", "web-e=1"])
 
@@ -97,7 +101,7 @@ class StarterTests(unittest.TestCase):
         self.fixture["memory"] = 8 * GIB
         result = self.execute()
         self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(any("--check-startup" in arguments for _name, arguments in self.events()))
+        self.assertTrue(any("{{.MemTotal}}" in arguments for _name, arguments in self.events()))
         self.assertFalse(any("up" in arguments or "enable" in arguments for _name, arguments in self.events()))
 
     def test_starter_when_compose_start_fails_never_enables(self) -> None:

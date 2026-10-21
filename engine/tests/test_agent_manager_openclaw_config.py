@@ -400,7 +400,12 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+        id=agent_id,
+        name="Memory Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        gogcli_enabled=False,
+        setup_pending=False,
     )
 
     # When
@@ -474,7 +479,12 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+        id=agent_id,
+        name="Memory Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        gogcli_enabled=False,
+        setup_pending=False,
     )
 
     # When
@@ -509,7 +519,12 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Missing Docker Agent", creator_id=uuid.uuid4(), primary_model_id=None, gogcli_enabled=False
+        id=agent_id,
+        name="Missing Docker Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        gogcli_enabled=False,
+        setup_pending=False,
     )
 
     # When

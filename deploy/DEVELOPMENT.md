@@ -52,6 +52,11 @@ Ctrl-C stops the controller safely; it does not destroy application data or stop
 the stack. `--no-install` instead starts and records, then exits without a
 controller. Neither mode stops, installs or modifies LaunchAgents/systemd units.
 An already-running controller holding this state's lock causes refusal.
+Foreground keeps a separate state handoff mutex while supervising its controller
+child, forwards Ctrl-C/termination, and releases the controller lock before the
+child starts. Another launcher cannot replace that foreground controller during
+its acquisition window. `--no-install` holds the state handoff through recording
+and exits; neither mode stops an existing persistent controller for you.
 `--no-build` requires cached images and never pulls them. Ordinary startup builds
 the existing application Dockerfiles; it does not change application behavior.
 
@@ -150,11 +155,13 @@ Before stopping or replacing the fixed-label job, the Python launcher checks bot
 its persisted configuration and loaded arguments against the requested checkout,
 state directory and pinned Docker endpoint. A foreign or unproven owner is refused
 without bootout or replacement, even before the new project's admission check.
-The Python Linux service path applies the same ownership checks; a legacy unit
-without explicit ownership arguments is not automatically adopted by that path.
+All Linux invocations, including no flags, apply the same ownership checks. A
+legacy unit without explicit ownership arguments is not automatically adopted;
+only the [narrow production approval](./README.md#transition-the-shipped-legacy-controller)
+can transition the unchanged shipped unit after installed and loaded checks.
 Before manual maintenance, `launchctl bootout
 "gui/$(id -u)/com.maraclaw.autoscaler"` and wait for shutdown. Rerun the starter
-after maintenance. The no-flag production Linux systemd contract is unchanged.
+after maintenance. Production prerequisites are unchanged; no shell bypass remains.
 
 The recorded LaunchAgent generation/loading tests used temporary homes and a stub
 `launchctl`; they did not install a real user LaunchAgent or systemd unit. Actual

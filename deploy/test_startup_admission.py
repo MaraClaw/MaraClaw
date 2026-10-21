@@ -22,6 +22,9 @@ class AdmissionEntrypointTests(unittest.TestCase):
         self.policy = self.root / "policy.toml"
         self.policy.write_text("")
         self.state = self.root / "state"
+        manager = patch("deploy.starter_handoff.manager_directory", return_value=self.root / "supervisor")
+        manager.start()
+        self.addCleanup(manager.stop)
 
     def test_starter_when_admission_fails_reports_reason_without_start_record_or_install(self) -> None:
         args = ["starter", "--root", str(self.root), "--policy", str(self.policy),

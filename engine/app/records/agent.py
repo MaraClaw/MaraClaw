@@ -56,6 +56,7 @@ class AgentRecord:
     api_key_hash: str | None = None
     openclaw_last_seen: datetime | None = None
     status: str = "creating"
+    setup_pending: bool = False
     container_id: str | None = None
     container_port: int | None = None
     primary_model_id: UUID | None = None
@@ -115,6 +116,7 @@ class AgentRecord:
             api_key_hash=str_from_row(row.get("api_key_hash")) or None,
             openclaw_last_seen=datetime_from_row(row.get("openclaw_last_seen")),
             status=str_from_row(row.get("status"), "creating") or "creating",
+            setup_pending=bool(row.get("setup_pending", False)),
             container_id=str_from_row(row.get("container_id")) or None,
             container_port=int_from_row(row["container_port"]) if row.get("container_port") is not None else None,
             primary_model_id=uuid_from_row_opt(row.get("primary_model_id")),

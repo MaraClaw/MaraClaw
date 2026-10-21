@@ -204,3 +204,56 @@ class BootstrapRerunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "bootstrap has not completed"):
             self.docker.remember_startup()
         self.assertFalse((self.docker.state_dir / "startup.sha256").exists())
+
+    def test_record_when_serving_roles_are_incomplete_preserves_previous_checkpoint(self) -> None:
+        original = self.members
+        checkpoint = self.docker.state_dir / "startup.sha256"
+        previous = checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns
+        for service in ("engine", "background", "web-a", "web-e", "ingress"):
+            for defect in ("missing", "stopped", "unhealthy", "extra"):
+                with self.subTest(service=service, defect=defect):
+                    self.members = original
+                    self.docker.startup(Policy())
+                    member = next(item for item in original if item.service == service)
+                    if defect == "missing":
+                        self.members = tuple(item for item in original if item != member)
+                    if defect == "stopped":
+                        self.members = tuple(replace(item, running=False) if item == member else item for item in original)
+                    if defect == "unhealthy":
+                        self.members = tuple(replace(item, healthy=False) if item == member else item for item in original)
+                    if defect == "extra":
+                        self.members += (replace(member, identity="f" * 64),)
+                    with self.assertRaises(ValueError):
+                        self.docker.remember_startup()
+                    self.assertEqual((checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns), previous)
+
+    def test_direct_record_when_pool_is_missing_refuses_even_with_oneoff_or_foreign_members(self) -> None:
+        self.members = tuple(item for item in self.members if item.service != "web-a")
+        self.members += (replace(container("web-a"), oneoff=True), replace(container("web-a"), project="foreign"))
+        with self.assertRaises(ValueError):
+            self.docker.remember_startup()
+
+    def test_direct_record_when_previously_scaled_counts_are_healthy_preserves_them(self) -> None:
+        original = self.members
+        for service in ("engine", "web-a", "web-e"):
+            for count in (1, 3):
+                with self.subTest(service=service, count=count):
+                    member = next(item for item in original if item.service == service)
+                    self.members = tuple(item for item in original if item != member) if count == 1 else (
+                        *original, replace(member, identity="f" * 64))
+                    self.docker.remember_startup()
+                    self.assertEqual(len(self.docker.owned(self.members, service)), count)
+
+    def test_direct_record_when_any_serving_member_is_stopped_or_unhealthy_preserves_checkpoint(self) -> None:
+        original = self.members
+        checkpoint = self.docker.state_dir / "startup.sha256"
+        previous = checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns
+        for service in ("engine", "background", "web-a", "web-e", "ingress"):
+            for unhealthy in (False, True):
+                with self.subTest(service=service, unhealthy=unhealthy):
+                    self.members = tuple(replace(item, healthy=False) if unhealthy and item.service == service
+                                         else replace(item, running=False) if item.service == service else item
+                                         for item in original)
+                    with self.assertRaises(ValueError):
+                        self.docker.remember_startup()
+                    self.assertEqual((checkpoint.read_bytes(), checkpoint.stat().st_mtime_ns), previous)

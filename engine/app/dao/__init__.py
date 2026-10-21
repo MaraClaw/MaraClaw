@@ -4,6 +4,7 @@ from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_credential_dao import agent_credential_dao
 from app.dao.agent_dao import agent_dao, agent_permission_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
+from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -59,6 +60,7 @@ __all__ = [
     "agent_permission_dao",
     "agent_relationship_dao",
     "agent_schedule_dao",
+    "agent_setup_dao",
     "agent_template_dao",
     "agent_tool_dao",
     "agent_trigger_dao",

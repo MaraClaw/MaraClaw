@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import sys
 
 
@@ -14,7 +15,32 @@ def main() -> int:
         case "python3":
             os.execv(sys.executable, [sys.executable, *arguments])
         case "systemctl":
+            unit = Path("/etc/systemd/system/maraclaw-autoscaler.service")
+            if arguments[0] == "show":
+                if unit.exists():
+                    fields = dict(line.split("=", 1) for line in unit.read_text().splitlines() if "=" in line)
+                    print("LoadState=loaded\nFragmentPath=" + str(unit))
+                    print("WorkingDirectory=" + fields["WorkingDirectory"])
+                    print("ExecStart={ argv[]=" + fields["ExecStart"] + " ; }")
+                else:
+                    print("LoadState=not-found")
+            if arguments[0] == "enable":
+                (root / "controller.service").write_text(unit.read_text())
             return 0
+        case "launchctl":
+            loaded = root / "loaded.plist"
+            if arguments[0] == "print":
+                if not loaded.exists():
+                    return 1
+                model = plistlib.loads(loaded.read_bytes())
+                print("job = {\n arguments = {\n" + "\n".join("  " + word for word in model["ProgramArguments"])
+                      + "\n }\n working directory = " + model["WorkingDirectory"] + "\n}")
+            elif arguments[0] == "bootout":
+                loaded.unlink()
+            elif arguments[0] == "bootstrap":
+                loaded.write_bytes(Path(arguments[2]).read_bytes())
+            else:
+                raise ValueError("unexpected fixture LaunchAgent command")
         case "docker":
             if arguments[:2] == ["compose", "version"]:
                 print("5.6.0")

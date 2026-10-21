@@ -8,6 +8,7 @@ import shlex
 import subprocess
 
 from deploy.starter_host import execute, private_directory
+from deploy.starter_legacy import Legacy
 
 
 LABEL = "com.maraclaw.autoscaler"
@@ -46,7 +47,7 @@ class Ownership:
         self.check(shlex.split(model["Service"]["ExecStart"]), model["Service"]["WorkingDirectory"])
 
 
-def verify(darwin: bool, owner: Ownership) -> bool:
+def verify(darwin: bool, owner: Ownership, approve_legacy: bool = False) -> bool:
     if darwin:
         path = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
         if path.exists():
@@ -61,18 +62,29 @@ def verify(darwin: bool, owner: Ownership) -> bool:
             raise ValueError("loaded controller ownership is unproven")
         owner.check([line.strip() for line in arguments[1].splitlines() if line.strip()], directory[1])
         return True
+    legacy = False
     if UNIT.exists():
-        owner.unit(UNIT)
+        try:
+            owner.unit(UNIT)
+        except ValueError:
+            if not approve_legacy:
+                raise
+            legacy = True
     result = subprocess.run(["systemctl", "show", "maraclaw-autoscaler.service",
-                             "--property=LoadState,WorkingDirectory,ExecStart,FragmentPath"],
+                             "--property=LoadState,WorkingDirectory,ExecStart,FragmentPath,DropInPaths,NeedDaemonReload,"
+                             "User,Type,Environment,EnvironmentFiles,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,"
+                             "RootDirectory,Restart,RestartUSec,TimeoutStopUSec,UMask,NoNewPrivileges,PrivateTmp"],
                             capture_output=True, text=True, timeout=30, check=True)
     values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    if legacy:
+        Legacy(owner.root, owner.state, owner.endpoint).verify(UNIT, values)
+        return True
     if values.get("LoadState") == "not-found":
         return False
-    command = re.search(r"argv\[\]=(.*?) ;", values.get("ExecStart", ""))
-    if command is None:
+    commands = re.findall(r"argv\[\]=(.*?) ;", values.get("ExecStart", ""))
+    if len(commands) != 1:
         raise ValueError("loaded controller ownership is unproven")
-    owner.check(shlex.split(command[1]), values.get("WorkingDirectory", ""))
+    owner.check(shlex.split(commands[0]), values.get("WorkingDirectory", ""))
     fragment = values.get("FragmentPath", "")
     if fragment:
         owner.unit(Path(fragment))
@@ -100,8 +112,8 @@ def launchagent(command: list[str], root: Path, state: Path) -> Path:
     return path
 
 
-def stop(darwin: bool, root: Path, state: Path) -> None:
-    if not verify(darwin, Ownership(root, state, os.environ["DOCKER_HOST"])):
+def stop(darwin: bool, root: Path, state: Path, *, approve_legacy: bool = False) -> None:
+    if not verify(darwin, Ownership(root, state, os.environ["DOCKER_HOST"]), approve_legacy):
         return
     if darwin:
         target = f"gui/{os.getuid()}/{LABEL}"
@@ -110,7 +122,7 @@ def stop(darwin: bool, root: Path, state: Path) -> None:
         execute(["systemctl", "stop", "maraclaw-autoscaler.service"], 260)
 
 
-def install(command: list[str], root: Path, state: Path) -> None:
+def install(command: list[str], root: Path, state: Path, *, approve_legacy: bool = False) -> None:
     private_directory(state)
     if os.uname().sysname == "Darwin":
         path = launchagent(command, root, state)
@@ -118,7 +130,7 @@ def install(command: list[str], root: Path, state: Path) -> None:
     else:
         owner = Ownership(root, state, os.environ["DOCKER_HOST"])
         owner.check(command, str(root))
-        verify(False, owner)
+        verify(False, owner, approve_legacy)
         if any(any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-=:"
                    for character in word) for word in command):
             raise ValueError("systemd arguments contain unsupported metacharacters")

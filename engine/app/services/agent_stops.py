@@ -14,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.services.agent_deletion_history import snapshot_task_history
 from app.services.agent_manager import agent_manager
 from app.services.agent_orphans import sweep_orphan_containers
+from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +27,7 @@ async def snapshot_agent_teardown(agents: Sequence[AgentRecord]) -> tuple[AgentT
     return tuple([AgentTeardown(replace(agent), await snapshot_task_history(agent.id)) for agent in agents])
 
 
-async def teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
+async def _teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
     for snapshot in snapshots:
         agent = snapshot.agent
         try:
@@ -34,13 +35,18 @@ async def teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
         except (ClientNotFoundError, DockerException, OSError) as exc:
             logger.warning("Deleted agent container cleanup failed agent_id=%s: %s", agent.id, exc)
         try:
-            archive_dir = await agent_manager.archive_agent_files(agent.id)
-            if snapshot.task_history is not None:
-                _ = await AsyncPath(archive_dir / "task_history.json").write_text(
-                    snapshot.task_history, encoding="utf-8"
-                )
+            async with setup_workspace_lock(agent_manager._agent_dir(agent.id)):
+                archive_dir = await agent_manager.archive_agent_files(agent.id)
+                if snapshot.task_history is not None:
+                    _ = await AsyncPath(archive_dir / "task_history.json").write_text(
+                        snapshot.task_history, encoding="utf-8"
+                    )
         except (OSError, shutil.Error) as exc:
             logger.warning("Deleted agent archive failed agent_id=%s: %s", agent.id, exc)
+
+
+async def teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
+    await drain_on_cancel(_teardown_deleted_agents(snapshots))
 
 
 def schedule_agent_teardown(snapshots: Sequence[AgentTeardown]) -> None:

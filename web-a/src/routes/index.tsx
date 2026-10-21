@@ -22,6 +22,7 @@ const LlmModelsPage = lazy(() => import('@/pages/llm-models').then((module) => (
 const UserDetailPage = lazy(() => import('@/pages/user-detail').then((module) => ({ default: module.UserDetailPage })))
 const UsersPage = lazy(() => import('@/pages/users').then((module) => ({ default: module.UsersPage })))
 const NotificationsPage = lazy(() => import('@/pages/notifications').then((module) => ({ default: module.NotificationsPage })))
+const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) => ({ default: module.AdminAuditPage })))
 const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
 
@@ -49,6 +50,7 @@ export function AppRouter() {
               <Route index element={<OverviewPage />} />
               <Route path="account" element={<AccountPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="activity" element={<AdminAuditPage />} />
               <Route element={<AdmissionReviewRoute />}>
                 <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
                 <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />

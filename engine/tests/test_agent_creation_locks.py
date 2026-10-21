@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.json_types import uuid_from_row
-from app.dao import agent_dao, agent_permission_dao
+from app.dao import agent_dao, agent_permission_dao, agent_setup_dao
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
 from app.db.session import connection_ctx, transaction
@@ -38,6 +38,11 @@ class CreationConnection(DbConnection):
             tenant = params.get("tenant_id")
             self.agent_tenant = uuid_from_row(tenant) if tenant is not None else None
             return dict(params)
+        if query.startswith("INSERT INTO agent_setups "):
+            self.operations.append(("setup", params["agent_id"]))
+            row: Row = dict(params)
+            row["inputs"] = {"files": {}, "gateway_key_encrypted": "encrypted"}
+            return row
         if "FROM agents" in query:
             return {"tenant_id": self.agent_tenant}
         if query.startswith("INSERT INTO agent_permissions "):
@@ -106,3 +111,20 @@ async def test_changed_creator_tenant_rejects_before_insert_without_locking_new_
     assert error.value.status_code == 409
     assert db.operations == [("observe", creator), ("tenant", old), ("tenant", target), ("creator", creator)]
     assert db.rollbacks == 1
+
+
+async def test_setup_and_agent_share_first_commit_through_real_dao_defaults():
+    creator, agent_id = uuid4(), uuid4()
+    db = CreationConnection(None, None)
+    async with transaction(db):
+        agent = await agent_dao.create(
+            obj_in={"id": agent_id, "name": "durable", "creator_id": creator, "setup_pending": True}
+        )
+        work = await agent_setup_dao.create(
+            obj_in={"agent_id": agent_id, "inputs": {"files": {}, "gateway_key_encrypted": "encrypted"}}
+        )
+        assert db.commits == 0
+    assert db.commits == 1
+    assert db.operations[-2:] == [("insert", agent_id), ("setup", agent_id)]
+    assert agent.setup_pending
+    assert work.state == "pending"

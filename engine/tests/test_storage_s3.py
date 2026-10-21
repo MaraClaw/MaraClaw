@@ -1,6 +1,9 @@
+import asyncio
 from contextlib import asynccontextmanager
 from importlib.metadata import version
-from typing import TypedDict, Unpack
+from io import BytesIO
+from threading import Event, get_ident
+from typing import TypedDict, Unpack, override
 
 import anyio
 import botocore.loaders
@@ -12,6 +15,7 @@ from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageConditionalRaceError,
+    StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
 )
@@ -318,3 +322,149 @@ async def test_s3_transport_errors_are_not_absence_or_conflict(operation, monkey
     else:
         with pytest.raises(EndpointConnectionError):
             await backend.create_bytes_if_absent("report.txt", b"complete")
+
+
+class CountedBody(BytesIO):
+    def __init__(self, data: bytes, chunk_size: int = 3):
+        super().__init__(data)
+        self.chunk_size = chunk_size
+        self.consumed = 0
+        self.requests: list[int] = []
+        self.close_count = 0
+
+    @override
+    def read(self, amt: int | None = None) -> bytes:
+        assert amt is not None
+        assert amt > 0
+        self.requests.append(amt)
+        chunk = super().read(min(amt, self.chunk_size))
+        self.consumed += len(chunk)
+        return chunk
+
+    @override
+    def close(self) -> None:
+        self.close_count += 1
+        super().close()
+
+
+@pytest.mark.parametrize(("limit", "size"), [(0, 0), (0, 1), (8, 0), (8, 7), (8, 8), (8, 9), (8, 200_000)])
+async def test_s3_bounded_read_counts_stream_not_metadata_and_closes(monkeypatch, limit, size):
+    backend = S3StorageBackend(bucket="bucket", prefix="tenant")
+    body = CountedBody(b"x" * size)
+
+    class Client:
+        def get_object(self, **kwargs):
+            assert kwargs == {"Bucket": "bucket", "Key": "tenant/report.bin"}
+            return {"Body": body, "ContentLength": 1}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+
+    if size > limit:
+        with pytest.raises(StorageReadLimitExceededError) as raised:
+            await backend.read_bytes_bounded("report.bin", limit)
+        assert raised.value.max_bytes == limit
+        assert raised.value.size_bytes == limit + 1
+    else:
+        assert await backend.read_bytes_bounded("report.bin", limit) == b"x" * size
+
+    assert body.consumed == min(size, limit + 1)
+    assert all(0 < size <= limit + 1 for size in body.requests)
+    assert body.closed
+    assert body.close_count == 1
+
+
+async def test_s3_bounded_read_closes_body_on_read_error(monkeypatch):
+    backend = S3StorageBackend(bucket="bucket")
+
+    class FailedBody(CountedBody):
+        @override
+        def read(self, amt: int | None = None) -> bytes:
+            if self.consumed:
+                raise OSError("stream failed")
+            return super().read(amt)
+
+    body = FailedBody(b"document")
+
+    class Client:
+        def get_object(self, **kwargs):
+            return {"Body": body}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+
+    with pytest.raises(OSError, match="stream failed"):
+        await backend.read_bytes_bounded("report.bin", 8)
+
+    assert body.consumed == 3
+    assert body.closed
+    assert body.close_count == 1
+
+
+@pytest.mark.parametrize("phase", ["get", "read"])
+@pytest.mark.parametrize("outcome", ["success", "overflow", "error"])
+async def test_s3_cancelled_awaiter_leaves_worker_owning_body_until_close(monkeypatch, phase, outcome):
+    backend = S3StorageBackend(bucket="bucket")
+    blocked, release, closed = Event(), Event(), Event()
+    owners: list[int] = []
+
+    def pause():
+        blocked.set()
+        assert release.wait(10)
+
+    class BlockingBody(CountedBody):
+        @override
+        def read(self, amt: int | None = None) -> bytes:
+            owners.append(get_ident())
+            if phase == "read":
+                pause()
+            if outcome == "error":
+                raise OSError("stream failed after cancellation")
+            return super().read(amt)
+
+        @override
+        def close(self) -> None:
+            owners.append(get_ident())
+            super().close()
+            closed.set()
+
+    body = BlockingBody(b"ok" if outcome == "success" else b"x" * 200_000)
+
+    class Client:
+        def get_object(self, **kwargs):
+            owners.append(get_ident())
+            if phase == "get":
+                pause()
+            return {"Body": body}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+    task = asyncio.create_task(backend.read_bytes_bounded("report.bin", 8))
+    try:
+        assert await anyio.to_thread.run_sync(blocked.wait, 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not body.closed
+    finally:
+        release.set()
+        assert await anyio.to_thread.run_sync(closed.wait, 10)
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert body.close_count == 1
+    assert body.consumed <= 9
+    assert len(set(owners)) == 1
+
+
+@pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound", "AccessDenied", "NoSuchBucket"])
+async def test_s3_bounded_read_preserves_provider_errors_except_missing_key(monkeypatch, code):
+    backend = S3StorageBackend(bucket="bucket")
+
+    class Client:
+        def get_object(self, **kwargs):
+            raise ClientError({"Error": {"Code": code}}, "GetObject")
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+
+    with pytest.raises(ClientError if code in {"AccessDenied", "NoSuchBucket"} else FileNotFoundError):
+        await backend.read_bytes_bounded("report.bin", 8)
