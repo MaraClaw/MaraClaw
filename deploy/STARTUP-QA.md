@@ -80,3 +80,83 @@ all test subprocesses were removed by fixture cleanup. The owned tmux session
 `startup-qa-dHzD5N` and temporary root were removed after capturing this receipt.
 No service, container, network, volume or external store was created to clean up.
 Historical deployment receipts were not overwritten.
+
+## Durable Replica Authority Addendum
+
+Date: 2026-10-21. This follow-on implementation changes `deploy/**` only; the
+canonical root shell launcher and the other proposal implementations were not
+replaced. The earlier receipt above is retained as historical evidence.
+
+Owned scratch roots were `/tmp/mara-intent-482-20261021` and the initial empty
+`/var/folders/fm/dhwbb9lj4yn1dkrn1qncq8sh0000gn/T/opencode/replica-intent-29082-13946`.
+Every shell invocation exported `RUN_TMP`, `TMPDIR`, `NODE_COMPILE_CACHE` and
+`BUN_RUNTIME_TRANSPILER_CACHE_PATH` into its owned scratch root. Python execution
+used `-B` or `PYTHONDONTWRITEBYTECODE=1`. Synthetic Compose inputs and disposable
+fake executables/homes were used; no Docker-starting acceptance, image builds,
+real host-service mutations or shared/external store operations were performed.
+
+| Gate | Exit | Observed result |
+|---|---|---|
+| `env -u MARACLAW_STARTER_TEST python3 -B -m unittest discover -s deploy -p 'test_*.py'` | 0 | 209 tests run, 204 passed, five opt-in tests skipped; 24.991 seconds |
+| `pyright --project deploy/pyrightconfig.json --pythonversion 3.14` | 0 | Zero errors, warnings or information diagnostics |
+| `shellcheck start-docker-compose.sh` | 0 | No findings; root launcher unchanged |
+| `python3 -B -m unittest deploy.test_replica_state deploy.test_replica_crashes -v` with starter fixtures disabled | 0 | 22 deterministic authority/crash checks passed |
+| Root launcher `--help` / `--not-a-valid-option` | 0 / 2 | Canonical help; unsupported input refused before startup |
+| Separate scratch driver invoking real fresh autoscaler CLI processes with fake Docker | 0 | Authorized 2/3/1 admission/recording; partial engine loss refused; checkpoint bytes/mtime preserved; both busy-lock shortcuts refused |
+
+All 21 changed deployment Python files had clean error-level LSP diagnostics.
+The temporary driver lived outside the workspace and needed `PYTHONPATH` to import
+the repository; its successful execution is CLI evidence, not a Linux qualification.
+Changed modules remain below 250 nonblank/noncomment lines. Docker admission,
+several existing fixture files and the acceptance driver are in the 200-250-line
+warning band; further additions should split their touched responsibilities.
+
+### Crash And Admission Evidence
+
+- Fresh `Docker` instances and separate CLI processes reject loss of one member
+  from an intended two/three, even when remaining members are healthy. Recording
+  never learns a lower target from observations. Authorized counts one and three
+  are accepted despite rendered defaults two; fingerprints remain count-independent.
+- Missing, malformed, duplicate-key, foreign, unsupported-version and unresolved
+  authority refuse recording without touching prior checkpoint bytes/mtime.
+  Ordered-file reversal and foreign identity components refuse; canonical Unix
+  endpoint aliases agree. Legacy pending evidence cannot authorize counts.
+- First failed memory admission creates no authority. Successful admission adopts
+  stopped members/defaults only when authority is absent, publishes before Compose,
+  restores known shortages and refuses excess before unsafe scale-down. Failed
+  Compose retains targets. Missing development effective state refuses when intent
+  exists even without a successful fingerprint.
+- Growth authorization failure never reaches Compose. A Compose failure retains
+  the higher admitted target and subsequent controller ticks suspend all scaling
+  while observation disagrees with authority.
+- Injected retirement failures before authorization, after authorization/before
+  stop, after stop/before rm, after rm/before accounting, before/after the atomic
+  decrement commit, and during release preserve the appropriate durable phase.
+  Generic cancellation cannot erase `removing`. Recovery never resumes deletion;
+  existing/stopped victims keep N, absent victims commit N-1 exactly once, and
+  repeated release/recovery never decrements again. Unknown phases or inventory
+  failure preserve evidence and refuse.
+- Runtime ticks retry a pending `releasing` cleanup after proxy recovery, then
+  rebaseline demand before any new scaling, without changing admitted counts.
+- Accounting reconciliation works without a proxy. Canonical startup performs
+  proxy cleanup after Compose readiness, under the existing locks, before
+  checkpoint/successor. Cleanup failure prevents both recording and installation.
+  Fresh CLI startup with an unrepaired shortage similarly preserves the old
+  checkpoint and leaves no loaded fake successor. Existing handoff-order tests pass.
+- Private atomic replace failure preserves the prior file and cleans its temporary;
+  successful publication syncs file/directory and leaves mode 0600. The separate
+  manual driver recovered an injected post-rm failure twice, retained target one,
+  and observed neither resumed deletion nor double decrement.
+
+### Qualification And Cleanup
+
+Actual Linux systemd startup, restart and reboot qualification remains **BLOCKED**
+on this Darwin host: no approved isolated Linux target was available. Synthetic
+crash injection cannot prove host power-loss durability, filesystem guarantees,
+Docker/HAProxy runtime behavior or real supervisor recovery. No such result is
+claimed. Docker-starting acceptance and the five opt-in tests were not run.
+
+Fixture cleanup removed owned homes, env files, states, subprocesses and fake
+service definitions. Both scratch roots and their caches were removed after the
+evidence was captured. No real containers, networks, volumes, services or stores
+were created by this follow-on run; historical JSON receipts were not overwritten.
