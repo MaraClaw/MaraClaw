@@ -521,8 +521,8 @@ export async function updateAgentPermissions(
 
 export async function listPermissionCandidates(
   agentId: string,
-): Promise<Array<{ id: string; name?: string; email?: string; username?: string }>> {
-  const data = await apiRequest<{ users?: Array<{ id: string; name?: string; email?: string; username?: string }> }>(
+): Promise<Array<{ id: string; name?: string; email?: string }>> {
+  const data = await apiRequest<{ users?: Array<{ id: string; name?: string; email?: string }> }>(
     `/api/agents/${agentId}/permissions/candidates`,
   )
   return data.users ?? []

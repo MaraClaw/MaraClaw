@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { admissionSummarySchema, type AdmissionSummary } from './company-admissions.ts'
 
 export type UserRole = 'platform_admin' | 'org_admin' | 'agent_admin' | 'member' | string
 
@@ -8,18 +9,22 @@ export type SuggestedOrg = {
   slug: string
 }
 
-export const joinOrgResponseSchema = z.object({
+const immediateJoinSchema = z.object({
   tenant: z.object({ id: z.uuid(), name: z.string(), slug: z.string() }).readonly(),
   role: z.string(),
   access_token: z.string().nullable(),
 }).readonly()
+
+export const joinOrgResponseSchema = z.union([
+  z.object({ status: z.literal('pending'), request: admissionSummarySchema }).readonly(),
+  immediateJoinSchema,
+])
 
 export type JoinOrgResponse = z.infer<typeof joinOrgResponseSchema>
 
 export type IdentityOut = {
   id: string
   email?: string | null
-  username?: string | null
   is_platform_admin?: boolean
   email_verified?: boolean
   must_change_password?: boolean
@@ -28,7 +33,6 @@ export type IdentityOut = {
 export type UserOut = {
   id: string
   identity_id?: string | null
-  username: string | null
   email: string | null
   display_name: string
   role: UserRole
@@ -47,6 +51,7 @@ export type TokenResponse = {
   suggested_org?: SuggestedOrg | null
   must_change_password?: boolean
   message?: string
+  admission_request?: AdmissionSummary | null
 }
 
 export type TenantChoice = {

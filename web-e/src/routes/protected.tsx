@@ -22,11 +22,12 @@ export function ProtectedRoute() {
     return <Navigate to="/login" replace state={{ from: location }} />
   }
 
-  if (needsOrgConfirm) {
+  const path = location.pathname
+  const isAdmissionPath = path === '/app/admissions' || path.startsWith('/app/admissions/')
+  if (needsOrgConfirm && !isAdmissionPath) {
     return <Navigate to="/join" replace />
   }
 
-  const path = location.pathname
   const allowedWhileForced =
     path === '/app/account' || path.startsWith('/app/account/') || path === '/app/settings'
   if (mustChangePassword && !allowedWhileForced) {

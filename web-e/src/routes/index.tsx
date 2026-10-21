@@ -23,6 +23,8 @@ const AgentCredentialsPage = lazy(() => import('@/pages/app/agent-credentials').
 const AgentPagesPage = lazy(() => import('@/pages/app/agent-pages').then((module) => ({ default: module.AgentPagesPage })))
 const AgentPlaywrightPage = lazy(() => import('@/pages/app/agent-playwright').then((module) => ({ default: module.AgentPlaywrightPage })))
 const DirectoryPage = lazy(() => import('@/pages/app/directory').then((module) => ({ default: module.DirectoryPage })))
+const AdmissionsPage = lazy(() => import('@/pages/app/admissions').then((module) => ({ default: module.AdmissionsPage })))
+const AdmissionDetailPage = lazy(() => import('@/pages/app/admission-detail').then((module) => ({ default: module.AdmissionDetailPage })))
 const NotificationsPage = lazy(() => import('@/pages/app/notifications').then((module) => ({ default: module.NotificationsPage })))
 const OkrPage = lazy(() => import('@/pages/app/okr').then((module) => ({ default: module.OkrPage })))
 const OnboardingPage = lazy(() => import('@/pages/app/onboarding').then((module) => ({ default: module.OnboardingPage })))
@@ -57,6 +59,8 @@ export function AppRouter() {
             <Route element={<AppShell />}>
               <Route path="account" element={<Navigate to="/app/settings" replace />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="admissions" element={<AdmissionsPage />} />
+              <Route path="admissions/:id" element={<AdmissionDetailPage />} />
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />

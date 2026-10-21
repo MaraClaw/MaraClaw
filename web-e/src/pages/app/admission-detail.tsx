@@ -1,0 +1,81 @@
+import { useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useAuth } from '@/hooks/use-auth'
+import { switchTenant } from '@/lib/auth-api'
+import { getMyAdmission } from '@/lib/company-admissions-api'
+import { userFacingRequestError } from '@/lib/http'
+import { relativeTime } from '@/lib/relative-time'
+import type { AdmissionSummary } from '@/lib/types/company-admissions'
+import { admissionStatuses } from './admission-labels'
+
+const methods = { invitation: 'Invitation', verified_domain: 'Verified email domain', sso: 'Single sign-on' } satisfies Record<AdmissionSummary['method'], string>
+
+export function AdmissionDetailPage() {
+  const { id = '' } = useParams<{ id: string }>()
+  const scope = useWorkspaceSession()
+  const { user, isCurrent, refreshReplacement } = useAuth()
+  const navigate = useNavigate()
+  const [opening, setOpening] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const query = useQuery({
+    queryKey: ['company-admissions', 'detail', id],
+    queryFn: ({ signal }) => getMyAdmission(id, { owner: scope.owner, signal }),
+    refetchOnMount: 'always',
+  })
+  const request = query.data
+
+  async function openWorkspace() {
+    const expectedOwner = scope.owner
+    if (!request || request.status !== 'approved' || !isCurrent(expectedOwner)) return
+    setOpening(true)
+    setError(null)
+    try {
+      const result = await switchTenant(request.target_tenant.id, expectedOwner)
+      if (!isCurrent(expectedOwner)) return
+      const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
+      if (!installedOwner || !isCurrent(installedOwner)) return
+      navigate('/app', { replace: true })
+    } catch (cause) {
+      if (isCurrent(expectedOwner)) setError(userFacingRequestError(cause, 'Unable to open the workspace. Try again.'))
+    } finally {
+      if (isCurrent(expectedOwner)) setOpening(false)
+    }
+  }
+
+  return (
+    <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
+      <Link to="/app/admissions" className="inline-flex min-h-11 items-center rounded-lg py-2 text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring">All admission requests</Link>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl font-semibold">{request?.target_tenant.name ?? 'Admission request'}</h1>
+        <Button className="h-auto min-h-11 whitespace-normal" variant="outline" disabled={query.isFetching || opening} onClick={() => void query.refetch()}>Refresh status</Button>
+      </div>
+      {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading request…</p> : null}
+      {query.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load this request. Refresh to try again.')}</p> : null}
+      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {request ? (
+        <>
+          <section aria-label="Admission status" className="space-y-3 rounded-xl border border-border p-4">
+            <Badge variant="outline">{admissionStatuses[request.status].label}</Badge>
+            <p className="text-sm text-muted-foreground">{admissionStatuses[request.status].description}</p>
+            {request.decision_reason ? <div className="space-y-1"><h2 className="text-sm font-medium">Decision reason</h2><p className="whitespace-pre-wrap text-sm">{request.decision_reason}</p></div> : null}
+            {request.status === 'approved' ? (
+              user?.tenant_id === request.target_tenant.id ? <Button asChild><Link to="/app">Open workspace</Link></Button> :
+                <Button className="h-auto min-h-11 max-w-full whitespace-normal" disabled={opening || query.isFetching || query.isError} onClick={() => void openWorkspace()}>{opening ? 'Opening workspace…' : `Open ${request.target_tenant.name}`}</Button>
+            ) : null}
+          </section>
+          <dl className="grid gap-4 rounded-xl border border-border p-4 text-sm sm:grid-cols-2">
+            <div><dt className="text-muted-foreground">Applicant</dt><dd>{request.applicant.email ?? request.applicant.id}</dd></div>
+            <div><dt className="text-muted-foreground">Source organization</dt><dd>{request.source_tenant?.name ?? 'No organization'}</dd></div>
+            <div><dt className="text-muted-foreground">Method</dt><dd>{methods[request.method]}</dd></div>
+            <div><dt className="text-muted-foreground">Submitted</dt><dd><time dateTime={request.created_at} title={new Date(request.created_at).toLocaleString()}>{relativeTime(request.created_at)}</time></dd></div>
+            {request.decided_at ? <div><dt className="text-muted-foreground">Decided</dt><dd><time dateTime={request.decided_at} title={new Date(request.decided_at).toLocaleString()}>{relativeTime(request.decided_at)}</time></dd></div> : null}
+          </dl>
+        </>
+      ) : null}
+    </div>
+  )
+}

@@ -31,7 +31,7 @@ export function PlazaPage() {
   const feed = useQuery({ queryKey: ['plaza', 'posts'], queryFn: () => listPlazaPosts() })
   const stats = useQuery({ queryKey: ['plaza', 'stats'], queryFn: plazaStats })
 
-  const authorName = user?.display_name || user?.username || user?.email || 'Member'
+  const authorName = user?.display_name || user?.email || 'Member'
   const canDelete = user?.role === 'org_admin'
 
   const publish = useMutation({
@@ -150,7 +150,7 @@ function PostThread({ postId }: { postId: string }) {
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
   const detail = useQuery({ queryKey: ['plaza', 'post', postId], queryFn: () => getPlazaPost(postId) })
-  const authorName = user?.display_name || user?.username || user?.email || 'Member'
+  const authorName = user?.display_name || user?.email || 'Member'
 
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">

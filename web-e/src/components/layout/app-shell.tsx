@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Loader2, LogOut } from 'lucide-react'
-import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { LogOut } from 'lucide-react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
@@ -21,6 +21,7 @@ const nav: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/app/okr', label: 'OKR', icon: 'okr' },
   { to: '/app/directory', label: 'Directory', icon: 'directory' },
   { to: '/app/notifications', label: 'Inbox', icon: 'inbox' },
+  { to: '/app/admissions', label: 'Admissions', icon: 'admissions' },
   { to: '/app/settings', label: 'Settings', icon: 'settings' },
 ]
 
@@ -45,7 +46,7 @@ function WorkspaceNavLink({
           'transition-[color,transform] duration-150 ease-out',
           'hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          'active:scale-[0.96]',
+          'active:scale-[0.96] motion-reduce:active:scale-100 motion-reduce:transition-none',
           isActive && 'text-foreground',
           compact
             ? 'min-h-14 shrink-0 gap-1 rounded-lg px-3 py-2'
@@ -86,6 +87,16 @@ function WorkspaceNavLink({
 }
 
 function AppShellFrame() {
+  const { pathname } = useLocation()
+  const mobileNav = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const rail = mobileNav.current
+    const active = rail?.querySelector<HTMLAnchorElement>('[aria-current="page"]')
+    if (!rail || !active || !pathname.startsWith(active.pathname) || rail.clientWidth === 0) return
+    const bounds = rail.getBoundingClientRect()
+    const target = active.getBoundingClientRect()
+    rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
+  }, [pathname])
   const scope = useWorkspaceSession()
   const { user, logout } = useAuth()
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
@@ -135,6 +146,7 @@ function AppShellFrame() {
             <ThemeToggle />
           </div>
           <nav
+            ref={mobileNav}
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
             aria-label="Workspace"
           >
@@ -145,8 +157,8 @@ function AppShellFrame() {
         </header>
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
           {tenantQuery.isLoading ? (
-            <div className="flex h-40 items-center justify-center text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-hidden />
+            <div role="status" aria-label="Loading workspace" className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+              Loading your organization’s workspace…
             </div>
           ) : (
             <Outlet />

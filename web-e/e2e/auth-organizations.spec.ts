@@ -11,7 +11,7 @@ const company = {
 }
 const fallback = { ...company, id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
 const originalUser: UserOut = {
-  id: 'a4ad792f-8901-44f0-a9b6-8947da623f38', username: 'member', email: 'member@example.test',
+  id: 'a4ad792f-8901-44f0-a9b6-8947da623f38', email: 'member@example.test',
   display_name: 'Original member', role: 'member', tenant_id: null, email_verified: true,
   must_change_password: false, is_platform_admin: false,
 }

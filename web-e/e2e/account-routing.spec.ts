@@ -9,7 +9,7 @@ const company = {
   im_provider: 'none', is_active: true,
 }
 const member: UserOut = {
-  id: 'f936188e-a374-4edf-9b05-ac6c9cb236a6', username: 'routing-member', email: 'member@routing.test',
+  id: 'f936188e-a374-4edf-9b05-ac6c9cb236a6', email: 'member@routing.test',
   display_name: 'Routing member', role: 'member', tenant_id: company.id, email_verified: true,
   is_platform_admin: false,
 }
@@ -87,6 +87,7 @@ for (const mustChangePassword of [true, false]) {
     // Then
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
     await expect(page.getByRole('main').locator('h1')).toHaveCount(1)
+    await expect(page.getByLabel('Username', { exact: true })).toHaveCount(0)
     await expect(page.locator('main [data-slot="card-title"]')).toHaveText(['Profile', 'Password', 'Organization', 'Session'])
     await expect(page.locator('nav a[href="/app/account"]')).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Account', exact: true, includeHidden: true })).toHaveCount(0)
@@ -127,7 +128,7 @@ for (const path of ['/app', '/app/agents']) {
 test('settings saves the trimmed profile and refreshes the signed-in identity', async ({ page }) => {
   // Given
   await prepareMember(page, false)
-  const updated = { ...member, display_name: 'Updated member', username: 'updated-member' }
+  const updated = { ...member, display_name: 'Updated member' }
   const updates: unknown[] = []
   let refreshes = 0
   await page.route('**/api/auth/me', async (route) => {
@@ -141,20 +142,18 @@ test('settings saves the trimmed profile and refreshes the signed-in identity', 
   })
   await page.goto('/app/settings')
   await page.getByLabel('Display name').fill('  Updated member  ')
-  await page.getByLabel('Username', { exact: true }).fill('  updated-member  ')
   // When
   await page.getByRole('button', { name: 'Save profile', exact: true }).click()
   // Then
   await expect(page.getByText(`Signed in as ${updated.display_name}.`, { exact: false })).toBeVisible()
   await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(1)
-  expect(updates).toEqual([{ display_name: 'Updated member', username: 'updated-member' }])
+  expect(updates).toEqual([{ display_name: 'Updated member' }])
   expect(refreshes).toBe(2)
 })
 
 for (const invalid of [
   { name: 'empty display name', field: 'Display name', value: '   ' },
   { name: 'long display name', field: 'Display name', value: 'x'.repeat(101) },
-  { name: 'long username', field: 'Username', value: 'x'.repeat(65) },
 ]) {
   test(`settings rejects an ${invalid.name} before updating the profile`, async ({ page }) => {
     // Given

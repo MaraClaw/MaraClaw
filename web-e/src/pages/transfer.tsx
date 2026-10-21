@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { AdmissionPending } from '@/components/auth/admission-pending'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,6 +16,7 @@ import { lookupOrgByEmail, transferOrg } from '@/lib/auth-api'
 import type { SessionOwner } from '@/lib/auth-session'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import type { SuggestedOrg } from '@/lib/types/auth'
+import type { AdmissionSummary } from '@/lib/types/company-admissions'
 
 const transferSchema = z.object({
   invitation_code: z.string().trim().max(128).optional(),
@@ -49,6 +51,7 @@ export function TransferPage() {
   const [fallback, setFallback] = useState<SuggestedOrg | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingTarget, setPendingTarget] = useState<string | null>(null)
+  const [admission, setAdmission] = useState<AdmissionSummary | null>(null)
 
   const {
     register,
@@ -88,6 +91,10 @@ export function TransferPage() {
     setFormError(null)
     const result = await transferOrg(body, expectedOwner)
     if (!isCurrent(expectedOwner)) return
+    if ('request' in result) {
+      setAdmission(result.request)
+      return
+    }
     const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
     if (!installedOwner || !isCurrent(installedOwner)) return
     toast.success('Organization updated')
@@ -142,11 +149,12 @@ export function TransferPage() {
     <AuthShell
       headingId={`${formId}-heading`}
       title="Transfer organization"
-      description="Move with an invitation code, or to your email-domain company / OpenClaw."
+      description="Company transfers require review. Keep your current organization while you wait, or move to OpenClaw immediately."
       brandTitle="Change where you work"
       brandBody="Keep the same MaraClaw account and switch companies when you have an invite or a matching domain."
       highlights={highlights}
     >
+      {admission ? <AdmissionPending request={admission} /> : null}
       {formError ? (
         <div
           role="alert"

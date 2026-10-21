@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages. Settings is an AppShell child outside OnboardingGate, so profile and password remain accessible before onboarding or a required password change. Legacy Account URLs redirect to Settings.
+Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, staleTime 30s) → OnboardingGate → pages. Settings and admissions are AppShell children outside OnboardingGate. Profile and password remain accessible before onboarding or a required password change; admissions remain subject to the password-change gate. Legacy Account URLs redirect to Settings.
 
 ## WHERE TO LOOK
 
@@ -14,6 +14,7 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/onboarding` | `onboarding.tsx` | workspace-api |
 | `/app/account` | → `/app/settings` | Legacy redirect |
 | `/app/settings` | `settings.tsx` | auth-api (profile, password, SSO bind, tenants/switch) |
+| `/app/admissions`, `/app/admissions/:id` | `admissions.tsx`, `admission-detail.tsx` | company-admissions-api; persisted applicant status; explicit approved workspace entry via auth-api switch/replacement |
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |

@@ -4,11 +4,13 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { AdmissionPending } from '@/components/auth/admission-pending'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { joinDefaultOrg, joinSuggestedOrg, lookupOrgByEmail } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import type { SuggestedOrg } from '@/lib/types/auth'
+import type { AdmissionSummary } from '@/lib/types/company-admissions'
 
 type JoinState = { suggested?: SuggestedOrg | null }
 
@@ -41,6 +43,7 @@ export function JoinOrgPage() {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [admission, setAdmission] = useState<AdmissionSummary | null>(null)
 
   useEffect(() => {
     const expectedOwner = owner
@@ -91,6 +94,10 @@ export function JoinOrgPage() {
           ? await joinSuggestedOrg(suggested.id, expectedOwner)
           : await joinDefaultOrg(expectedOwner)
       if (!isCurrent(expectedOwner)) return
+      if ('request' in result) {
+        setAdmission(result.request)
+        return
+      }
       const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
       if (!installedOwner || !isCurrent(installedOwner)) return
       toast.success('Organization joined')
@@ -125,7 +132,7 @@ export function JoinOrgPage() {
         needsVerify
           ? 'Verify your email before joining a company suggested by that address.'
           : suggested
-            ? `Your email matches ${suggested.name}. Join that company, or continue in ${fallbackName}.`
+            ? `Your email matches ${suggested.name}. Request admission to that company, or continue in ${fallbackName}.`
             : loading
               ? 'Looking up your organization…'
               : `Continue in ${fallbackName}, the default organization for members.`
@@ -134,6 +141,7 @@ export function JoinOrgPage() {
       brandBody="We match claimed email domains to companies. You stay in control of the final choice."
       highlights={highlights}
     >
+      {admission ? <AdmissionPending request={admission} /> : null}
       {error ? (
         <div
           role="alert"
@@ -145,7 +153,7 @@ export function JoinOrgPage() {
 
       <div className="flex flex-col gap-2">
         {suggested && !needsVerify ? (
-          <Button className="h-11" disabled={pending} onClick={() => void choose('suggested')}>
+          <Button className="h-11" disabled={pending || admission !== null} onClick={() => void choose('suggested')}>
             {pending ? <Loader2 className="size-4 animate-spin" /> : null}
             Join {suggested.name}
           </Button>

@@ -47,7 +47,7 @@ export function DirectoryPage() {
     const q = search.trim().toLowerCase()
     return (users.data ?? []).filter((user) => {
       if (!q) return true
-      return [user.display_name, user.email, user.username, user.title, user.role]
+      return [user.display_name, user.email, user.title, user.role]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q))
     })
@@ -94,13 +94,13 @@ export function DirectoryPage() {
           errorFallback="Unable to load people"
         >
           {filteredUsers.map((user) => {
-            const name = user.display_name || user.email || user.username || 'Member'
+            const name = user.display_name || user.email || 'Member'
             return (
               <PersonCard
                 key={user.id}
                 name={name}
                 avatarUrl={user.avatar_url}
-                description={contactLine(user.email, user.username)}
+                description={user.email}
                 badge={roleLabel(user.role)}
                 detail={user.title}
               />
@@ -121,12 +121,4 @@ function roleLabel(role: string): string {
   if (role === 'agent_admin') return 'Agent admin'
   if (role === 'member') return 'Member'
   return role
-}
-
-function contactLine(email?: string | null, username?: string | null): string | undefined {
-  const parts = [email, username].filter((value, index, all): value is string => {
-    if (!value) return false
-    return all.indexOf(value) === index
-  })
-  return parts.length ? parts.join(' · ') : undefined
 }
