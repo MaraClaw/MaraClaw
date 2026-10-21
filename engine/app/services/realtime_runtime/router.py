@@ -17,14 +17,19 @@ from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
 from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery
+from app.services.realtime_runtime.contracts import (
+    LocalDeliverer,
+    RealtimeEnvelope,
+    RealtimePresence,
+    ReceivedEnvelope,
+    presence_adapter,
+)
 from app.services.realtime_runtime.subscription import AcknowledgedPubSub
 
 settings = get_settings()
 
 PRESENCE_TTL_SECONDS = 180
 PUBSUB_PREFIX = "realtime:ws"
-
-type LocalDeliverer = Callable[..., Awaitable[object]]
 
 
 class RealtimeRouter:
@@ -65,7 +70,7 @@ class RealtimeRouter:
     ) -> str:
         connection_id = uuid.uuid4().hex
         redis_client: Redis = await get_redis()
-        payload = {
+        payload: RealtimePresence = {
             "agent_id": agent_id,
             "session_id": session_id or "",
             "user_id": user_id or "",
@@ -146,15 +151,14 @@ class RealtimeRouter:
             return
 
         redis = await get_redis()
-        envelope = json.dumps(
-            {
-                "message": message,
-                "agent_id": agent_id,
-                "session_id": session_id,
-                "user_id": user_id,
-                "origin_instance_id": self.instance_id,
-            }
-        )
+        payload: RealtimeEnvelope = {
+            "message": message,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "origin_instance_id": self.instance_id,
+        }
+        envelope = json.dumps(payload)
         publish_tasks = [
             redis.publish(f"{PUBSUB_PREFIX}:instance:{instance_id}", envelope) for instance_id in remote_targets
         ]
@@ -214,7 +218,8 @@ class RealtimeRouter:
             await asyncio.sleep(1.0)
 
     @staticmethod
-    async def _deliver_message(payload_raw: object, deliver_local: LocalDeliverer) -> None:
+    async def _deliver_message(payload_raw: object, deliver_local: Callable[..., Awaitable[object]]) -> None:
+        """Keep the legacy receive boundary permissive; registration uses LocalDeliverer."""
         try:
             if isinstance(payload_raw, (bytes, bytearray)):
                 data = json_loads_object(bytes(payload_raw))
@@ -222,21 +227,27 @@ class RealtimeRouter:
                 data = json_loads_object(payload_raw)
             else:
                 data = json_object_from(payload_raw)
-            await deliver_local(
+            envelope = ReceivedEnvelope(
                 agent_id=data["agent_id"],
-                payload=data["message"],
+                message=data["message"],
                 session_id=data.get("session_id"),
                 user_id=data.get("user_id"),
+            )
+            await deliver_local(
+                agent_id=envelope.agent_id,
+                payload=envelope.message,
+                session_id=envelope.session_id,
+                user_id=envelope.user_id,
             )
         except Exception as exc:
             logger.warning("[Realtime] Failed to deliver pubsub message: {}", exc)
 
-    async def _list_presence(self, agent_id: str) -> list[dict[str, str]]:
+    async def _list_presence(self, agent_id: str) -> list[RealtimePresence]:
         redis_client: Redis = await get_redis()
         connection_ids = await redis_client.smembers(self._agent_index_key(agent_id))
         if not connection_ids:
             return []
-        records: list[dict[str, str]] = []
+        records: list[RealtimePresence] = []
         stale_ids: list[str] = []
         for connection_id in connection_ids:
             connection_id_text = _redis_text(connection_id)
@@ -244,7 +255,11 @@ class RealtimeRouter:
             if not presence_raw:
                 stale_ids.append(connection_id_text)
                 continue
-            records.append({_redis_text(key): _redis_text(value) for key, value in presence_raw.items()})
+            records.append(
+                presence_adapter.validate_python(
+                    {_redis_text(key): _redis_text(value) for key, value in presence_raw.items()}, strict=True
+                )
+            )
         if stale_ids:
             _ = await redis_client.srem(self._agent_index_key(agent_id), *stale_ids)
         return records
