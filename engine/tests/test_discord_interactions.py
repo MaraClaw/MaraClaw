@@ -2,10 +2,12 @@ import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from httpx import Response
 from nacl.signing import SigningKey
 from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 
-from app.api import background_tasks, discord_bot
+from app.api import discord_bot
+from app.services.channels import submissions
 
 
 @pytest.mark.parametrize("interaction_type", [1, 2])
@@ -30,6 +32,10 @@ async def test_discord_verifies_ping_and_commands_before_side_effects(monkeypatc
     body = json.dumps(
         {
             "type": interaction_type,
+            "id": "interaction-1",
+            "channel_id": "channel-1",
+            "guild_id": "guild-1",
+            "member": {"user": {"id": "sender-1"}},
             "data": {"name": "ask", "options": [{"name": "message", "value": "private-message"}]},
         }
     ).encode()
@@ -50,28 +56,45 @@ async def test_discord_verifies_ping_and_commands_before_side_effects(monkeypatc
         config.encrypt_key = "ff"
     if failure == "modified_body":
         body += b" "
-    dispatched = []
+    accept = AsyncMock(return_value=submissions.AcceptedChannelEvent(replayed=False))
+    acceptance_at_response: list[int] = []
 
-    def schedule(coroutine, label):
-        dispatched.append(label)
-        coroutine.close()
+    async def observe_response(_response: Response) -> None:
+        acceptance_at_response.append(accept.await_count)
 
     update, logs = AsyncMock(), Mock()
     monkeypatch.setattr(discord_bot.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(discord_bot.channel_config_dao, "update", update)
     monkeypatch.setattr(discord_bot, "logger", logs)
-    monkeypatch.setattr(background_tasks, "schedule_background_task", schedule)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
     async with webhook_client(discord_bot.router) as client:
+        client.event_hooks["response"].append(observe_response)
         response = await client.post(f"/api/channel/discord/{AGENT_ID}/webhook", content=body, headers=headers)
     if failure is None:
         assert response.status_code == 200
         assert response.json()["type"] == (1 if interaction_type == 1 else 5)
-        assert len(dispatched) == (0 if interaction_type == 1 else 1)
     else:
         assert response.status_code == 401
-        assert not dispatched
-        assert not update.called
-        assert not logs.mock_calls
+    if failure is None and interaction_type == 2:
+        accept.assert_awaited_once_with(
+            submissions.ChannelEvent(
+                config_id=config.id,
+                agent_id=AGENT_ID,
+                provider="discord",
+                event_key=json.dumps([config.app_id, "channel-1", "interaction-1"], separators=(",", ":")),
+                sender_id="sender-1",
+                conversation_id="discord_channel-1",
+                text="private-message",
+                kind="application_command",
+                is_group=True,
+            )
+        )
+        assert acceptance_at_response == [1]
+    else:
+        accept.assert_not_called()
+        assert acceptance_at_response == [0]
+    update.assert_not_called()
+    assert not logs.mock_calls
 
 
 @pytest.mark.parametrize("configured", [False, True])
