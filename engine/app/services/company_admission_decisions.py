@@ -9,6 +9,7 @@ from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
 from app.schemas.company_admission import AdmissionDecision
+from app.services.admin_audit import field_change, write_admin_audit
 from app.services.company_admissions import fresh_user, require_genesis, validate_method
 from app.services.notification_service import send_notification
 from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, transfer_user_to_org
@@ -28,7 +29,7 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
         )
         for user in sorted((applicant, reviewer), key=lambda member: member.id):
             await lock_user(db, user.id, user.tenant_id)
-        await require_genesis(reviewer_id, snapshot.target_tenant_id)
+        reviewer = await require_genesis(reviewer_id, snapshot.target_tenant_id)
         request = await admissions.get_locked(request_id)
         if request is None:
             raise HTTPException(404, "Admission request not found")
@@ -67,6 +68,7 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
                     "UPDATE invitation_codes SET used_count=used_count+1 WHERE code=%(code)s",
                     {"code": request.invitation_code},
                 )
+        before_status = request.status.value
         resolved = await admissions.update(
             db_obj=request,
             obj_in={
@@ -74,6 +76,19 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
                 "decided_at": datetime.now(UTC),
                 "decided_by_user_id": reviewer_id,
                 "decision_reason": decision.reason,
+            },
+        )
+        await write_admin_audit(
+            actor=reviewer,
+            action="company_admission.decided",
+            target_type="company_admission",
+            target_id=resolved.id,
+            tenant_id=resolved.target_tenant_id,
+            changes={"status": field_change(before_status, resolved.status.value)},
+            details={
+                "applicant_user_id": str(resolved.applicant_user_id),
+                "source_tenant_id": str(resolved.source_tenant_id),
+                "method": resolved.method.value,
             },
         )
         await send_notification(
