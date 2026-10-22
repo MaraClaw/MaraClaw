@@ -14,6 +14,7 @@ from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
 from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentCreate, DepartmentMembersOut, DepartmentOut
+from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import END_USER_ROLES
 
 
@@ -63,7 +64,18 @@ async def rename_department(
             department = await org_department_dao.get(department_id)
             if department is None or department.tenant_id != tenant:
                 raise HTTPException(404, "Department not found")
+            before_name = department.name
+            if before_name == data.name:
+                return DepartmentOut.model_validate(department)
             updated = await org_department_dao.update(db_obj=department, obj_in={"name": data.name})
+            await write_admin_audit(
+                actor=fresh_actor,
+                action="department.rename",
+                target_type="department",
+                target_id=department_id,
+                tenant_id=tenant,
+                changes={"name": field_change(before_name, updated.name)},
+            )
             return DepartmentOut.model_validate(updated)
     except UniqueViolationError as exc:
         raise HTTPException(409, "Department name already exists") from exc
@@ -100,6 +112,7 @@ async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: U
         department = await org_department_dao.get(department_id)
         if department is None or department.tenant_id != tenant:
             raise HTTPException(404, "Department not found")
+        before_name = department.name
         for user_id in sorted(await org_department_dao.member_user_ids(department)):
             if user_id != actor.id:
                 await lock_user(db, user_id, tenant)
@@ -109,6 +122,14 @@ async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: U
         await org_department_dao.delete_department(department)
         for agent_id in sorted(affected):
             await bump_agent_acl_version(agent_id)
+        await write_admin_audit(
+            actor=fresh_actor,
+            action="department.delete",
+            target_type="department",
+            target_id=department_id,
+            tenant_id=tenant,
+            changes={"name": field_change(before_name, None)},
+        )
 
 
 async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> AssignmentsOut:
@@ -138,10 +159,32 @@ async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> A
             department.tenant_id != assignment.tenant_id for department in departments
         ):
             raise HTTPException(422, "Invalid department for this organization")
+        before_ids = sorted(
+            {
+                row.department_id
+                for row in await org_department_dao.list_assignments(assignment.tenant_id)
+                if row.user_id == subject.id and row.department_id is not None
+            }
+        )
+        if before_ids == assignment.department_ids:
+            return assignment
         affected = await org_department_dao.grant_agents_for_user(subject.id)
         await org_department_dao.replace_assignments(assignment)
         affected.update(await org_department_dao.grant_agents_for_user(subject.id))
         for agent_id in sorted(affected):
             await lock_agent(db, agent_id, assignment.tenant_id)
             await bump_agent_acl_version(agent_id)
+        await write_admin_audit(
+            actor=fresh_actor,
+            action="department.membership.replace",
+            target_type="user",
+            target_id=subject.id,
+            tenant_id=assignment.tenant_id,
+            changes={
+                "department_ids": field_change(
+                    [str(department_id) for department_id in before_ids],
+                    [str(department_id) for department_id in assignment.department_ids],
+                )
+            },
+        )
     return assignment
