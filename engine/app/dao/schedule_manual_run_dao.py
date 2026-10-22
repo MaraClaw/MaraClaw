@@ -28,6 +28,26 @@ class ScheduleManualRunDAO(BaseDAO[ScheduleManualRunRecord]):
     )
     record_factory = staticmethod(ScheduleManualRunRecord.from_row)
 
+    async def get_scoped(self, run_id: UUID, schedule_id: UUID, agent_id: UUID) -> ScheduleManualRunRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM agent_schedule_manual_runs "
+                "WHERE id = %(id)s AND schedule_id = %(schedule_id)s AND agent_id = %(agent_id)s",
+                {"id": run_id, "schedule_id": schedule_id, "agent_id": agent_id},
+            )
+            return self.record_factory(row) if row is not None else None
+
+    async def cancel_pending(self, run: ScheduleManualRunRecord, now: datetime) -> ScheduleManualRunRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agent_schedule_manual_runs SET outcome = 'cancelled', finished_at = %(now)s, "
+                "lease_token = NULL, lease_expires_at = NULL "
+                "WHERE id = %(id)s AND schedule_id = %(schedule_id)s AND agent_id = %(agent_id)s "
+                f"AND started_at IS NULL AND finished_at IS NULL RETURNING {self._select_list()}",
+                {"id": run.id, "schedule_id": run.schedule_id, "agent_id": run.agent_id, "now": now},
+            )
+            return self.record_factory(row) if row is not None else None
+
     async def accept(
         self, schedule_id: UUID, requester_id: UUID, idempotency_key: str | None
     ) -> ScheduleManualRunRecord | None:

@@ -25,6 +25,8 @@ from app.schemas.schedule_history import (
     ScheduleHistoryPage,
     history_cursor_adapter,
 )
+from app.schemas.schedule_manual_run import ScheduleManualRunResponse
+from app.services.schedule_manual_control import authorized_manual_run, cancel_manual_run
 from app.services.schedule_time import ScheduleTimezoneError, validate_timezone
 from app.services.scheduler import compute_next_run
 
@@ -198,6 +200,30 @@ async def trigger_schedule(
         raise HTTPException(status_code=404, detail="Schedule not found")
     await flush_request_transaction()
     return {"status": "triggered", "schedule_id": str(schedule_id), "run_id": str(run.id)}
+
+
+@router.get("/{schedule_id}/runs/{run_id}", response_model=ScheduleManualRunResponse)
+async def get_manual_run(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    run_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+) -> ScheduleManualRunResponse:
+    run = await authorized_manual_run(current_user, agent_id, schedule_id, run_id)
+    return ScheduleManualRunResponse.from_record(run)
+
+
+@router.post("/{schedule_id}/runs/{run_id}/cancel", response_model=ScheduleManualRunResponse)
+async def cancel_pending_manual_run(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    run_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+) -> ScheduleManualRunResponse:
+    run = await authorized_manual_run(current_user, agent_id, schedule_id, run_id)
+    cancelled = await cancel_manual_run(run)
+    await flush_request_transaction()
+    return ScheduleManualRunResponse.from_record(cancelled)
 
 
 @router.get("/{schedule_id}/history", response_model=list[ScheduleHistoryItem])
