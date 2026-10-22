@@ -24,6 +24,15 @@ export const scheduleHistoryOutcomeSchema = z.enum(['all', 'success', 'failure',
 const runAcceptanceSchema = z.object({
   status: z.literal('triggered'), schedule_id: z.string().min(1), run_id: z.string().min(1),
 }).readonly()
+const runReceiptSchema = z.object({
+  run_id: z.string().min(1), schedule_id: z.string().min(1), agent_id: z.string().min(1), requester_id: z.string().min(1),
+  status: z.enum(['pending', 'running', 'success', 'failure', 'cancelled', 'unknown']),
+  created_at: z.iso.datetime({ offset: true }),
+  started_at: z.iso.datetime({ offset: true }).nullable(), finished_at: z.iso.datetime({ offset: true }).nullable(),
+  can_cancel: z.boolean(),
+}).refine((receipt) => receipt.can_cancel === (receipt.status === 'pending'), {
+  path: ['can_cancel'], message: 'Only pending runs can be cancelled',
+}).readonly()
 
 export type ScheduleOut = z.infer<typeof scheduleSchema>
 export type ScheduleCreate = Readonly<z.input<typeof createSchema>>
@@ -32,6 +41,9 @@ export type ScheduleHistoryItem = z.infer<typeof historyItemSchema>
 export type ScheduleHistoryPage = z.infer<typeof historyPageSchema>
 export type ScheduleHistoryOutcome = z.infer<typeof scheduleHistoryOutcomeSchema>
 export type ScheduleRunAcceptance = z.infer<typeof runAcceptanceSchema>
+export type ScheduleRunReceipt = z.infer<typeof runReceiptSchema>
+export type ScheduleRunTarget = Readonly<{ agentId: string; scheduleId: string; runId: string }>
+type RunRequest = Readonly<{ signal?: AbortSignal }>
 type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal; outcome?: ScheduleHistoryOutcome }>
 
 export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
@@ -54,6 +66,32 @@ export async function runSchedule(agentId: string, scheduleId: string, idempoten
   return runAcceptanceSchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}/run`, {
     method: 'POST', idempotencyKey,
   }))
+}
+
+export async function getScheduleRun(
+  { agentId, scheduleId, runId }: ScheduleRunTarget, options: RunRequest = {},
+): Promise<ScheduleRunReceipt> {
+  if (options.signal !== undefined) {
+    return runReceiptSchema.parse(await apiRequest<unknown>(
+      `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}`, { signal: options.signal },
+    ))
+  }
+  return runReceiptSchema.parse(await apiRequest<unknown>(
+    `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}`,
+  ))
+}
+
+export async function cancelScheduleRun(
+  { agentId, scheduleId, runId }: ScheduleRunTarget, options: RunRequest = {},
+): Promise<ScheduleRunReceipt> {
+  if (options.signal !== undefined) {
+    return runReceiptSchema.parse(await apiRequest<unknown>(
+      `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}/cancel`, { signal: options.signal, method: 'POST' },
+    ))
+  }
+  return runReceiptSchema.parse(await apiRequest<unknown>(
+    `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}/cancel`, { method: 'POST' },
+  ))
 }
 
 export async function deleteSchedule(agentId: string, scheduleId: string): Promise<void> {

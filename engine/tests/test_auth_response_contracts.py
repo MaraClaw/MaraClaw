@@ -70,6 +70,8 @@ async def test_auth_response_union_preserves_payloads(
     monkeypatch.setattr(auth, "verify_password_async", AsyncMock(return_value=True))
     monkeypatch.setattr(auth.user_dao, "get_by_identity_id", AsyncMock(return_value=users))
     monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=users[0]))
+    monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=users[0]))
+    monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     monkeypatch.setattr(auth.tenant_dao, "get", AsyncMock(return_value=tenants[0]))
     monkeypatch.setattr(auth.tenant_dao, "get_by_ids", AsyncMock(return_value=tenants))
     monkeypatch.setattr(auth.identity_provider_dao, "get_preferred", AsyncMock(return_value=None))

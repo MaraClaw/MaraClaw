@@ -859,7 +859,9 @@ async def create_download_ticket(
     _ = await check_agent_access(current_user, agent_id, fresh=True)
     _ = await _downloadable_storage_key(agent_id, body.path, current_user.tenant_id)
     payload = decode_access_token(credentials.credentials)
-    result = await file_download_tickets.create(current_user, agent_id, body.path, body.inline, payload["exp"])
+    result = await file_download_tickets.create(
+        current_user, agent_id, body.path, body.inline, payload["exp"], payload["gen"]
+    )
     response.headers["Cache-Control"] = "no-store"
     return result
 

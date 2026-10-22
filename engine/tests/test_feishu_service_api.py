@@ -1,4 +1,5 @@
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -166,7 +167,7 @@ async def test_login_or_register_links_existing_user_to_feishu_member_without_le
     monkeypatch.setattr(feishu_service_module.identity_dao, "get", get_identity)
     monkeypatch.setattr(feishu_service_module.identity_dao, "update", update_identity)
     monkeypatch.setattr(feishu_service_module.org_member_dao, "update", update_member)
-    monkeypatch.setattr(feishu_service_module, "create_access_token", lambda _user_id, _role: "token")
+    monkeypatch.setattr(feishu_service_module, "create_access_token", AsyncMock(return_value="token"))
 
     feishu_user: FeishuOAuthUser = {
         "open_id": "ou_open_123",

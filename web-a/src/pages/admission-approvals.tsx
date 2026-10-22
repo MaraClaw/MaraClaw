@@ -1,4 +1,5 @@
 import { formatDistanceToNowStrict } from 'date-fns'
+import { useQueryClient } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -7,8 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
+import { admissionKeys } from '@/hooks/admission-options'
 import { useAdmissionReviews } from '@/hooks/use-admissions'
-import { ADMISSIONS_PAGE_SIZE, admissionStatusSchema, type AdmissionStatus } from '@/lib/admissions-api'
+import { admissionStatusSchema, type AdmissionStatus } from '@/lib/admissions-api'
 import { ApiError } from '@/lib/http'
 import { admissionMethodLabels, admissionStatusLabels } from './admission-labels'
 
@@ -16,10 +18,17 @@ const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scal
 
 export function AdmissionApprovalsPage() {
   const filterId = useId()
+  const client = useQueryClient()
   const [status, setStatus] = useState<AdmissionStatus>('pending')
-  const [offset, setOffset] = useState(0)
-  const reviews = useAdmissionReviews(status, offset)
-  const items = reviews.data ?? []
+  const [cursors, setCursors] = useState<readonly string[]>([])
+  const reviews = useAdmissionReviews(status, cursors.at(-1) ?? null)
+  const items = reviews.data?.items ?? []
+  const nextCursor = reviews.data?.next_cursor ?? null
+
+  function refresh() {
+    setCursors([])
+    void client.invalidateQueries({ queryKey: admissionKeys.list(status, null), exact: true })
+  }
 
   return (
     <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
@@ -32,12 +41,12 @@ export function AdmissionApprovalsPage() {
           <Label htmlFor={filterId}>Request status</Label>
           <Select id={filterId} fit value={status} onChange={(event) => {
             setStatus(admissionStatusSchema.parse(event.currentTarget.value))
-            setOffset(0)
+            setCursors([])
           }}>
             {admissionStatusSchema.options.map((value) => <option key={value} value={value}>{admissionStatusLabels[value]}</option>)}
           </Select>
         </div>
-        <Button variant="outline" className={actionClass} disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>Refresh requests</Button>
+        <Button variant="outline" className={actionClass} disabled={reviews.isFetching} onClick={refresh}>Refresh requests</Button>
       </div>
       {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading admission requests...</CardContent></Card> : null}
       {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
@@ -46,7 +55,7 @@ export function AdmissionApprovalsPage() {
       </CardContent></Card> : null}
       {reviews.isSuccess && items.length === 0 ? <Card><CardContent className="flex flex-col gap-2 py-4">
         <h2 className="font-display text-lg font-semibold">No {admissionStatusLabels[status].toLowerCase()} requests</h2>
-        <p className="text-sm text-muted-foreground">{offset === 0 ? 'Requests will appear here when someone asks to join your organization.' : 'Return to the previous page to see earlier requests.'}</p>
+        <p className="text-sm text-muted-foreground">{cursors.length === 0 ? 'Requests will appear here when someone asks to join your organization.' : 'Return to the previous page to see earlier requests.'}</p>
       </CardContent></Card> : null}
       {items.length > 0 ? <ul aria-label="Admission requests" className="flex flex-col gap-4">
         {items.map((request) => <li key={request.id}>
@@ -64,10 +73,10 @@ export function AdmissionApprovalsPage() {
           </CardContent></Card>
         </li>)}
       </ul> : null}
-      {offset > 0 || items.length > 0 ? <nav aria-label="Admission request pages" className="flex flex-wrap items-center justify-between gap-3">
-        <Button variant="outline" className={actionClass} disabled={offset === 0 || reviews.isFetching} onClick={() => setOffset((value) => Math.max(0, value - ADMISSIONS_PAGE_SIZE))}>Previous</Button>
-        <p role="status" className="text-xs text-muted-foreground">Page {offset / ADMISSIONS_PAGE_SIZE + 1}</p>
-        <Button variant="outline" className={actionClass} disabled={items.length < ADMISSIONS_PAGE_SIZE || reviews.isFetching || reviews.isError} onClick={() => setOffset((value) => value + ADMISSIONS_PAGE_SIZE)}>Next</Button>
+      {cursors.length > 0 || items.length > 0 || nextCursor !== null ? <nav aria-label="Admission request pages" className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" className={actionClass} disabled={cursors.length === 0 || reviews.isFetching} onClick={() => setCursors((value) => value.slice(0, -1))}>Previous</Button>
+        <p role="status" className="text-xs text-muted-foreground">Page {cursors.length + 1}</p>
+        <Button variant="outline" className={actionClass} disabled={nextCursor === null || reviews.isFetching || reviews.isError} onClick={() => { if (nextCursor !== null) setCursors((value) => [...value, nextCursor]) }}>Next</Button>
       </nav> : null}
     </div>
   )

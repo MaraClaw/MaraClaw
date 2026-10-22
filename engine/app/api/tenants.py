@@ -407,7 +407,7 @@ async def join_suggested_org(
     return JoinOrgResponse(
         tenant=TenantOut.model_validate(suggested),
         role=attached.role,
-        access_token=create_access_token(str(attached.id), attached.role),
+        access_token=await create_access_token(str(attached.id), attached.role),
     )
 
 
@@ -435,7 +435,7 @@ async def join_default_org(current_user: UserRecord = Depends(get_current_user))
     return JoinOrgResponse(
         tenant=TenantOut.model_validate(fallback),
         role=attached.role,
-        access_token=create_access_token(str(attached.id), attached.role),
+        access_token=await create_access_token(str(attached.id), attached.role),
     )
 
 
@@ -528,7 +528,7 @@ async def transfer_organization(
     return JoinOrgResponse(
         tenant=TenantOut.model_validate(target),
         role=attached.role,
-        access_token=create_access_token(str(attached.id), attached.role),
+        access_token=await create_access_token(str(attached.id), attached.role),
     )
 
 

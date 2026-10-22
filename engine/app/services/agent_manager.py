@@ -32,6 +32,7 @@ from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
+from app.services.guest_resource_config import preserve_guest_resources
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.openclaw_inbox import (
@@ -435,7 +436,7 @@ class AgentManager:
             selected=selected,
             linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
-        wrote = self._atomic_write_json(path, config)
+        wrote = self._atomic_write_json(path, preserve_guest_resources(path, config))
         if not wrote:
             _guest_config_fingerprints[str(agent.id)] = fingerprint
             self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
@@ -603,7 +604,9 @@ class AgentManager:
         )
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
-        self._atomic_write_json(agent_dir / "openclaw.json", config)
+        self._atomic_write_json(
+            agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
+        )
         self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
         _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
             primary=primary,
@@ -636,7 +639,7 @@ class AgentManager:
             if gateway_key not in (None, ""):
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
             container = self.docker_client.run(
-                settings.OPENCLAW_IMAGE,
+                settings.MARACLAW_OPENCLAW_IMAGE,
                 # Skip OfficeCLI download; a failed refresh restarts the guest
                 # and SIGKILLs in-flight inbox CLI turns (exit 137).
                 [

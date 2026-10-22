@@ -33,6 +33,8 @@ async def test_tenant_deletion_http_role_matrix(
         identity=IdentityRecord(id=identity_id),
     )
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=actor))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     get = AsyncMock(return_value=TenantRecord(id=tenant_id, name="Target", slug="target"))
     counts = {"users_count": 2, "agents_count": 3, "schedules_count": 5}
     count = AsyncMock(return_value=counts)
@@ -45,7 +47,7 @@ async def test_tenant_deletion_http_role_matrix(
     monkeypatch.setattr(tenants.user_dao, "fallback_tenant_for_identity", fallback)
     app = FastAPI()
     app.include_router(tenants.router, prefix="/api")
-    token = security.create_access_token(str(actor.id), actor.role)
+    token = await security.create_access_token(str(actor.id), actor.role)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.request(
@@ -85,11 +87,13 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
     tenant_id, identity_id = uuid4(), uuid4()
     actor = UserRecord(
         id=uuid4(),
-        identity_id=None if condition == "identity" else identity_id,
+        identity_id=identity_id,
         role="platform_admin",
         identity=IdentityRecord(id=identity_id, must_change_password=condition == "password"),
     )
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=actor))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     tenant = TenantRecord(
         id=tenant_id,
         name="Target",
@@ -106,7 +110,9 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
     monkeypatch.setattr(tenants.user_dao, "fallback_tenant_for_identity", fallback)
     app = FastAPI()
     app.include_router(tenants.router, prefix="/api")
-    token = security.create_access_token(str(actor.id), actor.role)
+    token = await security.create_access_token(str(actor.id), actor.role)
+    if condition == "identity":
+        actor.identity_id = None
     headers = {} if condition == "unauthenticated" else {"Authorization": f"Bearer {token}"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -116,11 +122,11 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
             headers=headers,
         )
 
-    expected_status = {"missing": 404, "password": 403, "unauthenticated": 401}.get(condition, 400)
+    expected_status = {"missing": 404, "password": 403, "unauthenticated": 401, "identity": 401}.get(condition, 400)
     assert response.status_code == expected_status
     if condition == "password":
         assert response.json()["detail"]["must_change_password"] is True
-    if condition in ("password", "unauthenticated"):
+    if condition in ("password", "unauthenticated", "identity"):
         get.assert_not_awaited()
     else:
         get.assert_awaited_once_with(tenant_id)

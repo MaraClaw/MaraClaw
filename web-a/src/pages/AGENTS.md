@@ -21,7 +21,7 @@ Each page owns Query/mutations + layout. Extract a component only when reused.
 | Models | `llm-models.tsx` | Org + platform admin. PA uses `?company=`. Writes `/api/enterprise/llm-models`. Set primary (`/set-default`), secondary (`/set-secondary`), and fallback (`/set-fallback`). Connect Grok or ChatGPT subscription starts/polls device-code (no token fields). |
 | Search keys | `search-engine.tsx` | Keys/Analytics icon rail. `?tab=analytics` mounts analytics. Leaving the tab drops `tab`/`company`/`range`. |
 | Analytics | `search-engine-analytics.tsx` | Not a route. `?company=` `?range=`. Dual system+scoped summary is intentional. |
-| Tools | `placeholder.tsx` | Still a stub. |
+| Tools | `tools.tsx`, `tools-catalog.tsx`, `tools-editor.tsx`, `tools-config-editor.tsx`, `tools-delete.tsx` | Live catalog/MCP create/metadata and status/delete confirmation. PA `?company=`, OA fixed own tenant. Ownership labels use source/`tenant_id`, never selected scope; required server `capabilities` gate actions (no client ownership policy). Creation/config still require a concrete company; built-in delete stays hidden. `tools-catalog-state.ts` tests presentation gates; `tools-forms.ts` / `tools-config.ts` own payload and secret boundaries. Metadata validates only exposed fields and omits config; explicit config is full replacement with secret re-entry. Scope-keyed editors + `use-tools-action.ts` fence stale UI effects; successful current-session writes invalidate all Tools scopes even after an editor unmounts. Pending writes disable Cancel; successful deletion focuses the catalog heading. |
 
 Hotspots: `llm-models.tsx` (~977, live Models screen), `search-engine-analytics.tsx` (~710), `login.tsx` (~590).
 

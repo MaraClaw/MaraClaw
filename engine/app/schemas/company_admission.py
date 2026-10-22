@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Literal
+from typing import ClassVar, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 
@@ -32,6 +32,13 @@ class RequestDetail(RequestSummary):
     applicant: AdmissionApplicant
     source_tenant: AdmissionTenant | None
     decided_by_user_id: UUID | None
+
+
+class ReviewPage(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: list[RequestDetail]
+    next_cursor: str | None
 
 
 class PendingAdmissionResponse(BaseModel):

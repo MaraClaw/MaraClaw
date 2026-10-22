@@ -3,6 +3,7 @@ from contextvars import Context
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import final
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -231,3 +232,30 @@ async def test_live_acceptance_failure_rolls_back_without_http_success(
     # Then no success response or recoverable request escapes the rollback.
     assert response.status_code == 500
     assert await runs.claim_pending(datetime.now(UTC)) == []
+
+
+@pytest.mark.parametrize("failure", ["history", "flush"])
+async def test_live_cancel_failure_rolls_back_state_and_history(
+    manual_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    # Given claimed pending work and an actual request transaction with a failing boundary.
+    claim = await accept_claim(manual_schedule)
+    match failure:
+        case "history":
+            monkeypatch.setattr(agent_activity_log_dao, "create", AsyncMock(side_effect=RuntimeError("history failed")))
+        case "flush":
+            monkeypatch.setattr(
+                schedules, "flush_request_transaction", AsyncMock(side_effect=RuntimeError("commit failed"))
+            )
+        case _:
+            raise AssertionError(failure)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=schedule_app(manual_schedule), raise_app_exceptions=False),
+        base_url="http://qa",
+    ) as client:
+        # When cancellation cannot commit both terminal state and activity.
+        response = await client.post(f"/agents/{claim.agent_id}/schedules/{claim.schedule_id}/runs/{claim.id}/cancel")
+    # Then no successful acknowledgement, terminal state, lease clearing or history escapes.
+    assert response.status_code == 500
+    assert await runs.get(claim.id) == claim
+    assert await agent_activity_log_dao.list_schedule_history(claim.agent_id, claim.schedule_id) == []

@@ -428,7 +428,7 @@ class FeishuService:
             if member:
                 _ = await org_member_dao.update(db_obj=member, obj_in={"user_id": user.id})
 
-        token = create_access_token(str(user.id), user.role)
+        token = await create_access_token(str(user.id), user.role)
         return user, token
 
     async def send_message(

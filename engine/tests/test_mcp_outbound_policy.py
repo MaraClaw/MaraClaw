@@ -1,5 +1,7 @@
 import json
 from collections.abc import Callable
+from contextlib import asynccontextmanager, nullcontext
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -11,7 +13,7 @@ from app.core.outbound_policy import OutboundPolicyError
 from app.core.security import get_current_user
 from app.records.tool import ToolRecord
 from app.records.user import UserRecord
-from app.services import resource_discovery
+from app.services import mcp_installation, resource_discovery
 from app.services.agent_tool_exec.mcp_tools import _execute_mcp_tool
 from app.services.mcp_client import MCPClient
 
@@ -223,6 +225,11 @@ async def test_direct_import_preserves_placeholder_on_ordinary_protocol_failure(
     async def assign(*_args: object, **_kwargs: object) -> None:
         writes.append("assignment")
 
+    @asynccontextmanager
+    async def mocked_connection():
+        yield SimpleNamespace(raw=SimpleNamespace(transaction=nullcontext))
+
+    monkeypatch.setattr(mcp_installation, "connection_ctx", mocked_connection)
     monkeypatch.setattr(resource_discovery.tool_dao, "get_by_name", lookup)
     monkeypatch.setattr(resource_discovery.tool_dao, "create", create)
     monkeypatch.setattr(resource_discovery.agent_tool_dao, "ensure_with_config", assign)

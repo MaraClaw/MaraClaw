@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
+from datetime import datetime
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ import pytest
 from fastapi import Depends, FastAPI
 
 from app.api import schedules
+from app.core.json_types import json_loads_object
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.db import session
@@ -210,3 +212,69 @@ async def test_mutations_remain_creator_only(api: _HTTP, method: str) -> None:
     assert response.status_code == 403
     api.get_schedule.assert_not_awaited()
     api.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("started", "finished", "outcome", "expected"),
+    [
+        (False, False, "cancelled", "pending"),
+        (True, False, "success", "running"),
+        (True, True, "success", "success"),
+        (True, True, "failure", "failure"),
+        (False, True, "cancelled", "cancelled"),
+        (True, True, "legacy", "unknown"),
+        (False, True, None, "unknown"),
+    ],
+)
+async def test_manual_receipt_projects_timestamps_without_private_fields(
+    api: _HTTP, monkeypatch: pytest.MonkeyPatch, started: bool, finished: bool, outcome: str | None, expected: str
+) -> None:
+    # Given a persisted run containing private snapshot, key and lease fields.
+    run = ScheduleManualRunRecord(
+        uuid4(),
+        api.row.id,
+        api.row.agent_id,
+        api.agent.creator_id,
+        "Private instruction",
+        idempotency_key="Private key",
+        created_at=NOW,
+        started_at=NOW if started else None,
+        finished_at=NOW if finished else None,
+        outcome=outcome,
+        lease_token=uuid4(),
+        lease_expires_at=NOW,
+    )
+    get = AsyncMock(return_value=run)
+    monkeypatch.setattr(schedules.schedule_manual_run_dao, "get_scoped", get, raising=False)
+    monkeypatch.setattr(
+        "app.services.schedule_manual_control.check_agent_access", AsyncMock(return_value=(api.agent, "manage"))
+    )
+    # When reading a scoped receipt over HTTP.
+    response = await api.client.get(api.url + f"/runs/{run.id}")
+    # Then only public identities, lifecycle timestamps and pending capability are exposed.
+    assert response.status_code == 200
+    body = json_loads_object(response.content)
+    assert set(body) == {
+        "run_id",
+        "schedule_id",
+        "agent_id",
+        "requester_id",
+        "status",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "can_cancel",
+    }
+    assert [body[key] for key in ("run_id", "schedule_id", "agent_id", "requester_id")] == [
+        str(run.id),
+        str(run.schedule_id),
+        str(run.agent_id),
+        str(run.requester_id),
+    ]
+    assert body["status"] == expected
+    assert body["can_cancel"] is (expected == "pending")
+    created_at = body["created_at"]
+    assert isinstance(created_at, str)
+    assert datetime.fromisoformat(created_at) == NOW
+    assert (body["started_at"] is not None) is started
+    assert (body["finished_at"] is not None) is finished

@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
 
 from app.api import admin as admin_api
+from app.core import security
 from app.core.json_types import json_loads_value
 from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
@@ -23,15 +24,18 @@ from app.schemas.admin_metrics import (
 
 @pytest.fixture
 def metric_user() -> UserRecord:
-    return UserRecord(id=uuid4(), role="platform_admin", identity=IdentityRecord(id=uuid4()))
+    identity = IdentityRecord(id=uuid4())
+    return UserRecord(id=uuid4(), role="platform_admin", identity_id=identity.id, identity=identity)
 
 
 @pytest.fixture
 async def metric_client(monkeypatch: pytest.MonkeyPatch, metric_user: UserRecord) -> AsyncIterator[AsyncClient]:
     monkeypatch.setattr(admin_api.user_dao, "get_with_identity", AsyncMock(return_value=metric_user))
+    monkeypatch.setattr(admin_api.user_dao, "get", AsyncMock(return_value=metric_user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     app = FastAPI()
     app.include_router(admin_api.router, prefix="/api")
-    token = create_access_token(str(metric_user.id), metric_user.role)
+    token = await create_access_token(str(metric_user.id), metric_user.role)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test", headers={"Authorization": f"Bearer {token}"}
     ) as client:

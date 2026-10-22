@@ -18,7 +18,7 @@ from app.services.registration_service import participant_dao, registration_serv
 
 
 @pytest.fixture
-def account() -> UserRecord:
+def account(monkeypatch) -> UserRecord:
     now = datetime.now(UTC)
     identity = IdentityRecord(
         id=uuid4(),
@@ -30,13 +30,16 @@ def account() -> UserRecord:
         created_at=now,
         updated_at=now,
     )
-    return UserRecord(
+    user = UserRecord(
         id=uuid4(),
         identity_id=identity.id,
         display_name="Alice",
         identity=identity,
         created_at=now,
     )
+    monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    return user
 
 
 @pytest.fixture

@@ -51,6 +51,7 @@ from app.services.tool_config import (
     meaningful_config,
     set_tenant_tool_config,
 )
+from app.services.tool_ownership import can_configure_tool, can_mutate_tool, tool_capabilities
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -97,14 +98,14 @@ def _resolve_target_tenant_id(current_user: UserRecord, tenant_id: str | None = 
             resolved = uuid.UUID(tenant_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid tenant_id format") from exc
-        if current_user.role != "platform_admin" and resolved != current_user.tenant_id:
+        if not current_user.is_platform_admin and resolved != current_user.tenant_id:
             raise HTTPException(status_code=403, detail="Cannot manage another tenant's tools")
         return resolved
     return current_user.tenant_id
 
 
 def _require_catalog_manager(current_user: UserRecord) -> None:
-    if current_user.role not in {"platform_admin", "org_admin"}:
+    if not current_user.is_platform_admin and current_user.role != "org_admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
@@ -191,6 +192,8 @@ async def list_tools(
                 "enabled": t.enabled,
                 "is_default": t.is_default,
                 "source": t.source,
+                "tenant_id": str(t.tenant_id) if t.tenant_id is not None else None,
+                "capabilities": tool_capabilities(current_user, t, target_tenant_id),
                 "config": company_config,
                 "config_schema": t.config_schema or {},
                 "created_at": t.created_at.isoformat() if t.created_at else None,
@@ -254,6 +257,8 @@ async def update_tools_bulk(
     tool_ids = [uuid.UUID(u.tool_id) for u in updates]
     tools = await tool_dao.list_by_ids(tool_ids)
     tools_map = {str(t.id): t for t in tools}
+    if any(not can_mutate_tool(current_user, tool) for tool in tools):
+        raise HTTPException(status_code=403, detail="Cannot modify shared or another tenant's tools")
 
     for update in updates:
         tool = tools_map.get(update.tool_id)
@@ -326,12 +331,20 @@ async def update_tool(
     )
     update_data.pop("tenant_id", None)
 
+    requires_record_mutation = bool(update_data.keys() - {"config"}) or (
+        "config" in update_data and tool.source != "builtin"
+    )
+    if requires_record_mutation and not can_mutate_tool(current_user, tool):
+        raise HTTPException(status_code=403, detail="Cannot modify shared or another tenant's tools")
+
     if "config" in update_data:
         update_data.pop("config")
         config_value = meaningful_config(data.config)
         if tool.source == "builtin":
-            if not target_tenant_id:
+            if target_tenant_id is None:
                 raise HTTPException(status_code=400, detail="tenant_id is required to configure builtin tools")
+            if not can_configure_tool(current_user, tool, target_tenant_id):
+                raise HTTPException(status_code=403, detail="Cannot configure another tenant's tools")
             await set_tenant_tool_config(target_tenant_id, tool.name, config_value, tool.config_schema)
         else:
             update_data["config"] = _encrypt_sensitive_fields(config_value, tool.config_schema)
@@ -350,8 +363,8 @@ async def delete_tool(tool_id: uuid.UUID, current_user: UserRecord = Depends(get
         raise HTTPException(status_code=404, detail="Tool not found")
     if tool.type == "builtin":
         raise HTTPException(status_code=400, detail="Cannot delete builtin tools")
-    if current_user.role != "platform_admin" and tool.tenant_id not in {None, current_user.tenant_id}:
-        raise HTTPException(status_code=403, detail="Cannot delete another tenant's tools")
+    if not can_mutate_tool(current_user, tool):
+        raise HTTPException(status_code=403, detail="Cannot delete shared or another tenant's tools")
 
     async with connection_ctx():
         await agent_tool_dao.delete_for_tool(tool_id)

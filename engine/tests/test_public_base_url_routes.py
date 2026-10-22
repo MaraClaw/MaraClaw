@@ -159,7 +159,7 @@ async def test_tenant_switch_requires_base_only_when_redirecting(monkeypatch, ur
     monkeypatch.setattr(
         auth.system_setting_dao, "is_sso_custom_domain_redirect_enabled", AsyncMock(return_value=redirect_enabled)
     )
-    monkeypatch.setattr(auth, "create_access_token", lambda *_: "switch-token")
+    monkeypatch.setattr(auth, "create_access_token", AsyncMock(return_value="switch-token"))
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.example") as client:
         response = await client.post("/api/auth/switch-tenant", json={"tenant_id": str(tenant.id)})

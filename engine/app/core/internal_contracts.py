@@ -23,9 +23,11 @@ class AccessTokenClaims(TypedDict, extra_items=JsonValue):
     sub: str
     role: str
     exp: datetime | int
+    gen: int
 
 
 class AccessTokenPayload(TypedDict, extra_items=JsonValue):
     sub: str
     role: str
     exp: int
+    gen: int

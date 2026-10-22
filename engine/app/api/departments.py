@@ -24,6 +24,7 @@ from app.schemas.department import (
     DepartmentOut,
     DepartmentsOut,
 )
+from app.services.admin_audit import field_change, write_admin_audit
 from app.services.org_departments import (
     admin_tenant,
     assign_department,
@@ -75,6 +76,14 @@ async def create_department(
             if await tenant_dao.get(tenant) is None:
                 raise HTTPException(404, "Organization not found")
             row = await org_department_dao.create(obj_in={"tenant_id": tenant, "name": data.name})
+            await write_admin_audit(
+                actor=actor,
+                action="department.create",
+                target_type="department",
+                target_id=row.id,
+                tenant_id=tenant,
+                changes={"name": field_change(None, row.name)},
+            )
             return DepartmentOut.model_validate(row)
     except UniqueViolationError as exc:
         raise HTTPException(409, "Department name already exists") from exc

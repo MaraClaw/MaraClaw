@@ -540,6 +540,8 @@ async def test_tool_mutation_wire_keeps_fixed_acknowledgements_and_empty_delete(
 ) -> None:
     user, agent, tool, assignment = tool_state
     tool.type = "mcp"
+    tool.source = "admin"
+    tool.tenant_id = user.tenant_id
 
     async def create(**_kwargs: object) -> ToolRecord:
         return tool

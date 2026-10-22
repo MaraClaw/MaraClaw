@@ -12,27 +12,43 @@ import { canReviewAdmissions } from '../src/lib/types/auth.ts'
 import { approvedAdmission, pendingAdmission } from './admission-fixtures.ts'
 import { adminUser } from './helpers.ts'
 
-test('admission review listing sends status and page bounds and parses the detail array', async (t) => {
+test('admission review listing preserves an opaque cursor and parses a readonly page', async (t) => {
   // Given
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([pendingAdmission]))
+  const page = { items: [pendingAdmission], next_cursor: 'next-page' }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(page))
   const controller = new AbortController()
   // When
-  const result = await fetchAdmissionReviews('pending', 50, controller.signal)
+  const result = await fetchAdmissionReviews('pending', 'opaque+/= cursor', controller.signal)
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review?status=pending&limit=50&offset=50')
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review/page?status=pending&limit=50&cursor=opaque%2B%2F%3D+cursor')
   assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, controller.signal)
-  assert.deepEqual(result, [pendingAdmission])
+  assert.deepEqual(result, page)
   assert.equal(Object.isFrozen(result), true)
+  assert.equal(Object.isFrozen(result.items), true)
 })
 
-test('review listing starts at offset zero for the selected status', async (t) => {
+test('review listing omits the cursor on the first page of the selected status', async (t) => {
   // Given
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([]))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
   // When
-  await fetchAdmissionReviews('rejected')
+  const result = await fetchAdmissionReviews('rejected')
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review?status=rejected&limit=50&offset=0')
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review/page?status=rejected&limit=50')
+  assert.deepEqual(result, { items: [], next_cursor: null })
 })
+
+for (const invalid of [
+  [], {}, { items: [] }, { next_cursor: null }, { items: null, next_cursor: null },
+  { items: [], next_cursor: 7 }, { items: [], next_cursor: '' },
+  { items: [{ ...pendingAdmission, status: 'cancelled' }], next_cursor: null },
+]) {
+  test('malformed review page envelopes fail at the API boundary', async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json(invalid))
+    // When / Then
+    await assert.rejects(fetchAdmissionReviews('pending'), z.ZodError)
+  })
+}
 
 test('admission detail accepts nullable applicant and source fields from the contract', async (t) => {
   // Given
@@ -48,12 +64,13 @@ test('admission detail accepts nullable applicant and source fields from the con
 test('withdrawn reviews parse through the listing boundary with applicant-owned decision metadata', async (t) => {
   // Given
   const withdrawn = { ...pendingAdmission, status: 'withdrawn', decided_at: '2026-10-20T10:00:00Z', decided_by_user_id: null, decision_reason: null }
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([withdrawn]))
+  const page = { items: [withdrawn], next_cursor: null }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(page))
   // When
   const result = await fetchAdmissionReviews('withdrawn')
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review?status=withdrawn&limit=50&offset=0')
-  assert.deepEqual(result, [withdrawn])
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review/page?status=withdrawn&limit=50')
+  assert.deepEqual(result, page)
 })
 
 test('withdrawn detail accepts the terminal status without requiring an admin reviewer', async (t) => {

@@ -13,16 +13,73 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.api import auth as auth_api
+from app.core import security
+from app.core.json_types import object_mapping_from
 from app.core.security import create_access_token, hash_password
+from app.records.identity import IdentityRecord
+from app.records.user import UserRecord
+from app.schemas.schemas import UserLogin
 from app.services import chat_tickets
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
 
 
-def test_chat_ticket_bearer_contract(monkeypatch):
-    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+@pytest.mark.asyncio
+async def test_bearer_rejects_revoked_generation_with_cached_principal(monkeypatch):
+    # Given a token shared by memberships of one identity and a cached principal.
+    identity = IdentityRecord(id=uuid.uuid4())
+    user = UserRecord(id=uuid.uuid4(), identity_id=identity.id, identity=identity)
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
+    generation = AsyncMock(return_value=7)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    token = await security.create_access_token(str(user.id), user.role)
+    generation.return_value = 8
+
+    # When the old credential is used, then fresh SQL wins over the cached user.
+    with pytest.raises(HTTPException) as caught:
+        await security.load_user_from_access_token(token)
+    assert caught.value.status_code == 401
+    assert generation.await_count == 2
+    assert await security.load_user_principal(user.id) is user
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["membership", "identity", "generation"])
+async def test_mint_fails_closed_when_current_identity_cannot_be_resolved(monkeypatch, missing):
+    # Given no valid persisted identity generation for the membership.
+    user = UserRecord(id=uuid.uuid4(), identity_id=None if missing == "identity" else uuid.uuid4())
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=None if missing == "membership" else user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=None))
+
+    # When minting, then no credential is issued from a snapshot or default generation.
+    with pytest.raises(HTTPException) as caught:
+        await security.create_access_token(str(user.id), user.role)
+    assert caught.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_identity_only_mint_reads_persisted_generation_without_membership(monkeypatch):
+    # Given an email-verification identity with no membership yet.
+    identity_id = uuid.uuid4()
+    membership = AsyncMock(side_effect=AssertionError("identity-only subject must not resolve membership"))
+    monkeypatch.setattr(security.user_dao, "get", membership)
+    generation = AsyncMock(return_value=9)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+
+    # When minting explicitly for that identity, then the persisted generation is retained.
+    token = await security.create_access_token(str(identity_id), "user", identity_id=identity_id)
+    assert security.decode_access_token(token)["gen"] == 9
+    generation.assert_awaited_once_with(identity_id)
+
+
+@pytest.mark.asyncio
+async def test_chat_ticket_bearer_contract(monkeypatch):
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=uuid.uuid4())
     agent_id, session_id = uuid.uuid4(), uuid.uuid4()
-    token = create_access_token(str(user.id), "member")
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    token = await create_access_token(str(user.id), "member")
     monkeypatch.setattr(auth_api, "load_user_from_access_token", AsyncMock(return_value=user))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock())
     monkeypatch.setattr(
@@ -48,6 +105,7 @@ def test_chat_ticket_bearer_contract(monkeypatch):
     assert binding.agent_id == agent_id
     assert binding.session_id == session_id
     assert binding.auth_deadline == auth_api.decode_access_token(token)["exp"]
+    assert binding.auth_generation == 7
 
 
 def _dummy_request() -> Request:
@@ -146,7 +204,7 @@ def _make_user(identity_id, *, role="member", tenant_id=None):
 
 
 def _make_login_data(login_identifier="test@example.com", password=DEFAULT_TEST_CREDENTIAL):
-    return SimpleNamespace(
+    return UserLogin(
         login_identifier=login_identifier,
         password=password,
         tenant_id=None,
@@ -244,8 +302,7 @@ async def test_login_unverified_email(monkeypatch):
     ):
         await auth_api.login(data, bg, _dummy_request())
     assert exc.value.status_code == 403
-    detail = exc.value.detail
-    assert isinstance(detail, dict)
+    detail = object_mapping_from(exc.value.detail)
     assert detail["needs_verification"] is True
 
 
@@ -367,7 +424,7 @@ async def test_register_init_returns_submitted_email(monkeypatch):
     monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
     monkeypatch.setattr(auth_api, "hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
-    monkeypatch.setattr(auth_api, "create_access_token", lambda *a, **k: "tok")
+    monkeypatch.setattr(auth_api, "create_access_token", AsyncMock(return_value="tok"))
 
     with (
         patch("app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=None)),

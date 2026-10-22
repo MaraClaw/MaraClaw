@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 from app.api import admin as admin_api, auth as auth_api
 from app.core import security as security_mod
+from app.core.json_types import object_mapping_from
 from app.core.security import hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -142,6 +143,8 @@ async def test_login_returns_must_change_password(monkeypatch):
 
     monkeypatch.setattr("app.dao.identity_dao.get_by_login_identifier", AsyncMock(return_value=identity))
     monkeypatch.setattr("app.dao.user_dao.get_by_identity_id", AsyncMock(return_value=[user]))
+    monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     monkeypatch.setattr("app.dao.tenant_dao.get", AsyncMock(return_value=tenant))
 
     data: Any = SimpleNamespace(
@@ -161,7 +164,9 @@ async def test_login_returns_must_change_password(monkeypatch):
 async def test_get_current_user_blocks_when_must_change_password(monkeypatch):
     identity = _identity_record(must_change_password=True)
     user = _user_record(identity)
-    token = security_mod.create_access_token(str(user.id), user.role)
+    monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    token = await security_mod.create_access_token(str(user.id), user.role)
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
@@ -169,15 +174,17 @@ async def test_get_current_user_blocks_when_must_change_password(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await security_mod.get_current_user(credentials)
     assert exc.value.status_code == 403
-    assert isinstance(exc.value.detail, dict)
-    assert exc.value.detail["must_change_password"] is True
+    detail = object_mapping_from(exc.value.detail)
+    assert detail["must_change_password"] is True
 
 
 @pytest.mark.asyncio
 async def test_get_authenticated_user_allows_must_change_password(monkeypatch):
     identity = _identity_record(must_change_password=True)
     user = _user_record(identity)
-    token = security_mod.create_access_token(str(user.id), user.role)
+    monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    token = await security_mod.create_access_token(str(user.id), user.role)
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
@@ -190,7 +197,9 @@ async def test_get_authenticated_user_allows_must_change_password(monkeypatch):
 async def test_load_user_from_access_token_enforces_password_change(monkeypatch):
     identity = _identity_record(must_change_password=True)
     user = _user_record(identity)
-    token = security_mod.create_access_token(str(user.id), user.role)
+    monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    token = await security_mod.create_access_token(str(user.id), user.role)
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
     with pytest.raises(HTTPException) as exc:
@@ -202,8 +211,8 @@ async def test_load_user_from_access_token_enforces_password_change(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_change_password_clears_must_change_flag(monkeypatch):
-    identity = _identity_ns(must_change_password=True, password="old-password")
-    user = _user_ns(identity)
+    identity = _identity_record(must_change_password=True, password="old-password")
+    user = _user_record(identity)
     updated = []
 
     async def fake_update(*, db_obj, obj_in):
@@ -225,8 +234,8 @@ async def test_change_password_clears_must_change_flag(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_change_password_rejects_same_password(monkeypatch):
-    identity = _identity_ns(must_change_password=True, password="same-password")
-    user = _user_ns(identity)
+    identity = _identity_record(must_change_password=True, password="same-password")
+    user = _user_record(identity)
     data: Any = SimpleNamespace(old_password="same-password", new_password="same-password")
     with pytest.raises(HTTPException) as exc:
         await auth_api.change_password(data, current_user=user)
@@ -367,9 +376,11 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
     monkeypatch.setattr(seeder.user_dao, "first_by_role", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(seeder, "hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr(seeder.identity_dao, "create_identity", AsyncMock(return_value=identity))
+    create_identity = AsyncMock(return_value=identity)
+    monkeypatch.setattr(seeder.identity_dao, "create_identity", create_identity)
     monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[]))
-    monkeypatch.setattr(seeder.user_dao, "create", AsyncMock(return_value=user))
+    create_user = AsyncMock(return_value=user)
+    monkeypatch.setattr(seeder.user_dao, "create", create_user)
     monkeypatch.setattr(seeder.participant_dao, "create_for_user", AsyncMock())
     maraclaw = _patch_maraclaw(monkeypatch, seeder)
 
@@ -379,11 +390,13 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
         result = await seeder.ensure_platform_admin()
 
     assert result is user
-    kwargs = seeder.identity_dao.create_identity.await_args.kwargs
+    assert create_identity.await_args is not None
+    kwargs = create_identity.await_args.kwargs
     assert kwargs["email"] == "platform@example.com"
     assert kwargs["is_platform_admin"] is True
     assert kwargs["must_change_password"] is True
-    create_user_kwargs = seeder.user_dao.create.await_args.kwargs["obj_in"]
+    assert create_user.await_args is not None
+    create_user_kwargs = create_user.await_args.kwargs["obj_in"]
     assert create_user_kwargs["tenant_id"] == maraclaw.id
     assert create_user_kwargs["role"] == "platform_admin"
     assert create_user_kwargs["is_genesis"] is True
@@ -681,7 +694,7 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(auth_api, "hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr(auth_api, "create_access_token", lambda *a, **k: "token")
+    monkeypatch.setattr(auth_api, "create_access_token", AsyncMock(return_value="token"))
     monkeypatch.setattr(auth_api, "_send_verification_email_task", AsyncMock())
 
     with (

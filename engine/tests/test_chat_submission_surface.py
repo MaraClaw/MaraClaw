@@ -27,6 +27,7 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(writable_rec
         agent_id=db.agent.id,
         session_id=db.session_id,
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
     )
     monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(return_value=binding))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(db.user, db.agent, "manage")))

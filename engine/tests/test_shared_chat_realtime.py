@@ -28,6 +28,7 @@ def socket_with_binding(agent_id, user_id, frames):
         agent_id=agent_id,
         session_id=shared_session_id(agent_id),
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
     )
     return socket
 

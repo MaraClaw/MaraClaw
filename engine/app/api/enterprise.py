@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 import uuid
+from collections.abc import Mapping
 from functools import partial
 from typing import Any
 
@@ -35,6 +36,8 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx, run_after_commit
 from app.records.identity import IdentityProviderRecord
+from app.records.llm import LLMModelRecord
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.organization_response_enterprise import (
     EmailExistsResponse,
@@ -65,6 +68,7 @@ from app.schemas.schemas import (
     LLMModelUpdate,
     UserInviteRequest,
 )
+from app.services.admin_audit import field_change, write_admin_audit
 from app.services.autonomy_service import autonomy_service
 from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
@@ -106,6 +110,40 @@ from app.services.subscription_boundaries import fresh_subscription_actor, uncha
 
 router = APIRouter(prefix="/enterprise", tags=["enterprise"])
 settings = get_settings()
+
+
+def _llm_audit_metadata(model: LLMModelRecord) -> JsonObject:
+    """Allowlist configuration only; endpoint values and all credentials stay out."""
+    return {
+        "provider": model.provider,
+        "model": model.model,
+        "label": model.label,
+        "enabled": model.enabled,
+        "supports_vision": model.supports_vision,
+        "temperature": model.temperature,
+        "max_tokens_per_day": model.max_tokens_per_day,
+        "max_output_tokens": model.max_output_tokens,
+        "request_timeout": model.request_timeout,
+        "reasoning_effort": model.reasoning_effort,
+        "base_url_configured": bool(model.base_url),
+    }
+
+
+def _llm_slot_changes(tenant: TenantRecord, updates: Mapping[str, uuid.UUID | None]) -> dict[str, object]:
+    """Record observed slot values before DAO updates mutate the record."""
+    changes: dict[str, object] = {}
+    slots = {
+        "default_model_id": tenant.default_model_id,
+        "default_secondary_model_id": getattr(tenant, "default_secondary_model_id", None),
+        "default_fallback_model_id": getattr(tenant, "default_fallback_model_id", None),
+    }
+    for slot, before in slots.items():
+        if slot not in updates:
+            continue
+        after = updates[slot]
+        if before != after:
+            changes[slot] = field_change(str(before) if before else None, str(after) if after else None)
+    return changes
 
 
 def _is_platform_admin_user(user: UserRecord) -> bool:
@@ -347,16 +385,28 @@ async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_us
 
     assigned_primary = False
     assigned_fallback = False
+    changes: dict[str, object] = {"created": field_change(False, True)}
     if model.tenant_id and model.enabled:
         tenant = await tenant_dao.get(model.tenant_id)
         if tenant:
             if tenant.default_model_id is None:
+                changes.update(_llm_slot_changes(tenant, {"default_model_id": model.id}))
                 _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": model.id})
                 assigned_primary = True
             elif getattr(tenant, "default_fallback_model_id", None) is None:
+                changes.update(_llm_slot_changes(tenant, {"default_fallback_model_id": model.id}))
                 _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
                 assigned_fallback = True
 
+    await write_admin_audit(
+        actor=current_user,
+        action="llm_model_create",
+        target_type="llm_model",
+        target_id=model.id,
+        tenant_id=model.tenant_id,
+        changes=changes,
+        details={**_llm_audit_metadata(model), "credential_changed": bool(data.api_key)},
+    )
     return serialize_llm_model(
         model,
         is_admin=True,
@@ -387,11 +437,12 @@ async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord) 
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     previous_default = tenant.default_model_id
-    updates: dict[str, Any] = {"default_model_id": model.id}
+    updates: dict[str, uuid.UUID | None] = {"default_model_id": model.id}
     if getattr(tenant, "default_fallback_model_id", None) == model.id:
         updates["default_fallback_model_id"] = None
     if getattr(tenant, "default_secondary_model_id", None) == model.id:
         updates["default_secondary_model_id"] = None
+    changes = _llm_slot_changes(tenant, updates)
     _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
 
     if previous_default and previous_default != model.id:
@@ -404,6 +455,15 @@ async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord) 
             f"[set_default_llm_model] Migrated agents in tenant {tenant.id} from {previous_default} -> {model.id}"
         )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="primary")
+    await write_admin_audit(
+        actor=current_user,
+        action="llm_model_set_default",
+        target_type="llm_model",
+        target_id=model.id,
+        tenant_id=model.tenant_id,
+        changes=changes,
+        details=_llm_audit_metadata(model),
+    )
 
 
 @router.post("/llm-models/{model_id}/set-fallback", status_code=status.HTTP_204_NO_CONTENT)
@@ -438,6 +498,7 @@ async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord)
         )
 
     previous_fallback = getattr(tenant, "default_fallback_model_id", None)
+    changes = _llm_slot_changes(tenant, {"default_fallback_model_id": model.id})
     _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
     _ = await agent_dao.migrate_fallback_model(
         tenant_id=tenant.id,
@@ -446,6 +507,15 @@ async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord)
     )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="fallback")
     logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
+    await write_admin_audit(
+        actor=current_user,
+        action="llm_model_set_fallback",
+        target_type="llm_model",
+        target_id=model.id,
+        tenant_id=model.tenant_id,
+        changes=changes,
+        details=_llm_audit_metadata(model),
+    )
 
 
 @router.post("/llm-models/{model_id}/set-secondary", status_code=status.HTTP_204_NO_CONTENT)
@@ -480,6 +550,7 @@ async def _set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord
         )
 
     previous_secondary = getattr(tenant, "default_secondary_model_id", None)
+    changes = _llm_slot_changes(tenant, {"default_secondary_model_id": model.id})
     _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_secondary_model_id": model.id})
     _ = await agent_dao.migrate_secondary_model(
         tenant_id=tenant.id,
@@ -488,6 +559,15 @@ async def _set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord
     )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="secondary")
     logger.info(f"[set_secondary_llm_model] Set secondary for tenant {tenant.id} to {model.id}")
+    await write_admin_audit(
+        actor=current_user,
+        action="llm_model_set_secondary",
+        target_type="llm_model",
+        target_id=model.id,
+        tenant_id=model.tenant_id,
+        changes=changes,
+        details=_llm_audit_metadata(model),
+    )
 
 
 @router.delete("/llm-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -515,9 +595,34 @@ async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: User
             },
         )
 
+    changes: dict[str, object] = {"deleted": field_change(False, True)}
+    if model.tenant_id:
+        tenant = await tenant_dao.get(model.tenant_id)
+        if tenant:
+            # The existing FK deletion policy clears these slots, without a separate tenant write.
+            changes.update(
+                _llm_slot_changes(
+                    tenant,
+                    {
+                        slot: None
+                        for slot in ("default_model_id", "default_secondary_model_id", "default_fallback_model_id")
+                        if getattr(tenant, slot, None) == model.id
+                    },
+                )
+            )
+    metadata = _llm_audit_metadata(model)
     if agent_names:
         await agent_dao.nullify_model_references(model_id)
     _ = await llm_model_dao.delete(id=model_id)
+    await write_admin_audit(
+        actor=current_user,
+        action="llm_model_delete",
+        target_type="llm_model",
+        target_id=model.id,
+        tenant_id=model.tenant_id,
+        changes=changes,
+        details={**metadata, "force": force, "affected_agent_count": len(agent_names)},
+    )
 
 
 @router.put("/llm-models/{model_id}", response_model=LLMModelOut)
@@ -535,6 +640,7 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
         raise HTTPException(status_code=404, detail="Model not found")
     assert_can_manage_model(current_user, model)
 
+    before = _llm_audit_metadata(model)
     updates: dict[str, Any] = {}
     if data.provider not in (None, ""):
         updates["provider"] = data.provider
@@ -567,6 +673,7 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
     if data.reasoning_effort is not None:
         updates["reasoning_effort"] = data.reasoning_effort or None
 
+    endpoint_changed = "base_url" in updates and model.base_url != updates["base_url"]
     try:
         model = await llm_model_dao.update(db_obj=model, obj_in=updates)
         from app.services.openclaw_hot_cache import drop_model_caches
@@ -575,10 +682,15 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
         default_model_id = None
         fallback_model_id = None
         secondary_model_id = None
+        changes: dict[str, object] = {
+            field: field_change(before[field], after)
+            for field, after in _llm_audit_metadata(model).items()
+            if before[field] != after
+        }
         if model.tenant_id:
             tenant = await tenant_dao.get(model.tenant_id)
             if tenant and updates.get("enabled") is False:
-                slot_clears: dict[str, Any] = {}
+                slot_clears: dict[str, uuid.UUID | None] = {}
                 if tenant.default_model_id == model.id:
                     slot_clears["default_model_id"] = None
                 if getattr(tenant, "default_fallback_model_id", None) == model.id:
@@ -586,11 +698,21 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
                 if getattr(tenant, "default_secondary_model_id", None) == model.id:
                     slot_clears["default_secondary_model_id"] = None
                 if slot_clears:
+                    changes.update(_llm_slot_changes(tenant, slot_clears))
                     tenant = await tenant_dao.update(db_obj=tenant, obj_in=slot_clears) or tenant
             if tenant:
                 default_model_id = tenant.default_model_id
                 fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
                 secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
+        await write_admin_audit(
+            actor=current_user,
+            action="llm_model_update",
+            target_type="llm_model",
+            target_id=model.id,
+            tenant_id=model.tenant_id,
+            changes=changes,
+            details={"credential_changed": "api_key_encrypted" in updates, "base_url_changed": endpoint_changed},
+        )
         return serialize_llm_model(
             model,
             is_admin=True,

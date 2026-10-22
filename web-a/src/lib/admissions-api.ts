@@ -21,7 +21,10 @@ export const admissionDetailSchema = z.object({
   source_tenant: tenantSchema.nullable(),
   decided_by_user_id: z.uuid().nullable(),
 }).readonly()
-const reviewListSchema = z.array(admissionDetailSchema).readonly()
+const reviewPageSchema = z.object({
+  items: z.array(admissionDetailSchema).readonly(),
+  next_cursor: z.string().min(1).nullable(),
+}).readonly()
 export const admissionReasonSchema = z.string().trim().max(ADMISSION_REASON_LIMIT, 'Use 2,000 characters or fewer.')
 export const admissionDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
@@ -31,11 +34,13 @@ export const admissionDecisionSchema = z.object({
 export type AdmissionId = z.infer<typeof admissionIdSchema>
 export type AdmissionStatus = z.infer<typeof admissionStatusSchema>
 export type AdmissionDetail = z.infer<typeof admissionDetailSchema>
+export type AdmissionReviewPage = z.infer<typeof reviewPageSchema>
 export type AdmissionDecision = z.infer<typeof admissionDecisionSchema>
 
-export async function fetchAdmissionReviews(status: AdmissionStatus, offset = 0, signal?: AbortSignal) {
-  const query = new URLSearchParams({ status, limit: String(ADMISSIONS_PAGE_SIZE), offset: String(offset) })
-  return reviewListSchema.parse(await apiRequest<unknown>(`/api/company-admissions/review?${query}`, { signal }))
+export async function fetchAdmissionReviews(status: AdmissionStatus, cursor: string | null = null, signal?: AbortSignal) {
+  const query = new URLSearchParams({ status, limit: String(ADMISSIONS_PAGE_SIZE) })
+  if (cursor !== null) query.set('cursor', cursor)
+  return reviewPageSchema.parse(await apiRequest<unknown>(`/api/company-admissions/review/page?${query}`, { signal }))
 }
 
 export async function fetchAdmissionDetail(id: AdmissionId, signal?: AbortSignal) {

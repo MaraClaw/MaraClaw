@@ -242,6 +242,7 @@ async def drive_turn(
         agent_id=agent.id,
         session_id=UUID(state.session_id),
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
     )
     handler.conversation = [{"role": "assistant", "content": "prior"}]
     from fastapi import HTTPException

@@ -52,7 +52,7 @@ async def test_registration_succeeds_and_logs_skipped_verification_without_trust
         AsyncMock(return_value=SimpleNamespace(tenant_id=None, suggested=None, needs_org_confirm=False)),
     )
     monkeypatch.setattr(auth, "hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr(auth, "create_access_token", lambda *_: "registration-token")
+    monkeypatch.setattr(auth, "create_access_token", AsyncMock(return_value="registration-token"))
     create_verification = AsyncMock()
     monkeypatch.setattr(email_verification_service, "create_email_verification_token", create_verification)
     schedule = Mock()
