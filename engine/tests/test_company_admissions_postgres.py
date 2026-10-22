@@ -1,7 +1,10 @@
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
 import pytest
 
 from app.schemas.company_admission import RequestDetail
-from company_admission_fixtures import AdmissionScenario, admission_scenario
+from company_admission_fixtures import AdmissionScenario, admission_scenario, review_page, seed_review
 
 __all__ = ["admission_scenario"]
 
@@ -114,6 +117,63 @@ async def test_expired_invitation_keeps_request_pending(admission_scenario: Admi
     assert response.status_code == 409
     assert await scenario.db.fetchval("SELECT status FROM company_admission_requests") == "pending"
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 4])
+async def test_review_page_continuation_uses_an_extra_row(admission_scenario: AdmissionScenario, count: int):
+    # Given a queue below, at, or beyond a two-item boundary.
+    scenario = admission_scenario
+    stamp = datetime(2026, 10, 21, 12, 0, 0, 123456, tzinfo=UTC)
+    await seed_review(scenario, [(number, stamp) for number in range(1, count + 1)])
+
+    # When the first page and its explicit continuation are requested.
+    first = await review_page(scenario, {"limit": 2})
+    pages = [first]
+    if first.next_cursor is not None:
+        pages.append(await review_page(scenario, {"limit": 2, "cursor": first.next_cursor}))
+
+    # Then exact boundaries do not advertise a spurious empty page.
+    assert [[item.id.int for item in page.items] for page in pages] == [
+        list(range(count, 0, -1))[offset : offset + 2] for offset in range(0, max(count, 1), 2)
+    ]
+    assert (first.next_cursor is not None) == (count > 2)
+    assert pages[-1].next_cursor is None
+
+
+async def test_review_pages_preserve_timestamp_ties_and_microseconds(admission_scenario: AdmissionScenario):
+    # Given timestamp ties with adjacent microseconds and UUIDs opposing timestamp order.
+    scenario = admission_scenario
+    stamp = datetime(2026, 10, 21, 12, 0, 0, 123456, tzinfo=UTC)
+    await seed_review(scenario, [(9, stamp), (8, stamp), (7, stamp), (1, stamp + timedelta(microseconds=1))])
+
+    # When each continuation is followed, including a different valid page size.
+    first = await review_page(scenario, {"limit": 2})
+    assert first.next_cursor is not None
+    second = await review_page(scenario, {"limit": 1, "cursor": first.next_cursor})
+    assert second.next_cursor is not None
+    third = await review_page(scenario, {"limit": 1, "cursor": second.next_cursor})
+
+    # Then the tuple boundary is exclusive and preserves full PostgreSQL precision.
+    assert [item.id.int for page in (first, second, third) for item in page.items] == [1, 9, 8, 7]
+    assert first.items[-1].created_at == stamp
+    assert third.next_cursor is None
+
+
+async def test_review_pages_ignore_inserts_above_the_position(admission_scenario: AdmissionScenario):
+    # Given a continuation for the first two of four pending requests.
+    scenario = admission_scenario
+    stamp = datetime(2026, 10, 21, tzinfo=UTC)
+    await seed_review(scenario, [(number, stamp) for number in range(1, 5)])
+    first = await review_page(scenario, {"limit": 2})
+    assert first.next_cursor is not None
+    await seed_review(scenario, [(5, stamp + timedelta(seconds=1))])
+
+    # When traversal continues while a newer request exists above the position.
+    following = await review_page(scenario, {"limit": 2, "cursor": first.next_cursor})
+
+    # Then untouched older rows are neither skipped nor duplicated.
+    assert [item.id for item in following.items] == [UUID(int=2), UUID(int=1)]
+    assert following.next_cursor is None
 
 
 async def test_request_detail_access_is_applicant_or_target_genesis(admission_scenario: AdmissionScenario):

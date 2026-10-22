@@ -1,6 +1,8 @@
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,15 +12,17 @@ from httpx import ASGITransport, AsyncClient
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
+from pydantic import BaseModel, ConfigDict
 
 from app.core.security import create_access_token, hash_password_async
+from app.dao.company_admission_dao import company_admission_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.records.user import UserRecord
-from app.schemas.company_admission import PendingAdmissionResponse
+from app.schemas.company_admission import PendingAdmissionResponse, RequestDetail
 
 
 @dataclass
@@ -46,6 +50,41 @@ class AdmissionScenario:
         )
         assert response.status_code == 202, response.text
         return str(PendingAdmissionResponse.model_validate_json(response.content).request.id)
+
+
+class ReviewPageResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[RequestDetail]
+    next_cursor: str | None
+
+
+async def seed_review(scenario: AdmissionScenario, positions: list[tuple[int, datetime]]) -> list[UUID]:
+    ids: list[UUID] = []
+    for number, created_at in positions:
+        applicant = await user_dao.create(
+            obj_in={"display_name": f"Applicant {number}", "tenant_id": scenario.source_id}
+        )
+        request = await company_admission_dao.create(
+            obj_in={
+                "id": UUID(int=number),
+                "applicant_user_id": applicant.id,
+                "source_tenant_id": scenario.source_id,
+                "target_tenant_id": scenario.target_id,
+                "method": "verified_domain",
+                "created_at": created_at,
+            }
+        )
+        ids.append(request.id)
+    return ids
+
+
+async def review_page(scenario: AdmissionScenario, params: dict[str, str | int] | None = None) -> ReviewPageResult:
+    response = await scenario.client.get(
+        "/api/company-admissions/review/page", params=params, headers=scenario.headers(scenario.genesis)
+    )
+    assert response.status_code == 200, response.text
+    return ReviewPageResult.model_validate_json(response.content)
 
 
 @pytest.fixture

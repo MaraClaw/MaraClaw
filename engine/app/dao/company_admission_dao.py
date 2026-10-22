@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
 
@@ -61,6 +62,29 @@ class CompanyAdmissionDAO(BaseDAO[CompanyAdmissionRecord]):
                 "SELECT * FROM company_admission_requests WHERE target_tenant_id=%(id)s AND status=%(status)s "
                 "ORDER BY created_at DESC,id DESC LIMIT %(limit)s OFFSET %(offset)s",
                 {"id": tenant_id, "status": status.value, "limit": limit, "offset": offset},
+            )
+            return [self.record_factory(row) for row in rows]
+
+    async def list_review_page(
+        self,
+        tenant_id: UUID,
+        status: AdmissionStatus,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None = None,
+    ) -> list[CompanyAdmissionRecord]:
+        params: dict[str, object] = {"tenant_id": tenant_id, "status": status.value, "limit": limit + 1}
+        boundary = ""
+        if before is not None:
+            boundary = " AND (created_at,id) < (%(created_at)s,%(request_id)s)"
+            params.update(created_at=before[0], request_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT * FROM company_admission_requests "
+                "WHERE target_tenant_id=%(tenant_id)s AND status=%(status)s"
+                + boundary
+                + " ORDER BY created_at DESC,id DESC LIMIT %(limit)s",
+                params,
             )
             return [self.record_factory(row) for row in rows]
 

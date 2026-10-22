@@ -77,3 +77,34 @@ async def test_reviewer_withdrawal_payload_is_rejected_over_http():
 
     # Then the route rejects it before calling the decision service.
     assert response.status_code == 422
+
+
+async def test_review_page_requires_authentication():
+    # Given the actual HTTP router without a session.
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+
+    # When even a malformed continuation is submitted anonymously.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admissions.test") as client:
+        response = await client.get("/api/company-admissions/review/page", params={"cursor": "%%%"})
+
+    # Then the cursor cannot substitute for authentication.
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"limit": "two"}, {"status": "unknown"}])
+async def test_review_page_rejects_invalid_query_contract(params: dict[str, str | int]):
+    # Given an authenticated HTTP boundary with invalid pagination inputs.
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role="org_admin")
+
+    # When framework query parsing runs before any database call.
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admissions.test") as client:
+            response = await client.get("/api/company-admissions/review/page", params=params)
+    finally:
+        app.dependency_overrides.clear()
+
+    # Then invalid limits/status remain standard typed 422 responses.
+    assert response.status_code == 422
