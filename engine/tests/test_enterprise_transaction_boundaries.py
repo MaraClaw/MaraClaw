@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import uuid
+from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,8 +20,13 @@ from app.db import session
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
-from app.schemas.schemas import LLMModelCreate
+from app.schemas.schemas import LLMModelCreate, LLMModelUpdate
 from app.services import chatgpt_subscription, grok_subscription
+
+if TYPE_CHECKING:
+    from tests.enterprise_audit_fakes import AuditDatabase
+
+pytest_plugins = ("tests.enterprise_audit_fakes",)
 
 
 @pytest.fixture
@@ -56,6 +66,66 @@ async def test_model_creation_and_default_assignment_share_owned_transaction(mon
     assert observed[0] is observed[1]
     assert owned_pool.raw.commits == 0
     assert owned_pool.raw.rollbacks == 1
+
+
+@pytest.mark.parametrize("failure", ["none", "outer", "audit"])
+@pytest.mark.parametrize("operation", ["create", "update", "delete", "set_default", "set_secondary", "set_fallback"])
+async def test_model_mutation_and_audit_share_transaction_and_recover_savepoint(
+    audit_db: AuditDatabase, failure: str, operation: str
+) -> None:
+    # Given
+    audit_db.reject_audit = failure == "audit"
+    before = deepcopy(audit_db.rows)
+    # When
+    with pytest.raises(RuntimeError, match="later mutation failed") if failure == "outer" else nullcontext():
+        async with session.connection_ctx():
+            if operation == "create":
+                await enterprise.add_llm_model(
+                    LLMModelCreate(
+                        provider="anthropic",
+                        model="new-model",
+                        api_key="new-secret",
+                        label="New",
+                        temperature=0.2,
+                        reasoning_effort=None,
+                    ),
+                    None,
+                    audit_db.actor,
+                )
+            elif operation == "update":
+                await enterprise.update_llm_model(
+                    audit_db.model.id,
+                    LLMModelUpdate(label="Renamed", temperature=None, reasoning_effort=None),
+                    audit_db.actor,
+                )
+            elif operation == "delete":
+                await enterprise.remove_llm_model(audit_db.model.id, False, audit_db.actor)
+            else:
+                assignment = {
+                    "set_default": enterprise.set_default_llm_model,
+                    "set_secondary": enterprise.set_secondary_llm_model,
+                    "set_fallback": enterprise.set_fallback_llm_model,
+                }[operation]
+                await assignment(audit_db.model.id, audit_db.actor)
+            assert audit_db.commits == 0
+            assert len(audit_db.events) == (0 if failure == "audit" else 1)
+            if failure == "outer":
+                raise RuntimeError("later mutation failed")
+    # Then
+    assert audit_db.pool.checkouts == audit_db.pool.releases == 1
+    if failure == "outer":
+        assert audit_db.commits == 0
+        assert audit_db.rollbacks == 1
+        assert audit_db.rows == before
+        assert audit_db.events == []
+    else:
+        assert audit_db.commits == 1
+        assert audit_db.rollbacks == 0
+        assert any(audit_db.rows[table] != before[table] for table in ("llm_models", "tenants"))
+        assert len(audit_db.events) == (0 if failure == "audit" else 1)
+    assert "SAVEPOINT admin_audit_write" in audit_db.statements
+    assert ("ROLLBACK TO SAVEPOINT admin_audit_write" in audit_db.statements) == (failure == "audit")
+    assert "RELEASE SAVEPOINT admin_audit_write" in audit_db.statements
 
 
 @pytest.mark.parametrize("service", [grok_subscription, chatgpt_subscription])
