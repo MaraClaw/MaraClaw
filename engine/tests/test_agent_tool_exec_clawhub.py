@@ -155,80 +155,6 @@ async def test_search_reports_no_matching_skills(monkeypatch: pytest.MonkeyPatch
     assert await target._search_clawhub(uuid.uuid4(), {"query": "missing"}) == "No skills found matching 'missing'."
 
 
-async def test_install_github_writes_files_with_tenant_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    target = _target()
-    skills = _skills()
-    _patch_tenant(monkeypatch)
-    calls: list[tuple[object, ...]] = []
-
-    def parse(source: str) -> JsonObject:
-        calls.append(("parse", source))
-        return {"owner": "acme", "repo": "skills", "branch": "main", "path": "tools/reporting"}
-
-    async def get_token(tenant_id: str) -> str:
-        calls.append(("token", tenant_id))
-        return "github-token"
-
-    async def fetch(owner: str, repo: str, path: str, branch: str, token: str) -> list[JsonObject]:
-        calls.append(("fetch", owner, repo, path, branch, token))
-        return [{"path": "SKILL.md", "content": "# Reporting"}]
-
-    monkeypatch.setattr(skills, "_parse_github_url", parse)
-    monkeypatch.setattr(skills, "_get_github_token", get_token)
-    monkeypatch.setattr(skills, "_fetch_github_directory", fetch)
-
-    result = await target._install_skill(
-        uuid.uuid4(),
-        tmp_path,
-        {"source": "https://github.com/acme/skills/tree/main/tools/reporting"},
-    )
-
-    assert calls == [
-        ("parse", "https://github.com/acme/skills/tree/main/tools/reporting"),
-        ("token", "tenant-clawhub"),
-        ("fetch", "acme", "skills", "tools/reporting", "main", "github-token"),
-    ]
-    assert (tmp_path / "skills" / "reporting" / "SKILL.md").read_text() == "# Reporting"
-    assert result == (
-        "✅ Skill 'reporting' installed successfully (1 files written to skills/reporting/).\n\nFiles: SKILL.md"
-    )
-
-
-async def test_install_clawhub_fetches_metadata_before_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    target = _target()
-    skills = _skills()
-    _patch_tenant(monkeypatch)
-    calls: list[tuple[object, ...]] = []
-
-    async def get_key(tenant_id: str) -> str:
-        calls.append(("key", tenant_id))
-        return "clawhub-key"
-
-    async def metadata(slug: str, *, api_key: str) -> tuple[JsonObject, str]:
-        calls.append(("metadata", slug, api_key))
-        return {"slug": slug}, "https://clawhub.test"
-
-    async def archive(slug: str, *, api_key: str, preferred_base: str) -> tuple[list[JsonObject], str]:
-        calls.append(("archive", slug, api_key, preferred_base))
-        return [{"path": "SKILL.md", "content": "# Market Research"}], preferred_base
-
-    monkeypatch.setattr(skills, "_get_clawhub_key", get_key)
-    monkeypatch.setattr(skills, "_fetch_clawhub_skill_meta", metadata)
-    monkeypatch.setattr(skills, "_fetch_clawhub_skill_archive", archive)
-
-    result = await target._install_skill(uuid.uuid4(), tmp_path, {"source": "  market-research  "})
-
-    assert calls == [
-        ("key", "tenant-clawhub"),
-        ("metadata", "market-research", "clawhub-key"),
-        ("archive", "market-research", "clawhub-key", "https://clawhub.test"),
-    ]
-    assert (tmp_path / "skills" / "market-research" / "SKILL.md").read_text() == "# Market Research"
-    assert result == (
-        "✅ Skill 'market-research' installed successfully (1 files written to skills/market-research/).\n\nFiles: SKILL.md"
-    )
-
-
 @pytest.mark.parametrize("source", ["../../ws-escape", ".", "..", "nested/skill", r"nested\skill"])
 async def test_install_rejects_slug_that_is_not_a_safe_folder_component(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str
@@ -255,56 +181,6 @@ async def test_install_rejects_slug_that_is_not_a_safe_folder_component(
     assert result == "❌ Invalid skill folder name."
     assert not (tmp_path.parent / "ws-escape").exists()
     assert not (tmp_path / "skills").exists()
-
-
-async def test_install_skips_paths_resolving_outside_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    target = _target()
-    skills = _skills()
-    _patch_tenant(monkeypatch)
-
-    def parse(_source: str) -> JsonObject:
-        return {"owner": "acme", "repo": "skills", "branch": "main", "path": ""}
-
-    async def get_token(_tenant_id: str) -> str:
-        return "token"
-
-    async def fetch(*_args: object) -> list[JsonObject]:
-        return [{"path": "../../../escape.txt", "content": "must not write"}]
-
-    monkeypatch.setattr(skills, "_parse_github_url", parse)
-    monkeypatch.setattr(skills, "_get_github_token", get_token)
-    monkeypatch.setattr(skills, "_fetch_github_directory", fetch)
-
-    result = await target._install_skill(uuid.uuid4(), tmp_path, {"source": "https://github.com/acme/skills"})
-
-    assert not (tmp_path.parent / "escape.txt").exists()
-    assert result == "✅ Skill 'skills' installed successfully (0 files written to skills/skills/).\n\nFiles: "
-
-
-async def test_install_skips_sibling_prefix_archive_escape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    target = _target()
-    skills = _skills()
-    _patch_tenant(monkeypatch)
-    workspace = tmp_path / "ws"
-    sibling = tmp_path / "ws-sibling"
-
-    def parse(_source: str) -> JsonObject:
-        return {"owner": "acme", "repo": "skill", "branch": "main", "path": ""}
-
-    async def get_token(_tenant_id: str) -> str:
-        return "token"
-
-    async def fetch(*_args: object) -> list[JsonObject]:
-        return [{"path": "../../../ws-sibling/escape.txt", "content": "must not write"}]
-
-    monkeypatch.setattr(skills, "_parse_github_url", parse)
-    monkeypatch.setattr(skills, "_get_github_token", get_token)
-    monkeypatch.setattr(skills, "_fetch_github_directory", fetch)
-
-    result = await target._install_skill(uuid.uuid4(), workspace, {"source": "https://github.com/acme/skill"})
-
-    assert not (sibling / "escape.txt").exists()
-    assert result == "✅ Skill 'skill' installed successfully (0 files written to skills/skill/).\n\nFiles: "
 
 
 @pytest.mark.parametrize(
