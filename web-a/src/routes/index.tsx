@@ -14,7 +14,7 @@ const LoginPage = lazy(() => import('@/pages/login').then((module) => ({ default
 const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({ default: module.CompaniesPage })))
 const CompanyDetailPage = lazy(() => import('@/pages/company-detail').then((module) => ({ default: module.CompanyDetailPage })))
 const OverviewPage = lazy(() => import('@/pages/overview').then((module) => ({ default: module.OverviewPage })))
-const PlaceholderPage = lazy(() => import('@/pages/placeholder').then((module) => ({ default: module.PlaceholderPage })))
+const ToolsPage = lazy(() => import('@/pages/tools').then((module) => ({ default: module.ToolsPage })))
 const ResetPasswordPage = lazy(() => import('@/pages/reset-password').then((module) => ({ default: module.ResetPasswordPage })))
 const SearchEnginePage = lazy(() => import('@/pages/search-engine').then((module) => ({ default: module.SearchEnginePage })))
 const SettingsPage = lazy(() => import('@/pages/settings').then((module) => ({ default: module.SettingsPage })))
@@ -66,16 +66,7 @@ export function AppRouter() {
               <Route path="users" element={<UsersPage />} />
               <Route path="users/:userId" element={<UserDetailPage />} />
               <Route path="models" element={<LlmModelsPage />} />
-              <Route
-                path="tools"
-                element={
-                  <PlaceholderPage
-                    title="Tools"
-                    description="Platform and tenant tool catalog management."
-                    apiHint="/api/tools"
-                  />
-                }
-              />
+              <Route path="tools" element={<ToolsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
