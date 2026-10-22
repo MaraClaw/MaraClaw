@@ -34,7 +34,15 @@ class AgentToolResponse(TypedDict):
     source: str
 
 
+class ToolCapabilities(TypedDict):
+    can_edit_details: bool
+    can_delete: bool
+    can_configure: bool
+
+
 class ToolCatalogResponse(AgentToolResponse):
+    tenant_id: str | None
+    capabilities: ToolCapabilities
     parameters_schema: JsonObject
     mcp_tool_name: str | None
     config: JsonObject
