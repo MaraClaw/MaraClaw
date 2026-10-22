@@ -9,8 +9,8 @@ DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 OPENCLAW_VERSION = "2026.10.5"
 OPENCLAW_SHA256 = "sha256:dbb1bdcf2346292e25f672822b6a9928c234909abe6fee0df5fc4556e769d40e"
-GOGCLI_VERSION = "0.45.0"
-GOGCLI_SHA256 = "sha256:6eb4734b3a14a4c96f63c9747d06495265f3a4518a17dec0a4a4a710c76bcb2b"
+GOGCLI_VERSION = "0.46.0"
+GOGCLI_SHA256 = "sha256:9ae69d117cef895aa1c50b5859d7d3def45c5580886b25dc1c7f3cfe128ed0dd"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
