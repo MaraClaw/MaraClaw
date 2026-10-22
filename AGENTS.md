@@ -89,7 +89,7 @@ cd engine && uv run --extra dev pytest
 
 **`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), platform-admin Linkup keys + search analytics (`/search-engine`). `/tools` still a placeholder. Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), Tools catalog/MCP/configuration (`/tools`), platform-admin Linkup keys + search analytics (`/search-engine`). Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 
