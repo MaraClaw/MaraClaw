@@ -13,6 +13,7 @@ from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from app.services import schedule_manual, scheduler_tasks
 from app.services.llm.background_guard import BackgroundCallGuard, BackgroundCallOutcome
+from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
     live_schedule as live_schedule,
@@ -270,3 +271,23 @@ async def test_live_terminal_history_failure_rolls_back_then_recovers(
     assert current is not None
     assert current.run_count == manual_schedule.run_count + 1
     assert len(await agent_activity_log_dao.list_schedule_history(manual_schedule.agent_id, manual_schedule.id)) == 1
+
+
+@pytest.mark.parametrize("claimed", [False, True])
+async def test_live_cancel_fences_worker(
+    manual_schedule: AgentScheduleRecord, inference: AsyncMock, claimed: bool
+) -> None:
+    # Given accepted work, optionally already handed to a worker but not started.
+    run = await runs.accept(manual_schedule.id, manual_schedule.created_by, "cancel-key")
+    assert run is not None
+    if claimed:
+        [run] = await runs.claim_pending(datetime.now(UTC))
+    # When cancellation commits before a stale worker or recovery proceeds.
+    await cancel_manual_run(run)
+    if claimed:
+        await schedule_manual.execute_manual_run(run)
+    await schedule_manual.recover_manual_runs()
+    # Then cancellation is the sole terminal history, with no execution or bookkeeping.
+    inference.assert_not_awaited()
+    assert await agent_schedule_dao.get(manual_schedule.id) == manual_schedule
+    assert len(await agent_activity_log_dao.list_schedule_history(run.agent_id, run.schedule_id)) == 1
