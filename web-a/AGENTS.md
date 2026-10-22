@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains, Users + org departments, Models, Linkup keys + search analytics. `/tools` remains a placeholder.
+Live: auth, force-change, companies + claimed domains, Users + org departments, Models, Tools catalog/MCP/configuration, Linkup keys + search analytics.
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -31,7 +31,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - JWT storage: `maraclaw-admin-token`. `AuthProvider` bootstraps `GET /api/auth/me`; reject non-admin roles even after valid credentials.
 - OR `must_change_password` from token / `user` / `identity`. Redirect to `/account`; allow `/account`, `/settings` and their subpaths until cleared. After `PUT /api/auth/me/password`, call `refreshUser()`.
 - `403 { must_change_password: true }` means force-change, not logout. Keep the token.
-- Companies + Search require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
+- Companies + Search require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 

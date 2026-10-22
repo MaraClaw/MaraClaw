@@ -16,7 +16,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/notifications` | admin (PA + OA); force-pw blocked | current-user Inbox; desktop/mobile bell |
 | `/activity` | admin (PA + OA); force-pw blocked | bounded recent administrator activity; platform filters vs own organization |
 | `/admission-approvals` `/admission-approvals/:id` | `org_admin` + `is_genesis`; force-pw blocked | admission requests + review decisions |
-| `/tools` | admin | `placeholder.tsx` |
+| `/tools` | admin (PA + OA) | `tools.tsx`; PA `?company=`, OA fixed own company |
 | `/companies` `/companies/:companyId` | platform_admin | companies |
 | `/search-engine` | platform_admin | search-engine |
 | `*` (inside shell) | — | `Navigate` → `/` |
@@ -29,7 +29,7 @@ Analytics is `?tab=analytics` on `/search-engine`, not a route.
 
 | File | Role |
 |------|------|
-| `index.tsx` | `AppRouter`. Public auth vs shell. Analytics is query-string. `/tools` is `PlaceholderPage`. |
+| `index.tsx` | `AppRouter`. Public auth vs shell. Analytics is query-string. `/tools` lazy-loads `ToolsPage`. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/account` and `/settings` (and `/*` under them) until cleared; else `/account`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*` and `/search-engine`. |
 
