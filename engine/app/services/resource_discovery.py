@@ -19,6 +19,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
+from app.services.mcp_installation import MCPInstallation, persist_mcp_installation
 from app.services.tool_config import decrypt_sensitive_fields, encrypt_sensitive_fields, get_tenant_tool_config
 
 
@@ -409,33 +410,6 @@ async def import_mcp_from_smithery(
     except Exception:
         logger.warning("Unable to persist Smithery API key configuration")
 
-    # ---- Early exit: check if this server's tools are already installed for this agent ----
-    # Check by both tool name prefix AND mcp_server_name to catch different server_id variants
-    # (e.g., "github" vs "@anthropic/github" both produce server_name "GitHub")
-    clean_id_check = server_id.replace("/", "_").replace("@", "")
-    try:
-        prefixes = [f"mcp_{clean_id_check}", f"mcp_{clean_id_check.split('_')[-1]}"]
-        existing_server_tools = await tool_dao.list_mcp_by_name_prefixes(prefixes)
-        if existing_server_tools and not server_config and not reauthorize:
-            tool_ids = [t.id for t in existing_server_tools]
-            agent_assignments = []
-            for tid in tool_ids:
-                at = await agent_tool_dao.get_assignment(agent_id, tid)
-                if at:
-                    agent_assignments.append(at)
-            if len(agent_assignments) >= len(existing_server_tools):
-                tool_names = [t.display_name for t in existing_server_tools[:5]]
-                more = f" ... and {len(existing_server_tools) - 5} more" if len(existing_server_tools) > 5 else ""
-                return (
-                    f"⏭️ You already have **{len(existing_server_tools)}** tools from this MCP server installed:\n"
-                    + "\n".join(f"  • {n}" for n in tool_names)
-                    + more
-                    + "\n\nNo action needed. These tools are ready to use."
-                    + '\n\n💡 If tools stopped working (e.g. OAuth expired), use `import_mcp_server(server_id="....", reauthorize=true)` to re-authorize.'
-                )
-    except Exception:
-        logger.warning("Unable to check existing Smithery server tools; continuing import")
-
     # Step 1: Search for server by ID
     headers = {"Accept": "application/json"}
 
@@ -535,6 +509,7 @@ async def import_mcp_from_smithery(
     # server (we hit this with shibui/finance: registry said `sql`, server
     # required `user_prompt` + `query`). The truth is whatever tools/list
     # returns at call time, so prefer it whenever available.
+    live_ready = False
     if smithery_config:
         ns_ = json_as_str_or(smithery_config["smithery_namespace"])
         conn_ = json_as_str_or(smithery_config["smithery_connection_id"])
@@ -592,115 +567,34 @@ async def import_mcp_from_smithery(
                         + f"{len(tools_discovered)}"
                     )
                     tools_discovered = live_tools_normalized
+                    live_ready = not auth_message
         except Exception as e:
             logger.warning(
                 f"[ResourceDiscovery] Live tools/list failed for {qualified_name}, falling back to registry schema: {e}"
             )
 
-    # Merge smithery_config + user config for AgentTool
-    agent_tool_config: JsonObject = {**smithery_config, **server_config}
-
-    imported_tools = []
-
-    async def _ensure_agent_tool(tool_id: uuid.UUID):
-        _ = await agent_tool_dao.ensure_with_config(
-            agent_id,
-            tool_id,
-            config=agent_tool_config,
-            source="user_installed",
-            installed_by_agent_id=agent_id,
-        )
-
-    if server_config or reauthorize:
-        for et in await tool_dao.list_mcp_by_server_display_name(display_name):
-            _ = await tool_dao.update_mcp_server_url(et.id, base_mcp_url)
-            await _ensure_agent_tool(et.id)
-
-    if tools_discovered:
-        generic_name = f"mcp_{server_id.replace('/', '_').replace('@', '')}"
-        old_generic = await tool_dao.get_by_name(generic_name)
-        if old_generic:
-            await agent_tool_dao.delete_for_tool(old_generic.id)
-            _ = await tool_dao.delete(id=old_generic.id)
-
-        for mcp_tool in tools_discovered:
-            mcp_tool_name = json_as_str_or(mcp_tool.get("name"))
-            if not mcp_tool_name:
-                continue
-            tool_name = f"mcp_{server_id.replace('/', '_').replace('@', '')}_{mcp_tool_name}"
-            tool_display = f"{display_name}: {mcp_tool_name}"
-
-            existing_tool = await tool_dao.get_by_name(tool_name)
-            if existing_tool:
-                _ = await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
-                await _ensure_agent_tool(existing_tool.id)
-                if reauthorize:
-                    imported_tools.append(f"🔄 {tool_display} (reauthorized)")
-                elif server_config:
-                    imported_tools.append(f"🔄 {tool_display} (config updated)")
-                else:
-                    imported_tools.append(f"⏭️ {tool_display} (already imported)")
-                continue
-
-            tool = await tool_dao.create(
-                obj_in={
-                    "name": tool_name,
-                    "display_name": tool_display,
-                    "description": (json_as_str_or(mcp_tool.get("description"), description) or "")[:500],
-                    "type": "mcp",
-                    "category": "mcp",
-                    "icon": "🔌",
-                    "parameters_schema": json_object_from(
-                        mcp_tool.get("inputSchema", {"type": "object", "properties": {}})
-                    ),
-                    "mcp_server_url": base_mcp_url,
-                    "mcp_server_name": display_name,
-                    "mcp_tool_name": mcp_tool_name,
-                    "enabled": True,
-                    "is_default": False,
-                    "source": "agent",
-                }
-            )
-            await _ensure_agent_tool(tool.id)
-            imported_tools.append(f"✅ {tool_display}")
-    else:
-        tool_name = f"mcp_{server_id.replace('/', '_').replace('@', '')}"
-        tool_display = display_name
-
-        existing_tool = await tool_dao.get_by_name(tool_name)
-        if existing_tool:
-            _ = await tool_dao.update_mcp_server_url(existing_tool.id, base_mcp_url)
-            await _ensure_agent_tool(existing_tool.id)
-            if server_config:
-                return f"🔄 {tool_display} config updated. The tool is now ready to use."
-            return f"⏭️ {tool_display} is already imported."
-
-        tool = await tool_dao.create(
-            obj_in={
-                "name": tool_name,
-                "display_name": tool_display,
-                "description": description[:500] or f"MCP Server: {server_id}",
-                "type": "mcp",
-                "category": "mcp",
-                "icon": "🔌",
-                "parameters_schema": {"type": "object", "properties": {}},
-                "mcp_server_url": base_mcp_url,
-                "mcp_server_name": display_name,
-                "enabled": True,
-                "is_default": False,
-                "source": "agent",
-            }
-        )
-        await _ensure_agent_tool(tool.id)
-        imported_tools.append(f"✅ {tool_display} (tool list not available from registry - may need configuration)")
+    normalized_tools = [tool for raw in tools_discovered if (tool := _normalize_discovered_mcp_tool(raw)) is not None]
+    imported_tools = await persist_mcp_installation(
+        agent_id,
+        MCPInstallation(
+            prefix=f"mcp_{server_id.replace('/', '_').replace('@', '')}",
+            display_name=display_name,
+            server_url=base_mcp_url,
+            description=description or f"MCP Server: {server_id}",
+            config={**smithery_config, **server_config},
+        ),
+        normalized_tools,
+    )
 
     result = f"🔌 Imported MCP server: **{display_name}** (`{server_id}`)\n\n"
     result += "\n".join(imported_tools)
     result += f"\n\n📡 MCP Server URL: `{base_mcp_url}`"
     if auth_message:
         result += auth_message
-    else:
+    elif live_ready and normalized_tools:
         result += "\n\n💡 The imported tools are now available for use."
+    else:
+        result += "\n\n⚠️ Configuration saved, but the server is not ready: live tools/list was not verified. Retry after configuring or authorizing the server."
     return result
 
 
@@ -726,12 +620,9 @@ async def import_mcp_direct(
     except OutboundPolicyError:
         return "MCP import blocked: server destination is not allowed."
 
-    # Build URL with apiKey if provided
-    full_url = mcp_url
-    if api_key not in (None, "") and "?" in mcp_url:
-        full_url = f"{mcp_url}&apiKey={api_key}"
-    elif api_key not in (None, ""):
-        full_url = f"{mcp_url}?apiKey={api_key}"
+    client = MCPClient(mcp_url)
+    if api_key not in (None, ""):
+        client.api_key = api_key
 
     display_name = server_name or mcp_url.split("//")[-1].split("/")[0].split(":")[0]
     safe_name = display_name.replace(".", "_").replace("/", "_").replace(":", "_").replace("-", "_")
@@ -739,7 +630,6 @@ async def import_mcp_direct(
     # Try to list tools from the endpoint
     tools_discovered: list[JsonObject] = []
     try:
-        client = MCPClient(full_url)
         tools_discovered = await client.list_tools()
         logger.info("[DirectImport] Got {} tools", len(tools_discovered))
     except OutboundPolicyError:
@@ -747,87 +637,26 @@ async def import_mcp_direct(
     except Exception:
         logger.error("[DirectImport] Could not list tools")
 
-    # Config to store in AgentTool
-    agent_tool_config: JsonObject = {}
-    if api_key not in (None, ""):
-        agent_tool_config["api_key"] = api_key
-
-    imported_tools = []
-
-    async def _ensure_agent_tool(tool_id: uuid.UUID):
-        _ = await agent_tool_dao.ensure_with_config(
-            agent_id,
-            tool_id,
-            config=agent_tool_config,
-            source="user_installed",
-            installed_by_agent_id=agent_id,
-        )
-
-    if tools_discovered:
-        for raw_mcp_tool in tools_discovered:
-            mcp_tool = _normalize_discovered_mcp_tool(raw_mcp_tool)
-            if mcp_tool is None:
-                continue
-            tool_name = f"mcp_{safe_name}_{mcp_tool['name']}"
-            tool_display = f"{display_name}: {mcp_tool['name']}"
-
-            existing_tool = await tool_dao.get_by_name(tool_name)
-            if existing_tool:
-                _ = await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
-                await _ensure_agent_tool(existing_tool.id)
-                imported_tools.append(f"⏭️ {tool_display} (already imported)")
-                continue
-
-            tool = await tool_dao.create(
-                obj_in={
-                    "name": tool_name,
-                    "display_name": tool_display,
-                    "description": mcp_tool["description"],
-                    "type": "mcp",
-                    "category": "mcp",
-                    "icon": "🔌",
-                    "parameters_schema": mcp_tool["parameters_schema"],
-                    "mcp_server_url": mcp_url,
-                    "mcp_server_name": display_name,
-                    "mcp_tool_name": mcp_tool["name"],
-                    "enabled": True,
-                    "is_default": False,
-                    "source": "agent",
-                }
-            )
-            await _ensure_agent_tool(tool.id)
-            imported_tools.append(f"✅ {tool_display}")
-    else:
-        tool_name = f"mcp_{safe_name}"
-        existing_tool = await tool_dao.get_by_name(tool_name)
-        if existing_tool:
-            _ = await tool_dao.update_mcp_server_url(existing_tool.id, mcp_url)
-            await _ensure_agent_tool(existing_tool.id)
-            return f"⏭️ {display_name} is already imported."
-
-        tool = await tool_dao.create(
-            obj_in={
-                "name": tool_name,
-                "display_name": display_name,
-                "description": f"MCP Server: {mcp_url}",
-                "type": "mcp",
-                "category": "mcp",
-                "icon": "🔌",
-                "parameters_schema": {"type": "object", "properties": {}},
-                "mcp_server_url": mcp_url,
-                "mcp_server_name": display_name,
-                "enabled": True,
-                "is_default": False,
-                "source": "agent",
-            }
-        )
-        await _ensure_agent_tool(tool.id)
-        imported_tools.append(f"✅ {display_name} (tools couldn't be listed - server may need configuration)")
+    normalized_tools = [tool for raw in tools_discovered if (tool := _normalize_discovered_mcp_tool(raw)) is not None]
+    imported_tools = await persist_mcp_installation(
+        agent_id,
+        MCPInstallation(
+            prefix=f"mcp_{safe_name}",
+            display_name=display_name,
+            server_url=client.server_url,
+            description=f"MCP Server: {client.server_url}",
+            config={"api_key": client.api_key} if client.api_key not in (None, "") else {},
+        ),
+        normalized_tools,
+    )
 
     result = f"🔌 Imported MCP server: **{display_name}**\n\n"
     result += "\n".join(imported_tools)
-    result += f"\n\n📡 MCP Server URL: `{mcp_url}`"
-    result += "\n\n💡 The imported tools are now available for use."
+    result += f"\n\n📡 MCP Server URL: `{client.server_url}`"
+    if normalized_tools:
+        result += "\n\n💡 The imported tools are now available for use."
+    else:
+        result += "\n\n⚠️ Configuration saved, but the server is not ready: tools/list returned no usable tools. Retry after configuring or authorizing the server."
     return result
 
 
