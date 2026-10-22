@@ -52,7 +52,7 @@ generates each process's identity; only bootstrap receives genesis credentials.
    Make it readable by HAProxy but protect the key from other host users.
    Certificate issuance is intentionally outside Compose. Allow host 80/443
    through the firewall; no other container ports are published.
-5. Build/load the guest image and set `OPENCLAW_IMAGE` if needed. The existing
+5. Build/load the guest image and set `MARACLAW_OPENCLAW_IMAGE` if needed. The existing
    default is `openclaw:local`; the available prebuilt guest image is **arm64**.
    On amd64, the operator must build a compatible guest image using the engine
    OpenClaw build instructions. Do not assume the engine build produces guests.

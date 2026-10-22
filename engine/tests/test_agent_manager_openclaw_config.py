@@ -423,7 +423,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     run_kwargs = docker_client.run_kwargs
     assert run_kwargs is not None
     assert docker_client.run_args == (
-        settings.OPENCLAW_IMAGE,
+        settings.MARACLAW_OPENCLAW_IMAGE,
         [
             "-s",
             "--",
@@ -534,7 +534,7 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
     assert container_id is None
     assert agent.status == "error"
     assert docker_client.run_args is not None
-    assert docker_client.run_args[0] == settings.OPENCLAW_IMAGE
+    assert docker_client.run_args[0] == settings.MARACLAW_OPENCLAW_IMAGE
 
 
 async def test_stop_container_clears_status_and_container_id_when_container_missing(monkeypatch):

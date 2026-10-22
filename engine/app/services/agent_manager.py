@@ -639,7 +639,7 @@ class AgentManager:
             if gateway_key not in (None, ""):
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
             container = self.docker_client.run(
-                settings.OPENCLAW_IMAGE,
+                settings.MARACLAW_OPENCLAW_IMAGE,
                 # Skip OfficeCLI download; a failed refresh restarts the guest
                 # and SIGKILLs in-flight inbox CLI turns (exit 137).
                 [
