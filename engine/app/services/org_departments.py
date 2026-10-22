@@ -81,6 +81,36 @@ async def assign_department(actor: UserRecord, assignment: AssignmentOut) -> Ass
     return assignment
 
 
+async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: UUID | None) -> None:
+    tenant = admin_tenant(actor, tenant_id)
+    async with connection_ctx() as db:
+        await lock_tenants(db, (tenant, actor.tenant_id))
+        await lock_user(db, actor.id, actor.tenant_id)
+        fresh_actor = await user_dao.get_with_identity(actor.id, fresh=True)
+        if (
+            fresh_actor is None
+            or not fresh_actor.is_active
+            or (fresh_actor.identity is not None and not fresh_actor.identity.is_active)
+        ):
+            raise HTTPException(403, "Administrator is inactive")
+        raise_if_password_change_required(fresh_actor)
+        admin_tenant(fresh_actor, tenant)
+        if await tenant_dao.get(tenant) is None:
+            raise HTTPException(404, "Organization not found")
+        department = await org_department_dao.get(department_id)
+        if department is None or department.tenant_id != tenant:
+            raise HTTPException(404, "Department not found")
+        for user_id in sorted(await org_department_dao.member_user_ids(department)):
+            if user_id != actor.id:
+                await lock_user(db, user_id, tenant)
+        affected = await org_department_dao.grant_agents_for_department(department)
+        for agent_id in sorted(affected):
+            await lock_agent(db, agent_id, tenant)
+        await org_department_dao.delete_department(department)
+        for agent_id in sorted(affected):
+            await bump_agent_acl_version(agent_id)
+
+
 async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> AssignmentsOut:
     async with connection_ctx() as db:
         await lock_tenants(db, (assignment.tenant_id, actor.tenant_id))

@@ -4,8 +4,8 @@ import { ZodError } from 'zod'
 
 import { joinSuggestedOrg, registerRequest, transferOrg } from '../src/lib/auth-api.ts'
 import { authSession } from '../src/lib/auth-session.ts'
-import { getMyAdmission, listMyAdmissions } from '../src/lib/company-admissions-api.ts'
-import { StaleSessionError } from '../src/lib/http.ts'
+import { getMyAdmission, listMyAdmissions, withdrawMyAdmission } from '../src/lib/company-admissions-api.ts'
+import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 
 const summary = {
   id: 'request-a', status: 'pending', source_tenant_id: 'source',
@@ -43,7 +43,7 @@ test('mine forwards pagination and cancellation and parses persisted summaries',
   assert.deepEqual(rows, [summary])
 })
 
-for (const status of ['pending', 'approved', 'rejected'] as const) {
+for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) {
   test(`detail parses the persisted ${status} result and encodes its id`, async (context) => {
     // Given
     const detail = {
@@ -60,6 +60,52 @@ for (const status of ['pending', 'approved', 'rejected'] as const) {
     assert.deepEqual(result, detail)
   })
 }
+
+const withdrawn = {
+  ...summary, status: 'withdrawn', decided_at: '2026-10-21T12:00:00Z',
+  applicant: { id: 'member', email: 'member@example.test' },
+  source_tenant: { id: 'source', name: 'OpenClaw' }, decided_by_user_id: null,
+} as const
+
+test('withdraw sends an owner-fenced bodyless POST and accepts repeated terminal detail without changing the session', async (context) => {
+  // Given
+  const snapshot = authSession.getSnapshot()
+  const owner = authSession.capture()
+  const signal = new AbortController().signal
+  context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
+    assert.equal(path, '/api/company-admissions/request%2Fone/withdraw')
+    assert.equal(init.method, 'POST')
+    assert.equal(init.body, undefined)
+    assert.equal(new Headers(init.headers).get('Content-Type'), null)
+    assert.equal(init.signal, signal)
+    return Response.json(withdrawn)
+  })
+  // When
+  const results = await Promise.all([
+    withdrawMyAdmission('request/one', { owner, signal }), withdrawMyAdmission('request/one', { owner, signal }),
+  ])
+  // Then
+  assert.deepEqual(results, [withdrawn, withdrawn])
+  assert.equal(authSession.getSnapshot(), snapshot)
+})
+
+test('withdraw preserves a terminal-review conflict for the UI to refresh', async (context) => {
+  // Given
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Already approved' }, { status: 409 }))
+  // When
+  const result = withdrawMyAdmission('request-a', { owner: authSession.capture() })
+  // Then
+  await assert.rejects(result, (error: unknown) => error instanceof ApiError && error.status === 409)
+})
+
+test('withdraw rejects a malformed detail rather than treating it as accepted', async (context) => {
+  // Given
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ ...withdrawn, status: 'cancelled' }))
+  // When
+  const result = withdrawMyAdmission('request-a', { owner: authSession.capture() })
+  // Then
+  await assert.rejects(result, ZodError)
+})
 
 test('detail rejects unknown status values at the boundary', async (context) => {
   // Given
@@ -116,3 +162,18 @@ test('a pending submission is discarded when its owner retires before completion
   // Then
   await assert.rejects(result, StaleSessionError)
 })
+
+for (const status of [200, 401, 503]) {
+  test(`withdraw discards a late ${status} after the owner retires`, async (context) => {
+    // Given
+    const owner = authSession.capture()
+    context.mock.method(globalThis, 'fetch', async () => {
+      authSession.logout(owner)
+      return Response.json(status === 200 ? withdrawn : { detail: 'Obsolete request' }, { status })
+    })
+    // When
+    const result = withdrawMyAdmission('request-a', { owner })
+    // Then
+    await assert.rejects(result, StaleSessionError)
+  })
+}

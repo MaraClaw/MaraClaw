@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 
-import { renameDepartment, setUserDepartments, type Department, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+import { deleteDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
 
 type RenameDepartmentInput = {
   readonly tenantId: string
@@ -28,6 +28,36 @@ type ReplaceUserDepartmentsInput = {
   readonly tenantId: string
   readonly userId: string
   readonly departmentIds: readonly string[]
+}
+
+type DeleteDepartmentInput = {
+  readonly tenantId: string
+  readonly departmentId: string
+}
+
+export function deleteDepartmentOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: (input: DeleteDepartmentInput) => deleteDepartment(input.tenantId, input.departmentId),
+    onSuccess: (_deleted: void, input: DeleteDepartmentInput) => {
+      const queryKey = ['admin-departments', input.tenantId]
+      const current = queryClient.getQueryData<DepartmentsResponse>(queryKey)
+      const affectedUsers = new Set(current?.assignments
+        .filter((assignment) => assignment.department_id === input.departmentId)
+        .map((assignment) => assignment.user_id))
+      queryClient.setQueryData<DepartmentsResponse>(queryKey, (directory) => directory
+        ? {
+            ...directory,
+            departments: directory.departments.filter((department) => department.id !== input.departmentId),
+            assignments: directory.assignments.filter((assignment) => assignment.department_id !== input.departmentId),
+          }
+        : undefined)
+      void queryClient.invalidateQueries({ queryKey, exact: true })
+      void queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId] })
+      for (const userId of affectedUsers) {
+        void queryClient.invalidateQueries({ queryKey: ['admin-user', userId], exact: true })
+      }
+    },
+  }
 }
 
 export function replaceUserDepartmentsOptions(queryClient: QueryClient) {

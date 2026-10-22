@@ -3,7 +3,7 @@ import { z } from 'zod'
 const tenantSchema = z.object({ id: z.string().min(1), name: z.string() }).readonly()
 const summarySchema = z.object({
   id: z.string().min(1),
-  status: z.enum(['pending', 'approved', 'rejected']),
+  status: z.enum(['pending', 'approved', 'rejected', 'withdrawn']),
   source_tenant_id: z.string().nullable(),
   target_tenant: tenantSchema,
   method: z.enum(['invitation', 'verified_domain', 'sso']),

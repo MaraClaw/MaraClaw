@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.core.acl_locks import lock_tenants, lock_user
 from app.core.security import get_current_user, raise_if_password_change_required
@@ -28,6 +28,7 @@ from app.services.org_departments import (
     admin_tenant,
     assign_department,
     assign_departments,
+    delete_department,
     list_department_members,
     rename_department,
 )
@@ -94,6 +95,16 @@ async def get_department_members(
     department_id: UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> DepartmentMembersOut:
     return await list_department_members(current_user, department_id)
+
+
+@router.delete("/departments/{department_id}", status_code=204)
+async def remove_department(
+    department_id: UUID,
+    tenant_id: UUID | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> Response:
+    await delete_department(current_user, department_id, tenant_id)
+    return Response(status_code=204)
 
 
 @router.put("/users/{user_id}/department", response_model=AssignmentOut)

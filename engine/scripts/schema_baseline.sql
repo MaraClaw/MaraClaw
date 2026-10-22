@@ -476,14 +476,15 @@ CREATE TABLE IF NOT EXISTS company_admission_requests (
     source_tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     target_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     method VARCHAR(24) NOT NULL CHECK (method IN ('invitation','verified_domain','sso')),
-    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','withdrawn')),
     invitation_code VARCHAR(32),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at TIMESTAMPTZ,
     decided_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     decision_reason TEXT,
     CHECK ((status='pending' AND decided_at IS NULL AND decided_by_user_id IS NULL)
-        OR (status<>'pending' AND decided_at IS NOT NULL))
+        OR (status IN ('approved','rejected') AND decided_at IS NOT NULL)
+        OR (status='withdrawn' AND decided_at IS NOT NULL AND decided_by_user_id IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
     ON company_admission_requests(applicant_user_id) WHERE status='pending';
@@ -1412,5 +1413,29 @@ CREATE INDEX IF NOT EXISTS ix_local_department_memberships_department
     ON local_department_memberships (tenant_id, department_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_permissions_department
     ON agent_permissions (agent_id, scope_id) WHERE scope_type = 'department';
+
+CREATE TABLE IF NOT EXISTS agent_schedule_manual_runs (
+    id UUID PRIMARY KEY,
+    schedule_id UUID NOT NULL REFERENCES agent_schedules(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instruction TEXT NOT NULL,
+    idempotency_key VARCHAR(200),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    outcome TEXT CHECK (outcome IN ('success', 'failure', 'cancelled', 'unknown')),
+    lease_token UUID,
+    lease_expires_at TIMESTAMPTZ,
+    UNIQUE (requester_id, schedule_id, idempotency_key),
+    CHECK (idempotency_key IS NULL OR length(btrim(idempotency_key)) > 0),
+    CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL)),
+    CHECK ((finished_at IS NULL) = (outcome IS NULL)),
+    CHECK (finished_at IS NULL OR lease_token IS NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_pending
+    ON agent_schedule_manual_runs (lease_expires_at, created_at, id) WHERE finished_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_schedule
+    ON agent_schedule_manual_runs (schedule_id);
 
 COMMIT;

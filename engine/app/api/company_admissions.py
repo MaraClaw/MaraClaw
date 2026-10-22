@@ -8,7 +8,7 @@ from app.records.company_admission import AdmissionStatus
 from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionDecision, RequestDetail, RequestSummary
 from app.services.company_admission_decisions import decide
-from app.services.company_admissions import detail, require_genesis, summarize
+from app.services.company_admissions import detail, require_genesis, summarize, withdraw_request
 
 router = APIRouter(prefix="/company-admissions", tags=["company-admissions"])
 
@@ -49,3 +49,8 @@ async def get_request(request_id: UUID, user: UserRecord = Depends(get_current_u
 @router.post("/{request_id}/decision", response_model=RequestDetail)
 async def decision(request_id: UUID, data: AdmissionDecision, user: UserRecord = Depends(get_current_user)):
     return await detail(await decide(request_id, user.id, data))
+
+
+@router.post("/{request_id}/withdraw", response_model=RequestDetail)
+async def withdraw(request_id: UUID, user: UserRecord = Depends(get_current_user)):
+    return await detail(await withdraw_request(request_id, user.id))

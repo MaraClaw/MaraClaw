@@ -45,6 +45,38 @@ test('admission detail accepts nullable applicant and source fields from the con
   assert.deepEqual(result, response)
 })
 
+test('withdrawn reviews parse through the listing boundary with applicant-owned decision metadata', async (t) => {
+  // Given
+  const withdrawn = { ...pendingAdmission, status: 'withdrawn', decided_at: '2026-10-20T10:00:00Z', decided_by_user_id: null, decision_reason: null }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([withdrawn]))
+  // When
+  const result = await fetchAdmissionReviews('withdrawn')
+  // Then
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review?status=withdrawn&limit=50&offset=0')
+  assert.deepEqual(result, [withdrawn])
+})
+
+test('withdrawn detail accepts the terminal status without requiring an admin reviewer', async (t) => {
+  // Given
+  const withdrawn = { ...pendingAdmission, status: 'withdrawn', decided_at: '2026-10-20T10:00:00Z' }
+  t.mock.method(globalThis, 'fetch', async () => Response.json(withdrawn))
+  // When
+  const result = await fetchAdmissionDetail(pendingAdmission.id)
+  // Then
+  assert.deepEqual(result, withdrawn)
+})
+
+for (const decision of ['pending', 'withdrawn', 'cancelled']) {
+  test(`admin decision parsing rejects ${decision} instead of widening review actions`, () => {
+    // Given
+    const input = { decision, reason: null }
+    // When
+    const result = admissionDecisionSchema.safeParse(input)
+    // Then
+    assert.equal(result.success, false)
+  })
+}
+
 for (const decision of ['approved', 'rejected'] as const) {
   test(`${decision} posts a bounded optional reason and parses the resulting detail`, async (t) => {
     // Given

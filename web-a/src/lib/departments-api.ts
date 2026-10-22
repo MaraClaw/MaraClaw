@@ -69,6 +69,11 @@ export async function renameDepartment(tenantId: string, departmentId: string, i
   )
 }
 
+export async function deleteDepartment(tenantId: string, departmentId: string): Promise<void> {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  await apiRequest<void>(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, { method: 'DELETE' })
+}
+
 export async function setUserDepartment(
   tenantId: string,
   userId: string,

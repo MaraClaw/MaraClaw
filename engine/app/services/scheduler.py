@@ -210,6 +210,9 @@ async def start_scheduler() -> None:
     """Start the background scheduler loop. Call from FastAPI startup."""
     new_trace_id()
     logger.info("🕐 Agent scheduler started (30s interval)")
+    from app.services.schedule_manual import recover_manual_runs
+
     while True:
+        await recover_manual_runs()
         await _tick()
         await asyncio.sleep(30)

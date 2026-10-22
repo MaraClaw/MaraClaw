@@ -1,7 +1,7 @@
 import type { AdmissionDetail, AdmissionStatus } from '@/lib/admissions-api'
 
 export const admissionStatusLabels = {
-  pending: 'Pending', approved: 'Approved', rejected: 'Rejected',
+  pending: 'Pending', approved: 'Approved', rejected: 'Rejected', withdrawn: 'Withdrawn',
 } as const satisfies Record<AdmissionStatus, string>
 
 export const admissionMethodLabels = {

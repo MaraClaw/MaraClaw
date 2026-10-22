@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.api import agents
@@ -40,7 +40,7 @@ class CreationStore:
         self.events.append("begin")
         try:
             yield
-        except RuntimeError:
+        except RuntimeError, HTTPException:
             self.agent_rows.clear()
             self.participants.clear()
             self.grants.clear()
@@ -52,6 +52,7 @@ class CreationStore:
             self.in_transaction = False
 
     async def get_departments(self, ids: Sequence[UUID]) -> list[OrgDepartmentRecord]:
+        assert self.in_transaction
         self.lookups.append(list(ids))
         return [self.departments[department_id] for department_id in ids if department_id in self.departments]
 
@@ -107,6 +108,15 @@ async def creation(monkeypatch):
         setup=setup,
     )
     monkeypatch.setattr(agents, "connection_ctx", store.transaction)
+    monkeypatch.setattr(agents, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(agents, "lock_user", AsyncMock())
+
+    async def fresh_actor(_user_id: UUID, *, fresh: bool = False) -> UserRecord:
+        assert fresh
+        assert store.in_transaction
+        return store.actor
+
+    monkeypatch.setattr(agents.user_dao, "get_with_identity", fresh_actor)
     monkeypatch.setattr(agents.agent_dao, "create", store.create_agent)
     monkeypatch.setattr(agents.agent_dao, "update", store.update_agent)
     monkeypatch.setattr(agents.participant_dao, "create", store.create_participant)
@@ -187,7 +197,7 @@ async def test_invalid_department_rejects_all_creation_side_effects(creation, in
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "Invalid department for this organization"
-    assert store.events == []
+    assert store.events == ["begin", "rollback"]
     assert store.agent_rows == store.participants == store.grants == []
     store.mint_key.assert_not_called()
     store.write_key.assert_not_called()
@@ -270,7 +280,7 @@ async def test_admin_override_validates_departments_against_target_tenant(creati
         assert store.grants[-1].scope_id == target_department.id
     else:
         assert response.json()["detail"] == "Invalid department for this organization"
-        assert store.events == []
+        assert store.events == ["begin", "rollback"]
 
 
 async def test_department_insert_failure_rolls_back_agent_participant_and_all_grants(creation):

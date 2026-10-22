@@ -114,8 +114,8 @@ test('an admission notification opens its persisted result and marking read clea
   await page.goto('/app/notifications')
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
   // When
-  await page.getByRole('button', { name: 'Read', exact: true }).click()
-  await page.getByRole('link', { name: 'Open', exact: true }).click()
+  await page.getByRole('button', { name: 'Mark as read: Admission decided', exact: true }).click()
+  await page.getByRole('link', { name: 'Open notification: Admission decided', exact: true }).click()
   // Then
   await expect(page).toHaveURL('/app/admissions/request-a')
   await expect(page.getByText('Rejected', { exact: true })).toBeVisible()

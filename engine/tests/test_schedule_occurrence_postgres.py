@@ -3,22 +3,29 @@ import os
 from collections.abc import AsyncIterator
 from contextvars import Context
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 from uuid import uuid4
 
+import httpx
 import pytest
+from fastapi import Depends, FastAPI
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
+from app.api import schedules
+from app.core.security import get_current_user, load_user_principal
 from app.dao.schedule_dao import agent_schedule_dao
+from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
 from app.db.errors import CheckViolationError
 from app.db.pool import close_pool, init_pool
-from app.db.session import connection_ctx
+from app.db.session import bind_crud_connection, connection_ctx
 from app.records.schedule import AgentScheduleRecord
+from app.records.schedule_manual_run import ScheduleManualRunRecord
+from app.records.user import UserRecord
 from app.scripts.bootstrap_db import SCHEMA_BASELINE, _statement_bodies
 from schedule_occurrence_persistence_fakes import SLOT_COLUMNS
 from test_schedule_dao import NEXT, NOW, _next_run, _schedule
@@ -67,6 +74,39 @@ async def live_schedule() -> AsyncIterator[AgentScheduleRecord]:
             await close_pool()
             await db.execute(f'DROP SCHEMA "{schema}" CASCADE')
             session_module._conn_ctx.reset(context_token)
+
+
+@pytest.fixture
+async def manual_schedule(live_schedule: AgentScheduleRecord) -> AgentScheduleRecord:
+    async with connection_ctx() as db:
+        await db.execute("UPDATE agents SET status = 'running' WHERE id = %(id)s", {"id": live_schedule.agent_id})
+    return live_schedule
+
+
+def schedule_app(schedule: AgentScheduleRecord) -> FastAPI:
+    app = FastAPI()
+    app.include_router(schedules.router, dependencies=[Depends(bind_crud_connection)])
+
+    async def user() -> UserRecord:
+        return await load_user_principal(schedule.created_by, fresh=True)
+
+    app.dependency_overrides[get_current_user] = user
+    return app
+
+
+@pytest.fixture
+async def manual_http(manual_schedule: AgentScheduleRecord) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=schedule_app(manual_schedule)), base_url="http://schedule-qa"
+    ) as client:
+        yield client
+
+
+async def accept_claim(schedule: AgentScheduleRecord) -> ScheduleManualRunRecord:
+    accepted = await schedule_manual_run_dao.accept(schedule.id, schedule.created_by, None)
+    assert accepted is not None
+    (claim,) = await schedule_manual_run_dao.claim_pending(datetime.now(UTC))
+    return claim
 
 
 async def test_live_competing_claim_skips_locked_row(live_schedule: AgentScheduleRecord) -> None:

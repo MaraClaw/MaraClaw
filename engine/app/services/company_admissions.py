@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import assert_never
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from app.core.json_types import uuid_from_row
 from app.dao.company_admission_dao import company_admission_dao as admissions
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
-from app.records.company_admission import AdmissionMethod, CompanyAdmissionRecord
+from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionApplicant, AdmissionTenant, RequestDetail, RequestSummary
 from app.services.notification_service import send_notification
@@ -74,6 +75,41 @@ async def detail(request: CompanyAdmissionRecord) -> RequestDetail:
         source_tenant=AdmissionTenant(id=source.id, name=source.name) if source else None,
         decided_by_user_id=request.decided_by_user_id,
     )
+
+
+async def withdraw_request(request_id: UUID, applicant_id: UUID) -> CompanyAdmissionRecord:
+    async with connection_ctx() as db:
+        snapshot = await admissions.get(request_id)
+        if snapshot is None:
+            raise HTTPException(404, "Admission request not found")
+        if snapshot.applicant_user_id != applicant_id:
+            raise HTTPException(403, "Only the applicant may withdraw an admission request")
+        applicant = await user_dao.get(applicant_id)
+        if applicant is None:
+            raise HTTPException(404, "Membership not found")
+        await lock_tenants(db, (snapshot.source_tenant_id, snapshot.target_tenant_id, applicant.tenant_id))
+        await lock_user(db, applicant.id, applicant.tenant_id)
+        await fresh_user(applicant_id)
+        request = await admissions.get_locked(request_id)
+        if request is None:
+            raise HTTPException(404, "Admission request not found")
+        match request.status:
+            case AdmissionStatus.WITHDRAWN:
+                return request
+            case AdmissionStatus.APPROVED | AdmissionStatus.REJECTED:
+                raise HTTPException(409, "Admission request already has a different decision")
+            case AdmissionStatus.PENDING:
+                return await admissions.update(
+                    db_obj=request,
+                    obj_in={
+                        "status": AdmissionStatus.WITHDRAWN.value,
+                        "decided_at": datetime.now(UTC),
+                        "decided_by_user_id": None,
+                        "decision_reason": None,
+                    },
+                )
+            case unreachable:
+                assert_never(unreachable)
 
 
 async def submit_request(

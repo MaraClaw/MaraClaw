@@ -26,6 +26,7 @@ from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.notification_responses import NotificationUnreadCountResponse
 from app.services.platform_service import platform_service
 
+SCHEDULE_RUN_ID = str(uuid.UUID(int=1))
 FIXED_CASES = [
     (contracts.GatewayHeartbeatResponse, {"status": "ok", "agent_id": "agent"}),
     (
@@ -58,7 +59,7 @@ FIXED_CASES = [
     (contracts.FeishuChallengeResponse, {"challenge": "verify"}),
     (contracts.FeishuEventResponse, {"code": 0, "msg": "ok"}),
     (contracts.FeishuEventResponse, {"code": 1, "msg": ""}),
-    (contracts.ScheduleTriggerResponse, {"status": "triggered", "schedule_id": "schedule"}),
+    (contracts.ScheduleTriggerResponse, {"status": "triggered", "schedule_id": "schedule", "run_id": SCHEDULE_RUN_ID}),
     (contracts.TaskTriggerResponse, {"status": "triggered", "task_id": "task"}),
     (contracts.UserRoleResponse, {"status": "ok", "user_id": "user", "role": "future_role"}),
     (OkAcknowledgement, {"ok": True}),

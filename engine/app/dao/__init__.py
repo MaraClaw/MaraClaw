@@ -38,6 +38,7 @@ from app.dao.participant_dao import participant_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.published_page_dao import published_page_dao
 from app.dao.schedule_dao import agent_schedule_dao
+from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
 from app.dao.skill_dao import skill_dao, skill_file_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.system_setting_dao import system_setting_dao
@@ -96,6 +97,7 @@ __all__ = [
     "plaza_like_dao",
     "plaza_post_dao",
     "published_page_dao",
+    "schedule_manual_run_dao",
     "skill_dao",
     "skill_file_dao",
     "sso_scan_session_dao",
