@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ScheduleRunHistory } from './schedule-run-history'
+import { ScheduleRunReceipt } from './schedule-run-receipt'
 import {
   createSchedule,
   deleteSchedule,
@@ -40,7 +41,13 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
   const timezoneInput = useRef<HTMLInputElement>(null)
   const [historyId, setHistoryId] = useState<string | null>(null)
   const runIntents = useRef(new Map<string, string>())
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const [runMessages, setRunMessages] = useState<Readonly<Record<string, string>>>({})
+  const [acceptedRun, setAcceptedRun] = useState<Readonly<{ scheduleId: string; runId: string }> | null>(null)
   const schedules = useQuery({ queryKey: ['schedules', agent.id], queryFn: () => listSchedules(agent.id) })
 
   const save = useMutation({
@@ -58,11 +65,14 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
   })
   const run = useMutation({
     mutationFn: ({ id, key }: { readonly id: string; readonly key: string }) => runSchedule(agent.id, id, key),
-    onSuccess(_accepted, { id }) {
+    onSuccess(accepted, { id }) {
+      if (!mounted.current) return
       runIntents.current.delete(id)
       setRunMessages((messages) => ({ ...messages, [id]: 'Run accepted. Check history for completion.' }))
+      setAcceptedRun({ scheduleId: id, runId: accepted.run_id })
     },
     onError(error, { id }) {
+      if (!mounted.current) return
       const definite = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408
       if (definite) runIntents.current.delete(id)
       setRunMessages((messages) => ({ ...messages, [id]: definite
@@ -151,6 +161,8 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                 {item.cron_expr} · {item.timezone} · next {formatScheduleNextRun(item)}
               </p>
               <p aria-live="polite" className="text-sm text-muted-foreground">{runMessages[item.id]}</p>
+              {isCreator && acceptedRun?.scheduleId === item.id ? <ScheduleRunReceipt key={acceptedRun.runId}
+                agentId={agent.id} scheduleId={item.id} runId={acceptedRun.runId} /> : null}
             </div>
             {isCreator ? (
               <div className="flex flex-wrap gap-2">
