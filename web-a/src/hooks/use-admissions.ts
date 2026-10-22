@@ -6,9 +6,9 @@ import { admissionDecisionOptions, admissionDetailOptions, admissionReviewsOptio
 import { useAuth } from './use-auth'
 import { useSessionMutation } from './use-session-mutation'
 
-export function useAdmissionReviews(status: AdmissionStatus, offset: number) {
+export function useAdmissionReviews(status: AdmissionStatus, cursor: string | null) {
   const { user, mustChangePassword } = useAuth()
-  return useQuery(admissionReviewsOptions(status, offset, canReviewAdmissions(user) && !mustChangePassword))
+  return useQuery(admissionReviewsOptions(status, cursor, canReviewAdmissions(user) && !mustChangePassword))
 }
 
 export function useAdmissionDetail(id: AdmissionId | null) {
