@@ -356,20 +356,32 @@ The Google Workspace admin-sync authorization endpoint, stored sync authorizatio
 ### B7. Tools catalog - `/api/tools/*`
 
 **Router:** `app/api/tools.py`  
-Catalog mutations: `_require_catalog_manager` → `platform_admin` \| `org_admin`.  
-Platform may target another company via `tenant_id`.
+Catalog mutations retain `get_current_user` (including the force-password-change gate) and `_require_catalog_manager`. Platform-admin authority follows `UserRecord.is_platform_admin` (role or loaded identity flag); org admins use `role=org_admin`. Only platform admins may target another company via `tenant_id`.
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/tools` | auth | Query: `tenant_id?` | Tenant-scoped catalog; secrets masked |
+| `GET` | `/api/tools` | auth | Query: `tenant_id?` | Tenant-scoped catalog; secrets masked; required `tenant_id: string \| null` and `capabilities` per record |
 | `POST` | `/api/tools` | admin | `ToolCreate`: name, display_name, description, type, category, icon, schemas, MCP fields, `is_default`, `tenant_id?` | `{ id, name }` |
-| `PUT` | `/api/tools/bulk` | admin | `[{ tool_id, enabled }]` | `{ ok: true }` |
-| `PUT` | `/api/tools/{tool_id}` | admin | `ToolUpdate` (partial; company config for builtins) | `{ ok: true }` |
-| `DELETE` | `/api/tools/{tool_id}` | admin | - | Non-builtin only; tenant ownership for non-platform |
+| `PUT` | `/api/tools/bulk` | admin + record rights | `[{ tool_id, enabled }]` | `{ ok: true }`; preload and authorize every existing record before any write; missing IDs silently skipped |
+| `PUT` | `/api/tools/{tool_id}` | admin + policy below | `ToolUpdate` (partial metadata; full config replacement) | `{ ok: true }`; mixed config + metadata requests require record rights before any write |
+| `DELETE` | `/api/tools/{tool_id}` | admin + record rights | - | `type=builtin` remains 400; forbidden records return 403 before assignment deletion |
+
+Record rights and configuration are evaluated by `app/services/tool_ownership.py`:
+
+| Record / operation | Platform admin | Org admin with concrete own tenant | Tenantless org admin / other roles |
+|--------------------|----------------|------------------------------------|------------------------------------|
+| Non-builtin source, concrete own-tenant row: metadata, enabled/default, bulk, row config | Yes | Yes | No |
+| Non-builtin source, shared (`tenant_id=null`) or foreign row: same mutations | Yes | No | No |
+| Builtin source: metadata, enabled/default, bulk | Yes | No, even if malformed row has own-tenant tag | No |
+| Builtin source: config-only replacement | Concrete authorized target required; any company | Own concrete target only | No |
+| Delete (`type != builtin`) | Any record | Only non-builtin source with non-null matching tenant | No |
+| Delete (`type=builtin`) | No (400) | No (400) | No |
+
+`capabilities` has three required booleans: `can_edit_details` follows record rights; `can_delete` additionally requires `type != builtin`; `can_configure` follows record rights for non-builtin sources and requires a concrete authorized target for builtin sources. `tenant_id` is the stored record owner, not the selected target. Member catalog reads remain available with all capabilities false. Existing response keys are unchanged; agent assignment/config response shapes do not gain these catalog-only fields.
 
 Agent-level tool assignment/config routes exist under `/api/tools/agents/...` but use agent access checks (not pure admin gates). **Only** platform/org may set `allow_network` / proxy fields on agent tool config.
 
-`search_x` and `generate_image_grok` read `config.api_key` from this catalog, then fall back to `XAI_API_KEY`. Custom `base_url` is only accepted for `https://api.x.ai`. web-a `/tools` is still a placeholder — configure via `PUT /api/tools/{id}` or env.
+`search_x` and `generate_image_grok` read `config.api_key` from this catalog, then fall back to `XAI_API_KEY`. Custom `base_url` is only accepted for `https://api.x.ai`. web-a `/tools` supports catalog inspection, MCP creation, capability-gated editing, explicit configuration replacement and deletion. Platform admins select `?company=`; org admins remain in their own tenant. Configuration PUT is a full replacement, not a merge: the UI omits config during metadata writes and requires existing secrets to be re-entered before a confirmed replacement. Builtin-source config is company-local in `tenant_settings`; non-builtin config is a catalog-row write. Metadata or mixed config + metadata on an unowned record rejects the entire request before any config/DAO write. Creation and `/mcp-server` request/response contracts are unchanged.
 
 ### B8. Skills - `/api/skills/*`
 
