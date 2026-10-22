@@ -120,13 +120,28 @@ def decrypt_data(ciphertext: str, key: str) -> str:
         raise ValueError(f"Decryption failed: {e}") from e
 
 
-def create_access_token(user_id: str, role: str, expires_delta: timedelta | None = None) -> str:
+async def create_access_token(
+    user_id: str, role: str, expires_delta: timedelta | None = None, *, identity_id: uuid.UUID | None = None
+) -> str:
     """Create a JWT access token."""
+    if identity_id is None:
+        try:
+            uid = uuid.UUID(user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject") from exc
+        user = await user_dao.get(uid)
+        if user is None or user.identity_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
+        identity_id = user.identity_id
+    generation = await identity_dao.get_auth_generation(identity_id)
+    if generation is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
     expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode: AccessTokenClaims = {
         "sub": user_id,
         "role": role,
         "exp": expire,
+        "gen": generation,
     }
     return str(jwt.encode(dict(to_encode), settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM))
 
@@ -143,12 +158,26 @@ def decode_access_token(token: str) -> AccessTokenPayload:
     sub = decoded.get("sub")
     role = decoded.get("role")
     exp = decoded.get("exp")
-    if not isinstance(sub, str) or not isinstance(role, str) or not isinstance(exp, int):
+    generation = decoded.get("gen")
+    if (
+        not isinstance(sub, str)
+        or not isinstance(role, str)
+        or not isinstance(exp, int)
+        or not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 0
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
-    return {"sub": sub, "role": role, "exp": exp}
+    return {"sub": sub, "role": role, "exp": exp, "gen": generation}
+
+
+async def check_token_generation(identity_id: uuid.UUID, claimed: int) -> None:
+    generation = await identity_dao.get_auth_generation(identity_id)
+    if generation is None or generation != claimed:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
 
 PASSWORD_CHANGE_REQUIRED_DETAIL: dict[str, object] = {
@@ -191,9 +220,13 @@ async def load_user_from_access_token(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
-    return await load_user_principal(
-        uid, require_active=require_active, enforce_password_change=enforce_password_change, fresh=fresh
-    )
+    user = await load_user_principal(uid, require_active=require_active, enforce_password_change=False, fresh=fresh)
+    if user.identity_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
+    await check_token_generation(user.identity_id, payload["gen"])
+    if enforce_password_change:
+        raise_if_password_change_required(user)
+    return user
 
 
 async def load_user_principal(

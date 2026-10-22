@@ -6,13 +6,14 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
 from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
+from app.core import security
 from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.user import UserRecord
@@ -259,6 +260,8 @@ async def test_http_callback_preserves_unverified_identity_login(monkeypatch, is
     monkeypatch.setattr(auth.identity_provider_dao, "get_preferred", AsyncMock(return_value=None))
     monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(auth.user_dao, "get_by_identity_id", AsyncMock(return_value=[user]))
+    monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
 
     async def remote(*args):
         assert pool.active == 0
@@ -286,3 +289,93 @@ async def test_http_callback_preserves_unverified_identity_login(monkeypatch, is
     assert response.json()["user"]["id"] == str(user.id)
     assert response.json()["access_token"]
     assert pool.active == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commit_fails", [False, True])
+async def test_logout_all_commits_before_success_and_never_acknowledges_failed_commit(monkeypatch, commit_fails):
+    # Given a valid bearer and generation changes deferred until the owning transaction commits.
+    pool = CountingPool()
+    monkeypatch.setattr(session, "get_pool", lambda: pool)
+    identity = IdentityRecord(id=uuid4())
+    user = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity)
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
+    generations = {identity.id: 7}
+
+    async def generation(identity_id):
+        return generations.get(identity_id)
+
+    async def bump(identity_id):
+        assert session.get_connection() is not None
+        session.run_after_commit(lambda: generations.update({identity_id: 8}))
+        return 8
+
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    monkeypatch.setattr(security.identity_dao, "bump_auth_generation", bump)
+    token = await security.create_access_token(str(user.id), user.role)
+    if commit_fails:
+        monkeypatch.setattr(pool.raw, "commit", AsyncMock(side_effect=RuntimeError("commit rejected")))
+    app = FastAPI()
+    app.include_router(auth.router, dependencies=[Depends(session.bind_crud_connection)])
+    acknowledged = []
+
+    async def observed(scope, receive, send):
+        async def inspect(message):
+            if message["type"] == "http.response.start" and message["status"] == 204:
+                acknowledged.append(generations[identity.id])
+            await send(message)
+
+        await app(scope, receive, inspect)
+
+    # When the route attempts to revoke and acknowledge through HTTP.
+    async with AsyncClient(
+        transport=ASGITransport(app=observed, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post("/auth/logout-all", headers={"Authorization": f"Bearer {token}"})
+
+    # Then success is empty and durable; a failed commit cannot send a successful response.
+    assert response.status_code == (500 if commit_fails else 204)
+    assert acknowledged == ([] if commit_fails else [8])
+    assert generations[identity.id] == (7 if commit_fails else 8)
+    assert pool.active == 0
+    if commit_fails:
+        assert pool.raw.rollbacks >= 1
+    else:
+        assert response.content == b""
+        with pytest.raises(HTTPException) as caught:
+            await security.load_user_from_access_token(token)
+        assert caught.value.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential", "expected"), [("missing", 401), ("force_change", 403), ("revoked", 401), ("missing_identity", 401)]
+)
+async def test_logout_all_preserves_authentication_gates_and_never_bumps_rejected_requests(
+    monkeypatch, credential, expected
+):
+    # Given a signed credential that is missing, restricted, revoked, or loses its identity during revocation.
+    identity = IdentityRecord(id=uuid4(), must_change_password=credential == "force_change")
+    user = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity)
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
+    generation = AsyncMock(return_value=7)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    token = await security.create_access_token(str(user.id), user.role)
+    if credential == "revoked":
+        generation.return_value = 8
+    bump = AsyncMock(return_value=None)
+    monkeypatch.setattr(security.identity_dao, "bump_auth_generation", bump)
+    app = FastAPI()
+    app.include_router(auth.router)
+    headers = {} if credential == "missing" else {"Authorization": f"Bearer {token}"}
+
+    # When logout is requested through its real dependency chain, then no successful acknowledgement is emitted.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/auth/logout-all", headers=headers)
+    assert response.status_code == expected
+    if credential == "missing_identity":
+        bump.assert_awaited_once_with(identity.id)
+    else:
+        bump.assert_not_awaited()

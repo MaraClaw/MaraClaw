@@ -569,7 +569,7 @@ async def test_transfer_requires_correct_password_then_requests_admission(monkey
         AsyncMock(return_value=SimpleNamespace(password_hash="hashed")),
     )
     verify_password = AsyncMock(side_effect=[False, True])
-    token = MagicMock(return_value="tok")
+    token = AsyncMock(return_value="tok")
     transfer = AsyncMock()
     monkeypatch.setattr("app.core.security.verify_password_async", verify_password)
     monkeypatch.setattr("app.core.security.create_access_token", token)
@@ -642,7 +642,7 @@ async def test_join_suggested_requests_admission_for_verified_member(monkeypatch
     tenant = _tenant()
     member = _user(role="member", tenant_id=None, email="ada@acme.com")
     attach = AsyncMock()
-    token = MagicMock(return_value="tok")
+    token = AsyncMock(return_value="tok")
     lookup = AsyncMock(return_value=tenant)
     monkeypatch.setattr(
         "app.services.org_membership.lookup_tenant_for_verified_email",
@@ -870,7 +870,7 @@ async def test_platform_metrics(monkeypatch):
     assert enhanced["retention_rate_7d"] == 50.0
 
 
-def test_security_encrypt_roundtrip_and_empty():
+async def test_security_encrypt_roundtrip_and_empty(monkeypatch):
     from app.core import security as sec
 
     assert sec.encrypt_data("", "k") == ""
@@ -879,7 +879,10 @@ def test_security_encrypt_roundtrip_and_empty():
     assert sec.decrypt_data(token, "secret-key") == "hello"
     with pytest.raises(ValueError):
         sec.decrypt_data("not-valid", "secret-key")
-    jwt = sec.create_access_token(str(uuid.uuid4()), "member")
+    user = _user(role="member")
+    monkeypatch.setattr(sec.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(sec.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    jwt = await sec.create_access_token(str(user.id), "member")
     assert sec.decode_access_token(jwt)["role"] == "member"
     with pytest.raises(HTTPException):
         sec.decode_access_token("bad.token.value")
@@ -1182,7 +1185,10 @@ async def test_get_tenant_logo_missing(monkeypatch):
 async def test_load_user_from_access_token_branches(monkeypatch):
     from app.core import security as sec
 
-    token = sec.create_access_token(str(uuid.uuid4()), "member")
+    user = _user(role="member")
+    monkeypatch.setattr(sec.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(sec.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    token = await sec.create_access_token(str(user.id), "member")
     monkeypatch.setattr(sec.user_dao, "get_with_identity", AsyncMock(return_value=None))
     with pytest.raises(HTTPException):
         await sec.load_user_from_access_token(token)
@@ -1322,6 +1328,8 @@ async def test_login_skips_inactive_memberships(monkeypatch):
     assert exc.value.status_code == 403
 
     monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive, active]))
+    monkeypatch.setattr(auth_api.user_dao, "get", AsyncMock(return_value=active))
+    monkeypatch.setattr(auth_api.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     monkeypatch.setattr(auth_api.tenant_dao, "get", AsyncMock(return_value=_tenant(id=active.tenant_id)))
     active_background_tasks: Any = SimpleNamespace()
     result = await auth_api.login(
@@ -1470,7 +1478,7 @@ async def test_join_default_immediate_and_suggested_pending_branches(monkeypatch
     attached = _user(role="member", tenant_id=fallback.id)
     admission = pending_admission(member, fallback, AdmissionMethod.VERIFIED_DOMAIN)
     attach = AsyncMock(return_value=attached)
-    token = MagicMock(return_value="tok")
+    token = AsyncMock(return_value="tok")
     monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
     monkeypatch.setattr("app.services.org_membership.attach_user_to_org", attach)
     monkeypatch.setattr("app.core.security.create_access_token", token)
@@ -1479,7 +1487,7 @@ async def test_join_default_immediate_and_suggested_pending_branches(monkeypatch
     assert joined.tenant.id == fallback.id
     assert joined.role == "member"
     attach.assert_awaited_once_with(member, fallback)
-    token.assert_called_once_with(str(attached.id), "member")
+    token.assert_awaited_once_with(str(attached.id), "member")
     admission.submit.assert_not_awaited()
 
     monkeypatch.setattr(
@@ -1623,7 +1631,7 @@ async def test_transfer_validation_pending_company_and_immediate_default_paths(m
     admission = pending_admission(member, dest, AdmissionMethod.VERIFIED_DOMAIN)
     transfer = AsyncMock(return_value=_user(role="member", tenant_id=dest.id))
     consume = AsyncMock()
-    token = MagicMock(return_value="tok")
+    token = AsyncMock(return_value="tok")
     monkeypatch.setattr("app.services.org_membership.transfer_user_to_org", transfer)
     monkeypatch.setattr("app.services.org_membership.consume_invitation_code", consume)
     monkeypatch.setattr(

@@ -35,9 +35,10 @@ class AdmissionScenario:
     outsider: UserRecord
     source_id: UUID
     target_id: UUID
+    tokens: dict[UUID, str]
 
     def headers(self, user: UserRecord) -> dict[str, str]:
-        return {"Authorization": f"Bearer {create_access_token(str(user.id), user.role)}"}
+        return {"Authorization": f"Bearer {self.tokens[user.id]}"}
 
     async def current_applicant(self) -> UserRecord:
         user = await user_dao.get(self.applicant.id)
@@ -131,6 +132,10 @@ async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
             genesis = await member("genesis", target.id, "org_admin", True)
             additional = await member("additional", target.id, "org_admin")
             outsider = await member("outsider", source.id, "platform_admin")
+            tokens = {
+                user.id: await create_access_token(str(user.id), user.role)
+                for user in (applicant, genesis, additional, outsider)
+            }
             await db.execute(
                 "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count) VALUES (%(id)s,'JOIN',%(tid)s,1,0)",
                 {"id": uuid4(), "tid": target.id},
@@ -148,7 +153,9 @@ async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
             for router in (auth.router, company_admissions.router, notification.router, tenants.router):
                 app.include_router(router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admissions.test") as client:
-                yield AdmissionScenario(db, client, applicant, genesis, additional, outsider, source.id, target.id)
+                yield AdmissionScenario(
+                    db, client, applicant, genesis, additional, outsider, source.id, target.id, tokens
+                )
         finally:
             await close_pool()
             await db.execute(f'DROP SCHEMA "{schema}" CASCADE')

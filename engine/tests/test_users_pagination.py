@@ -255,10 +255,12 @@ async def test_password_change_gate_when_page_uses_real_auth_dependency(
         id=UUID(int=1),
         tenant_id=TENANT,
         role="org_admin",
+        identity_id=UUID(int=1),
         identity=IdentityRecord(id=UUID(int=1), must_change_password=True),
     )
-    monkeypatch.setattr(security, "decode_access_token", lambda _token: {"sub": str(actor.id)})
+    monkeypatch.setattr(security, "decode_access_token", lambda _token: {"sub": str(actor.id), "gen": 7})
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     app = FastAPI()
     app.include_router(users_api.router, prefix="/api")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

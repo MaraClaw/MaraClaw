@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS identities (
 	is_platform_admin BOOLEAN NOT NULL DEFAULT false, 
 	email_verified BOOLEAN NOT NULL DEFAULT false, 
 	must_change_password BOOLEAN NOT NULL DEFAULT false,
+	auth_generation BIGINT NOT NULL DEFAULT 0 CHECK (auth_generation >= 0),
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id)

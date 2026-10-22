@@ -5,6 +5,8 @@ from calendar import timegm
 from datetime import UTC, datetime, timedelta, tzinfo
 from io import StringIO
 from typing import Self, override
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +22,7 @@ from app.core.logging.service import LoggingService
 
 def test_claims_adapter_keeps_datetime_and_extra_claims() -> None:
     expiration = datetime(2035, 1, 2, 3, 4, 5, tzinfo=UTC)
-    claims = {"sub": "user", "role": "member", "exp": expiration, "tenant": {"id": "tenant"}}
+    claims = {"sub": "user", "role": "member", "exp": expiration, "gen": 7, "tenant": {"id": "tenant"}}
 
     parsed = TypeAdapter(AccessTokenClaims).validate_python(claims, strict=True)
 
@@ -44,7 +46,7 @@ def test_payload_adapter_rejects_malformed_required_claims(claims: object) -> No
         adapter.validate_python(claims, strict=True)
 
 
-def test_access_token_encodes_datetime_as_numeric_date(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_access_token_encodes_datetime_as_numeric_date(monkeypatch: pytest.MonkeyPatch) -> None:
     issued_at = datetime(2035, 1, 2, 3, 4, 5, tzinfo=UTC)
 
     class Clock(datetime):
@@ -54,14 +56,17 @@ def test_access_token_encodes_datetime_as_numeric_date(monkeypatch: pytest.Monke
             return cls(2035, 1, 2, 3, 4, 5, tzinfo=UTC)
 
     monkeypatch.setattr(security, "datetime", Clock)
+    identity_id = uuid4()
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
 
-    token = security.create_access_token("user", "member", timedelta(seconds=90))
+    token = await security.create_access_token("user", "member", timedelta(seconds=90), identity_id=identity_id)
 
     payload = security.decode_access_token(token)
     assert payload == {
         "sub": "user",
         "role": "member",
         "exp": timegm((issued_at + timedelta(seconds=90)).utctimetuple()),
+        "gen": 7,
     }
 
 
@@ -72,6 +77,7 @@ def test_decode_accepts_extra_claims_without_exposing_them() -> None:
                 "sub": "user",
                 "role": "member",
                 "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "gen": 7,
                 "tenant": {"id": "tenant"},
             },
             security.settings.JWT_SECRET_KEY,
@@ -81,10 +87,24 @@ def test_decode_accepts_extra_claims_without_exposing_them() -> None:
 
     payload = security.decode_access_token(token)
 
-    assert set(payload) == {"sub", "role", "exp"}
+    assert set(payload) == {"sub", "role", "exp", "gen"}
     assert payload["sub"] == "user"
     assert payload["role"] == "member"
     assert TypeAdapter(AccessTokenPayload).validate_python(payload, strict=True) == payload
+
+
+@pytest.mark.parametrize("generation", [None, True, False, -1, "0", 0.0, [], {}])
+def test_decode_rejects_missing_or_malformed_generation(generation: object) -> None:
+    # Given a correctly signed token with a missing or invalid generation.
+    claims = {"sub": "user", "role": "member", "exp": datetime.now(UTC) + timedelta(minutes=5)}
+    if generation is not None:
+        claims["gen"] = generation
+    token = jwt.encode(claims, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM)
+
+    # When decoding it, then it is rejected rather than grandfathered in.
+    with pytest.raises(HTTPException) as caught:
+        security.decode_access_token(token)
+    assert caught.value.status_code == 401
 
 
 @pytest.mark.parametrize("token", ["not-a-jwt", ""])

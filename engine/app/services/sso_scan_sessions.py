@@ -57,4 +57,4 @@ async def redeem_scan_session(session_id: uuid.UUID) -> RedeemedScanLogin | None
         raise ScanLoginUnavailableError from exc
     if user.identity is None or not user.identity.is_active:
         raise ScanLoginUnavailableError
-    return RedeemedScanLogin(access_token=create_access_token(str(user.id), user.role), user=user)
+    return RedeemedScanLogin(access_token=await create_access_token(str(user.id), user.role), user=user)

@@ -7,11 +7,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, final, override
 from uuid import UUID
 
-from app.core.json_types import uuid_from_row
+from app.core.json_types import int_from_row, uuid_from_row
 from app.core.session_cache import bump_identity_session
 from app.dao.base import BaseDAO
 from app.records.identity import IdentityRecord
 
+# Generation is intentionally excluded: generic record writes must never reset revocation state.
 _IDENTITY_COLUMNS = (
     "id",
     "email",
@@ -33,6 +34,22 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     table: ClassVar[str] = "identities"
     columns: ClassVar[tuple[str, ...]] = _IDENTITY_COLUMNS
     record_factory = staticmethod(IdentityRecord.from_row)
+
+    async def get_auth_generation(self, identity_id: UUID) -> int | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT auth_generation FROM identities WHERE id = %(identity_id)s", {"identity_id": identity_id}
+            )
+            return int_from_row(row["auth_generation"]) if row is not None else None
+
+    async def bump_auth_generation(self, identity_id: UUID) -> int | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE identities SET auth_generation = auth_generation + 1, updated_at = now() "
+                "WHERE id = %(identity_id)s RETURNING auth_generation",
+                {"identity_id": identity_id},
+            )
+            return int_from_row(row["auth_generation"]) if row is not None else None
 
     @override
     async def update(self, *, db_obj: IdentityRecord, obj_in: Mapping[str, Any]) -> IdentityRecord:

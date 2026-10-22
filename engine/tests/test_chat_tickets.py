@@ -41,9 +41,13 @@ def context(monkeypatch):
         agent_id=uuid.uuid4(),
         session_id=uuid.uuid4(),
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=7,
     )
     user = SimpleNamespace(
-        id=binding.user_id, tenant_id=binding.tenant_id, identity=SimpleNamespace(is_active=True), display_name="Member"
+        id=binding.user_id,
+        tenant_id=binding.tenant_id,
+        identity=SimpleNamespace(id=uuid.uuid4(), is_active=True, auth_generation=7),
+        display_name="Member",
     )
     agent = SimpleNamespace(
         id=binding.agent_id,
@@ -57,6 +61,7 @@ def context(monkeypatch):
     )
     monkeypatch.setattr(tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(tickets, "load_user_principal", AsyncMock(return_value=user))
+    monkeypatch.setattr(tickets, "check_token_generation", AsyncMock())
     monkeypatch.setattr(tickets, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(
         tickets.chat_session_dao,

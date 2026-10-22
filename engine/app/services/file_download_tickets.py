@@ -6,13 +6,13 @@ import time
 import uuid
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from redis.exceptions import RedisError
 
 from app.config import get_settings
 from app.core.events import get_redis
 from app.core.permissions import check_agent_access
-from app.core.security import load_user_principal
+from app.core.security import check_token_generation, load_user_principal
 from app.records.user import UserRecord
 
 TICKET_TTL_SECONDS = 60
@@ -35,6 +35,7 @@ class DownloadTicketBinding(BaseModel):
     path: str
     inline: bool
     auth_deadline: int
+    auth_generation: int = Field(strict=True, ge=0)
 
 
 def normalize_download_path(path: str) -> str:
@@ -59,7 +60,7 @@ async def issue(binding: DownloadTicketBinding) -> DownloadTicketResponse:
 
 
 async def create(
-    user: UserRecord, agent_id: uuid.UUID, path: str, inline: bool, auth_deadline: int
+    user: UserRecord, agent_id: uuid.UUID, path: str, inline: bool, auth_deadline: int, auth_generation: int
 ) -> DownloadTicketResponse:
     if user.tenant_id is None:
         raise HTTPException(403, "Tenant membership required")
@@ -70,6 +71,7 @@ async def create(
         path=normalize_download_path(path),
         inline=inline,
         auth_deadline=auth_deadline,
+        auth_generation=auth_generation,
     )
     return await issue(binding)
 
@@ -99,6 +101,7 @@ async def authorize_binding(
     user = await load_user_principal(binding.user_id, fresh=True)
     if user.identity is None:
         raise HTTPException(401, "Identity unavailable")
+    await check_token_generation(user.identity.id, binding.auth_generation)
     if user.tenant_id != binding.tenant_id:
         raise HTTPException(403, "Membership changed")
     _ = await check_agent_access(user, agent_id, fresh=True)

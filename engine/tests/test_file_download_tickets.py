@@ -11,6 +11,7 @@ from redis.exceptions import RedisError
 
 from app.api import files as files_api
 from app.config import get_settings
+from app.core import security
 from app.core.security import create_access_token, decode_access_token
 from app.services import file_download_tickets as tickets
 
@@ -52,7 +53,7 @@ def context(monkeypatch):
         tenant_id=uuid.uuid4(),
         role="member",
         is_active=True,
-        identity=SimpleNamespace(is_active=True),
+        identity=SimpleNamespace(id=uuid.uuid4(), is_active=True, auth_generation=7),
     )
     agent_id = uuid.uuid4()
     binding = tickets.DownloadTicketBinding(
@@ -62,21 +63,24 @@ def context(monkeypatch):
         path="workspace/report.pdf",
         inline=False,
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=7,
     )
     monkeypatch.setattr(tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(tickets, "load_user_principal", AsyncMock(return_value=user))
+    monkeypatch.setattr(tickets, "check_token_generation", AsyncMock())
     monkeypatch.setattr(tickets, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use")))
     return redis, binding, user
 
 
 @pytest.fixture
-def mint(context, monkeypatch):
+async def mint(context, monkeypatch):
     _, binding, user = context
     storage = FileStorage({f"{binding.agent_id}/{binding.path}"})
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     access = AsyncMock(return_value=(SimpleNamespace(id=binding.agent_id), "use"))
     monkeypatch.setattr(files_api, "check_agent_access", access)
-    jwt = create_access_token(str(user.id), user.role)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    jwt = await create_access_token(str(user.id), user.role, identity_id=user.identity.id)
 
     async def call(path="workspace/report.pdf", inline=False, current_user=user):
         return await files_api.create_download_ticket(
@@ -112,6 +116,21 @@ async def test_mint_requires_agent_access(mint):
     with pytest.raises(HTTPException) as exc:
         await call()
     assert exc.value.status_code == 403
+
+
+async def test_mint_retains_admitted_jwt_generation_after_principal_changes(context, mint):
+    # Given a principal refreshed after the presenting JWT was admitted.
+    _, _, user = context
+    call, _, jwt = mint
+    user.identity.auth_generation += 1
+
+    # When the download route mints a ticket from that JWT.
+    issued = await call()
+
+    # Then the ticket retains the JWT generation, not the refreshed principal value.
+    binding = await tickets.redeem(issued.ticket)
+    assert binding.auth_generation == decode_access_token(jwt)["gen"]
+    assert binding.auth_generation != user.identity.auth_generation
 
 
 async def test_mint_requires_existing_visible_file(context, mint):

@@ -55,7 +55,7 @@ async def test_patch_returns_new_value_when_session_snapshot_is_warm(
     row_memo.clear_row_memo()
     app = FastAPI()
     app.include_router(auth.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
-    token = create_access_token(str(deletion_pg.actor.id), "org_admin")
+    token = await create_access_token(str(deletion_pg.actor.id), "org_admin")
     # When
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.patch("/api/auth/me", json={field: value}, headers={"Authorization": f"Bearer {token}"})

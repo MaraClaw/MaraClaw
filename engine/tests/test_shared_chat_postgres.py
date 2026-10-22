@@ -182,6 +182,7 @@ async def test_second_human_uses_persisted_shared_context_not_socket_or_archive_
                 agent_id=db.agent.id,
                 session_id=shared.id,
                 auth_deadline=2_000_000_000,
+                auth_generation=0,
             )
         )
         accepted = await chat_submissions.accept_submission(

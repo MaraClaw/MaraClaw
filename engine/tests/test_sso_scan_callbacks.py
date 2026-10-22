@@ -150,7 +150,7 @@ def flow(provider_type: str, monkeypatch: pytest.MonkeyPatch) -> CallbackFlow:
     async def redirect(_provider: IdentityProviderRecord, _request: object = None) -> str:
         return "https://example.test/api/auth/google_workspace/callback"
 
-    def mint(user_id: str, _role: str) -> str:
+    async def mint(user_id: str, _role: str) -> str:
         result.minted.append(user_id)
         return JWT
 

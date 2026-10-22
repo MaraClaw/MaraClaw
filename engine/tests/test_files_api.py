@@ -12,22 +12,23 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 from app.api import files as files_api
+from app.core import security
 from app.core.security import create_access_token
+from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import file_download_tickets
 from app.services.storage_runtime.local import LocalStorageBackend
 
 
-def make_user(**overrides):
-    values = {
-        "id": uuid.uuid4(),
-        "display_name": "Alice",
-        "role": "member",
-        "tenant_id": uuid.uuid4(),
-        "is_active": True,
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
+def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
+    return UserRecord(
+        id=uuid.uuid4(),
+        display_name="Alice",
+        role="member",
+        tenant_id=uuid.uuid4(),
+        is_active=True,
+        identity=identity,
+    )
 
 
 @pytest.mark.parametrize("suffix", ["docx", "pptx", "xls"])
@@ -233,7 +234,7 @@ class DownloadRedis:
 
 @pytest.fixture
 def download(monkeypatch):
-    user = make_user(identity=SimpleNamespace(is_active=True))
+    user = make_user(identity=IdentityRecord(id=uuid.uuid4()))
     agent_id = uuid.uuid4()
     redis = DownloadRedis()
     loader = AsyncMock(return_value=user)
@@ -241,6 +242,7 @@ def download(monkeypatch):
     monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use")))
     monkeypatch.setattr(file_download_tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(file_download_tickets, "load_user_principal", AsyncMock(return_value=user))
+    monkeypatch.setattr(file_download_tickets, "check_token_generation", AsyncMock())
     monkeypatch.setattr(
         file_download_tickets, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use"))
     )
@@ -255,6 +257,7 @@ async def _issue_ticket(download, path: str, inline: bool) -> str:
         path=path,
         inline=inline,
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
     )
     return (await file_download_tickets.issue(binding)).ticket
 
@@ -324,8 +327,9 @@ async def test_ticket_for_other_path_is_consumed_and_refused(monkeypatch, downlo
 
 
 @pytest.mark.parametrize("query", ["token={jwt}", "", "ticket="])
-def test_download_rejects_query_jwt_and_missing_credentials(download, query):
-    jwt = create_access_token(str(download.user.id), "member")
+async def test_download_rejects_query_jwt_and_missing_credentials(download, query, monkeypatch):
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=0))
+    jwt = await create_access_token(str(download.user.id), "member", identity_id=download.user.identity.id)
     app = FastAPI()
     app.include_router(files_api.router, prefix="/api")
     url = f"/api/agents/{download.agent_id}/files/download?path=workspace/report.pdf&{query.format(jwt=jwt)}"

@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -62,6 +63,8 @@ def install_principal(monkeypatch: pytest.MonkeyPatch, user: UserRecord | None) 
         return user
 
     monkeypatch.setattr(security.user_dao, "get_with_identity", get_with_identity)
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     return fresh_reads
 
 
@@ -157,6 +160,7 @@ async def test_concurrent_redeem_mints_one_fresh_login(monkeypatch: pytest.Monke
     assert claims is not None
     assert claims["sub"] == str(user.id)
     assert claims["role"] == "org_admin"
+    assert claims["gen"] == 7
     assert user.must_change_password
     assert reads == [True]
     assert dao.session == replace(row, status="completed")
@@ -219,3 +223,24 @@ async def test_repeated_redeem_returns_no_second_token(monkeypatch: pytest.Monke
 
     assert result is None
     assert reads == [True]
+
+
+async def test_redeem_mints_current_generation_after_older_credentials_are_revoked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an authorized scan and an earlier credential for the same identity.
+    user = make_user()
+    row = SSOScanSessionRecord(
+        id=uuid4(), status="authorized", user_id=user.id, expires_at=datetime.now(UTC) + timedelta(minutes=5)
+    )
+    monkeypatch.setattr(service, "sso_scan_session_dao", AtomicSessionDAO(row))
+    install_principal(monkeypatch, user)
+    generation = AsyncMock(side_effect=[7, 8])
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    earlier = await security.create_access_token(str(user.id), user.role)
+
+    # When redemption follows revocation, then its new login reads SQL instead of retaining the old generation.
+    result = await service.redeem_scan_session(row.id)
+    assert result is not None
+    assert security.decode_access_token(earlier)["gen"] == 7
+    assert security.decode_access_token(result.access_token)["gen"] == 8

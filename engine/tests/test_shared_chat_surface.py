@@ -37,6 +37,7 @@ async def test_two_humans_share_live_transcript_replay_and_http_history(receipt_
             agent_id=db.agent.id,
             session_id=shared.id,
             auth_deadline=int(time.time()) + 3600,
+            auth_generation=0,
         )
         for token, user in (("sender", db.user), ("viewer", viewer))
     }
@@ -131,6 +132,7 @@ async def test_archive_socket_reads_and_replays_but_rejects_new_writes(receipt_d
         agent_id=db.agent.id,
         session_id=db.session_id,
         auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
     )
     monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(return_value=binding))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(db.user, db.agent, "use")))

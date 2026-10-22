@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -85,6 +86,8 @@ def install_session(
         return user
 
     monkeypatch.setattr(security.user_dao, "get_with_identity", get_with_identity)
+    monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     return dao, user, session_id
 
 
@@ -96,11 +99,13 @@ async def test_winning_poll_preserves_login_response(monkeypatch: pytest.MonkeyP
     assert response["status"] == "authorized"
     assert response["provider_type"] == "feishu"
     assert response["error_msg"] is None
+    assert "access_token" in response
     token = response["access_token"]
     assert isinstance(token, str)
     claims = security.decode_access_token(token)
     assert claims is not None
     assert claims["sub"] == str(user.id)
+    assert "user" in response
     assert response["user"] == sso.UserOut.model_validate(user).model_dump()
     assert dao.row is not None
     assert dao.row.status == "completed"

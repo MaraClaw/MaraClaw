@@ -24,7 +24,7 @@ from app.core.security import (
     verify_password_async,
 )
 from app.dao import identity_dao, identity_provider_dao, system_setting_dao, tenant_dao, user_dao
-from app.db.session import optional_connection_ctx as connection_ctx
+from app.db.session import flush_request_transaction, optional_connection_ctx as connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.auth_responses import (
@@ -73,9 +73,21 @@ async def create_chat_ticket(
 ) -> chat_tickets.ChatTicketResponse:
     payload = decode_access_token(credentials.credentials)
     user = await load_user_from_access_token(credentials.credentials, fresh=True)
-    result = await chat_tickets.create(body, user, payload["exp"])
+    result = await chat_tickets.create(body, user, payload["exp"], payload["gen"])
     response.headers["Cache-Control"] = "no-store"
     return result
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(current_user: UserRecord = Depends(get_current_user)) -> Response:
+    async with connection_ctx():
+        if current_user.identity_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
+        generation = await identity_dao.bump_auth_generation(current_user.identity_id)
+        if generation is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
+        await flush_request_transaction()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -378,7 +390,7 @@ async def register_init(
             await _send_verification_email_task(user, background_tasks, settings, request)
 
     # 5. Generate token outside transaction
-    token = create_access_token(str(user.id), user.role)
+    token = await create_access_token(str(user.id), user.role)
 
     return RegisterInitResponse(
         user_id=user.id,
@@ -523,7 +535,7 @@ async def login(
 
     # 6. Generate Token (login succeeds even when password change is required;
     # general API access is blocked by get_current_user until the password is changed).
-    token = create_access_token(str(user.id), user.role)
+    token = await create_access_token(str(user.id), user.role)
     must_change = bool(getattr(identity, "must_change_password", False))
     user_out = UserOut.model_validate(user)
     user_out.must_change_password = must_change
@@ -740,7 +752,7 @@ async def switch_tenant(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This organization is currently unavailable.")
 
     # 3. Generate new token
-    token = create_access_token(str(target_user.id), target_user.role)
+    token = await create_access_token(str(target_user.id), target_user.role)
 
     # 4. Determine redirect URL
     from app.services.platform_service import platform_service
@@ -957,7 +969,7 @@ async def oauth_callback(
                 raise HTTPException(status_code=500, detail="Failed to create user")
             user = await _check_oauth_user(user)
 
-        jwt_token = create_access_token(str(user.id), user.role)
+        jwt_token = await create_access_token(str(user.id), user.role)
         return TokenResponse(
             access_token=jwt_token,
             user=UserOut.model_validate(user),
@@ -1044,7 +1056,7 @@ async def oauth_callback(
         )
 
     # Single tenant (or new user with no tenant yet) - issue token directly
-    jwt_token = create_access_token(str(user.id), user.role)
+    jwt_token = await create_access_token(str(user.id), user.role)
     return TokenResponse(
         access_token=jwt_token,
         user=UserOut.model_validate(user),
@@ -1166,7 +1178,7 @@ async def verify_email(data: VerifyEmailRequest):
     # 4. Generate token and return full response outside transaction
     effective_id = str(user.id) if user else str(identity.id)
     effective_role = user.role if user else "user"
-    token = create_access_token(effective_id, effective_role)
+    token = await create_access_token(effective_id, effective_role, identity_id=None if user else identity.id)
 
     return TokenResponse(
         access_token=token,
