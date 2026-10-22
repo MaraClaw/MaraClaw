@@ -4,12 +4,17 @@ import uuid
 from pathlib import Path
 
 from app.services import agent_tools
+from app.services.storage_runtime.skill_install import install_agent_skill
 
 from .registry import ToolArguments
 
 
 def _is_safe_folder_name(folder_name: str) -> bool:
-    return bool(folder_name) and folder_name not in {".", ".."} and "/" not in folder_name and "\\" not in folder_name
+    return (
+        bool(folder_name)
+        and not folder_name.startswith(".")
+        and not any(character in folder_name for character in ("/", "\\", "\x00"))
+    )
 
 
 async def _search_clawhub(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
@@ -66,8 +71,6 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
         return "❌ Missing required argument 'source'. Provide a ClawHub slug (e.g. 'market-research') or a GitHub URL."
 
     is_url = source.startswith(("http://", "https://"))
-    base = ws
-
     try:
         if is_url:
             from app.api.skills import _fetch_github_directory, _get_github_token, _parse_github_url
@@ -103,21 +106,12 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
                 return f"❌ No files found for skill '{slug}' in the ClawHub archive."
 
             folder_name = slug
-        skills_root = (base / "skills").resolve()
-        skill_dir = (skills_root / folder_name).resolve()
-        if not skill_dir.is_relative_to(skills_root):
+        skills_root = (ws / "skills").resolve()
+        skill_dir = skills_root / folder_name
+        if not skill_dir.resolve().is_relative_to(skills_root):
             return "❌ Invalid skill folder name."
-        _ = skill_dir.mkdir(parents=True, exist_ok=True)
-
-        written = []
-        for file in files:
-            file_path = (skill_dir / file["path"]).resolve()
-            if not file_path.is_relative_to(skill_dir):
-                continue
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            _ = file_path.write_text(file["content"], encoding="utf-8")
-            written.append(file["path"])
-
+        await install_agent_skill(agent_id, skill_dir, files)
+        written = [file["path"] for file in files]
         return f"✅ Skill '{folder_name}' installed successfully ({len(written)} files written to skills/{folder_name}/).\n\nFiles: {', '.join(written)}"
 
     except Exception as error:
