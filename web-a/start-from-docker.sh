@@ -16,8 +16,9 @@
 #   DETACH=1            run with -d --restart unless-stopped (default: --rm)
 #   PULL=1              build with --pull
 #
-# API prerequisite: this static image has no API proxy. With the default
-# same-origin API URL, an edge/ingress must route /api to the engine.
+# API prerequisite: engine must already run with alias maraclaw-engine on
+# maraclaw_network (or the DOCKER_NETWORK override). nginx proxies /api/ to it;
+# this launcher supplies --network (manual runs need --network maraclaw_network).
 # Only the public API URL is passed to the build; no runtime env is forwarded.
 
 set -euo pipefail

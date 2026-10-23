@@ -4,17 +4,18 @@
 # Multi-stage production image:
 #   1) deps    - install lockfile deps on Node 26.12.1 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
-#   3) runtime - unprivileged nginx serves static dist
+#   3) runtime - unprivileged nginx serves dist and proxies /api/ to engine
 #
 # Build:
 #   docker build -t maraclaw-web-a .
 #   docker build -t maraclaw-web-a --build-arg VITE_API_BASE_URL=https://api.example.com .
 #
 # Run:
-#   docker run --rm -p 8080:8080 maraclaw-web-a
+#   Engine must already run with alias maraclaw-engine on maraclaw_network.
+#   docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 #
-# Prefer leaving VITE_API_BASE_URL empty and reverse-proxying /api → engine
-# on the same origin so the browser never needs a cross-origin API host.
+# Prefer leaving VITE_API_BASE_URL empty: nginx proxies same-origin /api/
+# to http://maraclaw-engine:8000 without stripping /api from the request URI.
 
 ARG NODE_VERSION=26.12.1
 
@@ -63,7 +64,7 @@ LABEL org.opencontainers.image.title="MaraClaw web-a" \
       org.opencontainers.image.description="MaraClaw admin / operator console" \
       org.opencontainers.image.vendor="MaraClaw"
 
-# Replace the default site with our SPA config (port 8080, security headers).
+# Replace the default site with our SPA + API proxy config (port 8080, security headers).
 COPY --chown=nginx:nginx docker/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Static assets only - no Node runtime, no package tree, no source.

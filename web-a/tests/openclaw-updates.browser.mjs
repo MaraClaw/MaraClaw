@@ -93,7 +93,7 @@ try {
     // Given / When: direct navigation in the role's real app session.
     await expect(page).toHaveURL(`${base}${target}`)
     // Then: both route and navigation enforce PA identity.
-    const links = page.getByRole('link', { name: 'OpenClaw updates', exact: true })
+    const links = page.getByRole('link', { name: 'Updates', exact: true })
     await expect(links).toHaveCount(target === 'openclaw-updates' ? 1 : 0)
     if (target === 'openclaw-updates') {
       await expect(links).toHaveAttribute('aria-current', 'page')
@@ -108,7 +108,7 @@ try {
     // Given / When: a PA with a required password change navigates directly.
     // Then
     await expect(page).toHaveURL(`${base}account`)
-    await expect(page.getByRole('link', { name: 'OpenClaw updates', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Updates', exact: true })).toHaveCount(0)
     assert.equal(state.exchanges.length, 0)
   })
 
@@ -185,7 +185,7 @@ try {
     const original = state.exchanges[0].payload
     // When: the operator navigates away, reloads, and temporarily uses another account.
     await page.getByRole('link', { name: 'Account', exact: true }).click()
-    await page.getByRole('link', { name: 'OpenClaw updates', exact: true }).click()
+    await page.getByRole('link', { name: 'Updates', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Retry this notice', exact: true })).toBeVisible()
     await page.reload()
     await expect(page.getByRole('button', { name: 'Retry this notice', exact: true })).toBeVisible()
