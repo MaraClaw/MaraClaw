@@ -59,6 +59,7 @@ from app.services.enterprise_llm import (
     is_llm_pool_admin,
 )
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
+from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -962,7 +963,7 @@ async def resolve_agent_approval(
     }
 
 
-@router.post("/{agent_id}/api-key", response_model=None)
+@router.post("/{agent_id}/api-key", response_model=None, dependencies=[Depends(guest_write_exclusion)])
 async def generate_or_reset_api_key(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentApiKeyResponse:

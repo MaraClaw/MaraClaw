@@ -17,6 +17,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.channels.types import normalize_channel_type
+from app.services.openclaw_update_gate import assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
 
@@ -35,7 +36,11 @@ def delivery_cutoff(now: datetime) -> datetime:
 
 
 async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> list[GatewayMessageRecord]:
-    """Requeue expired deliveries and atomically claim the pending batch."""
+    """Requeue expired deliveries and atomically claim the pending batch.
+
+    Raises ``OpenClawUpdateGateError`` before any requeue or claim.
+    """
+    await assert_work_allowed(agent_id)
     at = now or _utcnow()
     shared_id = shared_session_id(agent_id)
     async with connection_ctx():

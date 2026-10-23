@@ -24,6 +24,12 @@ from app.records.workspace import WorkspaceEditLockRecord, WorkspaceFileRevision
 from app.schemas import content_response_catalog as catalog, content_response_files as file_contracts
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.workspace_collaboration import WorkspaceWriteResult
+from openclaw_update_gate_fixtures import open_guest_write_gate
+
+
+@pytest.fixture(autouse=True)
+def _open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    open_guest_write_gate(monkeypatch)
 
 
 @pytest.fixture

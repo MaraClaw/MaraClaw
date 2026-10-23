@@ -38,6 +38,7 @@ from app.schemas.schemas import AgentOut, AgentUpdate
 from app.services import heartbeat, okr_daily_collection, onboarding
 from app.services.agent_manager import agent_manager
 from app.services.autonomy_service import autonomy_service
+from openclaw_update_gate_fixtures import open_guest_write_gate
 
 ROUTES = tuple(
     route
@@ -518,6 +519,7 @@ async def test_template_catalog_keeps_capabilities_bootstrap_and_open_policy(
 async def test_api_key_wrapper_preserves_one_time_secret_and_access_errors(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
+    open_guest_write_gate(monkeypatch)
     actor.role = "member"
     agent.setup_pending = state == "setup_pending"
     if state == "other_owner":

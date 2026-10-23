@@ -31,8 +31,12 @@ def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     async def get_message(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord | None:
         return None
 
+    async def open_gate(agent_id: uuid.UUID) -> None:
+        return None
+
     monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "get_for_agent", get_message)
+    monkeypatch.setattr(openclaw_routing, "assert_work_allowed", open_gate)
 
 
 def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> Any:

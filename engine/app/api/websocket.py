@@ -27,6 +27,7 @@ from app.services.openclaw_routing import (
     enqueue_prepared_openclaw_message,
     prepare_openclaw_message,
 )
+from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
@@ -370,6 +371,9 @@ class WebSocketChatHandler:
                     {"type": "turn_rejected", "reason": "no_company_model", "content": str(exc)}
                 )
                 continue
+            except OpenClawUpdateGateError as gate:
+                await self.websocket.send_json({"type": "turn_rejected", **gate.rejection()})
+                continue
 
             try:
                 async with connection_ctx():
@@ -421,6 +425,8 @@ class WebSocketChatHandler:
             rejection.update(reason="submission_conflict", content="Submission UUID already used for another message.")
         except NoCompanyModelError as exc:
             rejection.update(reason="no_company_model", content=str(exc))
+        except OpenClawUpdateGateError as gate:
+            rejection.update(gate.rejection())
         except AgentExpired as exc:
             rejection.update(reason="agent_expired", content=exc.message)
         except QuotaExceeded as exc:

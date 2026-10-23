@@ -19,6 +19,13 @@ from app.services.document_parser import MAX_INPUT_BYTES
 from app.services.storage_runtime.bounded import BoundedReader
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
+from openclaw_update_gate_fixtures import open_guest_write_gate
+
+
+@pytest.fixture(autouse=True)
+def _open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    open_guest_write_gate(monkeypatch)
+
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "anydoc"
 

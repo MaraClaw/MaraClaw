@@ -54,6 +54,7 @@ from app.services.document_parser import (
 )
 from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
 from app.services.focus_service import is_focus_file_path
+from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.storage import (
     ensure_local_path,
     get_storage_backend,
@@ -895,7 +896,7 @@ async def download_file(
     return await _download_response(key, path, inline)
 
 
-@router.put("/content", response_model=dict[str, object])
+@router.put("/content", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def write_file(
     agent_id: uuid.UUID,
     path: str,
@@ -990,7 +991,7 @@ async def get_file_revisions(
     ]
 
 
-@router.post("/restore", response_model=dict[str, object])
+@router.post("/restore", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def restore_file_revision(
     agent_id: uuid.UUID,
     data: RestoreRevisionBody,
@@ -1017,7 +1018,7 @@ async def restore_file_revision(
     return {"status": "ok", "path": revision.path, "revision_id": restored.revision_id}
 
 
-@router.delete("/content", response_model=None)
+@router.delete("/content", response_model=None, dependencies=[Depends(guest_write_exclusion)])
 async def delete_file(
     agent_id: uuid.UUID,
     path: str,
@@ -1052,7 +1053,7 @@ class ImportSkillBody(BaseModel):
     skill_id: str
 
 
-@router.post("/import-skill", response_model=dict[str, object])
+@router.post("/import-skill", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def import_skill_to_agent(
     agent_id: uuid.UUID, body: ImportSkillBody, current_user: UserRecord = Depends(get_current_user)
 ) -> NamedAgentSkillImportAcknowledgement:
@@ -1104,7 +1105,7 @@ upload_router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
 DEFAULT_UPLOAD_DIR = "workspace/uploads"
 
 
-@upload_router.post("/upload", response_model=dict[str, object])
+@upload_router.post("/upload", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def upload_file_to_workspace(
     agent_id: uuid.UUID,
     file: UploadFileType = FastFile(...),
@@ -1334,7 +1335,7 @@ class UrlImportBody(BaseModel):
     url: str
 
 
-@router.post("/import-from-clawhub", response_model=dict[str, object])
+@router.post("/import-from-clawhub", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def agent_import_from_clawhub(
     agent_id: uuid.UUID, body: ClawhubImportBody, current_user: UserRecord = Depends(get_current_user)
 ) -> NamedAgentSkillImportAcknowledgement:
@@ -1391,7 +1392,7 @@ async def agent_import_from_clawhub(
     }
 
 
-@router.post("/import-from-url", response_model=dict[str, object])
+@router.post("/import-from-url", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def agent_import_from_url(
     agent_id: uuid.UUID, body: UrlImportBody, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentSkillImportAcknowledgement:

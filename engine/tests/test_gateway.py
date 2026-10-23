@@ -10,6 +10,7 @@ from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -382,6 +383,7 @@ def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
     for name in ("claim_shared", "claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
+    monkeypatch.setattr(delivery, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(delivery, "get_settings", lambda: SimpleNamespace(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=60))
     return store
 
