@@ -5,7 +5,7 @@ description = "Backend workspace for the MaraClaw enterprise digital employee pl
 requires-python = ">=3.14.8"
 dependencies = [
     "alibabacloud-credentials>=1.0.12",
-    "fastapi[standard]>=0.159.1",
+    "fastapi[standard]>=0.161.1",
     "uvicorn[standard]>=0.54.0",
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
@@ -69,8 +69,8 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "httpx>=0.28.1",
-    "ruff>=0.17.1",
-    "ty>=0.0.90",
+    "ruff>=0.17.2",
+    "ty>=0.0.91",
     "basedpyright>=1.40.2",
 ]
 
