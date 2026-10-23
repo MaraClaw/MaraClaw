@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { archivedSession, chatPath, complete, firstSession, message, prepareChat } from './chat-identity-fixture'
+import { archivedSession, chatPath, complete, firstSession, message, navigateChat, prepareChat } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
 test('opening chat ensures the empty shared conversation instead of the newest private primary', async ({ page }) => {
@@ -10,10 +10,10 @@ test('opening chat ensures the empty shared conversation instead of the newest p
   expect(chat.ensures()).toBe(1)
   await expect(page.locator('article')).toHaveCount(0)
   await expect(page.getByRole('textbox', { name: `Message ${originalAgent.name}` })).toBeVisible()
-  await expect(page.getByText('Everyone with access to this agent shares this conversation, including messages from connected channels.')).toBeVisible()
+  await expect(page.getByText('Everyone with access to this agent shares this conversation, including messages from connected channels.')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /New (session|chat)/ })).toHaveCount(0)
-  const canonical = page.locator('li').filter({ has: page.getByRole('button', { name: 'Shared conversation', exact: true }) })
-  await expect(canonical.getByRole('button', { name: /^(Edit|Del)$/ })).toHaveCount(0)
+  await expect(page.getByRole('main').getByRole('complementary')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^(Shared conversation|Archived private thread|Edit|Del)$/ })).toHaveCount(0)
 })
 
 test('authorized archive links stay readable and read-only with a return to shared', async ({ page }) => {
@@ -49,8 +49,10 @@ test('switching from a live shared conversation to a denied archive clears the r
   socket.route.send(JSON.stringify({ type: 'chunk', content: 'In-flight shared reply' }))
   await expect(page.getByRole('link', { name: 'Take Control', exact: true })).toBeVisible()
   await expect(page.getByText('In-flight shared reply', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Archived private thread', exact: true }).click()
+  await navigateChat(page, chatPath(archivedSession))
   await expect(page.getByText('Archive access denied', { exact: true })).toBeVisible()
+  complete(socket.route, message('late-shared-reply', 'Retired shared completion'))
+  socket.route.send(JSON.stringify({ type: 'agentbay_live', env: 'browser', live_preview: { screenshot_url: '/retired-preview.png' } }))
   await expect(page.locator('article')).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Take Control', exact: true })).toHaveCount(0)
   await expect(page.getByText('Thinking', { exact: true })).toHaveCount(0)

@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, MonitorPlay, Send } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { Link, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { ChatMarkdown } from '@/components/chat/markdown'
@@ -13,16 +13,14 @@ import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
-import { createChatSubmissions, type ChatSubmissions } from '@/lib/chat/submissions'
+import { createChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isWritableSession } from '@/lib/chat/sessions'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
-  deleteSession,
   listSessionMessages,
   listSessions,
-  renameSession,
   uploadChatFile,
   type AgentOut,
 } from '@/lib/workspace-api'
@@ -52,12 +50,7 @@ function ThinkingStatus() {
 export function AgentChatPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { sessionId } = useParams()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  type MutationOrigin = {
-    readonly owner: SessionOwner; readonly queryClient: typeof queryClient; readonly agentId: string
-    readonly scope: ChatSubmissions
-  }
   const { token, user, owner } = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot)
   const [mountedOwner] = useState(() => owner)
   const mountedRef = useRef(false)
@@ -78,8 +71,6 @@ export function AgentChatPage() {
   const [socketStopped, setSocketStopped] = useState(false)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameTitle, setRenameTitle] = useState('')
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
   const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
   const liveRef = useRef('')
@@ -390,27 +381,6 @@ export function AgentChatPage() {
     }
   }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions])
 
-  const rename = useMutation({
-    mutationFn: async (origin: MutationOrigin & { readonly sessionId: string; readonly title: string }) =>
-      isCurrent(origin.owner) ? renameSession(origin.agentId, origin.sessionId, origin.title) : null,
-    onSuccess(_result, origin) {
-      if (!isCurrent(origin.owner)) return
-      setRenamingId(null)
-      void origin.queryClient.invalidateQueries({ queryKey: ['sessions', origin.agentId] })
-    },
-  })
-
-  const remove = useMutation({
-    mutationFn: async (origin: MutationOrigin & { readonly sessionId: string; readonly active: boolean }) =>
-      isCurrent(origin.owner) ? deleteSession(origin.agentId, origin.sessionId) : null,
-    onSuccess(_result, origin) {
-      if (!isCurrent(origin.owner)) return
-      void origin.queryClient.invalidateQueries({ queryKey: ['sessions', origin.agentId] })
-      if (origin.active) navigate(`/app/agents/${origin.agentId}/chat`)
-    },
-  })
-
-  const sessionList = sessionsQuery.data ?? []
   const visible = useMemo(() => lines, [lines])
   const currentTurn = lines.findLast((line) => line.role === 'user' || line.role === 'assistant')
   const accepted = currentTurn?.role === 'user' && (currentTurn.delivery === 'accepted'
@@ -493,77 +463,8 @@ export function AgentChatPage() {
   }
 
   return (
-    <div className="grid h-full min-h-0 overflow-hidden grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
-      <aside className="min-h-0 max-h-36 overflow-y-auto p-3 md:max-h-none md:border-r md:border-border">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Conversations</p>
-        </div>
-        <ul className="space-y-1">
-          {sessionList.map((session) => (
-            <li key={session.id} className="rounded-lg hover:bg-muted">
-              {renamingId === session.id ? (
-                <form
-                  className="flex gap-1 p-1"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    if (!isCurrent()) return
-                    rename.mutate({ owner, queryClient, agentId: agent.id, scope: submissions, sessionId: session.id, title: renameTitle })
-                  }}
-                >
-                  <input
-                    className="h-7 min-w-0 flex-1 rounded border border-input bg-transparent px-1 text-xs"
-                    value={renameTitle}
-                    onChange={(event) => { if (isCurrent()) setRenameTitle(event.target.value) }}
-                  />
-                </form>
-              ) : (
-                <div className="flex items-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isCurrent()) navigate(`/app/agents/${agent.id}/chat/${session.id}`)
-                    }}
-                    className={cn(
-                      'min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs',
-                      session.id === activeId && 'font-medium',
-                    )}
-                  >
-                    {session.source_channel === 'shared' ? 'Shared conversation' : session.title || 'Untitled'}
-                  </button>
-                  {session.source_channel !== 'shared' ? <>
-                  <button
-                    type="button"
-                    className="px-1 text-[10px] text-muted-foreground"
-                    onClick={() => {
-                      if (!isCurrent()) return
-                      setRenamingId(session.id)
-                      setRenameTitle(session.title)
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="px-1 text-[10px] text-muted-foreground"
-                    onClick={() => {
-                      if (!isCurrent()) return
-                      remove.mutate({ owner, queryClient, agentId: agent.id, scope: submissions, sessionId: session.id, active: session.id === activeId })
-                    }}
-                  >
-                    Del
-                  </button>
-                  </> : null}
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </aside>
-
-      <section className="flex h-full min-h-0 flex-col overflow-hidden">
-        {shared || !sessionId ? <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          Everyone with access to this agent shares this conversation, including messages from connected channels.
-        </p> : !writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+      <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+        {sessionId && !writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
           <p>Archived conversation. Read-only history.</p>
           <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>Return to shared conversation</Link>
         </div> : null}
@@ -672,6 +573,5 @@ export function AgentChatPage() {
           </div>
         </form> : null}
       </section>
-    </div>
   )
 }
