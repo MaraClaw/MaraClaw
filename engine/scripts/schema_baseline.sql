@@ -1152,6 +1152,44 @@ CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created
 
 CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
 
+CREATE TABLE IF NOT EXISTS openclaw_update_notices (
+	id UUID NOT NULL,
+	request_id UUID NOT NULL,
+	title VARCHAR(200) NOT NULL,
+	body VARCHAR(1000) NOT NULL,
+	mandatory BOOLEAN NOT NULL,
+	recipients INTEGER NOT NULL DEFAULT 0,
+	created_by UUID,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ux_openclaw_update_notices_request_id UNIQUE (request_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_update_notices_created_at ON openclaw_update_notices (created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS openclaw_update_runs (
+	id UUID NOT NULL,
+	notice_id UUID NOT NULL,
+	agent_id UUID NOT NULL,
+	requested_by UUID,
+	state VARCHAR(20) NOT NULL,
+	failure_code VARCHAR(64),
+	journal JSONB NOT NULL DEFAULT '{}'::jsonb,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(notice_id) REFERENCES openclaw_update_notices (id),
+	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+	CONSTRAINT ck_openclaw_update_runs_state CHECK (state IN ('pending', 'cutover', 'succeeded', 'failed')),
+	CONSTRAINT ck_openclaw_update_runs_failure CHECK ((state = 'failed') = (failure_code IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_active_agent ON openclaw_update_runs (agent_id) WHERE state IN ('pending', 'cutover');
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_succeeded ON openclaw_update_runs (agent_id, notice_id) WHERE state = 'succeeded';
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_update_runs_agent_created ON openclaw_update_runs (agent_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS published_pages (
 	id UUID NOT NULL, 
 	short_id VARCHAR(16) NOT NULL, 
