@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -253,6 +254,7 @@ async def test_broadcast_enforces_role_and_tenant(client, member, role, has_tena
 
 async def test_broadcast_response_keeps_counts_and_tenant_scope(client, member, monkeypatch, stub):
     member.role = "org_admin"
+    monkeypatch.setattr(notification_api, "connection_ctx", nullcontext)
     users = stub(notification_api.user_dao, "list_active_for_tenant", [member])
     agents = stub(
         notification_api.agent_dao, "list_for_tenant", [AgentRecord(id=AGENT_ID, name="Agent", creator_id=member.id)]

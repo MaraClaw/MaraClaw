@@ -146,12 +146,15 @@ async def test_invalid_role_has_no_runtime_side_effects(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["api", "bootstrap", "worker", "connector", "all", "api,worker"])
-async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
+@pytest.mark.parametrize("broadcast_exit", ["shutdown", "return", "error", "cancel"])
+async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, broadcast_exit: str) -> None:
     # Given
     from app.process_roles import parse_process_roles, role_enabled
+    from app.runtime import readiness
     from app.services import (
         agent_setup,
         audit_logger,
+        broadcast_email_worker,
         gateway_report_relay,
         openclaw_update_worker,
         scheduler,
@@ -180,6 +183,27 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     async def loop() -> None:
         await asyncio.Event().wait()
 
+    broadcast_started = asyncio.Event()
+    broadcast_release = asyncio.Event()
+    broadcast_stopped = asyncio.Event()
+
+    async def broadcast() -> None:
+        broadcast_started.set()
+        try:
+            await broadcast_release.wait()
+            if broadcast_exit == "error":
+                raise RuntimeError("broadcast loop failed")
+        finally:
+            broadcast_stopped.set()
+
+    async def probe() -> bool:
+        return True
+
+    async def close_pool() -> None:
+        assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
+        events.append("database")
+
+    monkeypatch.setattr(lifecycle, "close_pool", close_pool)
     schedule_started = asyncio.Event()
 
     async def execution() -> None:
@@ -203,6 +227,9 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
+    monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", broadcast)
+    monkeypatch.setattr(readiness, "ping_pool", probe)
+    monkeypatch.setattr(readiness, "ping_redis", probe)
     manager = ChildManager(events)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (manager,))
     monkeypatch.setattr(runtime.proxy, "start", loop)
@@ -221,6 +248,21 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
         await manager.started.wait()
     scheduler_tasks.schedule_execution(execution)
     await asyncio.wait_for(schedule_started.wait(), timeout=1)
+    if role_enabled(roles, "worker"):
+        await asyncio.wait_for(broadcast_started.wait(), timeout=1)
+        task, finite = runtime.tasks.required["broadcast_email"]
+        assert not finite
+        assert not task.done()
+        if not role_enabled(roles, "connector") and not role_enabled(roles, "api"):
+            assert await runtime.readiness.check()
+        if broadcast_exit != "shutdown":
+            if broadcast_exit == "cancel":
+                task.cancel()
+            else:
+                broadcast_release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            assert not await runtime.readiness.check()
+            assert "broadcast_email" in runtime.tasks.required
     await runtime.stop()
     # Then
     expected = ["pool"]
@@ -238,6 +280,8 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str) -
     assert events == [*expected, "database", "redis", "llm", "logging"]
     assert ("trigger_daemon" in names) == role_enabled(roles, "worker")
     assert ("agent_setup" in names) == role_enabled(roles, "worker")
+    assert ("broadcast_email" in names) == role_enabled(roles, "worker")
+    assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
     assert ("gateway_report_relay" in names) == role_enabled(roles, "worker")
     assert ("openclaw_update" in names) == role_enabled(roles, "worker")
