@@ -3,6 +3,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = REPO_ROOT / "build-openclaw-local-dockerfile.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
@@ -37,6 +39,7 @@ def build_env(bin_dir: Path, log_path: Path, missing_env_file: Path) -> dict[str
     env["ENV_FILE"] = str(missing_env_file)
     env["DOCKER_FAKE_LOG"] = str(log_path)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env.pop("MARACLAW_OPENCLAW_IMAGE", None)
     return env
 
 
@@ -62,6 +65,47 @@ def test_openclaw_build_script_uses_arm64_platform_by_default(tmp_path: Path) ->
     # Then
     assert result.returncode == 0, result.stderr
     assert "--platform linux/arm64" in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("local_image", [None, "", "workspace/openclaw:custom"])
+def test_openclaw_build_script_selects_local_image_when_configured(tmp_path: Path, local_image: str | None) -> None:
+    # Given
+    bin_dir, log_path = install_fake_docker(tmp_path)
+    env = build_env(bin_dir, log_path, tmp_path / "missing.env")
+    if local_image is not None:
+        env["MARACLAW_OPENCLAW_IMAGE"] = local_image
+    expected_image = local_image or "openclaw:local"
+
+    # When
+    result = run_build_script(env)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert f"-t {expected_image} --load" in log_path.read_text(encoding="utf-8")
+    assert result.stdout.count(expected_image) == 2
+
+
+@pytest.mark.parametrize("inherited_image", [None, "process/openclaw:inherited"])
+@pytest.mark.parametrize("file_image", ["workspace/openclaw:from-file", ""])
+def test_openclaw_build_script_prefers_image_when_env_file_assigns_it(
+    tmp_path: Path, inherited_image: str | None, file_image: str
+) -> None:
+    # Given
+    bin_dir, log_path = install_fake_docker(tmp_path)
+    env_file = tmp_path / "build.env"
+    env_file.write_text(f'MARACLAW_OPENCLAW_IMAGE="{file_image}"\n', encoding="utf-8")
+    env = build_env(bin_dir, log_path, env_file)
+    if inherited_image is not None:
+        env["MARACLAW_OPENCLAW_IMAGE"] = inherited_image
+    expected_image = file_image or "openclaw:local"
+
+    # When
+    result = run_build_script(env)
+
+    # Then
+    assert result.returncode == 0, result.stderr
+    assert f"-t {expected_image} --load" in log_path.read_text(encoding="utf-8")
+    assert result.stdout.count(expected_image) == 2
 
 
 def test_openclaw_build_script_passes_default_openclaw_version_and_sha(tmp_path: Path) -> None:

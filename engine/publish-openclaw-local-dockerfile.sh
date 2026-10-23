@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build Dockerfile.openclaw and push a version-tagged image to Docker Hub.
 #
-# This wraps build-openclaw-local-dockerfile.sh so the local openclaw:local
-# tag stays in sync, then tags and pushes:
+# This wraps build-openclaw-local-dockerfile.sh to build MARACLAW_OPENCLAW_IMAGE
+# (default: openclaw:local), then tags and pushes:
 #   ${DOCKERHUB_NAMESPACE}/openclaw:${IMAGE_TAG}
 #
 # Usage:
@@ -11,6 +11,7 @@
 #   PUSH_LATEST=1 DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
 #
 # Environment (set in .env or on the command line):
+#   MARACLAW_OPENCLAW_IMAGE local build/tag source   (default: openclaw:local)
 #   DOCKERHUB_NAMESPACE     Docker Hub user or org (required unless OPENCLAW_PUBLISH_IMAGE is set)
 #   OPENCLAW_PUBLISH_IMAGE  full repo name          (default: ${DOCKERHUB_NAMESPACE}/openclaw)
 #   IMAGE_TAG               Hub tag                 (default: $OPENCLAW_VERSION)
@@ -34,6 +35,7 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
+LOCAL_IMAGE="${MARACLAW_OPENCLAW_IMAGE:-openclaw:local}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.5}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64}"
 IMAGE_TAG="${IMAGE_TAG:-$OPENCLAW_VERSION}"
@@ -71,17 +73,17 @@ if [ "$DOCKER_PLATFORM" != "linux/arm64" ]; then
 fi
 
 VERSIONED_REF="${PUBLISH_IMAGE}:${IMAGE_TAG}"
-echo "[openclaw-publish] Building and pushing $VERSIONED_REF (also tagging openclaw:local)"
+echo "[openclaw-publish] Building $LOCAL_IMAGE and pushing $VERSIONED_REF"
 
 "$SCRIPT_DIR/build-openclaw-local-dockerfile.sh"
 
-docker tag openclaw:local "$VERSIONED_REF"
+docker tag "$LOCAL_IMAGE" "$VERSIONED_REF"
 echo "[openclaw-publish] Pushing $VERSIONED_REF"
 docker push "$VERSIONED_REF"
 
 if [ "${PUSH_LATEST:-0}" = "1" ]; then
     LATEST_REF="${PUBLISH_IMAGE}:latest"
-    docker tag openclaw:local "$LATEST_REF"
+    docker tag "$LOCAL_IMAGE" "$LATEST_REF"
     echo "[openclaw-publish] Pushing $LATEST_REF"
     docker push "$LATEST_REF"
 fi
