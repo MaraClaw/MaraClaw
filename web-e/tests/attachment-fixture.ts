@@ -27,7 +27,19 @@ export function attachmentFixture(fetchRequest: typeof fetch = () => Promise.res
   const unsubscribe = scope.subscribe()
   const cache = createAttachmentCache(store)
   const http = createHttpClient(store, fetchRequest, (path) => `https://api.example${path}`)
-  const previews = createAttachmentPreviewClient(http, cache)
+  const previews = createAttachmentPreviewClient({
+    metadata(resource, { owner, signal }) {
+      return http.apiRequest<unknown>(
+        `/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-metadata?${new URLSearchParams({ path: resource.path })}`,
+        { owner, signal, cache: 'no-store' },
+      )
+    },
+    bytes(resource, versionToken, { owner, signal }) {
+      return http.apiBinaryRequest(`/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-bytes?${new URLSearchParams({
+        path: resource.path, version_token: versionToken,
+      })}`, { owner, signal })
+    },
+  }, cache)
   return {
     store, cache, http, scope, queryClient, previews,
     dispose() { unsubscribe(); cache.dispose(); queryClient.clear() },

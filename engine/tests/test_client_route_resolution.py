@@ -14,7 +14,7 @@ from app.main import app
 from route_dispatch import EffectiveRoute, Protocol, effective_routes, resolve
 
 PLACEHOLDER: Final = "00000000-0000-4000-8000-000000000000"
-HELPERS: Final = {"apiRequest", "apiFormRequest", "wsUrl"}
+HELPERS: Final = {"apiRequest", "apiFormRequest", "apiBinaryRequest", "wsUrl"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,13 +675,30 @@ def test_frontend_calls_reach_mounted_routes() -> None:
     assert failures == [], "Frontend calls do not reach mounted routes:\n" + "\n".join(failures)
 
 
+def test_attachment_preview_routes_are_extracted() -> None:
+    # Given
+    file = "web-e/src/lib/attachment-preview-api.ts"
+    source = (Path(__file__).resolve().parents[2] / file).read_text()
+    # When
+    calls = extract_calls(source, file)
+    # Then
+    assert sorted((call.protocol, call.method, call.path) for call in calls) == [
+        ("http", "GET", f"/api/agents/{PLACEHOLDER}/files/preview-bytes"),
+        ("http", "GET", f"/api/agents/{PLACEHOLDER}/files/preview-metadata"),
+    ]
+
+
 def test_extractor_supported_shapes() -> None:
     source = r"""
 export async function apiRequest<T>(path: string, options = {}) { return null }
 export const apiFormRequest = createApiRequest()
 import {
-  apiFormRequest, apiRequest,
+  apiFormRequest, apiRequest, apiBinaryRequest,
 } from '@/lib/http'
+const transport = {
+  async apiRequest<T>(path: string) { return null },
+  apiBinaryRequest(path: string): Promise<Uint8Array> { return execute(path) },
+}
 export async function load() { return apiRequest<{ id: string }>('/api/exported') }
 // apiRequest('/api/commented')
 /* apiRequest('/api/block-commented') */
@@ -702,6 +719,7 @@ function requests() {
   apiRequest('/api/conditional', { method: enabled ? 'POST' : 'DELETE' })
   apiFormRequest('/api/form', form)
   apiFormRequest('/api/form-options', form, { method: 'PATCH' })
+  apiBinaryRequest(`/api/binary/${encodeURIComponent(resource.agentId)}?${query}`, { owner, signal })
   apiRequest('/api/undefined', { body: undefined })
   wsUrl(`/ws/chat/${id}?${params.toString()}`)
   return `/api/download/${id}?${query.toString()}`
@@ -722,6 +740,7 @@ function requests() {
             ("http", "DELETE", "/api/conditional"),
             ("http", "POST", "/api/form"),
             ("http", "PATCH", "/api/form-options"),
+            ("http", "GET", f"/api/binary/{PLACEHOLDER}"),
             ("http", "GET", "/api/undefined"),
             ("websocket", "WEBSOCKET", f"/ws/chat/{PLACEHOLDER}"),
             ("http", "GET", f"/api/download/{PLACEHOLDER}"),
@@ -733,6 +752,10 @@ function requests() {
     ("source", "reason"),
     [
         ("apiRequest(path)", "first argument"),
+        ("apiBinaryRequest(path)", "first argument"),
+        ("apiBinaryRequest('/api/x', options)", "object literal"),
+        ("load().then(apiBinaryRequest)", "without a direct call"),
+        ("import { apiBinaryRequest as request } from '@/lib/http'", "aliasing apiBinaryRequest"),
         ("apiRequest('/api/x', { ...options })", "spread"),
         ("apiRequest('/api/x', options)", "object literal"),
         ("apiRequest('/api/x', { method: method })", "method must"),

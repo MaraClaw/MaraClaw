@@ -24,9 +24,27 @@ export function attachmentRenderer(metadata: AttachmentMetadata): AttachmentRend
   return 'unsupported'
 }
 
+type PreviewContext = {
+  readonly owner: SessionQueryScope['owner']
+  readonly signal: AbortSignal
+}
 type PreviewTransport = {
-  readonly apiRequest: typeof apiRequest
-  readonly apiBinaryRequest: typeof apiBinaryRequest
+  readonly metadata: (resource: AttachmentResource, context: PreviewContext) => Promise<unknown>
+  readonly bytes: (resource: AttachmentResource, versionToken: string, context: PreviewContext) => Promise<Uint8Array>
+}
+
+const previewTransport: PreviewTransport = {
+  metadata(resource, { owner, signal }) {
+    return apiRequest<unknown>(
+      `/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-metadata?${new URLSearchParams({ path: resource.path })}`,
+      { owner, signal, cache: 'no-store' },
+    )
+  },
+  bytes(resource, versionToken, { owner, signal }) {
+    return apiBinaryRequest(`/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-bytes?${new URLSearchParams({
+      path: resource.path, version_token: versionToken,
+    })}`, { owner, signal })
+  },
 }
 
 export function createAttachmentPreviewClient(transport: PreviewTransport, cache: AttachmentCache) {
@@ -34,15 +52,11 @@ export function createAttachmentPreviewClient(transport: PreviewTransport, cache
     async open(scope: SessionQueryScope, resource: AttachmentResource, signal: AbortSignal): Promise<AttachmentPreview> {
       const assertActive = () => { scope.assertCurrent(); signal.throwIfAborted() }
       assertActive()
-      const base = `/api/agents/${encodeURIComponent(resource.agentId)}/files`
       try {
         // staleTime=0: every opening reauthorizes before any cached bytes can be returned.
         const metadata = await requestAttachment(scope.client, {
           queryKey: ['attachment-metadata', resource.agentId, resource.path],
-          queryFn: async ({ signal }) => metadataSchema.parse(await transport.apiRequest<unknown>(
-            `${base}/preview-metadata?${new URLSearchParams({ path: resource.path })}`,
-            { owner: scope.owner, signal, cache: 'no-store' },
-          )),
+          queryFn: async ({ signal }) => metadataSchema.parse(await transport.metadata(resource, { owner: scope.owner, signal })),
         }, signal)
         assertActive()
         const key = cache.authorize(scope.owner, resource, metadata.version_token)
@@ -53,9 +67,7 @@ export function createAttachmentPreviewClient(transport: PreviewTransport, cache
           await requestAttachment(scope.client, {
             queryKey: ['attachment-bytes', resource.agentId, resource.path, metadata.version_token],
             queryFn: async ({ signal }) => {
-              const value = await transport.apiBinaryRequest(`${base}/preview-bytes?${new URLSearchParams({
-                path: resource.path, version_token: metadata.version_token,
-              })}`, { owner: scope.owner, signal })
+              const value = await transport.bytes(resource, metadata.version_token, { owner: scope.owner, signal })
               scope.assertCurrent()
               signal.throwIfAborted()
               cache.put(key, value)
@@ -76,4 +88,4 @@ export function createAttachmentPreviewClient(transport: PreviewTransport, cache
   }
 }
 
-export const attachmentPreviewClient = createAttachmentPreviewClient({ apiRequest, apiBinaryRequest }, attachmentCache)
+export const attachmentPreviewClient = createAttachmentPreviewClient(previewTransport, attachmentCache)
