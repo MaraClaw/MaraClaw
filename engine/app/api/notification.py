@@ -1,6 +1,7 @@
 """Notification API - list, count, mark-read, and broadcast."""
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -30,9 +31,11 @@ CATEGORY_TYPE_MAP: dict[str, list[str]] = {
 
 
 def _types_for_category(category: str | None) -> list[str] | None:
-    if category not in (None, "") and category != "all" and category in CATEGORY_TYPE_MAP:
-        return CATEGORY_TYPE_MAP[category]
-    return None
+    if category is None or category == "all":
+        return None
+    if category not in CATEGORY_TYPE_MAP:
+        raise HTTPException(400, "Unknown notification category")
+    return CATEGORY_TYPE_MAP[category]
 
 
 @router.get("/notifications")
@@ -89,9 +92,12 @@ async def mark_read(
 
 
 @router.post("/notifications/read-all")
-async def mark_all_read(current_user: UserRecord = Depends(get_current_user)) -> NotificationReadResponse:
-    """Mark all notifications as read for the current user."""
-    await notification_dao.mark_all_read_for_user(current_user.id)
+async def mark_all_read(
+    current_user: UserRecord = Depends(get_current_user),
+    category: Annotated[str | None, Query()] = None,
+) -> NotificationReadResponse:
+    """Mark matching notifications as read for the current user."""
+    await notification_dao.mark_all_read_for_user(current_user.id, types=_types_for_category(category))
     return {"ok": True}
 
 

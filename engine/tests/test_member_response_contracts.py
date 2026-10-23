@@ -93,7 +93,7 @@ async def test_notification_list_preserves_nullable_and_populated_fields(client,
     )
 
 
-@pytest.mark.parametrize("category", ["tool", "unknown", "all"])
+@pytest.mark.parametrize("category", ["tool", "all"])
 async def test_unread_count_is_scoped_to_member_and_category(client, member, stub, category):
     counter = stub(notification_api.notification_dao, "count_unread_for_user", 7)
     response = await client.get(f"/api/notifications/unread-count?category={category}")
@@ -102,8 +102,8 @@ async def test_unread_count_is_scoped_to_member_and_category(client, member, stu
     counter.assert_awaited_once_with(member.id, types=["autonomy_l2"] if category == "tool" else None)
 
 
-@pytest.mark.parametrize("all_read", [False, True])
-async def test_read_acknowledgement_preserves_member_scope(client, member, stub, all_read):
+@pytest.mark.parametrize(("all_read", "kwargs"), [(False, {}), (True, {"types": None})])
+async def test_read_acknowledgement_preserves_member_scope(client, member, stub, all_read, kwargs):
     notification_id = uuid4()
     method = "mark_all_read_for_user" if all_read else "mark_read_for_user"
     marker = stub(notification_api.notification_dao, method, None)
@@ -111,7 +111,7 @@ async def test_read_acknowledgement_preserves_member_scope(client, member, stub,
     response = await client.post(f"/api/notifications/{path}")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    marker.assert_awaited_once_with(*((member.id,) if all_read else (notification_id, member.id)))
+    marker.assert_awaited_once_with(*((member.id,) if all_read else (notification_id, member.id)), **kwargs)
 
 
 @pytest.mark.parametrize("populated", [False, True])
