@@ -2,7 +2,7 @@ from test_client_route_resolution import Token, group_end, split_tokens
 
 
 def helper_declaration(tokens: list[Token], index: int) -> bool:
-    if async_object_method(tokens, index):
+    if object_method(tokens, index):
         return True
     for opening in range(index - 1, 0, -1):
         if tokens[opening].text != "{" or tokens[opening - 1].text != "const":
@@ -16,8 +16,11 @@ def helper_declaration(tokens: list[Token], index: int) -> bool:
     return False
 
 
-def async_object_method(tokens: list[Token], index: int) -> bool:
-    if index < 2 or tokens[index - 1].text != "async" or tokens[index - 2].text not in {"{", ","}:
+def object_method(tokens: list[Token], index: int) -> bool:
+    prefix = index - 1
+    if prefix >= 0 and tokens[prefix].text == "async":
+        prefix -= 1
+    if prefix < 0 or tokens[prefix].text not in {"{", ","}:
         return False
     cursor = index + 1
     if tokens[cursor].text == "<":

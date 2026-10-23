@@ -15,6 +15,7 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
 from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
+from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 settings = get_settings()
@@ -35,6 +36,11 @@ app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=li
 @app.exception_handler(PublicBaseUrlNotConfiguredError)
 async def public_base_url_not_configured(request: Request, exc: PublicBaseUrlNotConfiguredError) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(OpenClawUpdateGateError)
+async def openclaw_update_gate(request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 app.include_router(readiness_router)
@@ -66,6 +72,7 @@ from app.api.dingtalk import router as dingtalk_router
 from app.api.discord_bot import router as discord_router
 from app.api.enterprise import router as enterprise_router
 from app.api.feishu import router as feishu_router
+from app.api.file_previews import router as file_previews_router
 from app.api.files import enterprise_kb_router, router as files_router, upload_router as files_upload_router
 from app.api.focus import router as focus_router
 from app.api.gateway import router as gateway_router
@@ -77,6 +84,7 @@ from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
 from app.api.okr import router as okr_router
 from app.api.onboarding import router as onboarding_router
+from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
 from app.api.pages import public_router as pages_public_router, router as pages_router
 from app.api.plaza import router as plaza_router
@@ -105,6 +113,7 @@ app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD
 app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_router, prefix=settings.API_PREFIX)
+app.include_router(file_previews_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
@@ -137,6 +146,7 @@ app.include_router(focus_router, prefix=settings.API_PREFIX, dependencies=_CRUD_
 app.include_router(chat_sessions_router, dependencies=_CRUD_DB)
 app.include_router(plaza_router, dependencies=_CRUD_DB)
 app.include_router(notification_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(openclaw_updates_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(webhooks_router)
 app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)

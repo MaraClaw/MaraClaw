@@ -1,7 +1,8 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from types import SimpleNamespace
+from typing import Literal, assert_never
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,7 +11,8 @@ from pydantic import ValidationError
 from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module
-from app.services.agent_manager import AgentManager
+from app.services.agent_manager import AgentManager, guest_container_name
+from app.services.guest_admission import GuestStartPreflightError
 from test_agent_manager_openclaw_config import RecordingDockerClient
 
 type Writer = Literal["refresh", "recreate"]
@@ -21,6 +23,7 @@ class Guest:
     manager: AgentManager
     agent: AgentRecord
     path: Path
+    docker: RecordingDockerClient
 
 
 @pytest.fixture
@@ -34,14 +37,15 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     directory = tmp_path / str(agent.id)
     directory.mkdir()
     manager = AgentManager.__new__(AgentManager)
-    monkeypatch.setattr(manager, "docker_client", RecordingDockerClient(), raising=False)
+    docker = RecordingDockerClient()
+    monkeypatch.setattr(manager, "docker_client", docker, raising=False)
 
     async def materialize(agent_id: UUID) -> Path:
         assert agent_id == agent.id
         return directory
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
-    return Guest(manager, agent, directory / "openclaw.json")
+    return Guest(manager, agent, directory / "openclaw.json", docker)
 
 
 async def rewrite(guest: Guest, writer: Writer) -> None:
@@ -124,10 +128,32 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
 async def test_corrupt_guest_resource_config_is_not_overwritten(guest: Guest, writer: Writer, text: str) -> None:
     # Given
     guest.path.write_text(text, encoding="utf-8")
+    guest.agent.status = "running"
+    guest.agent.container_id = "old-guest"
+    guest.agent.container_port = 19876
+    old_guest = SimpleNamespace(
+        id="old-guest",
+        name=guest_container_name(guest.agent.id),
+        config=SimpleNamespace(labels={"maraclaw.agent_id": str(guest.agent.id)}),
+        host_config=SimpleNamespace(port_bindings={}),
+    )
+    guest.docker.container.inspect_result = old_guest
+    match writer:
+        case "refresh":
+            expected_error = ValidationError
+        case "recreate":
+            expected_error = GuestStartPreflightError
+        case unreachable:
+            assert_never(unreachable)
 
     # When
-    with pytest.raises((ValueError, ValidationError)):
+    with pytest.raises(expected_error):
         await rewrite(guest, writer)
 
     # Then
     assert guest.path.read_text(encoding="utf-8") == text
+    assert (guest.agent.status, guest.agent.container_id, guest.agent.container_port) == ("running", "old-guest", 19876)
+    assert guest.docker.container.stop_calls == []
+    assert guest.docker.container.remove_calls == []
+    assert guest.docker.run_args is None
+    assert guest.docker.container.inspect_result is old_guest

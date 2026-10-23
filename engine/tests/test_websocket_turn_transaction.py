@@ -18,9 +18,12 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions, chat_tickets, openclaw_routing as routing
+from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
 from test_db_session import _FakePool, _FakeRawConnection
+
+NOTICE_ID = uuid4()
 
 
 @dataclass
@@ -32,6 +35,7 @@ class TurnState:
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     fail_enqueue: bool = False
     missing_model: bool = False
+    gate: Exception | None = None
     already_onboarded: bool = False
     claim_won: bool = True
     charge_allowed: bool = True
@@ -94,6 +98,8 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
     async def prepare(**kwargs):
         assert (session.get_connection() is None) == (kwargs["content"] == "Please begin the onboarding.")
         state.prepared_history.extend(kwargs["history"])
+        if state.gate is not None:
+            raise state.gate
         if state.missing_model:
             raise routing.NoCompanyModelError("No company model is available.")
         return routing.PreparedOpenClawMessage(
@@ -309,6 +315,36 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
     assert state.frames[0]["type"] == "turn_rejected"
     assert state.frames[0]["reason"] == reason
     assert "private" not in str(state.frames[0]["content"])
+    assert not state.messages
+    if not onboarding:
+        assert state.frames[0]["client_submission_id"] == state.submission_id
+
+
+@pytest.mark.parametrize("onboarding", [False, True])
+@pytest.mark.parametrize(
+    ("gate", "extra"),
+    [
+        (OpenClawUpdateRequiredError(NOTICE_ID), {"notice_id": str(NOTICE_ID)}),
+        (OpenClawUpdateInProgressError(), {}),
+    ],
+)
+async def test_openclaw_update_gate_rejects_the_turn_without_side_effects(monkeypatch, turn, onboarding, gate, extra):
+    state, raw = turn
+    state.gate = gate
+
+    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await background_tasks.drain_background_tasks(grace_seconds=0)
+
+    assert not state.pending
+    assert not state.committed
+    assert not state.wake.is_set()
+    assert raw.commits == 0
+    assert raw.rollbacks == int(not onboarding)
+    assert len(handler.conversation) == 1
+    assert len(state.frames) == 1
+    assert state.frames[0]["type"] == "turn_rejected"
+    assert state.frames[0]["reason"] == gate.code
+    assert state.frames[0].get("notice_id") == extra.get("notice_id")
     assert not state.messages
     if not onboarding:
         assert state.frames[0]["client_submission_id"] == state.submission_id

@@ -11,7 +11,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | File | Owns |
 |------|------|
 | `api.ts` | `getApiBaseUrl` / `apiUrl` / `wsUrl`. Empty `VITE_API_BASE_URL` = same-origin. Rejects hostname `0.0.0.0`. |
-| `http.ts` | Only fetch wrapper: `apiRequest`, `apiFormRequest`, `ApiError`, `formatApiDetail`, `userFacingRequestError`. Bearer unless `token` overridden. 401+token → `clearStoredToken`. 204 → `undefined`. |
+| `http.ts` | Only fetch wrapper: `apiRequest`, `apiFormRequest`, `apiBinaryRequest`, `ApiError`, `formatApiDetail`, `userFacingRequestError`. Bearer unless `token` overridden. Owner fences cover headers/body awaits; current-owner 401 expires that session. JSON 204 → `undefined`. Binary previews stream with a 20 MiB cap, no-store and no redirects. |
 | `auth-storage.ts` | localStorage `maraclaw-enduser-token` |
 | `auth-api.ts` | `/api/auth/*` and `/api/tenants/*` (login/register/SSO/password/join/switch). Public calls pass `token: null`. |
 | `types/auth.ts` | `UserOut`, `TokenResponse`, `MultiTenantResponse`, `isPlatformAdminUser`, `isTokenResponse` |
@@ -26,6 +26,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `org-departments-api.ts` | Own-tenant org department summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from the people directory and agent grants. |
 | `agent-departments-api.ts` | `GET /api/agents/:id/permissions/departments` for the permissions tab. |
 | `chat/ws-client.ts` | `connectAgentChat` issues a fresh bearer-authenticated `/api/auth/chat-ticket` per attempt, then `WS /ws/chat/{agentId}?ticket=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. No JWT in the socket URL. |
+| `attachment-preview-api.ts`, `attachment-cache.ts`, `attachment-request.ts`, `office-preview.ts` | Chat-only metadata/bytes preview; metadata reauthorizes every opening before cached display. A single owner-object/agent/path/version LRU holds at most 64 MiB, 20 MiB per entry; retirement/denial/version change evicts. Query deduplicates requests but stores no binary results. View-local object URLs are revoked; PDF/Office workers receive copies. Lazy local DOCX/XLSX/PPTX viewers disable hyperlinks, external fonts and optional engines; archive admission is 32 MiB/entry, 64 MiB total, 2000 entries, with bounded worker/load time and owned-viewer destruction. Legacy Office stays download-only. |
 | `utils.ts` | `cn()` |
 | `motion.ts` | Landing tokens only (`easeOut`, `fadeUp`, …). `springSnappy` unused. `/app` does not import this. |
 
@@ -52,7 +53,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 - New tenant/domain → new `*-api.ts`. Do **not** grow `workspace-api.ts`. Control/vault/pages already split even though agent-scoped.
 - Public auth endpoints pass `token: null`.
 - Chat WS is not React Query. Single-use tickets only in the query string; bearer JWT stays in HTTP headers.
-- File downloads/previews mint a fresh 60-second, single-use ticket per action/mount. `fileTicketUrl` stays relative and same-origin; do not route through `apiUrl`. Session JWTs stay in headers, never URLs. Preview image errors may re-mint once; ignore stale results after selection changes/unmount.
+- Files-tab previews and all native downloads mint a fresh 60-second, single-use ticket per action/mount. `fileTicketUrl` stays relative and same-origin; do not route through `apiUrl`. Session JWTs stay in headers, never URLs. Files-tab image errors may re-mint once; ignore stale results after selection changes/unmount. Chat attachment previews are the authenticated no-store metadata/bytes exception above, not ticket redemptions; never persist binary data, tickets or JWT URLs.
 - `motion.ts` is landing-only.
 
 ## ANTI-PATTERNS

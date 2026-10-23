@@ -15,6 +15,7 @@ from app.records.org_department import OrgDepartmentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate
 from app.services import onboarding
+from openclaw_update_gate_fixtures import open_guest_write_gate
 
 
 @dataclass(slots=True)
@@ -171,6 +172,7 @@ async def test_create_custom_departments_are_deduplicated_use_only_with_creator_
 
 @pytest.mark.parametrize("action", ["start", "api-key"])
 async def test_pending_setup_rejects_start_and_key_rotation(creation, monkeypatch, action):
+    open_guest_write_gate(monkeypatch)
     store, client = creation
     agent = AgentRecord(id=uuid4(), name="Pending", creator_id=store.actor.id, setup_pending=True)
     monkeypatch.setattr(agents, "check_agent_access", AsyncMock(return_value=(agent, "manage")))

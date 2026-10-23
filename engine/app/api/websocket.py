@@ -18,7 +18,12 @@ from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_persist import persist_chat_message
-from app.services.chat_submissions import ChatSubmission, SubmissionConflictError, accept_submission
+from app.services.chat_submissions import (
+    ChatSubmission,
+    InvalidChatAttachmentsError,
+    SubmissionConflictError,
+    accept_submission,
+)
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
@@ -27,6 +32,7 @@ from app.services.openclaw_routing import (
     enqueue_prepared_openclaw_message,
     prepare_openclaw_message,
 )
+from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.quota_guard import (
     AgentExpired,
     QuotaExceeded,
@@ -331,16 +337,25 @@ class WebSocketChatHandler:
                             "content": content,
                             "display_content": display_content,
                             "file_name": file_name,
+                            "attachments": data.get("attachments", []),
                         }
                     )
-                except ValidationError:
-                    await self.websocket.send_json(
-                        {
+                except ValidationError as exc:
+                    rejection: RealtimeMessage
+                    if any(error["loc"][0] == "client_submission_id" for error in exc.errors()):
+                        rejection = {
                             "type": "turn_rejected",
                             "reason": "invalid_submission_id",
                             "content": "Submission UUID required.",
                         }
-                    )
+                    else:
+                        rejection = {
+                            "type": "turn_rejected",
+                            "reason": "invalid_attachments",
+                            "client_submission_id": _payload_str(data.get("client_submission_id")),
+                            "content": "Attachment references must be valid agent-relative files.",
+                        }
+                    await self.websocket.send_json(rejection)
                     continue
                 if not await self._handle_submission(submission):
                     return
@@ -369,6 +384,9 @@ class WebSocketChatHandler:
                 await self.websocket.send_json(
                     {"type": "turn_rejected", "reason": "no_company_model", "content": str(exc)}
                 )
+                continue
+            except OpenClawUpdateGateError as gate:
+                await self.websocket.send_json({"type": "turn_rejected", **gate.rejection()})
                 continue
 
             try:
@@ -419,8 +437,12 @@ class WebSocketChatHandler:
             )
         except SubmissionConflictError:
             rejection.update(reason="submission_conflict", content="Submission UUID already used for another message.")
+        except InvalidChatAttachmentsError:
+            rejection.update(reason="invalid_attachments", content="An attachment file is unavailable.")
         except NoCompanyModelError as exc:
             rejection.update(reason="no_company_model", content=str(exc))
+        except OpenClawUpdateGateError as gate:
+            rejection.update(gate.rejection())
         except AgentExpired as exc:
             rejection.update(reason="agent_expired", content=exc.message)
         except QuotaExceeded as exc:
@@ -455,6 +477,11 @@ class WebSocketChatHandler:
                             "message_id": str(accepted.message.id),
                             "client_submission_id": str(submission.client_submission_id),
                             "session_id": self.conv_id,
+                            **(
+                                {"attachments": [ref.as_dict() for ref in accepted.message.attachments]}
+                                if accepted.message.attachments is not None and accepted.message.attachments
+                                else {}
+                            ),
                         },
                     )
                 await self.websocket.send_json({"type": "status", "content": "thinking"})

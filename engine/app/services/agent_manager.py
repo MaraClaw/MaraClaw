@@ -1,6 +1,5 @@
 """Agent lifecycle manager - Docker container management for OpenClaw Gateway instances."""
 
-import asyncio
 import hashlib
 import json
 import secrets
@@ -8,12 +7,15 @@ import shutil
 import sqlite3
 import time
 import uuid
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import TypedDict
 
-from python_on_whales import ClientNotFoundError, DockerClient
+from anyio import to_thread
+from fastapi import HTTPException
+from httpx import HTTPError
+from python_on_whales import ClientNotFoundError, Container, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
@@ -32,6 +34,14 @@ from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
+from app.services.guest_admission import GuestStartPreflightError, guest_admission
+from app.services.guest_identity import (
+    GuestOwnershipError,
+    guest_container_name as guest_container_name,
+    owned_guest_containers,
+    stop_guest_containers,
+)
+from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.linkup_runtime import linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
@@ -547,9 +557,14 @@ class AgentManager:
 
         return config
 
-    async def start_container(self, agent: AgentRecord) -> str | None:
+    async def start_container(
+        self, agent: AgentRecord, *, image: str | None = None, rehydrate: bool = True
+    ) -> str | None:
         """Start an OpenClaw Gateway Docker container for the agent.
 
+        ``image`` overrides the agent's pinned image, which overrides the configured one.
+        ``rehydrate=False`` reuses the on-disk state as-is (no storage materialization or
+        gogcli restore); the OpenClaw upgrade executor needs that to keep its snapshot exact.
         Returns container_id or None if Docker not available.
         """
         if agent.setup_pending:
@@ -560,67 +575,61 @@ class AgentManager:
             agent.last_active_at = datetime.now(UTC)
             return None
 
-        agent_dir = await self._materialize_agent_dir(agent.id)
-        if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
-            _ = await restore_gogcli_state(agent.id, agent_dir)
-
         original = agent
-        self._replace_existing_guest_container(agent)
-
-        gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
-
-        # Get model config (pure-psycopg). Guest starts on primary; secondary
-        # is registered so later enqueue rewrites can switch without new keys.
-        def _uuid_or_none(value: object) -> uuid.UUID | None:
-            return value if isinstance(value, uuid.UUID) else None
-
-        from app.services.enterprise_llm import ensure_agent_company_models, owned_model_or_none
-
-        agent = await ensure_agent_company_models(agent)
-        secondary_id = _uuid_or_none(getattr(agent, "secondary_model_id", None))
-        fallback_id = _uuid_or_none(getattr(agent, "fallback_model_id", None))
-        model_ids = [mid for mid in (agent.primary_model_id, secondary_id, fallback_id) if mid]
-        loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
-        tenant_id = getattr(agent, "tenant_id", None)
-        primary = owned_model_or_none(loaded.get(agent.primary_model_id) if agent.primary_model_id else None, tenant_id)
-        secondary = owned_model_or_none(loaded.get(secondary_id) if secondary_id else None, tenant_id)
-        fallback = owned_model_or_none(loaded.get(fallback_id) if fallback_id else None, tenant_id)
-        if primary is not None:
-            primary = await ensure_fresh_access_token(primary)
-        if secondary is not None:
-            secondary = await ensure_fresh_access_token(secondary)
-        if fallback is not None:
-            fallback = await ensure_fresh_access_token(fallback)
-
-        # Generate OpenClaw config. Proxy on/off is settings-only so container
-        # start does not need the key-ring tables to exist.
-        config = self._generate_openclaw_config(
-            agent,
-            primary,
-            secondary=secondary,
-            fallback=fallback,
-            selected=primary,
-            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
-        )
-        config_dir = agent_dir / ".openclaw"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        self._atomic_write_json(
-            agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
-        )
-        self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
-        _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
-            primary=primary,
-            secondary=secondary,
-            fallback=fallback,
-            selected=primary,
-            agent_dir=agent_dir,
-        )
-        self._ensure_openclaw_workspace_layout(agent_dir)
-
-        # Assign a unique port
-        container_port = 18789 + hash(str(agent.id)) % 10000
-
         try:
+            if rehydrate:
+                agent_dir = await self._materialize_agent_dir(agent.id)
+                if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
+                    _ = await restore_gogcli_state(agent.id, agent_dir)
+            else:
+                agent_dir = self._agent_dir(agent.id)
+            gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
+
+            def _uuid_or_none(value: object) -> uuid.UUID | None:
+                return value if isinstance(value, uuid.UUID) else None
+
+            from app.services.enterprise_llm import ensure_agent_company_models, owned_model_or_none
+
+            agent = await ensure_agent_company_models(agent)
+            secondary_id = _uuid_or_none(getattr(agent, "secondary_model_id", None))
+            fallback_id = _uuid_or_none(getattr(agent, "fallback_model_id", None))
+            model_ids = [mid for mid in (agent.primary_model_id, secondary_id, fallback_id) if mid]
+            loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
+            tenant_id = getattr(agent, "tenant_id", None)
+            primary = owned_model_or_none(
+                loaded.get(agent.primary_model_id) if agent.primary_model_id else None, tenant_id
+            )
+            secondary = owned_model_or_none(loaded.get(secondary_id) if secondary_id else None, tenant_id)
+            fallback = owned_model_or_none(loaded.get(fallback_id) if fallback_id else None, tenant_id)
+            if primary is not None:
+                primary = await ensure_fresh_access_token(primary)
+            if secondary is not None:
+                secondary = await ensure_fresh_access_token(secondary)
+            if fallback is not None:
+                fallback = await ensure_fresh_access_token(fallback)
+
+            config = self._generate_openclaw_config(
+                agent,
+                primary,
+                secondary=secondary,
+                fallback=fallback,
+                selected=primary,
+                linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
+            )
+            config_dir = agent_dir / ".openclaw"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            self._atomic_write_json(
+                agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
+            )
+            self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
+            _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
+                primary=primary,
+                secondary=secondary,
+                fallback=fallback,
+                selected=primary,
+                agent_dir=agent_dir,
+            )
+            self._ensure_openclaw_workspace_layout(agent_dir)
             gateway_token, _hooks_token = ensure_openclaw_tokens(agent_dir)
             write_maraclaw_sync_skill(agent_dir)
             container_envs: dict[str, str] = {
@@ -638,103 +647,128 @@ class AgentManager:
             gateway_key = _read_gateway_key_file(agent_dir)
             if gateway_key not in (None, ""):
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
-            container = self.docker_client.run(
-                settings.MARACLAW_OPENCLAW_IMAGE,
-                # Skip OfficeCLI download; a failed refresh restarts the guest
-                # and SIGKILLs in-flight inbox CLI turns (exit 137).
-                [
-                    "-s",
-                    "--",
-                    "/usr/local/bin/bootstrap-memory-tencentdb.sh",
-                    "/usr/local/bin/validate-gogcli.sh",
-                    "openclaw",
-                    "gateway",
-                ],
-                detach=True,
-                name=f"maraclaw-agent-{str(agent.id)[:8]}",
-                entrypoint="tini",
-                networks=[settings.DOCKER_NETWORK],
-                publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
-                volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
-                envs=container_envs,
-                restart="unless-stopped",
-                labels={
-                    "maraclaw.agent_id": str(agent.id),
-                    "maraclaw.agent_name": agent.name,
-                },
-            )
+            client = self.docker_client
+            guest_image = image or getattr(agent, "openclaw_image_id", None) or settings.MARACLAW_OPENCLAW_IMAGE
+            ports = guest_port_candidates(getattr(original, "container_port", None))
+        except (OSError, ValueError, HTTPError, HTTPException) as exc:
+            raise GuestStartPreflightError("Guest start preparation failed") from exc
 
-            now = datetime.now(UTC)
-            for target in (original, agent):
-                target.container_id = container.id
-                target.container_port = container_port
-                target.status = "running"
-                target.last_active_at = now
+        async with guest_admission(client, agent, agent_dir.parent):
+            try:
+                guests = await to_thread.run_sync(owned_guest_containers, client, agent)
+            except (ClientNotFoundError, DockerException) as exc:
+                raise GuestStartPreflightError("Guest ownership inspection failed") from exc
 
-            logger.info(f"Started container {container.id[:12]} for agent {agent.name} on port {container_port}")
-            return container.id
+            def run_container(container_port: int) -> Container:
+                return client.run(
+                    guest_image,
+                    # Skip OfficeCLI download; a failed refresh restarts the guest
+                    # and SIGKILLs in-flight inbox CLI turns (exit 137).
+                    [
+                        "-s",
+                        "--",
+                        "/usr/local/bin/bootstrap-memory-tencentdb.sh",
+                        "/usr/local/bin/validate-gogcli.sh",
+                        "openclaw",
+                        "gateway",
+                    ],
+                    detach=True,
+                    name=guest_container_name(agent.id),
+                    entrypoint="tini",
+                    networks=[settings.DOCKER_NETWORK],
+                    publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
+                    volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
+                    envs=container_envs,
+                    restart="unless-stopped",
+                    memory=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
+                    memory_swap=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
+                    cpus=settings.OPENCLAW_GUEST_CPUS,
+                    pids_limit=settings.OPENCLAW_GUEST_PIDS_LIMIT,
+                    labels={
+                        "maraclaw.agent_id": str(agent.id),
+                        "maraclaw.agent_name": agent.name,
+                    },
+                )
 
-        except (ClientNotFoundError, DockerException) as e:
-            logger.error(f"Failed to start container for agent {agent.name}: {e}")
-            original.status = "error"
-            agent.status = "error"
-            return None
+            try:
+                for guest in guests:
+                    await to_thread.run_sync(partial(client.container.stop, guest.id, time=10))
+                    _ = await to_thread.run_sync(type(client.container).remove, client.container, [guest.id])
+                agent.container_id = None
+                for container_port in ports:
+                    try:
+                        container = await to_thread.run_sync(run_container, container_port)
+                    except DockerException as exc:
+                        _ = await to_thread.run_sync(partial(stop_guest_containers, client, agent, remove=True))
+                        if is_port_bind_conflict(exc) and container_port != ports[-1]:
+                            continue
+                        raise
+                    now = datetime.now(UTC)
+                    for target in (original, agent):
+                        target.container_id = container.id
+                        target.container_port = container_port
+                        target.status = "running"
+                        target.last_active_at = now
+                    logger.info("Started guest {} for agent {} on port {}", container.id[:12], agent.id, container_port)
+                    return container.id
+            except (ClientNotFoundError, DockerException, GuestOwnershipError) as exc:
+                logger.error("Guest start failed for agent {}: {}", agent.id, type(exc).__name__)
+                for target in (original, agent):
+                    target.status = "error"
+                    target.container_id = None
+                    target.container_port = None
+                return None
+        return None
 
     def _replace_existing_guest_container(self, agent: AgentRecord) -> None:
-        """Stop and remove any guest with this id/name so a new entrypoint can apply."""
+        """Stop and remove only label-proven guests before applying a new entrypoint."""
         if not self.docker_client:
             return
-        refs: list[str] = []
-        container_id = getattr(agent, "container_id", None)
-        if isinstance(container_id, str) and container_id.strip():
-            refs.append(container_id.strip())
-        refs.append(f"maraclaw-agent-{str(agent.id)[:8]}")
-        seen: set[str] = set()
-        for ref in refs:
-            if ref in seen:
-                continue
-            seen.add(ref)
-            with suppress(NoSuchContainer, ClientNotFoundError, DockerException):
-                self.docker_client.container.stop(ref, time=10)
-            with suppress(NoSuchContainer, ClientNotFoundError, DockerException):
-                type(self.docker_client.container).remove(self.docker_client.container, [ref])
+        _ = stop_guest_containers(self.docker_client, agent, remove=True)
         agent.container_id = None
 
     async def stop_container(self, agent: AgentRecord) -> bool:
         """Stop the agent's Docker container."""
-        if not self.docker_client or agent.container_id in (None, ""):
+        if not self.docker_client:
             agent.status = "stopped"
             return True
 
         try:
-            await asyncio.to_thread(self.docker_client.container.stop, agent.container_id, time=10)
+            found = await to_thread.run_sync(stop_guest_containers, self.docker_client, agent)
+            if not found:
+                agent.container_id = None
             agent.status = "stopped"
-            logger.info(f"Stopped container {agent.container_id[:12]} for agent {agent.name}")
+            logger.info("Stopped guest for agent {}", agent.id)
             return True
         except NoSuchContainer:
             agent.status = "stopped"
             agent.container_id = None
             return True
+        except GuestOwnershipError as exc:
+            logger.warning("Guest stop ownership refused for agent {}: {}", agent.id, exc)
+            return False
         except (ClientNotFoundError, DockerException) as e:
             logger.error(f"Failed to stop container: {e}")
             return False
 
     async def remove_container(self, agent: AgentRecord) -> bool:
         """Stop and remove the agent's Docker container."""
-        if not self.docker_client or agent.container_id in (None, ""):
+        if not self.docker_client:
             return True
 
         try:
-            self.docker_client.container.stop(agent.container_id, time=10)
-            # ty misbinds ContainerCLI.remove through DockerClient.container; call the descriptor explicitly.
-            type(self.docker_client.container).remove(self.docker_client.container, [agent.container_id])
+            found = await to_thread.run_sync(partial(stop_guest_containers, self.docker_client, agent, remove=True))
             agent.container_id = None
-            agent.container_port = None
+            if found:
+                agent.container_port = None
             logger.info(f"Removed container for agent {agent.name}")
             return True
         except NoSuchContainer:
             agent.container_id = None
             return True
+        except GuestOwnershipError as exc:
+            logger.warning("Guest removal ownership refused for agent {}: {}", agent.id, exc)
+            return False
         except (ClientNotFoundError, DockerException) as e:
             logger.error(f"Failed to remove container: {e}")
             return False

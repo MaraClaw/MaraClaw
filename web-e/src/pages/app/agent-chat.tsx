@@ -5,9 +5,11 @@ import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom
 import { toast } from 'sonner'
 
 import { ChatMarkdown } from '@/components/chat/markdown'
+import { ChatMessageContent } from '@/components/chat/message-content'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { authSession } from '@/lib/auth-session'
+import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
@@ -169,7 +171,7 @@ export function AgentChatPage() {
   })
 
   useEffect(() => {
-    if (!isCurrent() || !historyQuery.data) return
+    if (!isCurrent(owner) || !historyQuery.data) return
     const firstLoad = historySessionRef.current === undefined
     const switched = !firstLoad && historySessionRef.current !== activeId
     historySessionRef.current = activeId
@@ -197,7 +199,7 @@ export function AgentChatPage() {
   }, [historyQuery.data, activeId, writable, owner, isCurrent, updateLines, submissions])
 
   useEffect(() => {
-    if (!isCurrent() || (!busy && !shared) || !activeId) return
+    if (!isCurrent(owner) || (!busy && !shared) || !activeId) return
     const timer = window.setInterval(() => {
       if (!isCurrent() || !submissions.active) return
       void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
@@ -206,7 +208,7 @@ export function AgentChatPage() {
   }, [busy, shared, activeId, agent.id, queryClient, owner, isCurrent, submissions])
 
   useEffect(() => {
-    if (!isCurrent() || !busy) return
+    if (!isCurrent(owner) || !busy) return
     const timer = window.setTimeout(() => {
       if (!isCurrent() || !submissions.active) return
       setSlow(true)
@@ -216,7 +218,7 @@ export function AgentChatPage() {
   }, [busy, owner, isCurrent, submissions, retryVersion])
 
   useEffect(() => {
-    if (!isCurrent()) return
+    if (!isCurrent(owner) || !socketReady) return
     const queued = queuedSendRef.current
     const sendFn = sendRef.current
     if (!queued || queued.sessionId !== activeId || !queued.line.submission || !sendFn || !activeId || historyQuery.isLoading) return
@@ -226,10 +228,10 @@ export function AgentChatPage() {
     setBusy(true)
     setInfo(null)
     sendFn(queued.line.submission)
-  }, [activeId, historyQuery.isLoading, historyQuery.data, socketReady, owner, isCurrent, updateLines])
+  }, [activeId, historyQuery.isLoading, socketReady, owner, isCurrent, updateLines])
 
   useEffect(() => {
-    if (!isCurrent()) return
+    if (!isCurrent(owner)) return
     const thread = threadRef.current
     if (!thread) return
     const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80
@@ -340,13 +342,14 @@ export function AgentChatPage() {
         if (event.type === 'done') {
           const content = event.content || liveRef.current
           const role = event.role ?? 'assistant'
-          if (content) {
+          if (content || event.attachments?.length) {
             updateLines((prev) => {
               if (!isCurrent()) return prev
               return appendCompletion(prev, {
                 role, content,
                 ...(event.message_id === undefined ? {} : { message_id: event.message_id }),
                 ...(event.entry_id === undefined ? {} : { entry_id: event.entry_id }),
+                ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
               })
             })
           }
@@ -456,15 +459,14 @@ export function AgentChatPage() {
     }
     setBusy(true)
     setSlow(false)
+    const uploadSession = activeSessionRef.current
     try {
       const uploaded = await uploadChatFile(file, agent.id)
-      if (!isCurrent() || !submissions.active || !sendRef.current) return
-      const extracted = uploaded.extracted_text || `[Uploaded ${uploaded.filename}]`
-      const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), content: extracted,
-        display_content: uploaded.filename, file_name: uploaded.filename })
+      if (!isCurrent() || !submissions.active || !sendRef.current || activeSessionRef.current !== uploadSession) return
+      const submission = createAttachmentSubmission(uploaded)
       updateLines((prev) => isCurrent() ? [
         ...prev,
-        { role: 'user', content: extracted, file_name: uploaded.filename, pending: true,
+        { role: 'user', content: uploaded.filename, file_name: uploaded.filename, attachments: submission.attachments, pending: true,
           client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' },
       ] : prev)
       rejectedTurnRef.current = false
@@ -472,7 +474,7 @@ export function AgentChatPage() {
       setInfo(null)
       sendRef.current(submission)
     } catch (error) {
-      if (!isCurrent() || !submissions.active) return
+      if (!isCurrent() || !submissions.active || activeSessionRef.current !== uploadSession) return
       setBusy(false)
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Upload failed')
     }
@@ -599,7 +601,7 @@ export function AgentChatPage() {
                 line.role === 'tool' && 'bg-card text-muted-foreground',
               )}
             >
-              {line.role === 'assistant' ? <ChatMarkdown text={line.content} /> : line.content}
+              <ChatMessageContent agentId={agent.id} message={line} />
               {line.delivery === 'rejected' || (line.delivery === 'unknown' && slow) ? (
                 <div className="mt-2 space-y-2">
                   <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : 'Acceptance not confirmed.'}</p>

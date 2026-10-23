@@ -13,6 +13,7 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
+LOCAL_IMAGE="${MARACLAW_OPENCLAW_IMAGE:-openclaw:local}"
 TENCENTDB_PLUGIN_VERSION="${TENCENTDB_PLUGIN_VERSION:-1.0.3}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.5}"
 OPENCLAW_SHA256="${OPENCLAW_SHA256:-sha256:dbb1bdcf2346292e25f672822b6a9928c234909abe6fee0df5fc4556e769d40e}"
@@ -25,7 +26,7 @@ if [ "$DOCKER_PLATFORM" != "linux/arm64" ]; then
     exit 2
 fi
 
-echo "[openclaw-build] Building openclaw:local for $DOCKER_PLATFORM with OpenClaw $OPENCLAW_VERSION and TencentDB plugin $TENCENTDB_PLUGIN_VERSION"
+echo "[openclaw-build] Building $LOCAL_IMAGE for $DOCKER_PLATFORM with OpenClaw $OPENCLAW_VERSION and TencentDB plugin $TENCENTDB_PLUGIN_VERSION"
 docker buildx build \
     --platform "$DOCKER_PLATFORM" \
     -f Dockerfile.openclaw \
@@ -34,7 +35,7 @@ docker buildx build \
     --build-arg OPENCLAW_SHA256="$OPENCLAW_SHA256" \
     --build-arg GOGCLI_VERSION="$GOGCLI_VERSION" \
     --build-arg GOGCLI_SHA256="$GOGCLI_SHA256" \
-    -t openclaw:local \
+    -t "$LOCAL_IMAGE" \
     --load \
     .
-echo "[openclaw-build] Successfully built local Docker image openclaw:local"
+echo "[openclaw-build] Successfully built local Docker image $LOCAL_IMAGE"

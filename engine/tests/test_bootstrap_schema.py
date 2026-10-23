@@ -182,3 +182,17 @@ def test_department_memberships_allow_distinct_department_pairs() -> None:
     # Then uniqueness applies to a membership, not the user's whole department set.
     assert "PRIMARY KEY (user_id, department_id)" in statement
     assert "user_id UUID PRIMARY KEY" not in statement
+
+
+def test_baseline_defines_openclaw_upgrade_journal_and_image_pin() -> None:
+    sql = BASELINE.read_text(encoding="utf-8")
+    assert "openclaw_image_id VARCHAR(200)" in sql
+    assert (
+        "ux_openclaw_update_runs_active_agent ON openclaw_update_runs (agent_id) WHERE state IN ('pending', 'cutover')"
+        in sql
+    )
+    assert (
+        "ux_openclaw_update_runs_succeeded ON openclaw_update_runs (agent_id, notice_id) WHERE state = 'succeeded'"
+        in sql
+    )
+    assert "FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE" in sql

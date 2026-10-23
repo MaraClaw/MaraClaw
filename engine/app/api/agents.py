@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Final, assert_never
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -50,7 +50,14 @@ from app.schemas.collaboration_response_agents import (
 from app.schemas.collaboration_response_relationships import CollaborationAcknowledgement
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
-from app.services.agent_manager import agent_manager
+from app.services.agent_lifecycle import (
+    LifecycleFailure,
+    LifecycleSuccess,
+    persist_agent_runtime as _persist_agent_runtime,
+    start_agent_guest,
+    stop_agent_guest,
+)
+from app.services.agent_manager import agent_manager as agent_manager
 from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 from app.services.enterprise_llm import (
@@ -59,6 +66,7 @@ from app.services.enterprise_llm import (
     is_llm_pool_admin,
 )
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
+from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -154,20 +162,6 @@ async def _agent_to_out(agent: AgentRecord, viewer_id: uuid.UUID) -> AgentOut:
     model = AgentOut.model_validate(agent)
     model.onboarded_for_me = await is_onboarded(agent.id, viewer_id)
     return model
-
-
-async def _persist_agent_runtime(agent: AgentRecord) -> AgentRecord:
-    """Persist fields agent_manager may mutate in-memory (status/container)."""
-    return await agent_dao.update(
-        db_obj=agent,
-        obj_in={
-            "status": agent.status,
-            "container_id": agent.container_id,
-            "container_port": agent.container_port,
-            "last_active_at": agent.last_active_at,
-            "api_key_hash": agent.api_key_hash,
-        },
-    )
 
 
 @router.get("/templates", response_model=None)
@@ -894,21 +888,31 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
     if agent.setup_pending:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
 
-    _ = await agent_manager.start_container(agent)
-    agent = await _persist_agent_runtime(agent)
-    return await _agent_to_out(agent, current_user.id)
+    outcome = await start_agent_guest(agent_id, _persist_agent_runtime)
+    match outcome:
+        case LifecycleSuccess(agent=agent):
+            return await _agent_to_out(agent, current_user.id)
+        case LifecycleFailure(status_code=code, code=error_code, message=message):
+            raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
+        case unreachable:
+            assert_never(unreachable)
 
 
 @router.post("/{agent_id}/stop", response_model=AgentOut)
 async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentOut:
     """Stop an agent's container."""
-    agent, access_level = await check_agent_access(current_user, agent_id)
+    _, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can stop agent")
 
-    _ = await agent_manager.stop_container(agent)
-    agent = await _persist_agent_runtime(agent)
-    return await _agent_to_out(agent, current_user.id)
+    outcome = await stop_agent_guest(agent_id, _persist_agent_runtime)
+    match outcome:
+        case LifecycleSuccess(agent=agent):
+            return await _agent_to_out(agent, current_user.id)
+        case LifecycleFailure(status_code=code, code=error_code, message=message):
+            raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
+        case unreachable:
+            assert_never(unreachable)
 
 
 @router.get("/{agent_id}/approvals", response_model=None)
@@ -962,7 +966,7 @@ async def resolve_agent_approval(
     }
 
 
-@router.post("/{agent_id}/api-key", response_model=None)
+@router.post("/{agent_id}/api-key", response_model=None, dependencies=[Depends(guest_write_exclusion)])
 async def generate_or_reset_api_key(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentApiKeyResponse:

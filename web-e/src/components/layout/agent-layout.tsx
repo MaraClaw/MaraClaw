@@ -1,10 +1,13 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { Outlet, useNavigate, useParams } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Button } from '@/components/ui/button'
+import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { ApiError } from '@/lib/http'
+import { canMountAgentOutlet } from '@/lib/openclaw-update-policy'
 import { getAgent } from '@/lib/workspace-api'
 
 const tabs = [
@@ -47,6 +50,8 @@ function AgentsListButton() {
 
 export function AgentLayout() {
   const { agentId = '' } = useParams()
+  const { pathname } = useLocation()
+  const update = useOpenClawUpdate(agentId)
   const query = useQuery({
     queryKey: ['agent', agentId],
     queryFn: () => getAgent(agentId),
@@ -99,7 +104,9 @@ export function AgentLayout() {
       />
       <div className="relative min-h-0 min-w-0 md:col-start-2 md:row-start-2">
         <div className="absolute inset-0 overflow-y-auto overscroll-y-contain">
-          <Outlet context={{ agent }} />
+          {canMountAgentOutlet(pathname, update.gate)
+            ? <Outlet context={{ agent }} />
+            : <AgentUpdateGate agentId={agentId} query={update} />}
         </div>
       </div>
     </div>

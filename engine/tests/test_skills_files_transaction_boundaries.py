@@ -20,6 +20,12 @@ from app.records.identity import IdentityRecord
 from app.records.skill import SkillRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from openclaw_update_gate_fixtures import open_guest_write_gate
+
+
+@pytest.fixture(autouse=True)
+def _open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    open_guest_write_gate(monkeypatch)
 
 
 @pytest.fixture

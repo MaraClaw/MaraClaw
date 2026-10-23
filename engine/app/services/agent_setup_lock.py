@@ -10,13 +10,15 @@ import anyio
 
 
 @asynccontextmanager
-async def setup_workspace_lock(agent_dir: Path) -> AsyncGenerator[None]:
+async def setup_workspace_lock(agent_dir: Path, *, shared: bool = False) -> AsyncGenerator[None]:
+    """Exclusive by default; ``shared`` lets concurrent guest-visible writers coexist and only fences exclusive holders."""
+    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
     lock_dir = agent_dir.parent / "_setup_locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     with (lock_dir / f"{agent_dir.name}.lock").open("a+b") as lock:
         while True:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, mode | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 await anyio.sleep(0.05)

@@ -15,11 +15,15 @@ from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.services import chat_submissions, chat_tickets
 from app.services.chat_submissions import ChatSubmission
+from app.services.storage_runtime import LocalStorageBackend
 
 pytest_plugins = ("test_chat_submission_postgres",)
 
 
-async def test_socket_receipt_reconnect_history_conflict_and_delete(writable_receipt_db, monkeypatch):
+@pytest.mark.parametrize("with_attachments", [False, True])
+async def test_socket_receipt_reconnect_history_conflict_and_delete(
+    writable_receipt_db, monkeypatch, tmp_path, with_attachments
+):
     db = writable_receipt_db
     binding = chat_tickets.ChatTicketBinding(
         user_id=db.user.id,
@@ -50,7 +54,18 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(writable_rec
     socket_path = f"/ws/chat/{db.agent.id}?ticket=qa&session_id={db.session_id}"
     session_path = f"/api/agents/{db.agent.id}/sessions/{db.session_id}"
     submission_id = str(uuid4())
-    envelope = {"content": "hello", "display_content": "visible", "client_submission_id": submission_id}
+    envelope: dict[str, object] = {
+        "content": "hello",
+        "display_content": "visible",
+        "client_submission_id": submission_id,
+    }
+    refs = [{"path": "workspace/uploads/report.docx", "name": "Report.docx"}]
+    if with_attachments:
+        file = tmp_path / str(db.agent.id) / refs[0]["path"]
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b"file reference only")
+        monkeypatch.setattr(chat_submissions, "get_storage_backend", lambda: LocalStorageBackend(str(tmp_path)))
+        envelope["attachments"] = refs
 
     with TestClient(app) as client:
         with client.websocket_connect(socket_path) as socket:
@@ -79,6 +94,10 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(writable_rec
             assert [(row["message_id"], row["client_submission_id"]) for row in rows] == [
                 (accepted["message_id"], submission_id)
             ]
+            if with_attachments:
+                assert rows[0]["attachments"] == refs
+            else:
+                assert "attachments" not in rows[0]
             assert client.delete(session_path).status_code == 409
             socket.send_json(envelope)
             assert socket.receive_json() == accepted

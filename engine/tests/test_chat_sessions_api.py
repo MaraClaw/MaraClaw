@@ -191,6 +191,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         participant_id=None,
         thinking=None,
         client_submission_id=None,
+        attachments=(),
     )
 
     async def fake_check_agent_access(_user, _agent_id):
@@ -252,6 +253,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         participant_id=None,
         thinking=None,
         client_submission_id=None,
+        attachments=(),
     )
 
     async def fake_check_agent_access(_user, _agent_id):

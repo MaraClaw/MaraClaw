@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/app-shell'
 import { OnboardingGate } from '@/components/layout/onboarding-gate'
 import { AgentLayout } from '@/components/layout/agent-layout'
 import { ProtectedRoute } from '@/routes/protected'
+import { openclawUpdateRoute } from '@/lib/openclaw-update-policy'
 
 const AgentChannelsPage = lazy(() => import('@/pages/app/agent-channels').then((module) => ({ default: module.AgentChannelsPage })))
 const AgentPermissionsPage = lazy(() => import('@/pages/app/agent-permissions').then((module) => ({ default: module.AgentPermissionsPage })))
@@ -26,6 +27,7 @@ const DirectoryPage = lazy(() => import('@/pages/app/directory').then((module) =
 const AdmissionsPage = lazy(() => import('@/pages/app/admissions').then((module) => ({ default: module.AdmissionsPage })))
 const AdmissionDetailPage = lazy(() => import('@/pages/app/admission-detail').then((module) => ({ default: module.AdmissionDetailPage })))
 const NotificationsPage = lazy(() => import('@/pages/app/notifications').then((module) => ({ default: module.NotificationsPage })))
+const OpenClawUpdateDetailPage = lazy(() => import('@/pages/app/openclaw-update-detail').then((module) => ({ default: module.OpenClawUpdateDetailPage })))
 const OkrPage = lazy(() => import('@/pages/app/okr').then((module) => ({ default: module.OkrPage })))
 const OnboardingPage = lazy(() => import('@/pages/app/onboarding').then((module) => ({ default: module.OnboardingPage })))
 const PlazaPage = lazy(() => import('@/pages/app/plaza').then((module) => ({ default: module.PlazaPage })))
@@ -65,6 +67,7 @@ export function AppRouter() {
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
+                <Route path={openclawUpdateRoute} element={<OpenClawUpdateDetailPage />} />
                 <Route path="plaza" element={<PlazaPage />} />
                 <Route path="okr" element={<OkrPage />} />
                 <Route path="directory" element={<DirectoryPage />} />

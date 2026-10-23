@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from app.core.json_types import json_as_int
 from app.services.storage_runtime.base import (
     StorageEntry,
+    StorageReadLimitExceededError,
     StorageVersion,
 )
 from app.services.storage_runtime.s3_connection import S3ObjectIdentity
@@ -172,6 +173,13 @@ class S3StorageBackend(S3CreateBackend):
             version_id=version.version_id,
             content_hash=version.content_hash,
         )
+
+    @override
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        version = await self.get_version(key)
+        if version.exists and version.size > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, version.size)
+        return version
 
     @override
     async def get_version(self, key: str) -> StorageVersion:

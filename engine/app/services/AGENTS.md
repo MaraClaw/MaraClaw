@@ -27,6 +27,19 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - `im_token_cache.py` shares Feishu/WeCom/DingTalk bearer tokens across workers. Keys hash public id **and** secret. DingTalk OAuth2 vs oapi use different provider prefixes. Drop on channel config rotate and WeCom 401. `channels/dedup.py` `*_shared` helpers add Redis SET NX on top of the process-local store.
 - `agent_runtime/` is leftover `__pycache__` only (no `.py`, no importers). Do not add `AGENTS.md` or treat it as live. Same for deleted `group_*` / `heartbeat_runtime` bytecode.
 
+## Guest Lifecycle
+
+Operator policy and limitations: [guest containers](../../docs/guest-containers.md).
+
+- Keep orchestration in `agent_lifecycle.py`; identity, admission, ports and observed diagnostics belong in `guest_identity.py`, `guest_admission.py`, `guest_ports.py` and `guest_container_status.py`, not new branches in `agent_manager.py`.
+- Canonical names use the full agent UUID. Stop/remove only inspected container IDs with an exact `maraclaw.agent_id` ownership label; legacy short names are eligible only with that label. A conflicting recorded/canonical reference must fail before destructive work.
+- Prepare workspace/model/auth/config inputs before destroying an owned guest. Those filesystem/config writes are not transactional and can already affect the existing guest; do not promise atomic replacement or rollback.
+- Keep manager-result failures durable: failed start maps to 502 after persisting its error outcome; failed stop records `stopped` for the existing worker retry before 502. Persist and commit these outcomes inside the per-agent flock, before returning the HTTP failure. Preserve the explicit no-Docker `idle` compatibility path.
+- Lock order is per-agent flock, then optional shared agents-root `_guest_admission` flock through admission and creation. Aggregate admission coordinates only cooperating engine starts on one host with the shared filesystem; it does not cover Docker restarts, manual Docker or multiple hosts.
+- Per-guest limits apply only on new/replacement creation, never automatic live updates. Port allocation prefers the persisted in-range port and permits at most eight total attempts, retrying only recognized bind conflicts.
+- `agent_stops.py` must read fresh stopped state under the per-agent lock and use compare-and-set for missing references. Preserve `agent_orphans.py` label/network/age checks and fresh locked ownership/upgrade guards for existing-agent duplicates. Neither path is a worker auto-restart feature.
+- Diagnostics are additive, safe observations of Docker health/OOM/limits/ownership/port drift, not readiness guarantees or automatic repair.
+
 ## Startup And Seeders
 
 - Seeders are startup-path code and must be idempotent. `app.runtime.lifecycle.lifespan` can invoke `app.runtime.bootstrap.bootstrap` repeatedly when bootstrap is enabled; see `../runtime/AGENTS.md` for ownership.

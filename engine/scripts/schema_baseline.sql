@@ -567,6 +567,7 @@ CREATE TABLE IF NOT EXISTS agents (
     setup_pending BOOLEAN NOT NULL DEFAULT false,
 	container_id VARCHAR(100), 
 	container_port INTEGER, 
+	openclaw_image_id VARCHAR(200),
 	primary_model_id UUID, 
 	secondary_model_id UUID, 
 	fallback_model_id UUID, 
@@ -951,12 +952,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	thinking TEXT, 
 	client_submission_id UUID,
 	submission_fingerprint TEXT,
+	attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	CONSTRAINT ck_chat_submission_receipt CHECK (
 		(client_submission_id IS NULL AND submission_fingerprint IS NULL)
 		OR (client_submission_id IS NOT NULL AND submission_fingerprint IS NOT NULL
-			AND role = 'user' AND submission_fingerprint ~ '^v1:[0-9a-f]{64}$')
+			AND role = 'user' AND submission_fingerprint ~ '^v[12]:[0-9a-f]{64}$')
+	),
+	CONSTRAINT ck_chat_attachments CHECK (
+		CASE WHEN jsonb_typeof(attachments) = 'array' THEN jsonb_array_length(attachments) <= 10 ELSE false END
 	),
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
@@ -979,9 +984,9 @@ CREATE OR REPLACE FUNCTION protect_chat_submission_receipt() RETURNS trigger AS 
 BEGIN
 	IF OLD.client_submission_id IS NOT NULL AND
 		ROW(NEW.id, NEW.user_id, NEW.agent_id, NEW.conversation_id, NEW.role,
-			NEW.client_submission_id, NEW.submission_fingerprint) IS DISTINCT FROM
+			NEW.client_submission_id, NEW.submission_fingerprint, NEW.attachments) IS DISTINCT FROM
 		ROW(OLD.id, OLD.user_id, OLD.agent_id, OLD.conversation_id, OLD.role,
-			OLD.client_submission_id, OLD.submission_fingerprint) THEN
+			OLD.client_submission_id, OLD.submission_fingerprint, OLD.attachments) THEN
 		RAISE EXCEPTION 'Chat submission receipt is immutable' USING ERRCODE = '23514';
 	END IF;
 	RETURN NEW;
@@ -1150,6 +1155,44 @@ CREATE INDEX IF NOT EXISTS ix_notifications_agent_id ON notifications (agent_id)
 CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);
 
 CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
+
+CREATE TABLE IF NOT EXISTS openclaw_update_notices (
+	id UUID NOT NULL,
+	request_id UUID NOT NULL,
+	title VARCHAR(200) NOT NULL,
+	body VARCHAR(1000) NOT NULL,
+	mandatory BOOLEAN NOT NULL,
+	recipients INTEGER NOT NULL DEFAULT 0,
+	created_by UUID,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ux_openclaw_update_notices_request_id UNIQUE (request_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_update_notices_created_at ON openclaw_update_notices (created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS openclaw_update_runs (
+	id UUID NOT NULL,
+	notice_id UUID NOT NULL,
+	agent_id UUID NOT NULL,
+	requested_by UUID,
+	state VARCHAR(20) NOT NULL,
+	failure_code VARCHAR(64),
+	journal JSONB NOT NULL DEFAULT '{}'::jsonb,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(notice_id) REFERENCES openclaw_update_notices (id),
+	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+	CONSTRAINT ck_openclaw_update_runs_state CHECK (state IN ('pending', 'cutover', 'succeeded', 'failed')),
+	CONSTRAINT ck_openclaw_update_runs_failure CHECK ((state = 'failed') = (failure_code IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_active_agent ON openclaw_update_runs (agent_id) WHERE state IN ('pending', 'cutover');
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_succeeded ON openclaw_update_runs (agent_id, notice_id) WHERE state = 'succeeded';
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_update_runs_agent_created ON openclaw_update_runs (agent_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS published_pages (
 	id UUID NOT NULL, 

@@ -139,7 +139,7 @@ services:
     build:
       context: ./web-a
       args:
-        NODE_VERSION: ${WEB_NODE_VERSION:-26.11.1}
+        NODE_VERSION: ${WEB_NODE_VERSION:-26.12.1}
     image: maraclaw-web-a:${RELEASE_TAG:-local}
     deploy:
       replicas: ${ADMIN_REPLICAS:-2}
@@ -149,7 +149,7 @@ services:
     build:
       context: ./web-e
       args:
-        NODE_VERSION: ${WEB_NODE_VERSION:-26.11.1}
+        NODE_VERSION: ${WEB_NODE_VERSION:-26.12.1}
     image: maraclaw-web-e:${RELEASE_TAG:-local}
     depends_on:
       ingress:

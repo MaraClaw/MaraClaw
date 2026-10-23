@@ -31,6 +31,7 @@ from app.services.openclaw_hot_cache import (
     recently_ensured,
     set_cached_bundle,
 )
+from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
 
@@ -101,7 +102,11 @@ async def prepare_openclaw_message(
     content: str,
     history: list[OpenAIMessage] | None = None,
 ) -> PreparedOpenClawMessage:
-    """Ensure models and rewrite guest config before the destination transaction."""
+    """Ensure models and rewrite guest config before the destination transaction.
+
+    Raises ``OpenClawUpdateGateError`` before any config or model side effect.
+    """
+    await assert_work_allowed(agent.id)
     if not recently_ensured(agent):
         agent = await ensure_agent_company_models(agent)
     bundle = get_cached_bundle(agent)
@@ -194,6 +199,11 @@ async def enqueue_openclaw_message(
 
 
 async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
+    try:
+        await assert_work_allowed(agent.id)
+    except OpenClawUpdateGateError as gate:
+        logger.info("[OpenClaw] inbox wake left pending for {}: {}", agent.id, gate.code)
+        return
     claimed: GatewayMessageRecord | None = None
     try:
         from app.services.openclaw_inbox import wake_openclaw_inbox

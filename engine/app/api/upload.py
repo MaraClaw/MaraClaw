@@ -23,6 +23,7 @@ from app.services.document_parser import (
     read_bytes_limited,
 )
 from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
+from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.storage import ensure_local_path, get_storage_backend, guess_content_type, normalize_storage_key
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -120,22 +121,23 @@ async def upload_file(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid agent_id") from exc
         _ = await check_agent_access(current_user, agent_uuid)
-        storage = get_storage_backend()
-        stem, suffix = os.path.splitext(filename)
-        for counter in range(100):
-            candidate = filename if counter == 0 else f"{stem}_{counter}{suffix}"
-            candidate_path = f"workspace/uploads/{candidate}"
-            key = normalize_storage_key(f"{agent_id}/{candidate_path}")
-            result = await storage.create_bytes_if_absent(key, content, content_type=guess_content_type(candidate))
-            if result.ok:
-                filename = candidate
-                workspace_path = candidate_path
-                break
-            if not result.conflict:
-                raise HTTPException(status_code=503, detail="Storage did not accept the upload")
-        else:
-            raise HTTPException(status_code=409, detail="Too many attachments share this filename; rename the file")
-        _ = await ensure_local_path(key)
+        async with guest_write_section(agent_uuid):
+            storage = get_storage_backend()
+            stem, suffix = os.path.splitext(filename)
+            for counter in range(100):
+                candidate = filename if counter == 0 else f"{stem}_{counter}{suffix}"
+                candidate_path = f"workspace/uploads/{candidate}"
+                key = normalize_storage_key(f"{agent_id}/{candidate_path}")
+                result = await storage.create_bytes_if_absent(key, content, content_type=guess_content_type(candidate))
+                if result.ok:
+                    filename = candidate
+                    workspace_path = candidate_path
+                    break
+                if not result.conflict:
+                    raise HTTPException(status_code=503, detail="Storage did not accept the upload")
+            else:
+                raise HTTPException(status_code=409, detail="Too many attachments share this filename; rename the file")
+            _ = await ensure_local_path(key)
         saved_filename = filename
     else:
         # No agent workspace exists to retain this upload. Keep its bytes request-scoped.

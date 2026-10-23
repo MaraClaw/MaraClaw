@@ -39,6 +39,7 @@ from app.schemas.schemas import (
 from app.services.openclaw_gateway_delivery import claim_poll_batch, publish_report, record_report
 from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
 from app.services.openclaw_turns import completed_history, runtime_session_key
+from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.shared_chat import shared_session_id
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
@@ -71,7 +72,10 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
         if active is None:
             raise HTTPException(status_code=401, detail="Invalid API key")
         agent = active
-        messages = await claim_poll_batch(agent.id)
+        try:
+            messages = await claim_poll_batch(agent.id)
+        except OpenClawUpdateGateError:
+            messages = []
     guest_model, guest_slot = poll_model_hint(messages)
 
     out = []

@@ -16,6 +16,7 @@ from app.core.json_types import (
     uuid_from_row_opt,
 )
 from app.dao.base import BaseDAO
+from app.db.types import as_jsonb
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 
 _SESSION_COLUMNS = (
@@ -46,6 +47,7 @@ _MESSAGE_COLUMNS = (
     "thinking",
     "client_submission_id",
     "submission_fingerprint",
+    "attachments",
     "created_at",
 )
 
@@ -513,9 +515,10 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO chat_messages "
-                "(id, user_id, agent_id, role, content, conversation_id, client_submission_id, submission_fingerprint) "
+                "(id, user_id, agent_id, role, content, conversation_id, client_submission_id, "
+                "submission_fingerprint, attachments) "
                 "VALUES (%(id)s, %(user_id)s, %(agent_id)s, 'user', %(content)s, %(conversation_id)s, "
-                "%(client_submission_id)s, %(submission_fingerprint)s) "
+                "%(client_submission_id)s, %(submission_fingerprint)s, %(attachments)s) "
                 "ON CONFLICT (user_id, agent_id, conversation_id, client_submission_id) "
                 "WHERE client_submission_id IS NOT NULL DO NOTHING "
                 f"RETURNING {self._select_list()}",
@@ -527,6 +530,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                     "conversation_id": message.conversation_id,
                     "client_submission_id": message.client_submission_id,
                     "submission_fingerprint": message.submission_fingerprint,
+                    "attachments": as_jsonb([ref.as_dict() for ref in message.attachments or ()]),
                 },
             )
             return ChatMessageRecord.from_row(row) if row is not None else None

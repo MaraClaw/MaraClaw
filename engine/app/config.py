@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.sandbox.config import SandboxConfig, SandboxType
@@ -163,6 +163,19 @@ class Settings(BaseSettings):
     DOCKER_NETWORK: str = "maraclaw_network"
     MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.5"
     OPENCLAW_GATEWAY_PORT: int = 18789
+    # Trial limits for newly created/replacement guests; never auto-update existing guests.
+    OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
+    OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
+    OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
+    OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_guest_memory_capacity(self) -> Settings:
+        capacity = self.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES
+        if capacity and capacity < self.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES:
+            raise ValueError("Guest aggregate memory limit must cover at least one per-guest memory limit")
+        return self
+
     # How OpenClaw guests reach this engine on the Docker network.
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Requeue a gateway message the guest took but has not reported after this many seconds.

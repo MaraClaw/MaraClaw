@@ -7,6 +7,7 @@ from app.records.llm import LLMModelRecord
 from app.records.okr import OKRSettingsRecord
 from app.services import okr_reporting, openclaw_inbox
 from app.services.agent_manager import agent_manager
+from app.services.guest_identity import GuestIdentity
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -24,6 +25,8 @@ def test_docker_execute_accepts_direct_and_nested_clients(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(agent_manager, "docker_client", Client() if nested else Executor())
     agent = AgentRecord(id=uuid4(), name="Inbox", creator_id=uuid4(), container_id="container-abc")
+    owned_guest = GuestIdentity("container-abc", f"maraclaw-agent-{agent.id}", str(agent.id), ())
+    monkeypatch.setattr(openclaw_inbox, "resolve_guest", lambda _client, _agent: owned_guest)
 
     # When: the adapter invokes a guest command.
     error = openclaw_inbox._docker_execute(agent, ["node", "wake.mjs"])

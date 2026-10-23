@@ -16,10 +16,11 @@ from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
+    StorageReadLimitExceededError,
     StorageVersion,
     content_hash_bytes,
 )
-from app.services.storage_runtime.bounded import read_bounded
+from app.services.storage_runtime.bounded import open_regular_file, read_bounded
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -84,9 +85,8 @@ class LocalStorageBackend(StorageBackend):
 
     @override
     async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
-        return await anyio.to_thread.run_sync(
-            _read_file_bounded, self._full_path(key), max_bytes, abandon_on_cancel=True
-        )
+        path = self.root.resolve() / normalize_storage_key(key)
+        return await anyio.to_thread.run_sync(_read_file_bounded, path, max_bytes, abandon_on_cancel=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -135,6 +135,16 @@ class LocalStorageBackend(StorageBackend):
 
     @override
     async def get_version(self, key: str) -> StorageVersion:
+        return await self._get_version(key, None)
+
+    @override
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        requested = self.root.resolve() / normalize_storage_key(key)
+        if requested != requested.resolve():
+            raise HTTPException(status_code=403, detail="Symlink previews are not allowed")
+        return await self._get_version(key, max_bytes)
+
+    async def _get_version(self, key: str, max_bytes: int | None) -> StorageVersion:
         path = self._full_path(key)
         if not path.exists():
             return StorageVersion(key=normalize_storage_key(key), exists=False, is_dir=False)
@@ -147,7 +157,11 @@ class LocalStorageBackend(StorageBackend):
                 modified_at=str(stat.st_mtime),
                 version_id=_local_version_token(stat, None),
             )
-        data = await self.read_bytes(key)
+        if max_bytes is not None and stat.st_size > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, stat.st_size)
+        if max_bytes is not None and not path.is_file():
+            raise FileNotFoundError(key)
+        data = await self.read_bytes(key) if max_bytes is None else await self.read_bytes_bounded(key, max_bytes)
         file_hash = content_hash_bytes(data)
         return StorageVersion(
             key=normalize_storage_key(key),
@@ -199,7 +213,7 @@ def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
 
 
 def _read_file_bounded(path: Path, max_bytes: int) -> bytes:
-    with path.open("rb", buffering=0) as stream:
+    with open_regular_file(path) as stream:
         return read_bounded(stream, max_bytes)
 
 

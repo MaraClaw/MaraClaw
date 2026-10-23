@@ -2,13 +2,16 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, override
 
-from python_on_whales.exceptions import DockerException
+from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.services import agent_manager as agent_manager_module, gogcli_oauth, gogcli_runtime
 from app.services.agent_manager import AgentManager
 
 
 class _RecordingContainerAPI:
+    def inspect(self, reference: str) -> None:
+        raise NoSuchContainer(["docker", "inspect", reference], 1)
+
     def stop(self, _ref: str, time: int = 10) -> None:
         del time
 
