@@ -14,8 +14,9 @@ from app.core.json_types import (
     json_object_from_response,
 )
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
-from app.services.sandbox.config import SandboxConfig
+from app.services.sandbox.config import ENDPOINT_BLOCKED_MESSAGE, SandboxConfig
 
 
 class SelfHostedBackend(BaseSandboxBackend):
@@ -61,13 +62,13 @@ class SelfHostedBackend(BaseSandboxBackend):
     async def health_check(self) -> bool:
         """Check if the self-hosted service is available."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.api_url, timeout=5.0) as client:
                 # Try /v1/sandbox first (aio-sandbox), then fall back to /health
                 for endpoint in ["/v1/sandbox", "/health"]:
                     check_url = (
                         self.api_url.split("/v1/")[0] + endpoint
                         if "/v1/" in self.api_url
-                        else f"{self.api_url.rsplit('/', 1)[0]}/health"
+                        else f"{self._service_root()}/health"
                     )
                     try:
                         response = await client.get(check_url, timeout=5.0)
@@ -79,8 +80,16 @@ class SelfHostedBackend(BaseSandboxBackend):
                         )
                         continue
                 return False
+        except OutboundPolicyError:
+            logger.warning("[SelfHosted] Health check blocked by outbound network policy")
+            return False
         except Exception:
             return False
+
+    def _service_root(self) -> str:
+        """Directory of the configured endpoint, keeping the origin even for a bare root URL."""
+        last_slash = self.api_url.rfind("/")
+        return self.api_url[:last_slash] if last_slash > self.api_url.find("://") + 2 else self.api_url
 
     @override
     async def execute(
@@ -139,7 +148,7 @@ class SelfHostedBackend(BaseSandboxBackend):
         payload.update(kwargs)
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.api_url, timeout=float(timeout + 10)) as client:
                 # Use URL directly without appending /execute
                 response = await client.post(
                     self.api_url,
@@ -210,6 +219,17 @@ class SelfHostedBackend(BaseSandboxBackend):
                 exit_code=124,
                 duration_ms=duration_ms,
                 error=f"Code execution timed out after {timeout}s",
+            )
+
+        except OutboundPolicyError:
+            logger.warning("[SelfHosted] Execution blocked by outbound network policy")
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=1,
+                duration_ms=int((time.time() - start_time) * 1000),
+                error=ENDPOINT_BLOCKED_MESSAGE,
             )
 
         except Exception as e:

@@ -8,8 +8,9 @@ import httpx
 
 from app.core.json_types import json_as_int, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
-from app.services.sandbox.config import SandboxConfig
+from app.services.sandbox.config import ENDPOINT_BLOCKED_MESSAGE, SandboxConfig
 
 # Judge0 language IDs
 _JUDGE0_LANGUAGE_IDS = {
@@ -39,7 +40,7 @@ class Judge0Backend(BaseSandboxBackend):
 
     def __init__(self, config: SandboxConfig):
         self.config: SandboxConfig = config
-        self.api_url: object = config.api_url or _DEFAULT_JUDGE0_URL
+        self.api_url: str = config.api_url or _DEFAULT_JUDGE0_URL
 
         if not config.api_key:
             # Judge0 has a free tier that doesn't require API key
@@ -60,9 +61,12 @@ class Judge0Backend(BaseSandboxBackend):
     async def health_check(self) -> bool:
         """Check if Judge0 API is available."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.api_url, timeout=5.0) as client:
                 response = await client.get(f"{self.api_url}/languages", timeout=5.0)
                 return response.status_code == 200
+        except OutboundPolicyError:
+            logger.warning("[Judge0] Health check blocked by outbound network policy")
+            return False
         except Exception:
             return False
 
@@ -94,7 +98,7 @@ class Judge0Backend(BaseSandboxBackend):
             )
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.api_url, timeout=10.0) as client:
                 # Step 1: Submit the code
                 submit_response = await client.post(
                     f"{self.api_url}/submissions",
@@ -133,7 +137,7 @@ class Judge0Backend(BaseSandboxBackend):
                 # Step 2: Poll for result
                 max_retries = timeout * 2  # Poll every 0.5 seconds
                 for _ in range(max_retries):
-                    _ = await client.get(f"{self.api_url}/submissions/{token}")
+                    _ = await client.get(f"{self.api_url}/submissions/{token}", timeout=5.0)
 
                     result_response = await client.get(
                         f"{self.api_url}/submissions/{token}",
@@ -199,6 +203,17 @@ class Judge0Backend(BaseSandboxBackend):
                 exit_code=124,
                 duration_ms=duration_ms,
                 error=f"Code execution timed out after {timeout}s",
+            )
+
+        except OutboundPolicyError:
+            logger.warning("[Judge0] Execution blocked by outbound network policy")
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=1,
+                duration_ms=int((time.time() - start_time) * 1000),
+                error=ENDPOINT_BLOCKED_MESSAGE,
             )
 
         except Exception as e:
