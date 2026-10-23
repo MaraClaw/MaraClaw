@@ -7,7 +7,7 @@
 #
 # Usage:
 #   DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
-#   OPENCLAW_PUBLISH_IMAGE=youruser/openclaw IMAGE_TAG=2026.10.5 ./publish-openclaw-local-dockerfile.sh
+#   OPENCLAW_PUBLISH_IMAGE=youruser/openclaw IMAGE_TAG=2026.10.6 ./publish-openclaw-local-dockerfile.sh
 #   PUSH_LATEST=1 DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
 #
 # Environment (set in .env or on the command line):
@@ -36,7 +36,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 LOCAL_IMAGE="${MARACLAW_OPENCLAW_IMAGE:-openclaw:local}"
-OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.5}"
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.6}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64}"
 IMAGE_TAG="${IMAGE_TAG:-$OPENCLAW_VERSION}"
 

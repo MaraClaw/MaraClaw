@@ -73,11 +73,17 @@ from app.services.autonomy_service import autonomy_service
 from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ChatGPTSubscriptionRefreshOut,
+    refresh_chatgpt_subscription_for_admin,
+)
+from app.services.chatgpt_subscription_handoff import (
+    chatgpt_subscription_status,
+    complete_chatgpt_subscription_handoff,
+    start_chatgpt_subscription_handoff,
+)
+from app.services.chatgpt_subscription_types import (
+    ChatGPTSubscriptionCompleteIn,
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
-    chatgpt_subscription_status,
-    refresh_chatgpt_subscription_for_admin,
-    start_chatgpt_subscription_handoff,
 )
 from app.services.enterprise_llm import (
     assert_can_manage_model,
@@ -282,19 +288,26 @@ async def start_chatgpt_subscription(
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_admin),
 ) -> ChatGPTSubscriptionStartOut:
-    """Start a ChatGPT Plus / Pro / Team device-code handoff. Tokens never leave the server."""
+    """Start browser OAuth PKCE. Tokens and the verifier stay on the server."""
     assert_llm_pool_admin(current_user)
     return await start_chatgpt_subscription_handoff(current_user, tenant_id)
 
 
 @router.get("/llm-models/chatgpt-subscription/status", response_model=ChatGPTSubscriptionStatusOut)
 async def get_chatgpt_subscription_status(
-    session_id: str,
+    attempt_id: str,
     current_user: UserRecord = Depends(get_current_admin),
 ) -> ChatGPTSubscriptionStatusOut:
-    """Poll a pending ChatGPT subscription handoff. Response never includes tokens."""
-    assert_llm_pool_admin(current_user)
-    return await chatgpt_subscription_status(current_user, session_id)
+    """Read an owner-bound result without contacting the provider."""
+    return await chatgpt_subscription_status(current_user, attempt_id)
+
+
+@router.post("/llm-models/chatgpt-subscription/complete", response_model=ChatGPTSubscriptionStatusOut)
+async def complete_chatgpt_subscription(
+    data: ChatGPTSubscriptionCompleteIn,
+    current_user: UserRecord = Depends(get_current_admin),
+) -> ChatGPTSubscriptionStatusOut:
+    return await complete_chatgpt_subscription_handoff(current_user, data)
 
 
 @router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)
