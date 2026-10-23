@@ -952,12 +952,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	thinking TEXT, 
 	client_submission_id UUID,
 	submission_fingerprint TEXT,
+	attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	CONSTRAINT ck_chat_submission_receipt CHECK (
 		(client_submission_id IS NULL AND submission_fingerprint IS NULL)
 		OR (client_submission_id IS NOT NULL AND submission_fingerprint IS NOT NULL
-			AND role = 'user' AND submission_fingerprint ~ '^v1:[0-9a-f]{64}$')
+			AND role = 'user' AND submission_fingerprint ~ '^v[12]:[0-9a-f]{64}$')
+	),
+	CONSTRAINT ck_chat_attachments CHECK (
+		CASE WHEN jsonb_typeof(attachments) = 'array' THEN jsonb_array_length(attachments) <= 10 ELSE false END
 	),
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
@@ -980,9 +984,9 @@ CREATE OR REPLACE FUNCTION protect_chat_submission_receipt() RETURNS trigger AS 
 BEGIN
 	IF OLD.client_submission_id IS NOT NULL AND
 		ROW(NEW.id, NEW.user_id, NEW.agent_id, NEW.conversation_id, NEW.role,
-			NEW.client_submission_id, NEW.submission_fingerprint) IS DISTINCT FROM
+			NEW.client_submission_id, NEW.submission_fingerprint, NEW.attachments) IS DISTINCT FROM
 		ROW(OLD.id, OLD.user_id, OLD.agent_id, OLD.conversation_id, OLD.role,
-			OLD.client_submission_id, OLD.submission_fingerprint) THEN
+			OLD.client_submission_id, OLD.submission_fingerprint, OLD.attachments) THEN
 		RAISE EXCEPTION 'Chat submission receipt is immutable' USING ERRCODE = '23514';
 	END IF;
 	RETURN NEW;

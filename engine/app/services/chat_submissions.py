@@ -6,18 +6,21 @@ from typing import ClassVar
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
+from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 from app.services.quota_guard import charge_conversation_quota, check_agent_expired
 from app.services.shared_chat import is_shared_session, require_writable_session
+from app.services.storage_runtime.agent_file_refs import is_agent_file
+from app.services.storage_runtime.facade import get_storage_backend
 
 
 class ChatSubmission(BaseModel):
@@ -27,12 +30,15 @@ class ChatSubmission(BaseModel):
     content: str
     display_content: str = ""
     file_name: str = ""
+    attachments: tuple[ChatAttachment, ...] = Field(default=(), max_length=10)
 
     def fingerprint(self) -> str:
-        canonical = json.dumps(
-            [self.content, self.display_content, self.file_name], ensure_ascii=True, separators=(",", ":")
-        )
-        return "v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        identity: list[object] = [self.content, self.display_content, self.file_name]
+        if self.attachments:
+            identity.append([[ref.path, ref.name] for ref in self.attachments])
+        canonical = json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
+        version = "v2:" if self.attachments else "v1:"
+        return version + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def saved_content(self) -> str:
         text = self.content if "[image_data:" in self.content else self.display_content or self.content
@@ -41,6 +47,10 @@ class ChatSubmission(BaseModel):
 
 class SubmissionConflictError(Exception):
     pass
+
+
+class InvalidChatAttachmentsError(Exception):
+    """A referenced file is unavailable in the authorized agent's storage."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +82,7 @@ async def accept_submission(
         conversation_id=str(session_id),
         client_submission_id=submission.client_submission_id,
         submission_fingerprint=submission.fingerprint(),
+        attachments=submission.attachments,
     )
     async with connection_ctx():
         session = await chat_session_dao.lock_for_agent(session_id, agent.id)
@@ -85,6 +96,11 @@ async def accept_submission(
             return _replay(existing, candidate)
 
         require_writable_session(session)
+        if submission.attachments:
+            storage = get_storage_backend()
+            for ref in submission.attachments:
+                if not await is_agent_file(storage, agent.id, ref.path):
+                    raise InvalidChatAttachmentsError
         await check_agent_expired(agent.id)
         current_history = history
         if shared:

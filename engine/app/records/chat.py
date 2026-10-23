@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.json_types import datetime_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_from_row_opt
+from app.records.chat_attachment import ChatAttachment, chat_attachments_adapter
 
 
 @dataclass(slots=True)
@@ -64,6 +65,7 @@ class ChatMessageRecord:
     created_at: datetime | None = None
     client_submission_id: UUID | None = None
     submission_fingerprint: str | None = None
+    attachments: tuple[ChatAttachment, ...] | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ChatMessageRecord:
@@ -79,4 +81,5 @@ class ChatMessageRecord:
             created_at=datetime_from_row(row.get("created_at")),
             client_submission_id=uuid_from_row_opt(row.get("client_submission_id")),
             submission_fingerprint=str_from_row_opt(row.get("submission_fingerprint")),
+            attachments=chat_attachments_adapter.validate_python(row.get("attachments", [])),
         )

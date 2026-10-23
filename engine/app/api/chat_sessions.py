@@ -24,6 +24,7 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
+from app.records.chat_attachment import AttachmentRef
 from app.records.user import UserRecord
 from app.services.shared_chat import ensure_shared_session, is_shared_session
 
@@ -48,6 +49,7 @@ class ChatMessageEntry(_ChatMessageContent):
     message_id: str
     entry_id: str
     client_submission_id: NotRequired[str | None]
+    attachments: NotRequired[list[AttachmentRef]]
 
 
 def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
@@ -394,6 +396,8 @@ async def get_session_messages(
             }
             if m.role == "user":
                 message_entry["client_submission_id"] = str(m.client_submission_id) if m.client_submission_id else None
+            if m.attachments is not None and m.attachments:
+                message_entry["attachments"] = [ref.as_dict() for ref in m.attachments]
             if m.thinking not in (None, ""):
                 message_entry["thinking"] = m.thinking
             if sender_name not in (None, ""):
