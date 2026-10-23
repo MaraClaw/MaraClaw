@@ -10,6 +10,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - `files.py` exports `router`, `upload_router`, `enterprise_kb_router`.
 - `whatsapp.py` is mounted with `API_PREFIX` (same as other IM channels). Webhook paths stay `/api/channel/whatsapp/{agent_id}/webhook`. No proactive outbound sender yet. `background_tasks.py` is a helper, not a router.
 - Launch route background work with `schedule_background_task`, not `asyncio.create_task`. It starts the work after the request transaction commits, in a fresh context that carries only the trace id, and drops it on rollback. FastAPI `BackgroundTasks` still run before the request commits.
+- `openclaw_updates.py` is mounted with `API_PREFIX` (`/admin/openclaw-updates` platform-admin publish, `/openclaw-updates/{id}`, `/agents/{id}/openclaw-update`). Guest-visible file/upload mutators carry `Depends(guest_write_exclusion)` (409 during an active run); `OpenClawUpdateGateError` maps to 423/409 in `main.py`. Contract: `../../docs/openclaw-updates.md`.
 - `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/departments`, and singular `/department`).
 
 ## Org departments

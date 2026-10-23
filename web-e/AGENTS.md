@@ -40,7 +40,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - Tailwind v4 is CSS-first: `src/index.css` owns `@theme inline`, `:root`, `.dark`; no `tailwind.config.*` or PostCSS setup. Shared visual conventions live in the components guide.
 - Lint is Oxlint (`.oxlintrc.json`), not ESLint/Prettier. TS uses `verbatimModuleSyntax` (`import type`) and `erasableSyntaxOnly` (no enums).
 - Engine I/O goes through `src/lib/http.ts`, never page-level fetch. Add a focused `lib/*-api.ts` for new domains rather than growing `workspace-api.ts`.
-- Chat attempts mint fresh HTTP-authenticated single-use tickets; JWTs stay in headers, never socket/file URLs. File previews/downloads mint per action/mount; redemption URLs stay relative/same-origin. Detailed lifetimes and stale-preview rules: lib guide.
+- Chat attempts mint fresh HTTP-authenticated single-use tickets; JWTs stay in headers, never socket/file URLs. Files-tab previews and all native downloads mint per action/mount; redemption URLs stay relative/same-origin. Chat attachment previews alone use authenticated metadata/bytes through `http.ts`, with fresh access/version checks on every opening and an owner-scoped bounded memory cache. Detailed lifetimes and stale-preview rules: lib guide.
 - No member admin screens or `/api/admin/*`; no LLM provider/model names, pickers, key or subscription controls. Org admins manage these in `web-a` `/models`, including Grok/ChatGPT subscriptions; members inherit the company pool.
 - Directory retains People and Org Departments; provider organization sync and the Synced view are retired. Keep org department summaries separate from custom-list agent department grants. Grants are `use`, not `manage`; department creation/membership stays in web-a Users. Member rename/permission rules: workspace and lib guides.
 - Landing features 12 of 22 engine role templates. Channel claims must follow engine truth, not badge copy; sections guide records incomplete WhatsApp/Discord/Atlassian support and absent Email/Google Workspace channel types.
@@ -50,8 +50,8 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 
 - Public `VITE_*` only, never secrets. Empty `VITE_API_BASE_URL` means same-origin; never use `http://0.0.0.0:8000`.
 - Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 25m.
-- Docker builds with Node 26.11.1 and serves via non-root `nginxinc/nginx-unprivileged` on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
-- CSP `font-src 'self' data:` blocks index.html's Google Fonts in the image; external APIs require `connect-src` edits. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
+- Docker builds with Node 26.12.1 and serves via non-root `nginxinc/nginx-unprivileged` on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
+- CSP `font-src 'self' data:` blocks index.html's Google Fonts in the image; external APIs require `connect-src` edits. Local Office parsing uses only `script-src 'wasm-unsafe-eval'` and `worker-src 'self' blob:`; never add JavaScript `unsafe-eval`, data workers or remote viewer/font hosts. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
 
 ## COMMANDS AND CHECKS
 

@@ -68,6 +68,6 @@ No npm e2e script exists; the three `tests/*.browser.mjs` scripts are standalone
 ## DEVELOPMENT AND PRODUCTION
 
 - `vite.config.ts`: dev `:5174`; `/api` proxies to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. This is dev-only.
-- `Dockerfile` + `docker/nginx.conf`: Node 26.11.1 build, nginx-unprivileged static SPA on `:8080`, CSP and `/healthz`; no production `/api` proxy. Route API traffic at the edge.
+- `Dockerfile` + `docker/nginx.conf`: Node 26.12.1 build, nginx-unprivileged static SPA on `:8080`, CSP and `/healthz`; no production `/api` proxy. Route API traffic at the edge.
 - `.env.example`: empty `VITE_API_BASE_URL` = same-origin; image override is `--build-arg VITE_API_BASE_URL=...`.
 - Reset emails: engine `public_base_url` must point at this admin app.
