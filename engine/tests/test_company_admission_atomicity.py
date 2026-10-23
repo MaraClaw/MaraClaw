@@ -47,6 +47,7 @@ async def test_notification_failure_rolls_back_approval(
     assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
     assert await scenario.db.fetchval("SELECT count(*) FROM admin_audit_logs") == 0
+    assert await scenario.db.fetchval("SELECT count(*) FROM notifications WHERE type='organization_welcome'") == 0
 
 
 async def test_parallel_duplicate_requests_are_serialized(admission_scenario: AdmissionScenario):

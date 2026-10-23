@@ -4,29 +4,36 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.records.identity import IdentityRecord
+from app.records.tenant import TenantRecord
+from app.records.user import UserRecord
 from app.services import org_membership as membership
 
 
-def _tenant(**overrides):
-    values = {
-        "id": uuid.uuid4(),
-        "name": "Acme",
-        "slug": "acme",
-        "is_active": True,
-        "is_default_end_user_org": False,
-        "default_message_limit": 50,
-        "default_message_period": "permanent",
-        "default_max_agents": 2,
-        "default_agent_ttl_hours": 0,
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
+def _tenant(
+    *,
+    name: str = "Acme",
+    slug: str = "acme",
+    default_message_limit: int = 50,
+    default_max_agents: int = 2,
+    is_default_end_user_org: bool = False,
+    is_system: bool = False,
+) -> TenantRecord:
+    return TenantRecord(
+        id=uuid.uuid4(),
+        name=name,
+        slug=slug,
+        default_message_limit=default_message_limit,
+        default_max_agents=default_max_agents,
+        is_default_end_user_org=is_default_end_user_org,
+        is_system=is_system,
+    )
 
 
 @pytest.mark.parametrize(
@@ -107,7 +114,7 @@ async def test_exhausted_invite_is_invitation_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_user_to_org_refuses_second_membership():
-    user: Any = SimpleNamespace(tenant_id=uuid.uuid4())
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.attach_user_to_org(user, _tenant())
 
@@ -116,8 +123,8 @@ async def test_attach_user_to_org_refuses_second_membership():
 async def test_transfer_user_to_org_moves_member(monkeypatch):
     source = uuid.uuid4()
     dest = _tenant()
-    user: Any = SimpleNamespace(id=uuid.uuid4(), tenant_id=source, role="member", is_genesis=False)
-    updated = SimpleNamespace(id=user.id, tenant_id=dest.id, role="member")
+    user = UserRecord(id=uuid.uuid4(), tenant_id=source)
+    updated = replace(user, tenant_id=dest.id)
     unbind = AsyncMock()
 
     @asynccontextmanager
@@ -136,7 +143,7 @@ async def test_transfer_user_to_org_moves_member(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_user_to_org_blocks_platform_admin():
-    user: Any = SimpleNamespace(tenant_id=None, role="platform_admin", is_genesis=False)
+    user = UserRecord(id=uuid.uuid4(), role="platform_admin")
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.attach_user_to_org(user, _tenant())
 
@@ -145,7 +152,9 @@ async def test_attach_user_to_org_blocks_platform_admin():
 async def test_lookup_tenant_for_verified_email_ignores_unverified(monkeypatch):
     lookup = AsyncMock()
     monkeypatch.setattr(membership, "lookup_tenant_by_email_domain", lookup)
-    user: Any = SimpleNamespace(email="ada@acme.com", email_verified=False)
+    user = UserRecord(
+        id=uuid.uuid4(), identity=IdentityRecord(id=uuid.uuid4(), email="ada@acme.com", email_verified=False)
+    )
     assert await membership.lookup_tenant_for_verified_email(user) is None
     lookup.assert_not_called()
 
@@ -154,7 +163,9 @@ async def test_lookup_tenant_for_verified_email_ignores_unverified(monkeypatch):
 async def test_lookup_tenant_for_verified_email_uses_verified(monkeypatch):
     acme = _tenant()
     monkeypatch.setattr(membership, "lookup_tenant_by_email_domain", AsyncMock(return_value=acme))
-    user: Any = SimpleNamespace(email="ada@acme.com", email_verified=True)
+    user = UserRecord(
+        id=uuid.uuid4(), identity=IdentityRecord(id=uuid.uuid4(), email="ada@acme.com", email_verified=True)
+    )
     assert await membership.lookup_tenant_for_verified_email(user) is acme
 
 
@@ -168,7 +179,7 @@ def test_cannot_delete_system_or_default_org():
 
 @pytest.mark.asyncio
 async def test_transfer_user_to_org_blocks_org_admin():
-    user: Any = SimpleNamespace(tenant_id=uuid.uuid4(), role="org_admin", is_genesis=False)
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.transfer_user_to_org(user, _tenant())
 
@@ -219,14 +230,12 @@ async def test_create_user_with_identity_copies_tenant_quotas(monkeypatch):
     from app.services.registration_service import RegistrationService
 
     tenant = _tenant(default_message_limit=80, default_max_agents=4)
-    identity: Any = SimpleNamespace(
-        id=uuid.uuid4(), email="ada@example.com", email_verified=True, is_platform_admin=False
-    )
-    created = {}
+    identity = IdentityRecord(id=uuid.uuid4(), email="ada@example.com", email_verified=True)
+    created: dict[str, object] = {}
 
-    async def _create(*, obj_in):
+    async def _create(*, obj_in: dict[str, object]) -> UserRecord:
         created.update(obj_in)
-        return SimpleNamespace(id=uuid.uuid4(), identity=identity, avatar_url=None, **obj_in)
+        return replace(UserRecord(id=uuid.uuid4(), identity=identity), **obj_in)
 
     service = RegistrationService()
     monkeypatch.setattr("app.services.registration_service.tenant_dao.get", AsyncMock(return_value=tenant))

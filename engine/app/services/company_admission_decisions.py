@@ -8,11 +8,14 @@ from app.dao.company_admission_dao import company_admission_dao as admissions
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
+from app.records.tenant import TenantRecord
+from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionDecision
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.company_admissions import fresh_user, require_genesis, validate_method
 from app.services.notification_service import send_notification
 from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, transfer_user_to_org
+from app.services.org_welcome import send_organization_welcome
 
 
 async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecision) -> CompanyAdmissionRecord:
@@ -38,6 +41,7 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
             if request.status != result:
                 raise HTTPException(409, "Admission request already has a different decision")
             return request
+        welcome_context: tuple[UserRecord, TenantRecord] | None = None
         if result == AdmissionStatus.APPROVED:
             current = await fresh_user(request.applicant_user_id)
             if current.tenant_id != request.source_tenant_id:
@@ -68,6 +72,7 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
                     "UPDATE invitation_codes SET used_count=used_count+1 WHERE code=%(code)s",
                     {"code": request.invitation_code},
                 )
+            welcome_context = (current, target)
         before_status = request.status.value
         resolved = await admissions.update(
             db_obj=request,
@@ -78,6 +83,8 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
                 "decision_reason": decision.reason,
             },
         )
+        if welcome_context is not None:
+            await send_organization_welcome(*welcome_context)
         await write_admin_audit(
             actor=reviewer,
             action="company_admission.decided",
