@@ -4,12 +4,15 @@ import { useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { AgentOpenClawUpgrade } from '@/components/agent-openclaw-upgrade'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
+import { agentUpdateKey } from '@/hooks/openclaw-update-options'
+import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { deleteAgent, getAgentMetrics, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentSettingsPage() {
@@ -18,6 +21,8 @@ export function AgentSettingsPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const openclaw = useOpenClawUpdate(agent.id)
+  const upgrading = openclaw.gate === 'upgrading'
   const isCreator = user?.id === agent.creator_id
   const isOrgAdmin = user?.role === 'org_admin'
   const canManage = agent.access_level === 'manage' || isCreator
@@ -38,6 +43,7 @@ export function AgentSettingsPage() {
     mutationFn: () => startAgent(agent.id),
     onSuccess() {
       void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
+      void queryClient.invalidateQueries({ queryKey: agentUpdateKey(agent.id) })
     },
     onError() {
       toast.error('Unable to start this agent')
@@ -96,15 +102,16 @@ export function AgentSettingsPage() {
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
         ) : null}
       </div>
+      <AgentOpenClawUpgrade agentId={agent.id} status={agent.status} query={openclaw} />
       <div className="flex gap-2">
         {canManage ? (
           <>
             {agent.status !== 'running' ? (
-              <Button size="sm" variant="outline" disabled={start.isPending} onClick={() => start.mutate()}>
+              <Button size="sm" variant="outline" disabled={start.isPending || upgrading} onClick={() => start.mutate()}>
                 Start
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
+            <Button size="sm" variant="outline" disabled={stop.isPending || upgrading} onClick={() => stop.mutate()}>
               Stop
             </Button>
           </>
@@ -113,6 +120,7 @@ export function AgentSettingsPage() {
           <Button
             size="sm"
             variant="outline"
+            disabled={upgrading}
             onClick={() => {
               if (!scope.isCurrent()) return
               if (!window.confirm(`Delete ${agent.name}?`)) return
@@ -174,7 +182,7 @@ export function AgentSettingsPage() {
         </p>
       ) : null}
       {isCreator || isOrgAdmin ? (
-        <Button onClick={() => save.mutate()} disabled={save.isPending}>
+        <Button onClick={() => save.mutate()} disabled={save.isPending || upgrading}>
           Save
         </Button>
       ) : (
