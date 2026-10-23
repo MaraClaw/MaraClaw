@@ -463,7 +463,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
-    assert run_kwargs["publish"] == [(agent.container_port, settings.OPENCLAW_GATEWAY_PORT)]
+    assert run_kwargs["publish"] == [(f"127.0.0.1:{agent.container_port}", settings.OPENCLAW_GATEWAY_PORT)]
     assert run_kwargs["restart"] == "unless-stopped"
     assert run_kwargs["labels"] == {
         "maraclaw.agent_id": str(agent.id),

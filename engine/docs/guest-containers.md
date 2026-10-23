@@ -84,6 +84,14 @@ reserves and unlimited-external-allocation refusal remain unchanged.
 
 ## Ports And Durable Failures
 
+New and replacement guests publish their gateway port on host `127.0.0.1`
+only. Inside the Docker network, the gateway retains `bind: lan` and token
+authentication so the engine can reach it by container name. OpenClaw's generic
+non-loopback warning still appears because it checks the in-container bind
+address, not authentication or Docker's host binding. Existing guests retain
+their original published binding until explicitly recreated; this does not
+restart or modify running guests automatically.
+
 [Port allocation](../app/services/guest_ports.py) prefers the persisted port when
 it is in the inclusive `18789..28788` range, then uses distinct random candidates.
 There are at most **eight total creation attempts**, not eight retries after the

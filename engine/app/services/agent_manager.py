@@ -676,7 +676,7 @@ class AgentManager:
                     name=guest_container_name(agent.id),
                     entrypoint="tini",
                     networks=[settings.DOCKER_NETWORK],
-                    publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
+                    publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
                     volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
                     envs=container_envs,
                     restart="unless-stopped",

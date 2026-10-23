@@ -21,26 +21,24 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
   deleteLlmModel,
-  getChatGPTSubscriptionStatus,
   getGrokSubscriptionStatus,
   listLlmModels,
   listLlmProviders,
   setDefaultLlmModel,
   setFallbackLlmModel,
   setSecondaryLlmModel,
-  startChatGPTSubscription,
   startGrokSubscription,
   testLlmModel,
   updateLlmModel,
   reasoningEffortLabel,
   reasoningEffortsFor,
   withKnownProviders,
-  type ChatGPTSubscriptionStart,
   type GrokSubscriptionStart,
   type LlmModel,
 } from '@/lib/llm-models-api'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
+import { ChatGPTSubscriptionCard } from '@/pages/chatgpt-subscription-card'
 
 const schema = z.object({
   provider: z.string().min(1, 'Choose a provider'),
@@ -271,7 +269,7 @@ export function LlmModelsPage() {
       ) : null}
 
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
-      <ChatGPTSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
+      <ChatGPTSubscriptionCard key={tenantId} tenantId={tenantId} platformAdmin={platformAdmin} />
       <p className="text-sm text-muted-foreground">
         A company can connect both subscriptions. Tokens stay on the server for each one.
       </p>
@@ -523,117 +521,6 @@ function GrokSubscriptionCard({
           >
             {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
             {pending ? 'Waiting for Grok' : 'Connect Grok subscription'}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ChatGPTSubscriptionCard({
-  tenantId,
-  platformAdmin,
-}: {
-  tenantId: string
-  platformAdmin: boolean
-}) {
-  const queryClient = useQueryClient()
-  const isCurrent = useSessionCurrent()
-  const [session, setSession] = useState<ChatGPTSubscriptionStart | null>(null)
-  const [startError, setStartError] = useState<string | null>(null)
-
-  const start = useMutation({
-    mutationFn: () => startChatGPTSubscription(platformAdmin ? tenantId : undefined),
-    onSuccess: (started) => {
-      setSession(started)
-      setStartError(null)
-    },
-    onError: (error) => {
-      if (error instanceof ApiError) {
-        if (error.status === 403) {
-          setStartError('Only an organization admin can connect a ChatGPT subscription.')
-          return
-        }
-        setStartError(formatApiDetail(error.detail) ?? 'Could not start ChatGPT sign-in.')
-        return
-      }
-      setStartError('Could not start ChatGPT sign-in. Check your connection and try again.')
-    },
-  })
-
-  const status = useQuery({
-    queryKey: ['admin-chatgpt-subscription', session?.session_id],
-    queryFn: ({ signal }) => getChatGPTSubscriptionStatus(session?.session_id ?? '', signal),
-    enabled: Boolean(session?.session_id),
-    refetchInterval: (query) => {
-      const current = query.state.data?.status
-      if (!current || current === 'pending') {
-        return Math.max((session?.interval ?? 5) * 1000, 2000)
-      }
-      return false
-    },
-  })
-
-  useEffect(() => {
-    if (!isCurrent() || status.data?.status !== 'authorized') return
-    void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-    toast.success('ChatGPT subscription connected. It is in the company pool.')
-    setSession(null)
-  }, [status.data?.status, queryClient, isCurrent])
-
-  const pending = session && (status.data?.status ?? 'pending') === 'pending'
-  const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Connect ChatGPT subscription</CardTitle>
-        <CardDescription>
-          Sign in with ChatGPT Plus, Pro, or Team. Enable device-code authorization in ChatGPT →
-          Settings → Security first. Team and workspace admins turn it on in ChatGPT workspace
-          Security. The verification code is shown here; access tokens stay on the server and are
-          stored encrypted for this company.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {pending && session ? (
-          <div className="grid gap-2 text-sm">
-            <p>
-              Open{' '}
-              <a
-                className="font-medium text-primary underline underline-offset-4"
-                href={session.verification_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {session.verification_url}
-              </a>
-            </p>
-            <p>
-              Enter code{' '}
-              <span className="font-mono text-base tracking-wide">{session.user_code}</span>
-            </p>
-            <p className="text-muted-foreground">Waiting for sign-in…</p>
-          </div>
-        ) : null}
-        {failed ? (
-          <p className="text-sm text-destructive" role="alert">
-            {status.data?.detail || 'ChatGPT sign-in did not complete. Start again.'}
-          </p>
-        ) : null}
-        {startError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {startError}
-          </p>
-        ) : null}
-        <div>
-          <Button
-            type="button"
-            disabled={start.isPending || !tenantId || Boolean(pending)}
-            onClick={() => start.mutate()}
-          >
-            {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-            {pending ? 'Waiting for ChatGPT' : 'Connect ChatGPT subscription'}
           </Button>
         </div>
       </CardContent>

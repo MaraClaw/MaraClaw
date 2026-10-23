@@ -28,6 +28,8 @@ class ShadowsocksProxy:
             logger.info("[Proxy] ss-local not found - Discord proxy disabled")
             return
         nodes = await self._nodes()
+        if not nodes:
+            return
         for node in nodes:
             try:
                 config: JsonObject = {

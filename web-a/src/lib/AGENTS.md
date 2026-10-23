@@ -22,7 +22,8 @@ Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 | `users-api.ts` | list/detail/activate members + OA + PA. `asAdminUser` / `setOrgAdminActive` flatten into `AdminUser` + `source`. |
 | `departments-api.ts` | `GET/POST /api/departments`, `PUT /api/users/{id}/department`. Always sends `tenant_id`; tenant-local directory only. Provider organization sync is retired. |
 | `linkup-keys-api.ts` | PA list/add/remove Linkup keys. Response is fingerprint, never plaintext. |
-| `llm-models-api.ts` | Org/platform admin LLM pool. Keys only on write; list returns `api_key_masked`. `withKnownProviders` always includes Grok. Grok and ChatGPT subscription start/status never accept or return tokens. |
+| `llm-models-api.ts` | Org/platform admin LLM pool. Keys only on write; list returns `api_key_masked`. `withKnownProviders` always includes Grok. Grok subscription retains device-code start/status. |
+| `chatgpt-subscription-api.ts` | Validated browser sign-in start (`attempt_id`, `authorization_url`, `redirect_uri`, `expires_in`), complete and read-only status. Optional start `tenant_id`; complete sends `{attempt_id, callback_url}` only in its POST body; status sends only `attempt_id`. No tokens. Errors discard potentially sensitive echoed details. |
 | `search-analytics-api.ts` | PA summary / timeseries / orgs / trending / export. |
 | `admin-audit-api.ts` | Validated recent audit logs: PA `/api/admin/audit-logs`, OA `/api/users/admin-audit-logs`. |
 | `admissions-api.ts` | Review pagination, detail and decisions via `/api/company-admissions`; Zod DTOs. |

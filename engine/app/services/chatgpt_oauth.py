@@ -1,16 +1,10 @@
-"""Simulatable ChatGPT / Codex device-code + refresh client.
-
-Talks to auth.openai.com using the Codex CLI public client. Device-code is
-not RFC 8628: JSON bodies, 403/404 mean still pending, and the server
-returns PKCE material that is exchanged at the ordinary token endpoint.
-Tests inject a transport; production uses httpx and never hits OpenAI in CI.
-"""
+"""Direct-HTTP ChatGPT authorization-code exchange and refresh client."""
 
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 import httpx
 
@@ -23,18 +17,10 @@ from app.core.json_types import (
     json_value_from_response,
 )
 
-# Shared Codex CLI / OpenClaw public client. OpenAI decides which ChatGPT
-# plans can receive OAuth tokens; device-code must be enabled in ChatGPT
-# Security settings before a code can be approved.
 OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_OAUTH_ISSUER = "https://auth.openai.com"
-OPENAI_USERCODE_URL = f"{OPENAI_OAUTH_ISSUER}/api/accounts/deviceauth/usercode"
-OPENAI_DEVICE_POLL_URL = f"{OPENAI_OAUTH_ISSUER}/api/accounts/deviceauth/token"
 OPENAI_TOKEN_URL = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
-OPENAI_USERINFO_URL = f"{OPENAI_OAUTH_ISSUER}/api/accounts/oauth/userinfo"
-OPENAI_VERIFICATION_URL = f"{OPENAI_OAUTH_ISSUER}/codex/device"
-OPENAI_DEVICE_REDIRECT_URI = f"{OPENAI_OAUTH_ISSUER}/deviceauth/callback"
-OPENAI_DEVICE_EXPIRES_IN = 900
+OPENAI_REDIRECT_URI = "http://localhost:1455/auth/callback"
 CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_CLIENT_VERSION = "0.145.0"
 
@@ -52,35 +38,16 @@ def codex_request_headers(account_id: str) -> dict[str, str]:
 
 
 class ChatGPTOAuthTransport(Protocol):
-    """HTTP boundary for device-code JSON posts and token form posts."""
-
-    async def post_json(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
-        """POST application/json. Return status + JSON object."""
-        raise NotImplementedError
+    """HTTP boundary for token form posts."""
 
     async def post_form(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
         """POST application/x-www-form-urlencoded. Return status + JSON object."""
         raise NotImplementedError
 
-    async def get_json(self, url: str, headers: dict[str, str]) -> tuple[int, JsonObject]:
-        """GET JSON. Return status + JSON object."""
-        raise NotImplementedError
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceCodeChallenge:
-    """Human-facing device-code challenge plus the secret device_auth_id."""
-
-    device_auth_id: str
-    user_code: str
-    verification_url: str
-    expires_in: int
-    interval: int
-
 
 @dataclass(frozen=True, slots=True)
 class ChatGPTOAuthTokens:
-    """Tokens from a successful device-code exchange or refresh."""
+    """Tokens from a successful authorization-code exchange or refresh."""
 
     access_token: str
     refresh_token: str
@@ -93,12 +60,11 @@ class ChatGPTOAuthTokens:
 
 @dataclass(frozen=True, slots=True)
 class TokenPoll:
-    """Outcome of one device poll, code exchange, or refresh call."""
+    """Outcome of one code exchange or refresh call; name retained for refresh consumers."""
 
-    status: str
+    status: Literal["authorized", "expired", "denied", "error"]
     tokens: ChatGPTOAuthTokens | None = None
     error: str | None = None
-    interval: int | None = None
 
 
 class HttpxChatGPTOAuthTransport:
@@ -107,17 +73,8 @@ class HttpxChatGPTOAuthTransport:
     def __init__(self, *, timeout: float = 20.0) -> None:
         self._timeout: float = timeout
 
-    async def post_json(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
-            response = await client.post(
-                url,
-                json=data,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-            )
-            return response.status_code, _json_body(response)
-
     async def post_form(self, url: str, data: dict[str, str]) -> tuple[int, JsonObject]:
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
             response = await client.post(
                 url,
                 data=data,
@@ -126,11 +83,6 @@ class HttpxChatGPTOAuthTransport:
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             )
-            return response.status_code, _json_body(response)
-
-    async def get_json(self, url: str, headers: dict[str, str]) -> tuple[int, JsonObject]:
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
-            response = await client.get(url, headers={"Accept": "application/json", **headers})
             return response.status_code, _json_body(response)
 
 
@@ -155,21 +107,7 @@ def _json_body(response: httpx.Response) -> JsonObject:
         parsed = None
     if isinstance(parsed, dict):
         return json_object_from(parsed)
-    if response.text:
-        return {"error": response.text[:300]}
     return body
-
-
-def _as_int(value: object, default: int) -> int:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    text = json_as_str(value)
-    if text in (None, ""):
-        return default
-    try:
-        return int(text.strip())
-    except ValueError:
-        return default
 
 
 def account_id_from_jwt(token: str) -> str:
@@ -195,28 +133,6 @@ def account_id_from_jwt(token: str) -> str:
     return ""
 
 
-def parse_device_code_response(status: int, payload: JsonObject) -> DeviceCodeChallenge:
-    """Parse a Codex usercode start response. Raises ValueError on failure."""
-    if status >= 400:
-        detail = (
-            json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device code failed"
-        )
-        raise ValueError(detail)
-    device_auth_id = json_as_str(payload.get("device_auth_id")) or ""
-    user_code = json_as_str(payload.get("user_code")) or json_as_str(payload.get("usercode")) or ""
-    if not device_auth_id or not user_code:
-        raise ValueError("ChatGPT device-code response missing device_auth_id or user_code")
-    expires_in = _as_int(payload.get("expires_in"), OPENAI_DEVICE_EXPIRES_IN)
-    interval = _as_int(payload.get("interval"), 5)
-    return DeviceCodeChallenge(
-        device_auth_id=device_auth_id,
-        user_code=user_code,
-        verification_url=OPENAI_VERIFICATION_URL,
-        expires_in=max(expires_in, 30),
-        interval=max(interval, 1),
-    )
-
-
 def parse_token_payload(payload: JsonObject) -> ChatGPTOAuthTokens:
     access = json_as_str(payload.get("access_token")) or ""
     if not access:
@@ -234,69 +150,20 @@ def parse_token_payload(payload: JsonObject) -> ChatGPTOAuthTokens:
     )
 
 
-def interpret_token_response(status: int, payload: JsonObject, *, default_interval: int = 5) -> TokenPoll:
-    """Map a token-endpoint poll or refresh onto a TokenPoll."""
-    if status < 400:
+def interpret_token_response(status: int, payload: JsonObject) -> TokenPoll:
+    """Map the provider response without returning provider prose or credentials."""
+    if 200 <= status < 300:
         try:
             return TokenPoll(status="authorized", tokens=parse_token_payload(payload))
-        except ValueError as exc:
-            return TokenPoll(status="error", error=str(exc))
+        except ValueError:
+            return TokenPoll(status="error", error="Invalid ChatGPT token response")
 
     error = json_as_str(payload.get("error")) or ""
-    description = json_as_str(payload.get("error_description")) or error or "token request failed"
-    if error == "authorization_pending":
-        return TokenPoll(status="pending", interval=default_interval)
-    if error == "slow_down":
-        return TokenPoll(status="pending", interval=default_interval + 5)
     if error == "access_denied":
-        return TokenPoll(status="denied", error=description)
+        return TokenPoll(status="denied", error="ChatGPT authorization was denied")
     if error in {"expired_token", "invalid_grant"}:
-        return TokenPoll(status="expired", error=description)
-    return TokenPoll(status="error", error=description)
-
-
-def interpret_device_poll(status: int, payload: JsonObject, *, default_interval: int = 5) -> TokenPoll:
-    """Map one Codex deviceauth/token poll. 403/404 stay pending."""
-    if status in {403, 404}:
-        return TokenPoll(status="pending", interval=default_interval)
-    if status >= 400:
-        detail = (
-            json_as_str(payload.get("error_description")) or json_as_str(payload.get("error")) or "device auth failed"
-        )
-        return TokenPoll(status="error", error=detail)
-    code = json_as_str(payload.get("authorization_code")) or ""
-    verifier = json_as_str(payload.get("code_verifier")) or ""
-    if not code or not verifier:
-        return TokenPoll(status="error", error="device auth response missing authorization_code")
-    return TokenPoll(status="authorized", tokens=None)
-
-
-async def request_device_code(transport: ChatGPTOAuthTransport | None = None) -> DeviceCodeChallenge:
-    """Start a Codex device-code challenge. This is the shipped start path."""
-    client = transport or get_chatgpt_oauth_transport()
-    status, body = await client.post_json(OPENAI_USERCODE_URL, {"client_id": OPENAI_OAUTH_CLIENT_ID})
-    return parse_device_code_response(status, body)
-
-
-async def poll_device_authorization(
-    device_auth_id: str,
-    user_code: str,
-    *,
-    interval: int = 5,
-    transport: ChatGPTOAuthTransport | None = None,
-) -> TokenPoll:
-    """Poll the Codex deviceauth endpoint once. Does not loop or sleep."""
-    client = transport or get_chatgpt_oauth_transport()
-    status, body = await client.post_json(
-        OPENAI_DEVICE_POLL_URL,
-        {"device_auth_id": device_auth_id, "user_code": user_code},
-    )
-    poll = interpret_device_poll(status, body, default_interval=interval)
-    if poll.status != "authorized":
-        return poll
-    code = json_as_str(body.get("authorization_code")) or ""
-    verifier = json_as_str(body.get("code_verifier")) or ""
-    return await exchange_authorization_code(code, verifier, transport=client)
+        return TokenPoll(status="expired", error="ChatGPT authorization expired; connect again")
+    return TokenPoll(status="error", error="ChatGPT token request failed")
 
 
 async def exchange_authorization_code(
@@ -305,7 +172,7 @@ async def exchange_authorization_code(
     *,
     transport: ChatGPTOAuthTransport | None = None,
 ) -> TokenPoll:
-    """Exchange a server-issued authorization code + PKCE verifier for tokens."""
+    """Exchange a browser authorization code with the original private PKCE verifier."""
     if not authorization_code or not code_verifier:
         return TokenPoll(status="error", error="missing authorization code")
     client = transport or get_chatgpt_oauth_transport()
@@ -314,7 +181,7 @@ async def exchange_authorization_code(
         {
             "grant_type": "authorization_code",
             "code": authorization_code,
-            "redirect_uri": OPENAI_DEVICE_REDIRECT_URI,
+            "redirect_uri": OPENAI_REDIRECT_URI,
             "client_id": OPENAI_OAUTH_CLIENT_ID,
             "code_verifier": code_verifier,
         },
@@ -340,22 +207,3 @@ async def refresh_access_token(
         },
     )
     return interpret_token_response(status, body)
-
-
-async def fetch_userinfo(
-    access_token: str,
-    *,
-    transport: ChatGPTOAuthTransport | None = None,
-) -> TokenPoll:
-    """Prove a ChatGPT access token is live. Used by the admin probe."""
-    if not access_token:
-        return TokenPoll(status="error", error="missing access token")
-    client = transport or get_chatgpt_oauth_transport()
-    status, body = await client.get_json(
-        OPENAI_USERINFO_URL,
-        {"Authorization": f"Bearer {access_token}"},
-    )
-    if status >= 400:
-        detail = json_as_str(body.get("error")) or "ChatGPT userinfo failed"
-        return TokenPoll(status="error", error=detail)
-    return TokenPoll(status="authorized")

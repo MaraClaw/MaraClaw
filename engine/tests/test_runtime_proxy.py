@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,10 @@ class FakeProcess:
 
 
 @pytest.mark.asyncio
-async def test_proxy_retries_reaps_and_removes_secret_files(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("previous_proxy", [None, "existing-proxy"])
+async def test_proxy_retries_reaps_and_removes_secret_files(
+    monkeypatch: pytest.MonkeyPatch, previous_proxy: str | None
+) -> None:
     # Given
     owner = proxy.ShadowsocksProxy()
     processes = [FakeProcess(True), FakeProcess()]
@@ -49,17 +53,114 @@ async def test_proxy_retries_reaps_and_removes_secret_files(monkeypatch: pytest.
     monkeypatch.setattr(proxy.shutil, "which", lambda _: "ss-local")
     monkeypatch.setattr(proxy.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(proxy.asyncio, "sleep", ready)
-    monkeypatch.setenv("DISCORD_PROXY", "existing-proxy")
+    if previous_proxy is None:
+        monkeypatch.delenv("DISCORD_PROXY", raising=False)
+    else:
+        monkeypatch.setenv("DISCORD_PROXY", previous_proxy)
     # When
     await owner.start()
     assert processes[0].reaped
     assert not paths[0].exists()
     assert paths[1].exists()
+    assert proxy.os.environ["DISCORD_PROXY"] == "socks5h://127.0.0.1:1080"
     await owner.stop()
     # Then
     assert processes[1].terminated
     assert processes[1].reaped
     assert not any(path.exists() for path in paths)
+    assert proxy.os.environ.get("DISCORD_PROXY") == previous_proxy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configuration", "expected_warning"),
+    [
+        pytest.param(None, None, id="unconfigured"),
+        pytest.param("[]", None, id="empty-list"),
+        pytest.param('[null, 1, "ignored"]', None, id="non-object-list"),
+        pytest.param(" \n", "Empty node config", id="empty-file"),
+        pytest.param("{", "Failed to parse node config", id="malformed-json"),
+        pytest.param("{}", "Config is not a node list", id="non-list"),
+    ],
+)
+async def test_proxy_skips_without_node_failure_when_no_nodes_are_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, configuration: str | None, expected_warning: str | None
+) -> None:
+    # Given
+    owner = proxy.ShadowsocksProxy()
+    config_path = tmp_path / "nodes.json"
+    if configuration is not None:
+        config_path.write_text(configuration)
+    warnings: list[str] = []
+
+    def record(message: str, *args: object) -> None:
+        warnings.append(message.format(*args))
+
+    async def spawn(*_args: str, **_kwargs: object) -> None:
+        pytest.fail("No child should start without a loaded node")
+
+    monkeypatch.setenv("SS_CONFIG_FILE", str(config_path))
+    monkeypatch.delenv("SS_SERVER", raising=False)
+    monkeypatch.delenv("SS_PASSWORD", raising=False)
+    monkeypatch.setenv("DISCORD_PROXY", "existing-proxy")
+    monkeypatch.setattr(proxy.shutil, "which", lambda _: "ss-local")
+    monkeypatch.setattr(proxy.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(proxy.logger, "warning", record)
+    # When
+    await owner.start()
+    # Then
+    if expected_warning is None:
+        assert warnings == []
+    else:
+        assert len(warnings) == 1
+        assert expected_warning in warnings[0]
+    assert owner.process is None
+    assert owner.config_path is None
+    assert proxy.os.environ["DISCORD_PROXY"] == "existing-proxy"
+
+
+@pytest.mark.asyncio
+async def test_proxy_reports_all_failed_nodes_and_cleans_attempts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given
+    owner = proxy.ShadowsocksProxy()
+    processes = [FakeProcess(True), FakeProcess(True)]
+    paths: list[Path] = []
+    warnings: list[str] = []
+    node = {"server": "host", "port": 443, "password": "secret", "method": "aes-256-gcm"}
+    config_path = tmp_path / "nodes.json"
+    config_path.write_text(json.dumps([{**node, "label": "first"}, {**node, "label": "second"}]))
+
+    def record(message: str, *args: object) -> None:
+        warnings.append(message.format(*args))
+
+    async def spawn(*args: str, **_kwargs: object) -> FakeProcess:
+        paths.append(Path(args[2]))
+        return processes[len(paths) - 1]
+
+    async def ready(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setenv("SS_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("DISCORD_PROXY", "existing-proxy")
+    monkeypatch.setattr(proxy.shutil, "which", lambda _: "ss-local")
+    monkeypatch.setattr(proxy.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(proxy.asyncio, "sleep", ready)
+    monkeypatch.setattr(proxy.logger, "warning", record)
+    # When
+    await owner.start()
+    # Then
+    assert warnings == [
+        "[Proxy] Node first failed: failed node",
+        "[Proxy] Node second failed: failed node",
+        "[Proxy] All SS nodes failed - Discord API calls will run without proxy",
+    ]
+    assert len(paths) == 2
+    assert all(process.reaped for process in processes)
+    assert not any(path.exists() for path in paths)
+    assert owner.process is None
+    assert owner.config_path is None
     assert proxy.os.environ["DISCORD_PROXY"] == "existing-proxy"
 
 
