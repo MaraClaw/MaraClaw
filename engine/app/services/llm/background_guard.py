@@ -10,6 +10,7 @@ from uuid import UUID
 from app.core.logging import logger
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
+from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.token_tracker import TokenUsage
 
 from .base import ToolDefinition
@@ -100,6 +101,12 @@ class BackgroundToolLoop:
                         )
                         return token_limit_message, False, tool_executed
 
+                self.ensure_held()
+                try:
+                    await consume_agent_llm_call(self.agent_id)
+                except QuotaExceeded:
+                    await flush_usage()
+                    raise
                 self.ensure_held()
                 try:
                     response = await client.complete(
