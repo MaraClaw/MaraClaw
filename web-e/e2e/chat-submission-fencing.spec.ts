@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { accept, chatPath, complete, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
+import { accept, chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 import { originalAgent, replacementAgent, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 
 for (const boundary of ['owner', 'conversation', 'agent'] as const) {
@@ -19,7 +19,7 @@ for (const boundary of ['owner', 'conversation', 'agent'] as const) {
         await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
         break
       case 'conversation':
-        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await navigateChat(page, chatPath(secondSession))
         break
       case 'agent':
         await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
@@ -68,7 +68,7 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
         await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
         break
       case 'conversation':
-        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await navigateChat(page, chatPath(secondSession))
         break
       case 'effect recreation':
         chat.setOnboarded(true)
@@ -109,7 +109,7 @@ test('late shared-session ensure cannot navigate or replay across a conversation
   await requested.promise
   await page.getByRole('textbox', { name: `Message ${originalAgent.name}` }).fill('Queued for the shared conversation')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
-  await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+  await navigateChat(page, chatPath(secondSession))
   const current = await chat.socket()
   const finished = page.waitForEvent('requestfinished', { predicate: (request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/sessions') })
   release.resolve()

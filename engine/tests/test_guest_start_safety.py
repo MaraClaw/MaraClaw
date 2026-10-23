@@ -115,7 +115,7 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     assert result == agent.container_id
     run = docker.runs[0]
     assert (run.get("memory"), run.get("memory_swap"), run.get("cpus"), run.get("pids_limit")) == (20, 20, 1.0, 512)
-    assert run["publish"] == [(18888, module.settings.OPENCLAW_GATEWAY_PORT)]
+    assert run["publish"] == [("127.0.0.1:18888", module.settings.OPENCLAW_GATEWAY_PORT)]
     assert docker.listings == []
 
 

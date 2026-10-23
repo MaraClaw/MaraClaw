@@ -139,20 +139,24 @@ for (const width of [390, 1440, 1920]) {
   }
 }
 
-test('initial loading and status errors never mount work, while Settings and Back remain reachable', async ({ page }, testInfo) => {
+for (const tab of ['files', 'chat']) {
+test(`initial loading and status errors never mount ${tab}, while Settings stays reachable`, async ({ page }, testInfo) => {
   // Given
   const state = await prepare(page)
   const statusReady = Promise.withResolvers<void>()
   state.statusReady = statusReady.promise
   // When
-  await page.goto(`${agentPath}/files`)
+  await page.goto(`${agentPath}/${tab}`)
   // Then
   await expect(page.getByRole('heading', { name: 'Agent work is paused' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(tab === 'chat' ? 0 : 1)
+  await expect(page.getByRole('navigation', { name: 'Agent sections', exact: true })).toBeVisible()
   expect(state.fileReads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('loading-gate.png') })
   state.statusError = true
   statusReady.resolve()
   await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(tab === 'chat' ? 0 : 1)
   expect(state.fileReads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('error-gate.png') })
   await page.getByRole('link', { name: 'Open agent Settings' }).click()
@@ -160,6 +164,7 @@ test('initial loading and status errors never mount work, while Settings and Bac
   await expect(page.getByRole('button', { name: 'Retry status check' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible()
 })
+}
 
 test('optional use-only agents allow work before an upgrade but cannot start one', async ({ page }, testInfo) => {
   // Given

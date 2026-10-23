@@ -1,6 +1,6 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, matchPath, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
@@ -9,6 +9,7 @@ import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { ApiError } from '@/lib/http'
 import { canMountAgentOutlet } from '@/lib/openclaw-update-policy'
 import { getAgent } from '@/lib/workspace-api'
+import { cn } from '@/lib/utils'
 
 const tabs = [
   { id: 'chat', to: 'chat', label: 'Chat', icon: 'chat' },
@@ -51,6 +52,13 @@ function AgentsListButton() {
 export function AgentLayout() {
   const { agentId = '' } = useParams()
   const { pathname } = useLocation()
+  const chat = Boolean(matchPath('/app/agents/:agentId/chat/*', pathname))
+  const layoutClass = cn(
+    'grid h-full min-h-0 overflow-hidden md:grid-cols-[6rem_minmax(0,1fr)]',
+    chat ? 'grid-rows-[auto_minmax(0,1fr)] md:grid-rows-1'
+      : 'grid-rows-[auto_auto_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]',
+  )
+  const railClass = cn('md:col-start-1 md:row-start-1', !chat && 'md:row-span-2')
   const update = useOpenClawUpdate(agentId)
   const query = useQuery({
     queryKey: ['agent', agentId],
@@ -63,9 +71,9 @@ export function AgentLayout() {
   if (!query.data) {
     if (query.isLoading) {
       return (
-        <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
-          <div className="space-y-3 p-6 md:col-start-2">
-            <AgentsListButton />
+        <div className={layoutClass}>
+          <div className={cn('min-h-0 min-w-0 space-y-3 p-6 md:col-start-2', chat && 'row-start-2 md:row-start-1')}>
+            {!chat ? <AgentsListButton /> : null}
             <div className="flex h-32 items-center justify-center text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
             </div>
@@ -73,19 +81,22 @@ export function AgentLayout() {
           <SectionRail
             items={tabs}
             label="Agent sections"
-            className="md:col-start-1 md:row-start-1 md:row-span-2"
+            className={railClass}
           />
         </div>
       )
     }
     return (
-      <div className="space-y-3 p-6">
-        <AgentsListButton />
-        <p className="text-sm text-destructive">
-          {query.error instanceof ApiError && query.error.status !== 404
-            ? query.error.message
-            : 'This agent is not available.'}
-        </p>
+      <div className={chat ? layoutClass : 'space-y-3 p-6'}>
+        {chat ? <SectionRail items={tabs} label="Agent sections" className={railClass} /> : null}
+        <div className={chat ? 'min-w-0 space-y-3 p-6 md:col-start-2' : undefined}>
+          {chat ? <Button variant="outline" asChild><Link to="/app/agents">Agents</Link></Button> : <AgentsListButton />}
+          <p className="text-sm text-destructive">
+            {query.error instanceof ApiError && query.error.status !== 404
+              ? query.error.message
+              : 'This agent is not available.'}
+          </p>
+        </div>
       </div>
     )
   }
@@ -93,16 +104,16 @@ export function AgentLayout() {
   const agent = query.data
 
   return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
-      <div className="min-w-0 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
+    <div className={layoutClass}>
+      {!chat ? <div className="min-w-0 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
         <AgentsListButton />
-      </div>
+      </div> : null}
       <SectionRail
         items={tabs}
         label="Agent sections"
-        className="md:col-start-1 md:row-start-1 md:row-span-2"
+        className={railClass}
       />
-      <div className="relative min-h-0 min-w-0 md:col-start-2 md:row-start-2">
+      <div className={cn('relative min-h-0 min-w-0 md:col-start-2', chat ? 'md:row-start-1' : 'md:row-start-2')}>
         <div className="absolute inset-0 overflow-y-auto overscroll-y-contain">
           {canMountAgentOutlet(pathname, update.gate)
             ? <Outlet context={{ agent }} />

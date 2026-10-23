@@ -7,7 +7,7 @@
 #
 # Usage:
 #   DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
-#   OPENCLAW_PUBLISH_IMAGE=youruser/openclaw IMAGE_TAG=2026.10.5 ./publish-openclaw-local-dockerfile.sh
+#   OPENCLAW_PUBLISH_IMAGE=youruser/openclaw IMAGE_TAG=2026.10.6 ./publish-openclaw-local-dockerfile.sh
 #   PUSH_LATEST=1 DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
 #
 # Environment (set in .env or on the command line):
@@ -16,7 +16,7 @@
 #   OPENCLAW_PUBLISH_IMAGE  full repo name          (default: ${DOCKERHUB_NAMESPACE}/openclaw)
 #   IMAGE_TAG               Hub tag                 (default: $OPENCLAW_VERSION)
 #   PUSH_LATEST=1           also tag and push :latest
-#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_*, TENCENTDB_PLUGIN_VERSION, DOCKER_PLATFORM
+#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_*, DOCKER_PLATFORM
 #                           same pins as the local build script
 #
 # Requires an existing `docker login` to Docker Hub. This script does not store credentials.
@@ -36,7 +36,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 LOCAL_IMAGE="${MARACLAW_OPENCLAW_IMAGE:-openclaw:local}"
-OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.5}"
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.6}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64}"
 IMAGE_TAG="${IMAGE_TAG:-$OPENCLAW_VERSION}"
 

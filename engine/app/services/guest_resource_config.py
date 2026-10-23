@@ -33,9 +33,7 @@ _RESOURCE_CONFIG = TypeAdapter(_Resources)
 
 def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
     """Retain guest resources; generated platform records always win."""
-    if not path.exists():
-        return generated
-    previous = _RESOURCE_CONFIG.validate_json(path.read_bytes(), strict=True)
+    previous: _Resources = _RESOURCE_CONFIG.validate_json(path.read_bytes(), strict=True) if path.exists() else {}
     result = generated.copy()
     for section, key, entries in (
         ("mcp", "servers", previous.get("mcp", {}).get("servers", {})),
@@ -48,7 +46,6 @@ def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
         managed = json_object_from(generated.get(section))
         managed_entries = json_object_from(managed.get(key))
         if retained or managed_entries:
-            # Entire platform records win, including Linkup env and TencentDB bootstrap policy.
             result[section] = {**managed, key: {**retained, **managed_entries}}
 
     skill_load = previous.get("skills", {}).get("load", {})
@@ -56,4 +53,13 @@ def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
         skills = json_object_from(result.get("skills"))
         load: JsonObject = {"extraDirs": [*skill_load["extraDirs"]], **json_object_from(skills.get("load"))}
         result["skills"] = {**skills, "load": load}
+
+    if (
+        "memory-tencentdb" in previous.get("plugins", {}).get("entries", {})
+        or (path.parent / "extensions" / "memory-tencentdb").exists()
+    ):
+        # OpenClaw auto-discovers persisted extensions; retain a named tombstone without deleting their data.
+        plugins = json_object_from(result.get("plugins"))
+        entries = json_object_from(plugins.get("entries"))
+        result["plugins"] = {**plugins, "entries": {**entries, "memory-tencentdb": {"enabled": False}}}
     return result

@@ -1,9 +1,8 @@
 ARG OPENCLAW_BASE_IMAGE=node:26.12.1-bookworm-slim
 FROM ${OPENCLAW_BASE_IMAGE}
 
-ARG TENCENTDB_PLUGIN_VERSION=1.0.3
-ARG OPENCLAW_VERSION=2026.10.5
-ARG OPENCLAW_SHA256=sha256:dbb1bdcf2346292e25f672822b6a9928c234909abe6fee0df5fc4556e769d40e
+ARG OPENCLAW_VERSION=2026.10.6
+ARG OPENCLAW_SHA256=sha256:b13fc9f1221e185451573a435ff31bdeb8c5875f569e6f41008198708ca2359f
 ARG TINI_VERSION=0.19.0-1+b3
 ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
 ARG CURL_VERSION=7.88.1-10+deb12u15
@@ -39,68 +38,19 @@ RUN apt-get update \
     && chmod 0755 /usr/local/bin/gog \
     && rm -f /tmp/gogcli.tar.gz /tmp/gogcli.tar.gz.sha256 \
     && gog --version \
-    && mkdir -p /opt/openclaw-plugin-cache \
-    && chown -R node:node /opt/openclaw-plugin-cache \
     && rm -rf /root/.npm
 
-USER node
-RUN npm pack "@tencentdb-agent-memory/memory-tencentdb@${TENCENTDB_PLUGIN_VERSION}" \
-        --pack-destination /opt/openclaw-plugin-cache \
-    && TARBALL="$(find /opt/openclaw-plugin-cache -maxdepth 1 -name '*.tgz' -print -quit)" \
-    && test -n "$TARBALL" \
-    && mv "$TARBALL" /opt/openclaw-plugin-cache/memory-tencentdb.tgz \
-    && sha256sum /opt/openclaw-plugin-cache/memory-tencentdb.tgz \
-        > /opt/openclaw-plugin-cache/memory-tencentdb.tgz.sha256 \
-    && tar -xzf /opt/openclaw-plugin-cache/memory-tencentdb.tgz \
-        -C /opt/openclaw-plugin-cache \
-        package/scripts/openclaw-after-tool-call-messages.patch.sh \
-    && mv /opt/openclaw-plugin-cache/package/scripts/openclaw-after-tool-call-messages.patch.sh \
-        /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh \
-    && rm -rf /opt/openclaw-plugin-cache/package
+COPY --chown=root:root docker/openclaw/patch-openclaw-sqlite-exit.cjs /usr/local/bin/patch-openclaw-sqlite-exit.cjs
+RUN node /usr/local/bin/patch-openclaw-sqlite-exit.cjs "$(npm root --global)/openclaw"
 
-USER root
 COPY --chown=node:node docker/openclaw/bootstrap-officecli.sh /usr/local/bin/bootstrap-officecli.sh
-COPY --chown=node:node docker/openclaw/bootstrap-memory-tencentdb.sh /usr/local/bin/bootstrap-memory-tencentdb.sh
 COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh
-COPY --chown=root:root docker/openclaw/verify-tencentdb-openclaw-patch.sh /usr/local/bin/verify-tencentdb-openclaw-patch.sh
-COPY --chown=root:root docker/openclaw/classify-tencentdb-openclaw-hook.cjs /usr/local/bin/classify-tencentdb-openclaw-hook.cjs
-COPY --chown=root:root docker/openclaw/adapt-tencentdb-patch-discovery.sh /usr/local/bin/adapt-tencentdb-patch-discovery.sh
 RUN chmod 0755 /usr/local/bin/bootstrap-officecli.sh \
-    && chmod 0755 /usr/local/bin/bootstrap-memory-tencentdb.sh \
-    && chmod 0755 /usr/local/bin/validate-gogcli.sh \
-    && chmod 0755 /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh
-RUN chmod 0755 /usr/local/bin/verify-tencentdb-openclaw-patch.sh
-RUN chmod 0755 /usr/local/bin/adapt-tencentdb-patch-discovery.sh
-RUN /usr/local/bin/adapt-tencentdb-patch-discovery.sh /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh
-RUN OPENCLAW_ROOT="$(npm root --global)/openclaw" \
-    && /usr/local/bin/verify-tencentdb-openclaw-patch.sh \
-        "$OPENCLAW_ROOT" \
-        /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh
+    && chmod 0755 /usr/local/bin/validate-gogcli.sh
 
-ENV TENCENTDB_PLUGIN_VERSION=${TENCENTDB_PLUGIN_VERSION} \
-    OPENCLAW_MEMORY_TENCENTDB_ARCHIVE=/opt/openclaw-plugin-cache/memory-tencentdb.tgz \
-    OFFICECLI_SKIP_UPDATE=1 \
+ENV OFFICECLI_SKIP_UPDATE=1 \
     OFFICECLI_NO_AUTO_RESIDENT=1
 
 USER node
-# Warm npm using the exact runtime installer, not a different dependency tree.
-# Only npm's integrity-checked cache survives; no guest state or OfficeCLI is baked.
-RUN set -eu; \
-    for WARM_ATTEMPT in 1 2 3; do \
-        echo "[npm-warmup] attempt=$WARM_ATTEMPT/3" >&2; \
-        if ( \
-            WARM_STATE="$(mktemp -d)" \
-                && trap 'rm -rf "$WARM_STATE"' EXIT \
-                && OPENCLAW_STATE_DIR="$WARM_STATE" npm_config_offline=false \
-                    /usr/local/bin/bootstrap-memory-tencentdb.sh true \
-        ); then \
-            break; \
-        else \
-            WARM_STATUS=$?; \
-            echo "[npm-warmup] attempt=$WARM_ATTEMPT/3 failed status=$WARM_STATUS" >&2; \
-            if [ "$WARM_ATTEMPT" -eq 3 ]; then exit "$WARM_STATUS"; fi; \
-            sleep "$((WARM_ATTEMPT * 5))"; \
-        fi; \
-    done
 ENTRYPOINT ["tini", "-s", "--", "/usr/local/bin/bootstrap-officecli.sh"]
 CMD ["/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway"]

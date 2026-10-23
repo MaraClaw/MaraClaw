@@ -161,7 +161,7 @@ class Settings(BaseSettings):
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"
-    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.5"
+    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.6"
     OPENCLAW_GATEWAY_PORT: int = 18789
     # Trial limits for newly created/replacement guests; never auto-update existing guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
@@ -180,8 +180,6 @@ class Settings(BaseSettings):
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Requeue a gateway message the guest took but has not reported after this many seconds.
     OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
-    OPENCLAW_MEMORY_TENCENTDB_ENABLED: bool = True
-    TENCENTDB_PLUGIN_VERSION: str = "1.0.3"
     GOGCLI_ENABLED: bool = True
     # Seed and default-install vendored ClawSec OpenClaw security skills.
     CLAWSEC_SKILLS_ENABLED: bool = True

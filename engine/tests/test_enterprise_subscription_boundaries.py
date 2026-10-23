@@ -10,7 +10,7 @@ from tests.test_enterprise_transaction_boundaries import _actor, _model, owned_p
 
 from app.dao.user_dao import user_dao
 from app.db import session
-from app.services import chatgpt_subscription, enterprise_llm, grok_subscription, openclaw_hot_cache
+from app.services import enterprise_llm, grok_subscription, openclaw_hot_cache
 
 
 async def test_activation_rollback_preserves_model_cache(monkeypatch, owned_pool):
@@ -32,7 +32,7 @@ async def test_activation_rollback_preserves_model_cache(monkeypatch, owned_pool
         openclaw_hot_cache.cache_drop(cache_key)
 
 
-@pytest.mark.parametrize("service", [grok_subscription, chatgpt_subscription])
+@pytest.mark.parametrize("service", [grok_subscription])
 @pytest.mark.parametrize("has_model", [False, True])
 @pytest.mark.parametrize("outcome", ["revoked", "stale", "cancel", "failure", "success"])
 async def test_device_poll_releases_pool_and_publishes_only_after_commit(
@@ -51,14 +51,9 @@ async def test_device_poll_releases_pool_and_publishes_only_after_commit(
         "expires_at": expires,
         "verification_url": "https://auth.invalid/device",
     }
-    if service is grok_subscription:
-        oauth_session = service.GrokOAuthSession(**common, device_code="device-secret")
-        poll_name = "poll_device_token"
-        status = service.grok_subscription_status
-    else:
-        oauth_session = service.ChatGPTOAuthSession(**common, device_auth_id="device-secret")
-        poll_name = "poll_device_authorization"
-        status = service.chatgpt_subscription_status
+    oauth_session = service.GrokOAuthSession(**common, device_code="device-secret")
+    poll_name = "poll_device_token"
+    status = service.grok_subscription_status
     monkeypatch.setattr(service, "_SESSIONS", {"boundary-test": oauth_session})
     snapshot = model if has_model else None
     current = SimpleNamespace(id="concurrent-model") if outcome == "stale" else snapshot
@@ -108,7 +103,7 @@ async def test_device_poll_releases_pool_and_publishes_only_after_commit(
     assert owned_pool.active == 0
 
 
-@pytest.mark.parametrize("service", [grok_subscription, chatgpt_subscription])
+@pytest.mark.parametrize("service", [grok_subscription])
 @pytest.mark.parametrize("outcome", ["revoked", "cancel", "failure", "success"])
 async def test_device_start_releases_pool_and_rechecks_authority(monkeypatch, owned_pool, service, outcome):
     user = _actor(_model())
@@ -135,11 +130,7 @@ async def test_device_start_releases_pool_and_rechecks_authority(monkeypatch, ow
         )
 
     monkeypatch.setattr(service, "request_device_code", remote)
-    start = (
-        grok_subscription.start_grok_subscription_handoff
-        if service is grok_subscription
-        else chatgpt_subscription.start_chatgpt_subscription_handoff
-    )
+    start = grok_subscription.start_grok_subscription_handoff
     if outcome == "cancel":
         with pytest.raises(asyncio.CancelledError):
             await start(user, None)

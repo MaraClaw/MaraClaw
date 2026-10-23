@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-OFFICECLI_TAG="v1.0.156"
-OFFICECLI_ARM64_SHA256="972198c8db1f992ffd3fec4ecf6694533ecbdbae8da7a021ab513e73ecb2f15c"
+OFFICECLI_TAG="v1.0.158"
+OFFICECLI_ARM64_SHA256="b1d5e74d93a8471a47b037cc7774ac29c559940e226f99b9fdf788966cc395b8"
 OFFICECLI_SKILL_SHA256="c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
 readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_SKILL_SHA256
 
@@ -230,7 +230,6 @@ OFFICECLI_ROOT="$STATE_DIR/.officecli"
 RELEASES_DIR="$OFFICECLI_ROOT/releases"
 CURRENT_LINK="$OFFICECLI_ROOT/current"
 SKILL_LINK="$STATE_DIR/skills/officecli"
-SCRIPT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 STAGE_DIR=""
 TEMPORARY_CURRENT_LINK=""
 
@@ -257,4 +256,4 @@ if [ -L "$CURRENT_LINK" ] && validate_current_release; then
     PATH="$CURRENT_LINK:$PATH"
     export PATH
 fi
-exec "$SCRIPT_DIR/bootstrap-memory-tencentdb.sh" "$@"
+exec "$@"

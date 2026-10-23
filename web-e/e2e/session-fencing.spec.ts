@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { accept, chatPath, complete, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
+import { accept, chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 
 import {
   deferCreation, delayedAgent, originalAgent, originalToken, prepareWorkspace, replacementAgent,
@@ -207,14 +207,14 @@ for (const boundary of ['session', 'owner'] as const) {
     await expect.poll(chat.requests).toBeGreaterThan(before)
     switch (boundary) {
       case 'session':
-        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await navigateChat(page, chatPath(secondSession))
         await expect(page).toHaveURL(chatPath(secondSession))
         break
       case 'owner':
         await writeFromOtherTab(page, replacementToken)
         await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
         await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
-        await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+        await navigateChat(page, chatPath(secondSession, replacementAgent))
         await expect(page).toHaveURL(chatPath(secondSession, replacementAgent))
         break
       default:
@@ -253,7 +253,7 @@ for (const boundary of ['logout', 'session', 'owner'] as const) {
           await expect(page).toHaveURL('/login')
           break
         case 'session':
-          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await navigateChat(page, chatPath(secondSession))
           await expect(page).toHaveURL(chatPath(secondSession))
           await chat.socket()
           break
@@ -261,7 +261,7 @@ for (const boundary of ['logout', 'session', 'owner'] as const) {
           await writeFromOtherTab(page, replacementToken)
           await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
           await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
-          await page.getByRole('button', { name: 'Identity thread 2', exact: true }).click()
+          await navigateChat(page, chatPath(secondSession, replacementAgent))
           await expect(page).toHaveURL(chatPath(secondSession, replacementAgent))
           await expect.poll(() => chat.sockets.at(-1)?.session).toBe(secondSession)
           break

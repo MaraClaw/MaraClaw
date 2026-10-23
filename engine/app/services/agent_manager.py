@@ -58,19 +58,9 @@ from app.services.storage_runtime.base import StorageBackend
 settings = get_settings()
 
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
-TENCENTDB_BOOTSTRAP_MARKER = ".bootstrap-tencentdb-version"
 XAI_OAUTH_PROFILE_ID = "xai:default"
 OPENAI_OAUTH_PROFILE_ID = "openai:default"
 _guest_config_fingerprints: dict[str, str] = {}
-
-
-def tencentdb_plugin_ready(agent_dir: Path) -> bool:
-    """True when guest bootstrap finished installing memory-tencentdb."""
-    marker = agent_dir / TENCENTDB_BOOTSTRAP_MARKER
-    try:
-        return marker.is_file() and bool(marker.read_text(encoding="utf-8").strip())
-    except OSError:
-        return False
 
 
 def guest_provider_id(provider: str) -> str:
@@ -397,7 +387,6 @@ class AgentManager:
         secondary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
         selected: LLMModelRecord | None,
-        agent_dir: Path | None = None,
     ) -> str:
         parts: list[str] = []
         for row in (selected, primary, secondary, fallback):
@@ -409,8 +398,6 @@ class AgentManager:
             )
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
-        if agent_dir is not None:
-            parts.append(f"td:{int(tencentdb_plugin_ready(agent_dir))}")
         return "|".join(parts)
 
     def write_guest_config(
@@ -432,7 +419,6 @@ class AgentManager:
             secondary=secondary,
             fallback=fallback,
             selected=selected,
-            agent_dir=agent_dir,
         )
         path = agent_dir / "openclaw.json"
         if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
@@ -477,10 +463,10 @@ class AgentManager:
         if aliases:
             defaults["models"] = aliases
         defaults["heartbeat"] = heartbeat_block()
-        # Disable native memory search; guests may not have embedding credentials.
         config: JsonObject = {
             "agents": {"defaults": defaults},
-            "memory": {"search": {"enabled": False, "provider": "none"}},
+            "memory": {"search": {"enabled": True, "provider": "none"}},
+            "plugins": {"slots": {"memory": "memory-core"}},
         }
         agent_dir = self._agent_dir(agent.id)
         if agent_dir.exists():
@@ -529,31 +515,6 @@ class AgentManager:
                 },
             },
         }
-
-        # Pinning plugins.slots.memory before the guest has installed the
-        # package makes openclaw.json invalid (gateway never binds, CLI dies).
-        if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED and tencentdb_plugin_ready(agent_dir):
-            config["plugins"] = {
-                "enabled": True,
-                "slots": {
-                    "memory": "memory-tencentdb",
-                    "contextEngine": "memory-tencentdb",
-                },
-                "entries": {
-                    "memory-tencentdb": {
-                        "enabled": True,
-                        "hooks": {
-                            "allowConversationAccess": True,
-                        },
-                        "config": {
-                            "storeBackend": "sqlite",
-                            "offload": {
-                                "enabled": True,
-                            },
-                        },
-                    },
-                },
-            }
 
         return config
 
@@ -627,7 +588,6 @@ class AgentManager:
                 secondary=secondary,
                 fallback=fallback,
                 selected=primary,
-                agent_dir=agent_dir,
             )
             self._ensure_openclaw_workspace_layout(agent_dir)
             gateway_token, _hooks_token = ensure_openclaw_tokens(agent_dir)
@@ -637,10 +597,6 @@ class AgentManager:
                 "OPENCLAW_HOME": "/home/node",
                 "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
                 "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
-                "TENCENTDB_PLUGIN_VERSION": settings.TENCENTDB_PLUGIN_VERSION,
-                "OPENCLAW_MEMORY_TENCENTDB_ENABLED": (
-                    "true" if settings.OPENCLAW_MEMORY_TENCENTDB_ENABLED else "false"
-                ),
                 "MARACLAW_API_BASE": guest_engine_base_url(),
                 **gogcli_envs,
             }
@@ -662,12 +618,10 @@ class AgentManager:
             def run_container(container_port: int) -> Container:
                 return client.run(
                     guest_image,
-                    # Skip OfficeCLI download; a failed refresh restarts the guest
-                    # and SIGKILLs in-flight inbox CLI turns (exit 137).
                     [
                         "-s",
                         "--",
-                        "/usr/local/bin/bootstrap-memory-tencentdb.sh",
+                        "/usr/local/bin/bootstrap-officecli.sh",
                         "/usr/local/bin/validate-gogcli.sh",
                         "openclaw",
                         "gateway",
@@ -676,7 +630,7 @@ class AgentManager:
                     name=guest_container_name(agent.id),
                     entrypoint="tini",
                     networks=[settings.DOCKER_NETWORK],
-                    publish=[(container_port, settings.OPENCLAW_GATEWAY_PORT)],
+                    publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
                     volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
                     envs=container_envs,
                     restart="unless-stopped",

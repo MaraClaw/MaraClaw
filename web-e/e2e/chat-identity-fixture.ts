@@ -13,6 +13,20 @@ export const message = (message_id: string, content: string, role = 'assistant')
   message_id, entry_id: message_id, role, content, created_at: '2030-01-01T00:00:00Z',
 })
 
+export async function navigateChat(page: Page, path: string) {
+  // Exercise BrowserRouter in the same document now that chat has no session picker.
+  const marker = await page.evaluate((path) => {
+    const marker = crypto.randomUUID()
+    document.documentElement.dataset.chatNavigation = marker
+    const state = { ...window.history.state, key: marker, idx: (window.history.state?.idx ?? 0) + 1 }
+    window.history.pushState(state, '', path)
+    window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    return marker
+  }, path)
+  await expect(page).toHaveURL(path)
+  expect(await page.evaluate(() => document.documentElement.dataset.chatNavigation)).toBe(marker)
+}
+
 export async function prepareChat(page: Page, initial: readonly ChatMessage[] = []) {
   await prepareWorkspace(page)
   let history = initial

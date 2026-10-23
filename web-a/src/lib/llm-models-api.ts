@@ -112,9 +112,6 @@ export type GrokSubscriptionStatus = {
   interval?: number | null
 }
 
-export type ChatGPTSubscriptionStart = GrokSubscriptionStart
-export type ChatGPTSubscriptionStatus = GrokSubscriptionStatus
-
 export type LlmModelWrite = {
   provider: string
   model: string
@@ -195,23 +192,6 @@ export async function getGrokSubscriptionStatus(
   const query = new URLSearchParams({ session_id: sessionId })
   return apiRequest<GrokSubscriptionStatus>(
     `/api/enterprise/llm-models/grok-subscription/status?${query.toString()}`,
-    { signal },
-  )
-}
-
-export async function startChatGPTSubscription(tenantId?: string): Promise<ChatGPTSubscriptionStart> {
-  return apiRequest<ChatGPTSubscriptionStart>(
-    `/api/enterprise/llm-models/chatgpt-subscription/start${tenantQuery(tenantId)}`,
-    { method: 'POST' },
-  )
-}
-
-export async function getChatGPTSubscriptionStatus(
-  sessionId: string, signal?: AbortSignal,
-): Promise<ChatGPTSubscriptionStatus> {
-  const query = new URLSearchParams({ session_id: sessionId })
-  return apiRequest<ChatGPTSubscriptionStatus>(
-    `/api/enterprise/llm-models/chatgpt-subscription/status?${query.toString()}`,
     { signal },
   )
 }

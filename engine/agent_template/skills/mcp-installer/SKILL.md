@@ -1,3 +1,8 @@
+---
+name: mcp-installer
+description: Discover and import MCP tools and integrations from Smithery or a public HTTP/SSE endpoint.
+---
+
 # MCP Tool Installer
 
 ## When to Use This Skill

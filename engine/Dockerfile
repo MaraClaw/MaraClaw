@@ -83,17 +83,12 @@ COPY --chown=maraclaw:maraclaw . .
 # Prove firecrawl-anydoc imports and converts in this image (not host-only).
 RUN python /app/scripts/verify_anydoc.py
 
-# SetUID on bwrap for hosts without unprivileged user namespaces (older kernels,
-# user.max_user_namespaces=0). Guest image is Debian 13, but the *host kernel*
-# still governs namespace support. Pair with --unshare-user-try in code.
-# Incompatible with container --security-opt no-new-privileges and Kubernetes
-# allowPrivilegeEscalation=false (those disable setuid elevation).
-# Build with --build-arg BWRAP_SETUID=0 to skip on modern userns-capable hosts.
-ARG BWRAP_SETUID=1
+# Bubblewrap 0.12 rejects setuid execution. Keep it unprivileged even if an
+# upstream package supplies the bit; non-root sandboxing requires host userns.
 RUN chmod +x /app/entrypoint.sh && \
     BWRAP_BIN="$(command -v bwrap)" && \
     test -n "${BWRAP_BIN}" && \
-    if [ "${BWRAP_SETUID}" = "1" ]; then chmod u+s "${BWRAP_BIN}"; fi
+    chmod u-s "${BWRAP_BIN}"
 
 # Note: USER is removed to allow entrypoint.sh to fix permissions of mounted volumes
 # at runtime. The entrypoint script will drop privileges to 'maraclaw' after fixing permissions.

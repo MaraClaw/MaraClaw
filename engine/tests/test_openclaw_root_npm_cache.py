@@ -10,7 +10,6 @@ CLEANUP: Final = "rm -rf /root/.npm"
 VALID_SOURCE: Final = (
     f'USER root\nRUN npm pack "openclaw@${{OPENCLAW_VERSION}}" \\\n'
     f"    && {INSTALL} \\\n"
-    "    && chown -R node:node /opt/openclaw-plugin-cache \\\n"
     f"    && {CLEANUP}\nUSER node\nRUN npm cache verify\n"
 )
 

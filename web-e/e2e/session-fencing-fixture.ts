@@ -94,6 +94,13 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
       case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages`:
         await route.fulfill({ json: [] })
         return
+      case `/api/agents/${originalAgent.id}/openclaw-update`:
+      case `/api/agents/${replacementAgent.id}/openclaw-update`:
+      case `/api/agents/${delayedAgent.id}/openclaw-update`:
+        expect(request.method()).toBe('GET')
+        expect(request.headers().authorization).toBe(`Bearer ${replacing ? switchToken : originalToken}`)
+        await route.fulfill({ json: { notice: null, run: null, required: false, can_upgrade: false } })
+        return
       case `/api/agents/${delayedAgent.id}/sessions`:
         await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })
         return

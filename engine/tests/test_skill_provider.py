@@ -1,5 +1,6 @@
 import base64
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ from fastapi import HTTPException
 
 from app.api import skills
 from app.core.json_types import JsonValue
+from app.services.skill_provider import parse_skill_md_frontmatter
 
 
 class FakeResponse:
@@ -143,6 +145,19 @@ def test_parse_skill_md_frontmatter_defaults_malformed_values() -> None:
     frontmatter = skills._parse_skill_md_frontmatter("---\nname:\n  - Research\ndescription: 3\n---\n# Research")
 
     assert frontmatter == {}
+
+
+def test_mcp_installer_metadata_when_parsing_bundled_template() -> None:
+    # Given
+    template = Path(__file__).resolve().parents[1] / "agent_template" / "skills" / "mcp-installer" / "SKILL.md"
+    content = template.read_text(encoding="utf-8")
+
+    # When
+    frontmatter = parse_skill_md_frontmatter(content)
+
+    # Then
+    assert frontmatter.get("name") == "mcp-installer"
+    assert frontmatter.get("description", "").strip()
 
 
 async def test_fetch_github_directory_preserves_valid_file_payload(monkeypatch: pytest.MonkeyPatch) -> None:

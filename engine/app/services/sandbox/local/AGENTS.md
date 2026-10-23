@@ -18,11 +18,11 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 
 ## Bubblewrap compatibility
 
-- Command uses `--unshare-user-try` and `--unshare-cgroup-try` so older kernels / `user.max_user_namespaces=0` can skip unavailable namespaces without hard-failing.
-- Production Docker image may set setuid on `bwrap` (`BWRAP_SETUID=1`, default) for hosts without unprivileged user namespaces. Guest distro (Debian trixie) does not remove **host kernel** constraints.
-- Setuid bwrap is incompatible with `--security-opt no-new-privileges` and Kubernetes `allowPrivilegeEscalation: false`. Prefer enabling host userns on modern fleets and build with `BWRAP_SETUID=0` when setuid is unnecessary.
-- Docker run must grant `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` (see `start-from-docker.sh`). Without `NET_ADMIN`+`SYS_PTRACE`, non-root setuid bwrap fails with `capset failed: Operation not permitted`.
-- Startup logs bwrap path, mode/setuid, and a short namespace probe; probe failure is a warning only.
+- Command retains `--unshare-user-try` and `--unshare-cgroup-try`; these flags do not bypass the permissions required to create the sandbox.
+- Production pins bubblewrap 0.12, which rejects setuid execution. The image explicitly clears the bit; `BWRAP_SETUID` is no longer a supported build option.
+- Non-root bwrap requires usable host user namespaces. Host kernel/sysctl, seccomp and LSM restrictions still apply; clearing setuid alone does not prove namespace execution works. Do not restore setuid or enable unsafe host fallback to hide a failed probe.
+- Launcher retains `SYS_ADMIN` `SETUID` `SETGID` `SYS_CHROOT` `SETPCAP` `NET_ADMIN` `SYS_PTRACE` and `seccomp=unconfined` (see `start-from-docker.sh`). Validate the actual namespace probe under the intended deployment configuration rather than adding capabilities wholesale.
+- Startup logs bwrap path, mode/setuid, and a short namespace probe; probe failure is a warning only. This probe does not mount `/proc`, unlike the backend's `--proc /proc`; validate a real backend command too. `Can't mount proc on /proc: Operation not permitted` remains a deployment restriction, not permission to remove proc isolation or retry on the host.
 
 ## Proxy env
 
