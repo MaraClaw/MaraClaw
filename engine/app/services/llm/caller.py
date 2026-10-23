@@ -23,6 +23,7 @@ from app.dao.base import as_uuid
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_tool_exec.registry import ToolOutputCallback
+from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.token_tracker import (
     TokenUsage,
     estimate_token_usage_from_chars,
@@ -634,6 +635,15 @@ async def call_llm(
         if side_effect_guard is not None:
             side_effect_guard()
         try:
+            await consume_agent_llm_call(agent_id)
+        except QuotaExceeded as error:
+            if _unsaved_usage.total_tokens > 0:
+                await record_token_usage(agent_id, _unsaved_usage)
+            await client.close()
+            return error.message
+        if side_effect_guard is not None:
+            side_effect_guard()
+        try:
             # Use streaming API for real-time responses
             async def _buffer_chunk(_text: str) -> None:
                 # Final user-facing text must come through finish(content=...).
@@ -1077,7 +1087,10 @@ async def call_agent_llm_with_tools(
     await loop.confirm()
 
     # Try primary model
-    reply, success, primary_tool_executed = await loop.try_model(primary_model)
+    try:
+        reply, success, primary_tool_executed = await loop.try_model(primary_model)
+    except QuotaExceeded as error:
+        return await outcome(error.message, False)
     await loop.confirm()
     if success:
         return await outcome(reply, True)
@@ -1093,7 +1106,10 @@ async def call_agent_llm_with_tools(
 
     # Try fallback model
     logger.info(f"[call_agent_llm_with_tools] Retrying with fallback: {fallback_model.model}")
-    reply2, success2, _fallback_tool_executed = await loop.try_model(fallback_model)
+    try:
+        reply2, success2, _fallback_tool_executed = await loop.try_model(fallback_model)
+    except QuotaExceeded as error:
+        return await outcome(error.message, False)
     if success2:
         return await outcome(reply2, True)
 
