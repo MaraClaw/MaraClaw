@@ -1,10 +1,15 @@
 import uuid
+from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from tests.test_background_llm import BackgroundClient
 
+from app.records.agent import AgentRecord
 from app.services import heartbeat
-from app.services.llm.types import LLMToolCall, ToolPayload
+from app.services.llm.types import LLMResponse, LLMToolCall, ToolPayload
+from test_finish_protocol import _finish_response, _model
 
 
 class _Client:
@@ -102,3 +107,61 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     assert client.closed is True
     assert exception_messages == []
     assert any("completed (0 rounds" in message for message in info_messages)
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+@pytest.mark.parametrize("budget", [0, 1, 2], ids=["already-capped", "midloop-cap", "finish"])
+async def test_daily_quota_charges_each_heartbeat_request_and_skips_when_capped(monkeypatch, path, budget):
+    # Given: both heartbeat entry points share a bounded agent daily budget.
+    from app.dao.agent_dao import agent_dao
+    from app.dao.notification_dao import notification_dao
+
+    tenant_id = uuid.uuid4()
+    model = replace(_model(), tenant_id=tenant_id)
+    agent = AgentRecord(
+        id=uuid.uuid4(), name="Heartbeat", creator_id=uuid.uuid4(), tenant_id=tenant_id, primary_model_id=model.id
+    )
+    finish = _finish_response("done")
+    finish.usage = {"total_tokens": 17}
+    client = BackgroundClient([LLMResponse(content="continue", usage={"total_tokens": 17}), finish])
+    charge = AsyncMock(side_effect=[agent] * budget + [None])
+    usage, activity, execute, notify = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr("app.dao.llm_dao.llm_model_dao.get", AsyncMock(return_value=model))
+    monkeypatch.setattr("app.dao.activity_log_dao.agent_activity_log_dao.list_for_agent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(notification_dao, "list_unread_for_agent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(heartbeat, "get_storage_backend", lambda: SimpleNamespace(exists=AsyncMock(return_value=False)))
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("", "")))
+    monkeypatch.setattr("app.services.agent_tools.get_agent_tools_for_llm", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.agent_tools.execute_tool", execute)
+    monkeypatch.setattr("app.services.llm.create_fresh_llm_client_from_model", AsyncMock(return_value=(model, client)))
+    monkeypatch.setattr("app.services.token_tracker.record_token_usage", usage)
+    monkeypatch.setattr("app.services.activity_logger.log_activity", activity)
+    monkeypatch.setattr(heartbeat, "_notify_oneshot_error", notify)
+    complete = client.complete
+
+    async def charged_complete(**kwargs):
+        assert charge.await_count == len(client.messages_seen) + 1
+        return await complete(**kwargs)
+
+    monkeypatch.setattr(client, "complete", charged_complete)
+
+    # When: the chosen entry point runs until finish or quota denial.
+    if path == "heartbeat":
+        await heartbeat._execute_heartbeat(agent.id)
+    else:
+        reply = await heartbeat.run_agent_oneshot(agent.id, "task")
+        assert reply == ("done" if budget == 2 else "")
+
+    # Then: refused requests never dispatch or post and prior token usage survives.
+    assert len(client.messages_seen) == budget
+    assert charge.await_count == (2 if budget == 2 else budget + 1)
+    assert client.closed
+    assert activity.await_count == int(budget == 2)
+    assert usage.await_count == int(budget > 0)
+    if budget:
+        assert usage.await_args is not None
+        assert usage.await_args.args[1].total_tokens == 17 * budget
+    execute.assert_not_awaited()
+    notify.assert_not_awaited()
