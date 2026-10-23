@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -17,13 +19,16 @@ from app.config import get_settings
 from app.core.security import encrypt_data
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services import agent_manager as agent_manager_module, openclaw_routing
+from app.records.llm import LLMModelRecord
+from app.services import agent_manager as agent_manager_module, openclaw_routing, openclaw_update_exclusion as exclusion
 from app.services.agent_manager import AgentManager, guest_model_ref
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.llm.turn import ModelBundle
+from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 
 
 @pytest.fixture(autouse=True)
-def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     @asynccontextmanager
     async def connection() -> AsyncGenerator[None]:
         yield None
@@ -37,6 +42,86 @@ def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "get_for_agent", get_message)
     monkeypatch.setattr(openclaw_routing, "assert_work_allowed", open_gate)
+    monkeypatch.setattr(exclusion, "assert_no_active_run", open_gate)
+    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+
+
+@pytest.fixture
+def preparation_agent(monkeypatch: pytest.MonkeyPatch) -> AgentRecord:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    model = LLMModelRecord(uuid.uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
+    monkeypatch.setattr(openclaw_routing, "ensure_agent_company_models", AsyncMock(return_value=agent))
+    monkeypatch.setattr(openclaw_routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[]))
+    return agent
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("private path"), ValueError("private config"), RuntimeError("private bug")]
+)
+async def test_config_write_failure_rejects_preparation(preparation_agent, monkeypatch, failure):
+    # Given a synchronous config writer that fails.
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", Mock(side_effect=failure))
+    # When preparing a turn, the failure must not produce a queueable message.
+    with pytest.raises(openclaw_routing.GuestConfigWriteError, match="Guest configuration") as raised:
+        await openclaw_routing.prepare_openclaw_message(agent=preparation_agent, content="hello")
+    # Then the typed boundary retains the private cause without exposing it as retry copy.
+    assert raised.value.__cause__ is failure
+    assert "private" not in str(raised.value)
+
+
+async def test_config_lock_timeout_rejects_preparation(preparation_agent, monkeypatch, tmp_path):
+    # Given a held cutover lock and an exhausted shared acquisition budget.
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
+    writer = Mock()
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", writer)
+    async with setup_workspace_lock(tmp_path / str(preparation_agent.id)):
+        # When preparing a turn behind that cutover.
+        with pytest.raises(openclaw_routing.GuestConfigWriteError) as raised:
+            await openclaw_routing.prepare_openclaw_message(agent=preparation_agent, content="hello")
+    # Then the typed cause records contention and config was never written.
+    assert isinstance(raised.value.__cause__, WorkspaceLockTimeoutError)
+    writer.assert_not_called()
+
+
+async def test_config_recheck_preserves_active_upgrade_error(preparation_agent, monkeypatch):
+    # Given an upgrade that starts between the first check and the locked recheck.
+    monkeypatch.setattr(
+        exclusion, "assert_no_active_run", AsyncMock(side_effect=[None, OpenClawUpdateInProgressError()])
+    )
+    writer = Mock()
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", writer)
+    # When preparing the turn.
+    with pytest.raises(OpenClawUpdateInProgressError):
+        await openclaw_routing.prepare_openclaw_message(agent=preparation_agent, content="hello")
+    # Then the config is untouched, not classified as a generic config failure.
+    writer.assert_not_called()
+
+
+async def test_only_config_write_holds_shared_workspace_lock(preparation_agent, monkeypatch, tmp_path):
+    # Given a real per-agent flock observed during model preparation and the write.
+    agent = preparation_agent
+    lock_dir = tmp_path / "_setup_locks"
+    lock_dir.mkdir()
+    lock_path = lock_dir / f"{agent.id}.lock"
+
+    async def pending(_agent_id):
+        with lock_path.open("a+b") as observer:
+            fcntl.flock(observer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return []
+
+    def write(*_args, **_kwargs):
+        with lock_path.open("a+b") as observer, pytest.raises(BlockingIOError):
+            fcntl.flock(observer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", pending)
+    monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", write)
+    # When preparing a turn.
+    prepared = await openclaw_routing.prepare_openclaw_message(agent=agent, content="hello")
+    # Then the shared fence has ended before the prepared turn reaches its caller.
+    with lock_path.open("a+b") as observer:
+        fcntl.flock(observer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert prepared.content == "hello"
 
 
 def _model(*, name: str, provider: str = "anthropic", key: str = "sk-test") -> Any:
