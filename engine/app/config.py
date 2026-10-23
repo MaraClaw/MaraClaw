@@ -249,9 +249,12 @@ def get_settings() -> Settings:
 
 
 def get_sandbox_config() -> SandboxConfig:
-    """Create SandboxConfig from application settings."""
+    """Create SandboxConfig from application settings.
+
+    Server settings are the operator's own endpoint, so it may reach private addresses.
+    """
     settings = get_settings()
-    return SandboxConfig(
+    config = SandboxConfig(
         type=settings.SANDBOX_TYPE,
         enabled=True,
         api_key=settings.SANDBOX_API_KEY,
@@ -268,3 +271,4 @@ def get_sandbox_config() -> SandboxConfig:
         https_proxy=settings.SANDBOX_HTTPS_PROXY or None,
         no_proxy=settings.SANDBOX_NO_PROXY or None,
     )
+    return config.grant_operator_endpoint()

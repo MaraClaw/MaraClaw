@@ -15,10 +15,18 @@ from app.core.tool_types import ToolConfigSchema
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.services.tool_config import get_tenant_tool_config
+from app.services.tool_runtime.provenance import ConfigLayer, merge_layers
 
 SENSITIVE_FIELD_KEYS = {"api_key", "private_key", "auth_code", "password", "secret", "atlassian_api_key"}
 _tool_config_cache: dict[tuple[str | None, str], tuple[JsonObject, datetime]] = {}
 _TOOL_CONFIG_CACHE_TTL_SECONDS = 60
+
+
+class ToolConfigDecryptionError(ValueError):
+    """Stored tool credentials could not be decrypted; deliberately carries no detail."""
+
+    def __init__(self) -> None:
+        super().__init__("Tool configuration credentials could not be decrypted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +132,26 @@ def set_cached_tool_config(
     cache_store[cache_key] = (config, timestamp + timedelta(seconds=ttl))
 
 
+def _decrypt_layer(
+    dependencies: ToolConfigDependencies, config: JsonObject, schema: ToolConfigSchema | None
+) -> JsonObject:
+    try:
+        return dependencies.decrypt_sensitive_fields(config, schema)
+    except ValueError:
+        raise ToolConfigDecryptionError from None
+
+
+async def _tenant_layer(tenant_id: uuid.UUID | None, tool_name: str, schema: ToolConfigSchema | None) -> JsonObject:
+    try:
+        return await get_tenant_tool_config(tenant_id, tool_name, schema)
+    except ValueError:
+        raise ToolConfigDecryptionError from None
+
+
+def _global_layer(source: object) -> ConfigLayer:
+    return ConfigLayer.BUILTIN_GLOBAL if source == "builtin" else ConfigLayer.CUSTOM_GLOBAL
+
+
 async def get_tool_config(
     agent_id: uuid.UUID | None,
     tool_name: str,
@@ -149,12 +177,14 @@ async def get_tool_config(
             tenant_config: JsonObject = {}
             schema = _as_tool_config_schema(tool_fields["config_schema"])
             if tool_fields["source"] == "builtin":
-                tenant_config = await get_tenant_tool_config(agent_tenant_id, tool_fields["name"], schema)
-            merged: JsonObject = {
-                **dependencies.decrypt_sensitive_fields(global_config, schema),
-                **tenant_config,
-                **dependencies.decrypt_sensitive_fields(agent_config, schema),
-            }
+                tenant_config = await _tenant_layer(agent_tenant_id, tool_fields["name"], schema)
+            merged = merge_layers(
+                [
+                    (_global_layer(tool_fields["source"]), _decrypt_layer(dependencies, global_config, schema)),
+                    (ConfigLayer.TENANT, tenant_config),
+                    (ConfigLayer.AGENT, _decrypt_layer(dependencies, agent_config, schema)),
+                ]
+            )
             if merged:
                 dependencies.set_cached_tool_config(agent_id, tool_name, merged)
                 return merged
@@ -165,8 +195,13 @@ async def get_tool_config(
     tenant_config = {}
     schema = _as_tool_config_schema(tool.config_schema)
     if tool.source == "builtin":
-        tenant_config = await get_tenant_tool_config(agent_tenant_id, tool.name, schema)
-    merged = {**dependencies.decrypt_sensitive_fields(json_object_from(tool.config), schema), **tenant_config}
+        tenant_config = await _tenant_layer(agent_tenant_id, tool.name, schema)
+    merged = merge_layers(
+        [
+            (_global_layer(tool.source), _decrypt_layer(dependencies, json_object_from(tool.config), schema)),
+            (ConfigLayer.TENANT, tenant_config),
+        ]
+    )
     if not merged:
         return None
     dependencies.set_cached_tool_config(agent_id, tool_name, merged)
