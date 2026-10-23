@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 
 const ICON_NAMES = [
   'overview',
+  'notifications',
   'companies',
   'search',
   'users',

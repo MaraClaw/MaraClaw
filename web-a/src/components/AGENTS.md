@@ -17,7 +17,7 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 | Primitives | `ui/{badge,button,card,input,label,password-field,select,separator}.tsx` |
 | Shells | `layout/admin-shell.tsx`: protected nav + `Outlet`; `layout/auth-shell.tsx`: forgot/reset chrome (login has its own) |
 | Navigation | `layout/nav-icon.tsx`: active/inactive assets; `layout/section-rail.tsx`: route links or local selection |
-| Notifications | `layout/notification-bell.tsx`: shared Inbox bell for desktop/mobile navigation |
+| Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
 | Company UI | `companies/create-company-form.tsx`: company + genesis OA; `companies/company-status-icon.tsx`: active/disabled state |
 | User rows | `users/user-card.tsx`: linked row, toggle action and slots; page owns role/toggle policy |
 | Brand | `brand/maraclaw-logo.tsx`: `MaraClawLogo`; `brand/maraclaw-mark.tsx`: public SVG mark |
