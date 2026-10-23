@@ -348,6 +348,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return [AgentRecord.from_row(row) for row in rows]
 
+    async def clear_missing_stopped_container(self, agent_id: UUID, expected_container_id: str) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agents SET container_id = NULL, container_port = NULL, updated_at = NOW() "
+                "WHERE id = %(id)s AND container_id = %(container_id)s AND status = 'stopped' RETURNING id",
+                {"id": agent_id, "container_id": expected_container_id},
+            )
+        memo_drop("agent", agent_id)
+        return row is not None
+
     async def list_all_ids(self) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall("SELECT id FROM agents")

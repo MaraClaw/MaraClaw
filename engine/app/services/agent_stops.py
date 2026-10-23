@@ -9,12 +9,14 @@ from python_on_whales.exceptions import DockerException
 
 from app.api.background_tasks import schedule_background_task
 from app.core.logging import logger
+from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.services.agent_deletion_history import snapshot_task_history
 from app.services.agent_manager import agent_manager
 from app.services.agent_orphans import sweep_orphan_containers
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
+from app.services.guest_identity import GuestOwnershipError
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,11 +33,12 @@ async def _teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
     for snapshot in snapshots:
         agent = snapshot.agent
         try:
-            _ = await agent_manager.remove_container(agent)
-        except (ClientNotFoundError, DockerException, OSError) as exc:
-            logger.warning("Deleted agent container cleanup failed agent_id=%s: %s", agent.id, exc)
-        try:
             async with setup_workspace_lock(agent_manager._agent_dir(agent.id)):
+                # Under the lock an in-flight OpenClaw cutover has already published or rolled back.
+                try:
+                    _ = await agent_manager.remove_container(agent)
+                except (ClientNotFoundError, DockerException, GuestOwnershipError, OSError) as exc:
+                    logger.warning("Deleted agent container cleanup failed agent_id=%s: %s", agent.id, exc)
                 archive_dir = await agent_manager.archive_agent_files(agent.id)
                 if snapshot.task_history is not None:
                     _ = await AsyncPath(archive_dir / "task_history.json").write_text(
@@ -54,12 +57,24 @@ def schedule_agent_teardown(snapshots: Sequence[AgentTeardown]) -> None:
         schedule_background_task(teardown_deleted_agents(snapshots), description="teardown deleted agents")
 
 
+async def _stop_and_persist_missing_container(current: AgentRecord, container_id: str) -> None:
+    stopped = await agent_manager.stop_container(current)
+    if stopped and current.container_id is None:
+        _ = await agent_dao.clear_missing_stopped_container(current.id, container_id)
+
+
 async def stop_containers(agents: Sequence[AgentRecord]) -> None:
     for agent in agents:
         if agent.container_id not in (None, ""):
             try:
-                _ = await agent_manager.stop_container(agent)
-            except (ClientNotFoundError, DockerException, OSError) as exc:
+                # An OpenClaw cutover holds this lock from stop to publication or rollback.
+                async with setup_workspace_lock(agent_manager._agent_dir(agent.id)):
+                    memo_drop("agent", agent.id)
+                    current = await agent_dao.get(agent.id)
+                    if current is None or current.status != "stopped" or current.container_id in (None, ""):
+                        continue
+                    await _stop_and_persist_missing_container(current, current.container_id)
+            except (ClientNotFoundError, DockerException, GuestOwnershipError, OSError) as exc:
                 logger.warning("Agent container stop failed agent_id=%s: %s", agent.id, exc)
 
 

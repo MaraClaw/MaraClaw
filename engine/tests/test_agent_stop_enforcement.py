@@ -4,9 +4,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -31,7 +32,12 @@ from app.services import (
 from app.services.agent_manager import agent_manager
 
 
-def _agent():
+@pytest.fixture(autouse=True)
+def _isolated_workspace_locks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+
+
+def _agent() -> AgentRecord:
     return AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4(), tenant_id=uuid4(), container_id="fake")
 
 
@@ -42,10 +48,12 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
     calls = []
     loop_thread = threading.get_ident()
 
-    def container(name, label, network: str | None = "owned", age=timedelta(minutes=5)):
+    def container(
+        name: str, label: str | None, network: str | None = "owned", age: timedelta = timedelta(minutes=5)
+    ) -> SimpleNamespace:
         return SimpleNamespace(
             id=name,
-            config=SimpleNamespace(labels={"maraclaw.agent_id": label} if label else None),
+            config=SimpleNamespace(labels={"maraclaw.agent_id": label} if bool(label) else None),
             network_settings=SimpleNamespace(networks={network: {}} if network is not None else None),
             created=now - age,
         )
@@ -67,6 +75,10 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
             assert threading.get_ident() != loop_thread
             return listed
 
+        def inspect(self, reference: str) -> SimpleNamespace:
+            assert threading.get_ident() != loop_thread
+            return {"fake": listed[1], "retained": listed[1]}[reference]
+
         def stop(self, container_id, *, time):
             assert threading.get_ident() != loop_thread
             calls.append(("stop", container_id))
@@ -80,6 +92,8 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
     monkeypatch.setattr(agent_dao, "prepare_container_stops", AsyncMock(return_value=[]))
     lookup = AsyncMock(return_value=[existing])
     monkeypatch.setattr(agent_dao, "get_many", lookup)
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=replace(existing, status="stopped")))
+    monkeypatch.setattr(agent_orphans, "assert_no_active_run", AsyncMock())
     await agent_stops.reconcile_stopped_containers(now)
     assert calls == [("stop", "orphan"), ("remove", ["orphan"])]
     assert lookup.await_args is not None
@@ -157,13 +171,21 @@ async def test_gateway_key_sql_rejects_all_persisted_stop_reasons(monkeypatch):
 async def test_disable_stops_only_after_owning_crud_commit(monkeypatch, rollback, scope):
     # Given: the real request transaction owner, with only DB writes and Docker faked.
     agent = _agent()
-    raw = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    commit = AsyncMock()
+    raw = SimpleNamespace(commit=commit, rollback=AsyncMock())
+
+    async def current(agent_id: UUID) -> AgentRecord:
+        assert agent_id == agent.id
+        assert commit.await_count == 1
+        assert session.get_connection() is None
+        return replace(agent, status="stopped")
 
     @asynccontextmanager
     async def connection():
         yield raw
 
     monkeypatch.setattr(session, "get_pool", lambda: SimpleNamespace(connection=connection))
+    monkeypatch.setattr(agent_dao, "get", current)
     monkeypatch.setattr(admin_provisioning, "write_admin_audit", AsyncMock())
     for dao, method, result in (
         (admin_provisioning.user_dao, "update", SimpleNamespace(is_active=False)),
@@ -233,13 +255,25 @@ async def test_actual_docker_stop_runs_off_event_loop(monkeypatch):
     # Given: a harmless synchronous Docker fake that records the executing thread.
     threads = []
     loop_thread = threading.get_ident()
+    agent = _agent()
+    owned = SimpleNamespace(
+        id=agent.container_id,
+        name=f"maraclaw-agent-{agent.id}",
+        config=SimpleNamespace(labels={"maraclaw.agent_id": str(agent.id)}),
+        host_config=SimpleNamespace(port_bindings={}),
+    )
     monkeypatch.setattr(
         agent_manager,
         "docker_client",
-        SimpleNamespace(container=SimpleNamespace(stop=lambda *args, **kwargs: threads.append(threading.get_ident()))),
+        SimpleNamespace(
+            container=SimpleNamespace(
+                inspect=lambda _ref: owned,
+                stop=lambda *args, **kwargs: threads.append(threading.get_ident()),
+            )
+        ),
     )
     # When: using the public async stop API.
-    assert await agent_manager.stop_container(_agent()) is True
+    assert await agent_manager.stop_container(agent) is True
     # Then: blocking Docker work did not execute on the event-loop thread.
     assert len(threads) == 1
     assert threads[0] != loop_thread
@@ -275,6 +309,11 @@ async def test_expired_heartbeat_disabled_container_retries_false_stop_after_com
     events = []
     queries = []
 
+    async def current(agent_id: UUID) -> AgentRecord:
+        assert agent_id == agent.id
+        assert events[-1] == "commit"
+        return replace(agent)
+
     async def fetchall(sql, params=None):
         queries.append(sql)
         if sql.startswith("SELECT tenant_id"):
@@ -301,6 +340,7 @@ async def test_expired_heartbeat_disabled_container_retries_false_stop_after_com
         return next(results)
 
     monkeypatch.setattr(agent_dao, "session", context)
+    monkeypatch.setattr(agent_dao, "get", current)
     monkeypatch.setattr(agent_manager, "stop_container", stop)
     # When: two worker reconciliation passes run without any guest traffic.
     monkeypatch.setattr(agent_manager, "docker_client", None)

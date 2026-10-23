@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import admin as admin_api, tenants as tenants_api, users as users_api
+from app.records.agent import AgentRecord
 from app.services import admin_provisioning as provisioning
 from app.services.tenant_provisioning import AdminEmailTakenError
 
@@ -449,7 +451,14 @@ async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
     tenant_id = uuid.uuid4()
     actor = _user(role="org_admin", tenant_id=tenant_id)
     target = _user(role="member", tenant_id=tenant_id, is_active=True)
-    agent = SimpleNamespace(id=uuid.uuid4(), container_id="abc123", name="Daisy")
+    agent = AgentRecord(
+        id=uuid.uuid4(),
+        container_id="abc123",
+        name="Daisy",
+        creator_id=target.id,
+        tenant_id=tenant_id,
+        status="stopped",
+    )
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
@@ -460,6 +469,7 @@ async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
     disable_schedules = AsyncMock(return_value=1)
     stop_container = AsyncMock(return_value=True)
     monkeypatch.setattr(provisioning.agent_dao, "disable_for_creator", disable_agents)
+    monkeypatch.setattr(provisioning.agent_dao, "get", AsyncMock(return_value=replace(agent)))
     monkeypatch.setattr(provisioning.agent_trigger_dao, "disable_for_creator", disable_triggers)
     monkeypatch.setattr(provisioning.agent_schedule_dao, "disable_for_creator", disable_schedules)
     monkeypatch.setattr("app.services.agent_manager.agent_manager.stop_container", stop_container)
