@@ -6,6 +6,8 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
+from python_on_whales.exceptions import NoSuchContainer
+
 from app.services import openclaw_inbox
 from app.services.openclaw_inbox import (
     guest_engine_base_url,
@@ -15,6 +17,22 @@ from app.services.openclaw_inbox import (
     wake_urls,
     write_maraclaw_sync_skill,
 )
+
+
+class OwnedGuestInspect:
+    def __init__(self, agent_id: uuid.UUID) -> None:
+        self.agent_id = agent_id
+
+    def inspect(self, reference: str) -> SimpleNamespace:
+        name = f"maraclaw-agent-{self.agent_id}"
+        if reference not in ("container-abc", name):
+            raise NoSuchContainer(["docker", "inspect", reference], 1)
+        return SimpleNamespace(
+            id="container-abc",
+            name=name,
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(self.agent_id)}),
+            host_config=SimpleNamespace(port_bindings={}),
+        )
 
 
 def test_guest_engine_base_url_is_docker_alias() -> None:
@@ -48,8 +66,9 @@ async def test_wake_uses_http_hooks_when_reachable(tmp_path, monkeypatch) -> Non
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[object] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -75,8 +94,9 @@ async def test_wake_uses_docker_exec_on_loopback(tmp_path, monkeypatch) -> None:
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[tuple[str, list[str], bool]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -114,8 +134,9 @@ async def test_wake_leaves_pending_when_hooks_refuse(tmp_path, monkeypatch) -> N
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -150,8 +171,9 @@ async def test_wake_starts_guest_gateway_then_hooks(tmp_path, monkeypatch) -> No
     execute_calls: list[list[str]] = []
     started = False
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -199,8 +221,9 @@ async def test_wake_skips_in_guest_hooks_after_recent_econnrefused(tmp_path, mon
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -228,8 +251,9 @@ async def test_http_refuse_still_tries_in_guest_hooks(tmp_path, monkeypatch) -> 
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -259,8 +283,9 @@ async def test_skips_cli_when_inbox_already_reported(tmp_path, monkeypatch) -> N
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):
@@ -299,8 +324,9 @@ async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> N
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
 
-    class FakeDocker:
+    class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
+            super().__init__(agent_id)
             self.container = self
 
         def execute(self, container, argv, stream=False):

@@ -84,6 +84,14 @@ containers. This includes old managed-store containers left running as orphans
 after cutover: known hard limits remain charged, and unlimited allocations still
 fail closed unless accounted. Off-host stores need separate capacity planning.
 
+Engine [guest lifecycle policy](../engine/docs/guest-containers.md) sets defaults
+of 2 GiB memory, 1 CPU and 512 PIDs only for new/replacement guests; existing
+guests are not automatically updated. Optional
+`OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES` defaults to `0` (disabled) and is an
+operator-chosen budget for cooperating engine starts on one host with a shared
+filesystem. It neither chooses a safe host-capacity budget nor replaces the
+deployment admission and unlimited-external-container fail-closed policy above.
+
 `capacity_gib=0` uses daemon memory; a positive value may lower, never raise it.
 There is no fixed 16-GiB cap. With other default pools at two replicas, fixed
 non-API steady limits are **2.75 GiB**: 2 GiB background, 0.5 GiB for four web

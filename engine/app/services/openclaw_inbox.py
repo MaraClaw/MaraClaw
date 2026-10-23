@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.records.agent import AgentRecord
+from app.services.guest_identity import GuestIdentity, guest_container_name as openclaw_container_name, resolve_guest
 from app.services.service_contracts import OpenClawHeartbeat, OpenClawInboxConfig
 
 HOOKS_TOKEN_FILENAME = ".openclaw-hooks-token"  # noqa: S105
@@ -73,10 +74,6 @@ JSON: `{{"message_id": "<id>", "result": "<your reply>"}}`
 def guest_engine_base_url() -> str:
     """URL guests use to reach engine (Docker network alias by default)."""
     return get_settings().OPENCLAW_ENGINE_BASE_URL.rstrip("/")
-
-
-def openclaw_container_name(agent_id: UUID) -> str:
-    return f"maraclaw-agent-{str(agent_id)[:8]}"
 
 
 def _token_file(agent_dir: Path, name: str) -> str:
@@ -162,12 +159,17 @@ def heartbeat_block() -> JsonObject:
     return {"every": block["every"], "prompt": block["prompt"]}
 
 
-def wake_urls(agent: AgentRecord) -> list[str]:
+def wake_urls(agent: AgentRecord, guest: GuestIdentity | None = None) -> list[str]:
     """HTTP fallbacks from the engine container. Never 127.0.0.1 (that is the engine)."""
     port = get_settings().OPENCLAW_GATEWAY_PORT
-    urls = [f"http://{openclaw_container_name(agent.id)}:{port}/hooks/agent"]
+    name = guest.name if guest is not None else openclaw_container_name(agent.id)
+    urls = [f"http://{name}:{port}/hooks/agent"]
     published = getattr(agent, "container_port", None)
-    if isinstance(published, int) and published > 0:
+    if (
+        isinstance(published, int)
+        and published > 0
+        and (guest is None or (f"{port}/tcp", str(published)) in guest.port_bindings)
+    ):
         urls.append(f"http://host.docker.internal:{published}/hooks/agent")
     return urls
 
@@ -223,10 +225,12 @@ def _wake_body(content: str, message_id: UUID | None = None, *, session_key: str
 
 
 def _container_ref(agent: AgentRecord) -> str | None:
-    container_id: object = getattr(agent, "container_id", None)
-    if isinstance(container_id, str) and container_id.strip():
-        return container_id.strip()
-    return openclaw_container_name(agent.id)
+    from app.services.agent_manager import agent_manager
+
+    if agent_manager.docker_client is None:
+        return None
+    guest = resolve_guest(agent_manager.docker_client, agent)
+    return guest.id if guest is not None else None
 
 
 @runtime_checkable
@@ -306,10 +310,17 @@ _HTTP_WAKE_TIMEOUT = httpx.Timeout(1.5, connect=0.25)
 
 async def _http_hooks_wake(agent: AgentRecord, agent_dir: Path, body: WakeBody) -> str | None:
     """POST the guest hooks endpoint from the engine. None means the gateway accepted."""
+    from app.services.agent_manager import agent_manager
+
+    if agent_manager.docker_client is None:
+        return "docker client missing"
+    guest = await run_sync(resolve_guest, agent_manager.docker_client, agent)
+    if guest is None:
+        return "owned guest missing"
     _gateway_token, hooks_token = ensure_openclaw_tokens(agent_dir)
     errors: list[str] = []
     async with httpx.AsyncClient(timeout=_HTTP_WAKE_TIMEOUT) as client:
-        for url in wake_urls(agent):
+        for url in wake_urls(agent, guest):
             try:
                 response = await client.post(
                     url,

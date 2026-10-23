@@ -2,7 +2,9 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
+
+from python_on_whales.exceptions import NoSuchContainer
 
 from app.config import Settings
 from app.records.agent import AgentRecord
@@ -29,6 +31,13 @@ class RecordingContainerApi:
         self.inspect_calls.append(container_id)
         if self.inspect_error is not None:
             raise self.inspect_error
+        if self.inspect_result is None:
+            raise NoSuchContainer(["docker", "inspect", container_id], 1)
+        if hasattr(self.inspect_result, "id") and container_id not in (
+            self.inspect_result.id,
+            self.inspect_result.name,
+        ):
+            raise NoSuchContainer(["docker", "inspect", container_id], 1)
         return self.inspect_result
 
     def stop(self, container_id, **kwargs):
@@ -391,7 +400,14 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     manager = AgentManager.__new__(AgentManager)
-    docker_client = RecordingDockerClient()
+    docker_client = RecordingDockerClient(
+        inspect_result=SimpleNamespace(
+            id="stale-container",
+            name=f"maraclaw-agent-{str(agent_id)[:8]}",
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(agent_id)}),
+            host_config=SimpleNamespace(port_bindings={}),
+        )
+    )
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
     async def materialize_agent_dir(requested_agent_id):
@@ -437,7 +453,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert docker_client.container.stop_calls
     assert docker_client.container.remove_calls
     assert run_kwargs["detach"] is True
-    assert run_kwargs["name"] == f"maraclaw-agent-{str(agent.id)[:8]}"
+    assert run_kwargs["name"] == f"maraclaw-agent-{agent.id}"
     assert run_kwargs["volumes"] == [(str(agent_dir), "/home/node/.openclaw", "rw")]
     assert run_kwargs["envs"]["OPENCLAW_HOME"] == "/home/node"
     assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/.openclaw"
@@ -544,9 +560,18 @@ async def test_stop_container_clears_status_and_container_id_when_container_miss
 
     monkeypatch.setattr(agent_manager_module, "NoSuchContainer", FakeNoSuchContainerError, raising=False)
     manager = AgentManager.__new__(AgentManager)
-    docker_client = RecordingDockerClient(stop_error=FakeNoSuchContainerError("missing"))
+    agent_id = uuid.uuid4()
+    docker_client = RecordingDockerClient(
+        inspect_result=SimpleNamespace(
+            id="missing-container",
+            name="legacy-name",
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(agent_id)}),
+            host_config=SimpleNamespace(port_bindings={}),
+        ),
+        stop_error=FakeNoSuchContainerError("missing"),
+    )
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.status = "running"
 
@@ -567,9 +592,18 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
 
     monkeypatch.setattr(agent_manager_module, "NoSuchContainer", FakeNoSuchContainerError, raising=False)
     manager = AgentManager.__new__(AgentManager)
-    docker_client = RecordingDockerClient(stop_error=FakeNoSuchContainerError("missing"))
+    agent_id = uuid.uuid4()
+    docker_client = RecordingDockerClient(
+        inspect_result=SimpleNamespace(
+            id="missing-container",
+            name="legacy-name",
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(agent_id)}),
+            host_config=SimpleNamespace(port_bindings={}),
+        ),
+        stop_error=FakeNoSuchContainerError("missing"),
+    )
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
-    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent: Any = SimpleNamespace(id=agent_id, name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.container_port = 19876
     agent.status = "running"
@@ -584,12 +618,19 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
     assert docker_client.container.stop_calls == [("missing-container", {"time": 10})]
 
 
-async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_remove():
+async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_remove(monkeypatch):
     # Given
     manager = AgentManager.__new__(AgentManager)
-    docker_client = RecordingDockerClient()
-    manager.docker_client = cast(Any, docker_client)
-    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Running Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent = AgentRecord(id=uuid.uuid4(), name="Running Agent", creator_id=uuid.uuid4())
+    docker_client = RecordingDockerClient(
+        inspect_result=SimpleNamespace(
+            id="running-container",
+            name="legacy-name",
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(agent.id)}),
+            host_config=SimpleNamespace(port_bindings={}),
+        )
+    )
+    monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
     agent.container_id = "running-container"
     agent.container_port = 19876
     agent.status = "running"

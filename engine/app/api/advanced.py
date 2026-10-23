@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
+from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +26,7 @@ from app.services.collaboration import (
     MessageDeliveryResult,
     collaboration_service,
 )
+from app.services.guest_container_status import get_guest_container_status
 
 router = APIRouter(tags=["advanced"])
 
@@ -259,7 +261,7 @@ async def get_agent_metrics(
     # Container status
     from app.services.agent_manager import agent_manager
 
-    container_status = agent_manager.get_container_status(agent)
+    container_status = await to_thread.run_sync(get_guest_container_status, agent_manager, agent)
 
     today_tokens = agent.tokens_used_today or 0
     month_tokens = agent.tokens_used_month or 0

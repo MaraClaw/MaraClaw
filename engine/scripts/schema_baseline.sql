@@ -567,6 +567,7 @@ CREATE TABLE IF NOT EXISTS agents (
     setup_pending BOOLEAN NOT NULL DEFAULT false,
 	container_id VARCHAR(100), 
 	container_port INTEGER, 
+	openclaw_image_id VARCHAR(200),
 	primary_model_id UUID, 
 	secondary_model_id UUID, 
 	fallback_model_id UUID, 

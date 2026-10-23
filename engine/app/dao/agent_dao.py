@@ -41,6 +41,7 @@ _AGENT_COLUMNS = (
     "setup_pending",
     "container_id",
     "container_port",
+    "openclaw_image_id",
     "primary_model_id",
     "secondary_model_id",
     "fallback_model_id",
