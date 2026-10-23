@@ -2,16 +2,22 @@
 
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user
 from app.core.json_types import JsonObject, json_as_str, json_object_from, object_mapping_from
 from app.core.permissions import check_agent_access
-from app.dao.trigger_dao import agent_trigger_dao
+from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.records.user import UserRecord
 from app.schemas.content_response_catalog import OkAcknowledgement
+from app.schemas.trigger_execution import (
+    TriggerExecutionCursor,
+    TriggerExecutionHistoryItem,
+    TriggerExecutionHistoryPage,
+)
 
 router = APIRouter(prefix="/api/agents", tags=["triggers"])
 
@@ -78,6 +84,39 @@ async def list_agent_triggers(
         )
         for t in triggers
     ]
+
+
+@router.get("/{agent_id}/triggers/{trigger_id}/executions", response_model=TriggerExecutionHistoryPage)
+async def get_trigger_executions(
+    agent_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    user: UserRecord = Depends(get_current_user),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: str | None = None,
+) -> TriggerExecutionHistoryPage:
+    _, access_level = await check_agent_access(user, agent_id)
+    if not _can_manage(user, access_level):
+        raise HTTPException(403, "Manage access required")
+    trigger = await agent_trigger_dao.get_for_agent(trigger_id, agent_id)
+    if trigger is None:
+        raise HTTPException(404, "Trigger not found")
+
+    before = None
+    if cursor is not None:
+        try:
+            position = TriggerExecutionCursor.decode(cursor, agent_id, trigger_id)
+        except ValueError:
+            raise HTTPException(400, "Invalid cursor") from None
+        before = (position.created_at, position.id)
+    rows = await trigger_execution_dao.list_history_for_trigger(agent_id, trigger_id, limit=limit + 1, before=before)
+    items = [TriggerExecutionHistoryItem.model_validate(row) for row in rows[:limit]]
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = TriggerExecutionCursor(
+            version=1, agent_id=agent_id, trigger_id=trigger_id, created_at=last.created_at, id=last.id
+        ).encode()
+    return TriggerExecutionHistoryPage(items=items, next_cursor=next_cursor)
 
 
 @router.patch("/{agent_id}/triggers/{trigger_id}", response_model=None)
