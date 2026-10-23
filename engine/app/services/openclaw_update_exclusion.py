@@ -24,12 +24,16 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.openclaw_update_gate import assert_no_active_run
 
+GUEST_WRITE_LOCK_TIMEOUT_SECONDS = 1.0
+
 
 @asynccontextmanager
 async def guest_write_section(agent_id: UUID) -> AsyncGenerator[None]:
     """Shared section for code that changes files the guest can see."""
     await assert_no_active_run(agent_id)
-    async with setup_workspace_lock(agent_manager._agent_dir(agent_id), shared=True):
+    async with setup_workspace_lock(
+        agent_manager._agent_dir(agent_id), shared=True, timeout_seconds=GUEST_WRITE_LOCK_TIMEOUT_SECONDS
+    ):
         await assert_no_active_run(agent_id)
         yield
 
