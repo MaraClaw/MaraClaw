@@ -40,7 +40,8 @@ RUN apt-get update \
     && rm -f /tmp/gogcli.tar.gz /tmp/gogcli.tar.gz.sha256 \
     && gog --version \
     && mkdir -p /opt/openclaw-plugin-cache \
-    && chown -R node:node /opt/openclaw-plugin-cache
+    && chown -R node:node /opt/openclaw-plugin-cache \
+    && rm -rf /root/.npm
 
 USER node
 RUN npm pack "@tencentdb-agent-memory/memory-tencentdb@${TENCENTDB_PLUGIN_VERSION}" \
