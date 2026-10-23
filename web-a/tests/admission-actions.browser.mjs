@@ -63,8 +63,41 @@ export async function backToList(h, page, state, history = false) {
   return call
 }
 export async function assertDecided(h, page, id, status) {
+  // Given a completed synthetic decision, inspect the real detail presentation.
   await visible(page.locator('[role="status"]').filter({ hasText: exact(`Request ${status}.`) }))
   await detached(reasonField(page))
   h.verify('successful decision stays on detail', await page.evaluate(() => location.pathname), `/admission-approvals/${id}`)
   h.verify('decided detail cannot be submitted again', await button(page, 'Approve request').count(), 0)
+  // When keyboard navigation returns to the Back link, it remains visibly focused.
+  await page.locator('main a[href="/admission-approvals"]').evaluate((link) => link.focus())
+  await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab')
+  const presentation = await page.evaluate(() => {
+    const link = document.querySelector('main a[href="/admission-approvals"]')
+    const icon = link.querySelector('svg')
+    const badge = document.querySelector('main [data-slot="badge"]')
+    const control = getComputedStyle(link), statusStyle = getComputedStyle(badge)
+    const rect = link.getBoundingClientRect(), iconRect = icon.getBoundingClientRect()
+    const canvas = document.createElement('canvas'), context = canvas.getContext('2d')
+    context.fillStyle = statusStyle.color; context.fillRect(0, 0, 1, 1)
+    return {
+      status: badge.textContent, color: statusStyle.color, background: statusStyle.backgroundColor,
+      rgb: [...context.getImageData(0, 0, 1, 1).data].slice(0, 3),
+      text: link.textContent, slot: link.dataset.slot, width: rect.width, height: rect.height,
+      radius: parseFloat(control.borderTopLeftRadius), border: control.borderTopWidth,
+      alignment: control.alignSelf, decoration: control.textDecorationLine,
+      icon: [icon.getAttribute('aria-hidden'), iconRect.width, iconRect.height],
+      focused: link.matches(':focus-visible'), shadow: control.boxShadow,
+      viewport: innerWidth, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+    }
+  })
+  // Then status meaning and the standard labelled, rounded outline control are preserved.
+  const [red, green, blue] = presentation.rgb
+  h.verify(`${status} detail uses its semantic status color`, status === 'approved' ? green > red * 1.2 && green > blue : red > green * 1.2 && red > blue)
+  h.verify('detail Back retains its visible label', presentation.text, 'Back to admission approvals')
+  h.verify('detail Back uses the shared outline button', [presentation.slot, presentation.border, presentation.alignment, presentation.decoration], ['button', '1px', 'flex-start', 'none'])
+  h.verify('detail Back is a normal rounded rectangle, not an icon circle', presentation.height === 44 && presentation.width > presentation.height * 3 && presentation.radius > 0 && presentation.radius < presentation.height / 2)
+  h.verify('detail Back has a decorative 16px arrow', presentation.icon, ['true', 16, 16])
+  h.verify('detail Back shows a keyboard focus ring', presentation.focused && presentation.shadow !== 'none')
+  if (!h.receipt.detailPresentation) h.receipt.detailPresentation = []
+  h.receipt.detailPresentation.push({ id, ...presentation })
 }

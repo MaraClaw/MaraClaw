@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, type ComponentProps } from 'react'
+import { ArrowLeft } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +14,12 @@ import type { AdmissionSummary } from '@/lib/types/company-admissions'
 import { admissionStatuses } from './admission-labels'
 
 const methods = { invitation: 'Invitation', verified_domain: 'Verified email domain', sso: 'Single sign-on' } satisfies Record<AdmissionSummary['method'], string>
+const statusVariants = {
+  pending: 'outline',
+  approved: 'success',
+  rejected: 'destructive',
+  withdrawn: 'outline',
+} satisfies Record<AdmissionSummary['status'], ComponentProps<typeof Badge>['variant']>
 
 export function AdmissionDetailPage() {
   const { id = '' } = useParams<{ id: string }>()
@@ -64,7 +71,7 @@ function AdmissionDetail({ id }: { readonly id: string }) {
 
   return (
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-      <Link to="/app/admissions" className="inline-flex min-h-11 items-center rounded-lg py-2 text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring">All admission requests</Link>
+      <Button asChild variant="outline"><Link to="/app/admissions"><ArrowLeft aria-hidden="true" className="size-4" />All admission requests</Link></Button>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">{request?.target_tenant.name ?? 'Admission request'}</h1>
         <Button className="h-auto min-h-11 whitespace-normal" variant="outline" disabled={query.isFetching || opening || withdraw.isPending} onClick={scope.effect(() => { void query.refetch() })}>Refresh status</Button>
@@ -75,7 +82,7 @@ function AdmissionDetail({ id }: { readonly id: string }) {
       {request ? (
         <>
           <section aria-label="Admission status" className="space-y-3 rounded-xl border border-border p-4">
-            <Badge variant="outline">{admissionStatuses[request.status].label}</Badge>
+            <Badge variant={statusVariants[request.status]}>{admissionStatuses[request.status].label}</Badge>
             <p className="text-sm text-muted-foreground">{admissionStatuses[request.status].description}</p>
             {request.decision_reason ? <div className="space-y-1"><h2 className="text-sm font-medium">Decision reason</h2><p className="whitespace-pre-wrap text-sm">{request.decision_reason}</p></div> : null}
             {request.status === 'pending' ? <Button variant="outline" className="h-auto min-h-11 whitespace-normal"
