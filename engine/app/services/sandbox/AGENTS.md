@@ -4,7 +4,7 @@ This package is security-sensitive. Keep top-level files limited to public contr
 
 ## Layout
 
-- Top level contains `base.py`, `config.py`, `registry.py`, and `__init__.py` only.
+- Python modules at top level are `base.py`, `config.py`, `registry.py`, and `__init__.py`. Backend subdirectories are `api/`, `local/`, and `remote/`; `AGENTS.md` also lives here.
 - Local implementations belong in `local/`; read `local/AGENTS.md` before changing isolation behavior.
 - API/cloud implementations belong in `api/`; read `api/AGENTS.md` before changing SDK/API backends.
 - Remote/self-hosted implementations belong in `remote/`; read `remote/AGENTS.md` before changing endpoint-driven backends.

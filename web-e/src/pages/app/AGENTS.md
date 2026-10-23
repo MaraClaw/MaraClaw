@@ -1,6 +1,6 @@
 # pages/app/ — member workspace screens
 
-**Generated:** 2026-10-07 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-10-23 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -16,6 +16,7 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/settings` | `settings.tsx` | auth-api (profile, password, SSO bind, tenants/switch) |
 | `/app/admissions`, `/app/admissions/:id` | `admissions.tsx`, `admission-detail.tsx` | company-admissions-api; persisted applicant status; explicit approved workspace entry via auth-api switch/replacement |
 | `/app/notifications` | `notifications.tsx` | workspace-api; remap `/plaza…` → `/app/plaza…` |
+| `/app/updates/:noticeId` | `openclaw-update-detail.tsx` | openclaw-updates-api; route uses `openclawUpdateRoute` from `lib/openclaw-update-policy.ts` |
 | `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
 | `/app/directory` | `directory.tsx` | People/Org Departments icon rail; `?tab=` `?q=`. `org-departments-api` serves org department name cards with org-admin inline rename; `directory-api` serves people from `/api/org/users`. Provider sync and the Synced view are retired |

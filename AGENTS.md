@@ -1,7 +1,7 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-10-20
-**Commit:** 3942af0
+**Generated:** 2026-10-23
+**Commit:** e009080
 **Branch:** 2026Oct
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
@@ -13,26 +13,24 @@ This file is the **repo-level router**. Package contracts live in nested `AGENTS
 
 ## OVERVIEW
 
-Three independently configured packages: FastAPI `engine/` plus two Vite apps, with no root npm workspace. Root `compose.yaml` and `deploy/` own deployment; `.github/workflows/` owns CI. Behavioral truth is `engine/`; frontends are clients.
+Three independently configured packages: FastAPI `engine/` plus two Vite apps, with no root npm workspace. Each package has its own `start-from-docker.sh` launcher. `.github/workflows/` owns CI. Behavioral truth is `engine/`; frontends are clients.
 
 ## Package map
 
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
 | **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.8 | Mature |
-| **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, Take Control) |
-| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, Linkup keys + search analytics |
+| **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, admissions, notifications, Take Control, OpenClaw update notices) |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, tools, broadcast, notifications, activity, admission approvals, OpenClaw updates, Linkup keys + search analytics |
 
 **Rule:** one concern → one package. No admin screens in `web-e`, no marketing in `web-a`, no HTML marketing in `engine`.
 
 ```
-One/
+./
 ├── AGENTS.md           # THIS FILE - cross-package routing
-├── .env.example        # Shared/backend env (mirrors engine)
 ├── engine/             # Backend - read engine/AGENTS.md before edits
 ├── web-e/              # End-user UI (landing + members) - web-e/AGENTS.md
 ├── web-a/              # Admin - web-a/AGENTS.md
-├── deploy/             # Compose launcher, autoscaling, host-service lifecycle
 └── .github/workflows/  # Engine and frontend verification gates
 ```
 
@@ -46,7 +44,6 @@ One/
 | Tenant/platform admin UI | **`web-a/`** | `web-e` |
 | Member product (auth, join, workspace chat) | **`web-e/`** | `web-a` |
 | HTTP/WS, auth, DB, LLM, tools, sandboxes, IM, schema | **`engine/`** | frontends (except clients) |
-| Shared env / secrets template | Root **`.env.example`** and/or `engine/.env.example` | Hardcoded in UI |
 
 Full-stack: engine first (API + schema + tests), then the matching UI. Landing never calls privileged APIs.
 
@@ -62,9 +59,8 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
 | Org department directory | `engine` | `app/api/departments.py`. Org departments remain; provider organization sync is retired. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
-| CORS / API base URL | engine config + consuming app | Root `.env.example` |
-| Compose / autoscaling / host startup | `deploy` | `deploy/AGENTS.md`, root `compose.yaml`, `start-docker-compose.sh` |
-| CI checks / image smoke | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml`, `deploy/smoke_frontend_image.sh` |
+| CORS / API base URL | engine config + consuming app | `engine/.env.example` |
+| CI checks | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml` |
 
 ---
 
@@ -87,9 +83,9 @@ cd engine && ./start-from-docker.sh
 cd engine && uv run --extra dev pytest
 ```
 
-**`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels + Plaza/OKR/directory + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
+**`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels/schedules + Plaza/OKR/directory + admissions + notifications + OpenClaw update notices + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), Tools catalog/MCP/configuration (`/tools`), platform-admin Linkup keys + search analytics (`/search-engine`). Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), Tools catalog/MCP/configuration (`/tools`), platform-admin Linkup keys + search analytics (`/search-engine`), broadcast (`/broadcast`), activity log, admission approvals, notifications, OpenClaw updates (`/openclaw-updates`). Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 
@@ -106,7 +102,7 @@ cd engine && uv run --extra dev pytest
 
 Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed on empty DB). Open registration never becomes `platform_admin`. Genesis OA: platform admin via `POST /api/admin/companies` (or `POST /api/tenants/`). JWT may issue before password change; privileged REST/WS/files 403 until cleared. Details: `engine/docs/admin-apis.md`.
 
-**Env:** backend secrets in engine (+ root `.env.example`). Frontends: public `VITE_*` only. CORS origins live in **engine**. Fresh installs need `PLATFORM_ADMIN_*`.
+**Env:** backend secrets in engine (+ `engine/.env.example`). Frontends: public `VITE_*` only. CORS origins live in **engine**. Fresh installs need `PLATFORM_ADMIN_*`.
 
 **Brand:** **MaraClaw** = product, **OpenClaw** = runtime/guest heritage. Visual source is `web-e` (`MaraClawLogo`, `public/maraclaw-mark.svg`) - do not fork three marks.
 
@@ -119,7 +115,6 @@ Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fai
 | Admin HTTP + genesis | `engine/docs/admin-apis.md` |
 | Admin console | `web-a/AGENTS.md` |
 | End-user UI (landing + members) | `web-e/AGENTS.md` |
-| Deployment / operational safety | `deploy/AGENTS.md` |
 
 Keep this file a router. New domains get a nested `AGENTS.md`, not more root prose.
 
@@ -142,6 +137,6 @@ Keep this file a router. New domains get a nested `AGENTS.md`, not more root pro
 
 ## NOTES
 
-Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage). Frontend CI runs lint, TypeScript, `npm test` (Node runner), build, and final-image smoke. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
+Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage). Frontend CI runs lint, TypeScript, `npm test` (Node runner), build, and Docker build. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
 
 Who is looking, and does it need a secret or privileged role? Public or member → `web-e`. Operator → `web-a`. Data/policy → `engine`.

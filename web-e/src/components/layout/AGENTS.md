@@ -1,6 +1,6 @@
 # layout/ — workspace + marketing chrome
 
-**Generated:** 2026-08-23 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-10-23 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -10,8 +10,9 @@ Workspace + marketing chrome.
 
 | File | Role |
 |------|------|
-| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Settings. Desktop aside + mobile top strip. Inbox badge: `unreadNotificationCount` (30s poll). |
-| `agent-layout.tsx` | Per-agent header + `SectionRail` tabs. `Outlet` context `{ agent }`. Start/stop only when `access_level === 'manage'`. |
+| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Admissions (`/app/admissions`) / Settings. Desktop aside + mobile top strip. Inbox badge: `notificationUnreadOptions('all')`; `hooks/notification-options.ts` owns the 30s poll and calls `unreadNotificationCount` from `lib/notifications-api.ts`. |
+| `agent-layout.tsx` | Per-agent header + `SectionRail` tabs. `Outlet` context `{ agent }`. Management gates live in `pages/app/agent-settings.tsx` (manage access or creator) and `agent-tools.tsx`, `agent-files.tsx`, `agent-pages.tsx` (manage access). Start/stop controls are in `agent-settings.tsx`, not this layout. |
+| `agent-update-gate.tsx` | AgentLayout fallback when the OpenClaw update gate blocks the outlet; shows update/check status, retry on error and a link to agent Settings. Settings stays accessible through the gate. |
 | `section-rail.tsx` | Shared icon rail. Route `to` (agent tabs) or `onSelect` (directory `?tab=`). Smaller than the workspace rail — do not merge. |
 | `onboarding-gate.tsx` | First-run: no agents + status not `completed` + not skipped → `/app/onboarding`. Skip key `maraclaw-onboarding-skipped` (`wasOnboardingSkipped` in workspace-api). |
 | `site-header.tsx` / `site-footer.tsx` | Marketing chrome only. Header `navItems` omit `#enterprise`; footer has it. Known hash mismatch — do not fix one side only. |
