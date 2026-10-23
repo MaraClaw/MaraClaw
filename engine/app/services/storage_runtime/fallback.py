@@ -96,6 +96,17 @@ class FallbackStorageBackend(StorageBackend):
         return await self.fallback.stat(key)
 
     @override
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        version = await self.primary.get_version_bounded(key, max_bytes)
+        if version.exists:
+            return version
+        legacy = await self.fallback.get_version_bounded(key, max_bytes)
+        if not legacy.exists or legacy.is_dir:
+            return legacy
+        await self.read_bytes_bounded(key, max_bytes)
+        return await self.primary.get_version_bounded(key, max_bytes)
+
+    @override
     async def get_version(self, key: str) -> StorageVersion:
         if await self._promote_file(key):
             return await self.primary.get_version(key)

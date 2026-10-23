@@ -53,6 +53,11 @@ from app.services.document_parser import (
     sheets_preview_text,
 )
 from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
+from app.services.file_storage_paths import (
+    agent_storage_key as _agent_storage_key,
+    enterprise_storage_key as _enterprise_storage_key,
+    visible_storage_key as _visible_storage_key,
+)
 from app.services.focus_service import is_focus_file_path
 from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.storage import (
@@ -345,12 +350,6 @@ def _agent_base_dir(agent_id: uuid.UUID) -> Path:
     return Path(local_root) / str(agent_id)
 
 
-def _agent_storage_key(agent_id: uuid.UUID, rel_path: str = "") -> str:
-    prefix = str(agent_id)
-    rel = normalize_storage_key(rel_path)
-    return f"{prefix}/{rel}" if rel else prefix
-
-
 def _safe_path(agent_id: uuid.UUID, rel_path: str) -> Path:
     """Ensure the path is within the agent's directory (no path traversal)."""
     base = _agent_base_dir(agent_id)
@@ -372,21 +371,6 @@ def _visible_path(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUID | Non
     except WorkspacePathError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return resolved.path, resolved.relative_root, resolved.is_enterprise
-
-
-def _is_enterprise_visible_path(rel_path: str) -> bool:
-    normalized = (rel_path or "").strip().strip("/")
-    return normalized == "enterprise_info" or normalized.startswith("enterprise_info/")
-
-
-def _visible_storage_key(agent_id: uuid.UUID, rel_path: str, tenant_id: uuid.UUID | None) -> tuple[str, bool]:
-    normalized = file_download_tickets.normalize_download_path(rel_path)
-    if _is_enterprise_visible_path(normalized):
-        if not tenant_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant associated")
-        sub_path = normalized[len("enterprise_info") :].lstrip("/")
-        return _enterprise_storage_key(str(tenant_id), sub_path), True
-    return _agent_storage_key(agent_id, normalized), False
 
 
 async def _require_agent_file_delete_access(
@@ -1180,12 +1164,6 @@ def _enterprise_kb_dir(tenant_id: str) -> Path:
 def _enterprise_info_dir(tenant_id: str) -> Path:
     local_root = settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR
     return Path(local_root) / f"enterprise_info_{tenant_id}"
-
-
-def _enterprise_storage_key(tenant_id: str, rel_path: str = "") -> str:
-    prefix = f"enterprise_info_{tenant_id}"
-    rel = normalize_storage_key(rel_path)
-    return f"{prefix}/{rel}" if rel else prefix
 
 
 @enterprise_kb_router.get("/files", response_model=list[dict[str, object]])

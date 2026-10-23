@@ -140,6 +140,14 @@ class StorageBackend:
             content_hash=entry.content_hash,
         )
 
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        """Resolve the normal version identity without unbounded hashing/promotion.
+
+        Reject oversized files before reading, and bound any identity reads or
+        fallback promotion by actual bytes. Unsupported backends fail closed.
+        """
+        raise NotImplementedError
+
     async def write_bytes_if_match(
         self,
         key: str,

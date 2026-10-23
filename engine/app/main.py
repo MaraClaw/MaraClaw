@@ -72,6 +72,7 @@ from app.api.dingtalk import router as dingtalk_router
 from app.api.discord_bot import router as discord_router
 from app.api.enterprise import router as enterprise_router
 from app.api.feishu import router as feishu_router
+from app.api.file_previews import router as file_previews_router
 from app.api.files import enterprise_kb_router, router as files_router, upload_router as files_upload_router
 from app.api.focus import router as focus_router
 from app.api.gateway import router as gateway_router
@@ -112,6 +113,7 @@ app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD
 app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_router, prefix=settings.API_PREFIX)
+app.include_router(file_previews_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
