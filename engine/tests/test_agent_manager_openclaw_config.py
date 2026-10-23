@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from python_on_whales.exceptions import NoSuchContainer
 
 from app.config import Settings
@@ -11,7 +12,6 @@ from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import (
     OPENAI_OAUTH_PROFILE_ID,
-    TENCENTDB_BOOTSTRAP_MARKER,
     XAI_OAUTH_PROFILE_ID,
     AgentManager,
 )
@@ -71,69 +71,38 @@ class RecordingDockerClient:
         return SimpleNamespace(id="container-1234567890")
 
 
-class OpenClawMemorySettings:
-    def __init__(
-        self, wrapped_settings, memory_enabled: bool, plugin_version: str = "1.0.3", storage_root: str | None = None
-    ):
+class GuestSettings:
+    def __init__(self, wrapped_settings: Settings, storage_root: str | None = None):
         self.wrapped_settings = wrapped_settings
-        self.OPENCLAW_MEMORY_TENCENTDB_ENABLED = memory_enabled
-        self.TENCENTDB_PLUGIN_VERSION = plugin_version
         self.STORAGE_LOCAL_ROOT = storage_root if storage_root is not None else wrapped_settings.STORAGE_LOCAL_ROOT
 
     def __getattr__(self, name: str):
         return getattr(self.wrapped_settings, name)
 
 
-def test_openclaw_tencentdb_memory_setting_defaults_to_enabled():
-    assert Settings.model_fields["OPENCLAW_MEMORY_TENCENTDB_ENABLED"].default is True
-
-
-def test_tencentdb_plugin_version_setting_defaults_to_pinned_version():
-    assert Settings.model_fields["TENCENTDB_PLUGIN_VERSION"].default == "1.0.3"
-
-
-def test_generate_openclaw_config_omits_tencentdb_until_plugin_is_installed(monkeypatch, tmp_path):
+@pytest.mark.parametrize("legacy_marker", [False, True])
+def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_path, legacy_marker):
     # Given
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
-    monkeypatch.setattr(agent_manager_module, "settings", settings)
-    manager = AgentManager.__new__(AgentManager)
-    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-    (tmp_path / str(agent.id)).mkdir()
-
-    # When
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
-
-    # Then
-    assert "plugins" not in config
-
-
-def test_generate_openclaw_config_includes_tencentdb_memory_plugin_when_installed(monkeypatch, tmp_path):
-    # Given
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     manager = AgentManager.__new__(AgentManager)
     agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
-    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.3", encoding="utf-8")
+    if legacy_marker:
+        (agent_dir / ".bootstrap-tencentdb-version").write_text("1.0.3", encoding="utf-8")
 
     # When
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
-    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
     assert "memorySearch" not in config["agents"]["defaults"]
-    assert config["plugins"]["enabled"] is True
-    assert config["plugins"]["slots"]["memory"] == "memory-tencentdb"
-    assert config["plugins"]["slots"]["contextEngine"] == "memory-tencentdb"
-    assert config["plugins"]["entries"]["memory-tencentdb"]["enabled"] is True
-    assert config["plugins"]["entries"]["memory-tencentdb"]["hooks"]["allowConversationAccess"] is True
-    assert config["plugins"]["entries"]["memory-tencentdb"]["config"]["storeBackend"] == "sqlite"
-    assert config["plugins"]["entries"]["memory-tencentdb"]["config"]["offload"] == {"enabled": True}
+    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
 
 
 def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -181,13 +150,13 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
     assert config["agents"]["defaults"]["heartbeat"]["every"] == "30s"
-    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
 
 def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -211,7 +180,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
 
 def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cache(monkeypatch, tmp_path) -> None:
     # Given
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True, storage_root=str(tmp_path))
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -220,7 +189,7 @@ def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cach
     agent = AgentRecord(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4())
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
-    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("1.0.3", encoding="utf-8")
+    (agent_dir / ".bootstrap-tencentdb-version").write_text("1.0.3", encoding="utf-8")
     tencentdb_plugins = {
         "enabled": True,
         "slots": {"memory": "memory-tencentdb", "contextEngine": "memory-tencentdb"},
@@ -249,13 +218,16 @@ def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cach
     # Then
     assert path == config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
     assert "memorySearch" not in config["agents"]["defaults"]
-    assert config["plugins"] == tencentdb_plugins
+    assert config["plugins"] == {
+        "slots": {"memory": "memory-core"},
+        "entries": {"memory-tencentdb": {"enabled": False}},
+    }
 
 
 def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> None:
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False, storage_root=str(tmp_path))
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -297,7 +269,7 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
 
 
 def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monkeypatch):
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False)
+    settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -330,7 +302,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
 
 
 def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -> None:
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=False, storage_root=str(tmp_path))
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
@@ -375,26 +347,9 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     assert legacy["openai"]["accountId"] == "acct-from-row"
 
 
-def test_generate_openclaw_config_omits_plugins_when_tencentdb_memory_disabled(monkeypatch):
-    # Given
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True)
-    monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "OPENCLAW_MEMORY_TENCENTDB_ENABLED", False)
-    manager = AgentManager.__new__(AgentManager)
-    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-
-    # When
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
-
-    # Then
-    assert "plugins" not in config
-
-
 async def test_start_container_writes_openclaw_config_at_state_root_and_passes_env(monkeypatch, tmp_path):
     # Given
-    settings = OpenClawMemorySettings(
-        agent_manager_module.settings, memory_enabled=True, plugin_version="7.8.9", storage_root=str(tmp_path)
-    )
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
@@ -433,7 +388,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert host_config_path.exists()
     assert not (agent_dir / ".openclaw" / "openclaw.json").exists()
     config = json.loads(host_config_path.read_text(encoding="utf-8"))
-    assert "plugins" not in config
+    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
     assert (agent_dir / "workspace" / "skills" / "maraclaw-sync" / "SKILL.md").is_file()
 
     run_kwargs = docker_client.run_kwargs
@@ -443,7 +398,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         [
             "-s",
             "--",
-            "/usr/local/bin/bootstrap-memory-tencentdb.sh",
+            "/usr/local/bin/bootstrap-officecli.sh",
             "/usr/local/bin/validate-gogcli.sh",
             "openclaw",
             "gateway",
@@ -458,8 +413,8 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["envs"]["OPENCLAW_HOME"] == "/home/node"
     assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/.openclaw"
     assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
-    assert run_kwargs["envs"]["TENCENTDB_PLUGIN_VERSION"] == "7.8.9"
-    assert run_kwargs["envs"]["OPENCLAW_MEMORY_TENCENTDB_ENABLED"] == "true"
+    assert "TENCENTDB_PLUGIN_VERSION" not in run_kwargs["envs"]
+    assert "OPENCLAW_MEMORY_TENCENTDB_ENABLED" not in run_kwargs["envs"]
     assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
@@ -471,16 +426,15 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     }
 
 
-async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch, tmp_path):
+async def test_start_container_keeps_native_memory_with_legacy_bootstrap_marker(monkeypatch, tmp_path):
     # Given
-    settings = OpenClawMemorySettings(
-        agent_manager_module.settings, memory_enabled=True, plugin_version="7.8.9", storage_root=str(tmp_path)
-    )
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    (agent_dir / TENCENTDB_BOOTSTRAP_MARKER).write_text("7.8.9", encoding="utf-8")
+    marker = agent_dir / ".bootstrap-tencentdb-version"
+    marker.write_text("7.8.9", encoding="utf-8")
     (agent_dir / "openclaw.json").write_text(
         json.dumps({"agents": {"defaults": {"memorySearch": {"enabled": False, "provider": "none"}}}}),
         encoding="utf-8",
@@ -509,9 +463,10 @@ async def test_start_container_pins_tencentdb_after_bootstrap_marker(monkeypatch
     # Then
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": False, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
     assert "memorySearch" not in config["agents"]["defaults"]
-    assert config["plugins"]["slots"]["memory"] == "memory-tencentdb"
+    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
+    assert marker.read_text(encoding="utf-8") == "7.8.9"
 
 
 async def test_start_container_returns_none_when_python_on_whales_client_is_missing(monkeypatch, tmp_path):
@@ -520,7 +475,7 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
         pass
 
     monkeypatch.setattr(agent_manager_module, "ClientNotFoundError", FakeClientNotFoundError, raising=False)
-    settings = OpenClawMemorySettings(agent_manager_module.settings, memory_enabled=True)
+    settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)

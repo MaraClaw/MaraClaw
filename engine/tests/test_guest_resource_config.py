@@ -29,7 +29,6 @@ class Guest:
 @pytest.fixture
 def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
-    monkeypatch.setattr(module.settings, "OPENCLAW_MEMORY_TENCENTDB_ENABLED", False)
     monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(module.settings, "LINKUP_API_KEY", "")
     monkeypatch.setattr(module, "_guest_config_fingerprints", {})
@@ -120,7 +119,70 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
         assert stored[key] == generated[key]
     assert "auth" not in stored
     assert stored["skills"] == generated["skills"]
-    assert stored["plugins"] == {"entries": {"custom": {"enabled": True}}}
+    assert stored["plugins"] == {
+        "slots": {"memory": "memory-core"},
+        "entries": {"custom": {"enabled": True}, "memory-tencentdb": {"enabled": False}},
+    }
+
+
+@pytest.mark.parametrize("writer", ["refresh", "recreate"])
+@pytest.mark.parametrize("legacy", ["entry", "extension", "extension-without-config"])
+async def test_legacy_memory_retirement_preserves_data_and_survives_rewrites(
+    guest: Guest, writer: Writer, legacy: str
+) -> None:
+    # Given
+    saved = {
+        "workspace/MEMORY.md": b"Project codename: orchid.\n",
+        "workspace/memory/2026-10-23.md": b"Keep daily memory.\n",
+        "MEMORY.md": b"Keep root memory.\n",
+        "memory/archive.md": b"Keep root memory directory.\n",
+        "memory/tencentdb.sqlite": b"SQLite format 3\x00legacy-state",
+        ".bootstrap-tencentdb-version": b"1.0.3",
+        "extensions/custom/index.js": b"export default {};\n",
+    }
+    if legacy != "entry":
+        saved.update(
+            {
+                "extensions/memory-tencentdb/index.js": b"export default {};\n",
+                "extensions/memory-tencentdb/data/memory.sqlite": b"SQLite format 3\x00plugin-state",
+                "extensions/memory-tencentdb/.installed": b"preserve installation evidence",
+            }
+        )
+    for relative, content in saved.items():
+        path = guest.path.parent / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    previous_entries: JsonObject = {"custom": {"enabled": True, "config": {"keep": "custom-value"}}}
+    if legacy == "entry":
+        previous_entries["memory-tencentdb"] = {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+            "config": {"storeBackend": "sqlite", "offload": {"enabled": True}},
+        }
+    plugins: JsonObject = {
+        "slots": {"memory": "memory-tencentdb", "contextEngine": "memory-tencentdb"},
+        "load": {"paths": ["/home/node/.openclaw/extensions/memory-tencentdb"]},
+        "installs": {"memory-tencentdb": {"source": "npm"}},
+        "entries": previous_entries,
+    }
+    if legacy != "extension-without-config":
+        guest.path.write_text(json.dumps({"plugins": plugins}), encoding="utf-8")
+
+    # When: cached refresh, cold refresh, and recreation must retain the retirement.
+    await rewrite(guest, writer)
+    guest.manager.write_guest_config(guest.agent, primary=None)
+    module._guest_config_fingerprints.clear()
+    await rewrite(guest, writer)
+    guest.manager.write_guest_config(guest.agent, primary=None)
+
+    # Then
+    stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    assert json_object_from(stored["memory"])["search"] == {"enabled": True, "provider": "none"}
+    entries: JsonObject = {"memory-tencentdb": {"enabled": False}}
+    if legacy != "extension-without-config":
+        entries["custom"] = {"enabled": True, "config": {"keep": "custom-value"}}
+    assert stored["plugins"] == {"slots": {"memory": "memory-core"}, "entries": entries}
+    assert {relative: (guest.path.parent / relative).read_bytes() for relative in saved} == saved
 
 
 @pytest.mark.parametrize("writer", ["refresh", "recreate"])
