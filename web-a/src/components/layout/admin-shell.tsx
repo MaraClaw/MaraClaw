@@ -24,6 +24,7 @@ const navItems: {
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
+  { to: '/openclaw-updates', label: 'OpenClaw updates', icon: 'tools', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
