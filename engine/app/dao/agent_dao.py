@@ -656,6 +656,27 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return len(rows)
 
+    async def consume_llm_call(self, agent_id: UUID) -> AgentRecord | None:
+        reset_due = (
+            "llm_calls_reset_at IS NULL OR "
+            "(llm_calls_reset_at AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date"
+        )
+        daily_count = f"CASE WHEN {reset_due} THEN 0 ELSE COALESCE(llm_calls_today, 0) END"
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agents SET "
+                + f"llm_calls_today = ({daily_count}) + 1, "
+                + f"llm_calls_reset_at = CASE WHEN {reset_due} THEN NOW() ELSE llm_calls_reset_at END, "
+                + "updated_at = NOW() "
+                + f"WHERE id = %(id)s AND (max_llm_calls_per_day = 0 OR ({daily_count}) < max_llm_calls_per_day) "
+                + f"RETURNING {self._select_list()}",
+                {"id": agent_id},
+            )
+            agent = AgentRecord.from_row(row) if row is not None else None
+            if agent is not None:
+                memo_set("agent", agent.id, agent)
+            return agent
+
     async def increment_token_usage(
         self,
         agent_id: UUID,
