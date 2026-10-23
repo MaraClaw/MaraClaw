@@ -10,6 +10,7 @@ import { useInfiniteQuery, useMutation, useQuery } from '@/hooks/session-workspa
 import { userFacingRequestError } from '@/lib/http'
 import { notificationCategories, notificationCategorySchema, type NotificationCategory } from '@/lib/notifications-api'
 import { relativeTime } from '@/lib/relative-time'
+import { cn } from '@/lib/utils'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal'
 const categoryLabels = { all: 'All', tool: 'Tools', approval: 'Approvals', social: 'Social', broadcast: 'Broadcasts' } satisfies Record<NotificationCategory, string>
@@ -66,7 +67,7 @@ export function NotificationsPage() {
       <ul aria-label="Notifications" className="space-y-2">
         {items.map((item) => {
           const link = memberLink(item.link)
-          return <li key={item.id} className="space-y-3 rounded-xl border border-border px-3 py-3">
+          return <li key={item.id} className={cn('space-y-3 rounded-xl border px-3 py-3', item.is_read ? 'border-border bg-card' : 'border-primary/30 bg-accent')}>
             <div className="space-y-1">
               <p className="text-sm font-medium">{item.title}</p>
               {item.body ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}

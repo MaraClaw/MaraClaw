@@ -158,3 +158,55 @@ test('late paginated rows cannot cross a retired session boundary', async ({ pag
   await expect(page.getByText('Obsolete next page', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
 })
+
+for (const width of [390, 1440, 1920]) {
+  for (const colorScheme of ['light', 'dark'] as const) {
+    test.describe(`${width} ${colorScheme} inbox backgrounds`, () => {
+      test.use({ viewport: { width, height: width === 390 ? 844 : 900 }, isMobile: width === 390,
+        hasTouch: width === 390, deviceScaleFactor: width === 390 ? 3 : 1, colorScheme, reducedMotion: 'reduce' })
+
+      for (const readMode of ['one', 'all'] as const) {
+        test(`backgrounds converge when marking ${readMode} read`, async ({ page }, testInfo) => {
+          // Given mixed read states with the existing labels and destinations.
+          await prepareNotifications(page, [
+            { ...notice('company-announcement', 'broadcast'), title: 'Company announcement', body: 'Review the latest company news and upcoming team plans.', link: '/plaza?post=announcement' },
+            { ...notice('tool-request', 'autonomy_l2'), title: 'Tool request ready', body: 'Your requested tool is available for the next task.' },
+            { ...notice('membership-approved', 'company_admission_resolved', true), title: 'Membership approved', body: 'Your membership request has been approved.', link: '/app/admissions/request-a' },
+          ])
+          await page.clock.install({ time: new Date('2030-01-02T12:00:00Z') })
+          await page.goto(inboxPath)
+          const rows = page.getByRole('list', { name: 'Notifications' }).getByRole('listitem')
+          await expect(rows).toHaveCount(3)
+          const readBackground = await rows.nth(2).evaluate((row) => getComputedStyle(row).backgroundColor)
+          const unreadBackground = await rows.first().evaluate((row) => getComputedStyle(row).backgroundColor)
+          expect(unreadBackground).not.toBe(readBackground)
+          await expect(rows.nth(1)).toHaveCSS('background-color', unreadBackground)
+          await expect(rows.nth(2).getByText('Read', { exact: true })).toBeVisible()
+          await page.screenshot({ path: testInfo.outputPath('mixed.png'), fullPage: true })
+          if (width === 390) {
+            await rows.last().scrollIntoViewIfNeeded()
+            await page.screenshot({ path: testInfo.outputPath('mixed-end.png'), fullPage: true })
+          }
+
+          // When
+          await page.getByRole('button', { name: readMode === 'one' ? 'Mark as read: Company announcement' : 'Mark all read', exact: true }).click()
+
+          // Then the changed rows match the neutral read surface, not just their labels.
+          await expect(rows.first()).toHaveCSS('background-color', readBackground)
+          await expect(rows.first().getByText('Read', { exact: true })).toBeVisible()
+          await expect(rows.nth(1)).toHaveCSS('background-color', readMode === 'one' ? unreadBackground : readBackground)
+          await expect(rows.nth(2)).toHaveCSS('background-color', readBackground)
+          await expect(page.getByRole('button', { name: /^Mark as read:/ })).toHaveCount(readMode === 'one' ? 1 : 0)
+          await expect(page.getByText(`${readMode === 'one' ? 1 : 0} unread in All`, { exact: true })).toBeVisible()
+          await page.getByRole('heading', { name: 'Inbox', exact: true }).scrollIntoViewIfNeeded()
+          await page.screenshot({ path: testInfo.outputPath(`${readMode}-read.png`), fullPage: true })
+          if (width === 390) {
+            await rows.last().scrollIntoViewIfNeeded()
+            await page.screenshot({ path: testInfo.outputPath(`${readMode}-read-end.png`), fullPage: true })
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+        })
+      }
+    })
+  }
+}
