@@ -97,6 +97,7 @@ class Runtime:
             from app.services.agent_setup import start_agent_setup_worker
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.linkup.export import start_web_search_export_daemon
+            from app.services.openclaw_update_worker import start_openclaw_update_worker
             from app.services.scheduler import start_scheduler
             from app.services.trigger_daemon import start_trigger_daemon
 
@@ -105,6 +106,7 @@ class Runtime:
             self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
             self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
+            self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
             from app.services.wechat_channel import WeChatPollManager
