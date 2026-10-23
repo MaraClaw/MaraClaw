@@ -9,7 +9,7 @@ test "$(id -un)" = node
 test "$(id -u)" -ne 0
 test -w "$OPENCLAW_STATE_DIR"
 test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
-test "$(node --version)" = "v26.11.1"
+test "$(node --version)" = "v26.12.1"
 test "$(node -p 'process.arch')" = "arm64"
 node --expose-internals -e 'require("internal/deps/acorn/acorn/dist/acorn").parse("export{}",{sourceType:"module"})'
 test "$(cat "$OPENCLAW_STATE_DIR/.bootstrap-tencentdb-version")" = 1.0.3

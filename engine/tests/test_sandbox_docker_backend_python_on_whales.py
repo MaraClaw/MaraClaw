@@ -209,8 +209,8 @@ async def test_execute_pulls_image_when_image_is_missing():
 
     # Then
     assert result.success is True
-    assert client.image.exists_calls == ["node:26.11.1-slim"]
-    assert client.image.pull_calls == ["node:26.11.1-slim"]
+    assert client.image.exists_calls == ["node:26.12.1-slim"]
+    assert client.image.pull_calls == ["node:26.12.1-slim"]
 
 
 async def test_execute_unsupported_language_does_not_touch_docker_client(monkeypatch):

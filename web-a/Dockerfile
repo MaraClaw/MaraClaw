@@ -2,7 +2,7 @@
 
 # ─── MaraClaw admin console (web-a) ─────────────────────────────────────────
 # Multi-stage production image:
-#   1) deps    - install lockfile deps on Node 26.11.1 (cache-friendly layer)
+#   1) deps    - install lockfile deps on Node 26.12.1 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
 #   3) runtime - unprivileged nginx serves static dist
 #
@@ -16,7 +16,7 @@
 # Prefer leaving VITE_API_BASE_URL empty and reverse-proxying /api → engine
 # on the same origin so the browser never needs a cross-origin API host.
 
-ARG NODE_VERSION=26.11.1
+ARG NODE_VERSION=26.12.1
 
 # ─── Dependencies ───────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-trixie-slim AS deps

@@ -169,7 +169,7 @@ class ComposeContracts(unittest.TestCase):
             self.assertTrue(service["read_only"])
             self.assertFalse(service.get("env_file"))
             self.assertFalse(service.get("environment"))
-            self.assertEqual(service["build"]["args"], {"NODE_VERSION": "26.11.1"})
+            self.assertEqual(service["build"]["args"], {"NODE_VERSION": "26.12.1"})
         self.assertEqual(self.services["web-e"]["depends_on"]["ingress"]["condition"], "service_started")
 
     def test_frontend_builds_when_shared_node_version_is_overridden(self) -> None:
