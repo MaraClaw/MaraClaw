@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { recoverRejectedTurn, restoreComposerDraft } from '../src/lib/chat/turn-rejection.ts'
+import { createChatSubmissions } from '../src/lib/chat/submissions.ts'
 import { mergeServerHistory } from '../src/lib/chat/transcript.ts'
 import type { ChatLine } from '../src/lib/chat/transcript.ts'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
@@ -9,6 +10,53 @@ import { firstSubmission, secondSubmission, fixture, submission } from './socket
 
 const rejection: ChatTurnRejection = {
   type: 'turn_rejected', reason: 'quota_exceeded', content: 'Message allowance reached.', client_submission_id: firstSubmission,
+}
+
+for (const frame of [
+  { type: 'turn_rejected', reason: 'openclaw_update_required',
+    content: 'This digital employee must be upgraded before it can work again.', notice_id: secondSubmission },
+  { type: 'turn_rejected', reason: 'openclaw_update_in_progress',
+    content: 'This digital employee is being upgraded. Try again in a few minutes.' },
+]) {
+  test(`socket ${frame.reason} restores the correlated draft without completing or closing chat`, async (t) => {
+    // Given
+    const f = fixture()
+    const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+    const conn = connectAgentChat('agent-a', 'thread-a', { ...f.handlers, submissions })
+    t.after(conn.close)
+    await Promise.resolve()
+    const socket = f.socket()
+    socket.open()
+    const envelope = submission('Please review these notes')
+    conn.send(envelope)
+    const draft = '  Please review these notes\n'
+    const lines: ChatLine[] = [{ role: 'user', content: envelope.content, composerText: draft,
+      client_submission_id: firstSubmission, submission: envelope, pending: true }]
+    const correlated = { ...frame, client_submission_id: firstSubmission }
+
+    // When
+    socket.frame(JSON.stringify(correlated))
+    const event = f.events[0]
+    assert.ok(event && isTurnRejected(event))
+    const recovery = recoverRejectedTurn(lines, event)
+
+    // Then
+    assert.deepEqual(f.events, [correlated])
+    assert.deepEqual(submissions.pending(), [])
+    assert.equal(recovery.matched, true)
+    assert.equal(recovery.restoredText, draft)
+    assert.equal(restoreComposerDraft('New typing', recovery.restoredText), `${draft}\n\nNew typing`)
+    assert.equal(recovery.lines[0]?.delivery, 'rejected')
+    assert.equal(recovery.lines[0]?.pending, false)
+    assert.equal(recovery.lines[0]?.retryable, true)
+    assert.equal(recovery.lines[0]?.submission, envelope)
+    assert.ok(recovery.notice.includes(frame.content))
+    assert.match(recovery.notice, /Settings.*Upgrade/)
+    assert.match(recovery.notice, /retry/i)
+    assert.equal(socket.readyState, 1)
+    assert.equal(socket.closes, 0)
+    assert.deepEqual(f.codes, [])
+  })
 }
 
 test('rejection marks only its correlated submission and preserves a newer equal-text turn', () => {
