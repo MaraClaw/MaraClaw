@@ -285,8 +285,8 @@ def test_chat_issuer_constant():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fails", [False, True])
-async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failure(monkeypatch, fails):
+@pytest.mark.parametrize("failure_kind", ["none", "enqueue", "guest_config"])
+async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failure(monkeypatch, failure_kind):
     # Given
     agent_id = uuid4()
     config = SimpleNamespace(id=uuid4(), app_id="chat-app", is_configured=True, verification_token="token")
@@ -316,14 +316,20 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
     monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
     monkeypatch.setattr(google_chat_api.channel_dedup, "mark_processed_shared", marked)
     started, release = asyncio.Event(), asyncio.Event()
-    failure = RuntimeError("message processing failed")
+    from app.services.openclaw_routing import GuestConfigWriteError
+
+    failure = (
+        GuestConfigWriteError("message processing failed")
+        if failure_kind == "guest_config"
+        else RuntimeError("message processing failed")
+    )
     from app.services.channels import submissions
 
     async def accept(event):
         assert message_name in event.event_key
         started.set()
         await release.wait()
-        if fails:
+        if failure_kind != "none":
             raise failure
 
     monkeypatch.setattr(submissions, "accept_channel_event", accept)
@@ -337,8 +343,8 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
     finally:
         release.set()
     # Then
-    if fails:
-        with pytest.raises(RuntimeError, match="message processing failed"):
+    if failure_kind != "none":
+        with pytest.raises(type(failure), match="message processing failed"):
             await asyncio.wait_for(operation, 1)
     else:
         assert await asyncio.wait_for(operation, 1) == {}

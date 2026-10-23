@@ -3,8 +3,9 @@ import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import override
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,8 +17,16 @@ from app.db import session
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
-from app.services import chat_submissions, chat_tickets, openclaw_routing as routing
+from app.services import (
+    chat_submissions,
+    chat_tickets,
+    openclaw_routing as routing,
+    openclaw_update_exclusion as exclusion,
+)
+from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
@@ -296,11 +305,13 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
 
 
 @pytest.mark.parametrize("onboarding", [False, True])
-@pytest.mark.parametrize("reason", ["no_company_model", "enqueue_failed"])
+@pytest.mark.parametrize("reason", ["no_company_model", "enqueue_failed", "guest_config_failed"])
 async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(monkeypatch, turn, onboarding, reason):
     state, raw = turn
     state.missing_model = reason == "no_company_model"
     state.fail_enqueue = reason == "enqueue_failed"
+    if reason == "guest_config_failed":
+        state.gate = routing.GuestConfigWriteError("private config details")
 
     handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
     await background_tasks.drain_background_tasks(grace_seconds=0)
@@ -318,6 +329,48 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
     assert not state.messages
     if not onboarding:
         assert state.frames[0]["client_submission_id"] == state.submission_id
+
+
+@pytest.mark.parametrize("onboarding", [False, True])
+@pytest.mark.parametrize("failure", ["write", "timeout", "upgrade"])
+async def test_real_config_preparation_rejects_without_accepting_a_turn(
+    monkeypatch: pytest.MonkeyPatch, turn, tmp_path: Path, onboarding: bool, failure: str
+):
+    # Given real preparation with a broken writer, contended fence, or locked gate recheck.
+    state, raw = turn
+    model = LLMModelRecord(uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", routing.prepare_openclaw_message)
+    monkeypatch.setattr(ws_api, "prepare_openclaw_message", routing.prepare_openclaw_message)
+    monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
+    monkeypatch.setattr(routing, "ensure_agent_company_models", AsyncMock(return_value=state.agent))
+    monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
+    gate = AsyncMock(side_effect=[None, OpenClawUpdateInProgressError()]) if failure == "upgrade" else AsyncMock()
+    monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
+    writer = Mock(side_effect=OSError("private config path"))
+    monkeypatch.setattr(routing.agent_manager, "write_guest_config", writer)
+    # When driving the actual WebSocket turn through preparation.
+    if failure == "timeout":
+        async with setup_workspace_lock(tmp_path / str(state.agent.id)):
+            handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    else:
+        handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    # Then neither success frames nor durable or in-memory acceptance survive.
+    reason = "openclaw_update_in_progress" if failure == "upgrade" else "guest_config_failed"
+    assert len(state.frames) == 1
+    assert state.frames[0]["type"] == "turn_rejected"
+    assert state.frames[0]["reason"] == reason
+    assert "private" not in str(state.frames[0]["content"])
+    assert not state.pending
+    assert not state.committed
+    assert not state.messages
+    assert not state.wake.is_set()
+    assert raw.commits == 0
+    assert raw.rollbacks == int(not onboarding)
+    assert len(handler.conversation) == 1
+    if failure != "write":
+        writer.assert_not_called()
 
 
 @pytest.mark.parametrize("onboarding", [False, True])
