@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from openclaw_officecli_smoke_cleanup import CLEANUP_PROBE, CleanupFailure, cleanup_error_message, run_cleanup
-from openclaw_officecli_smoke_probe import CHILD_MARKER, EMPTY_OFFLINE_PROBE, GOG_MARKER, PROBE, TENCENT_MARKER
+from openclaw_officecli_smoke_probe import CHILD_MARKER, EMPTY_OFFLINE_PROBE, GOG_MARKER, MEMORY_MARKER, PROBE
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 SMOKE_FLAG: Final = "RUN_OPENCLAW_OFFICECLI_SMOKE"
@@ -198,9 +198,12 @@ def _run_container(workspace: SmokeWorkspace, request: RunRequest, *, probe: str
             f"GOG_KEYRING_PASSWORD_FILE={KEYRING_PATH}",
             "-e",
             "GOG_KEYRING_BACKEND=file",
-            "-e",
-            "OPENCLAW_MEMORY_TENCENTDB_ENABLED=true",
+            "--entrypoint",
+            "tini",
             workspace.image_tag,
+            "-s",
+            "--",
+            "/usr/local/bin/bootstrap-officecli.sh",
             "/usr/local/bin/validate-gogcli.sh",
             "sh",
             "-c",
@@ -219,7 +222,6 @@ def _assert_online_state(state_dir: Path) -> str:
     assert os.access(binary, os.X_OK)
     assert skill.is_file()
     assert not skill.is_symlink()
-    assert (state_dir / TENCENT_MARKER).is_file()
     assert (state_dir / GOG_MARKER).is_file()
     assert (state_dir / CHILD_MARKER).is_file()
     return os.readlink(current)
@@ -260,7 +262,7 @@ def test_real_linux_arm64_officecli_restart_smoke() -> None:
             probe=EMPTY_OFFLINE_PROBE,
         )
         assert empty.returncode == 0, f"empty-state offline start failed\n{empty.describe()}"
-        assert (workspace.empty_state_dir / TENCENT_MARKER).is_file()
+        assert (workspace.empty_state_dir / MEMORY_MARKER).is_file()
         assert (workspace.empty_state_dir / GOG_MARKER).is_file()
         assert (workspace.empty_state_dir / CHILD_MARKER).is_file()
 

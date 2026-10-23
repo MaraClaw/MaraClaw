@@ -82,8 +82,7 @@ def test_exact_manifest_installs_when_awk_rejects_interval_syntax(
     result = fixture.run("sh", "-c", 'printf child > "$CHILD_SENTINEL"')
 
     # Then
-    assert fixture.tencent_sentinel.exists(), result.stderr
-    assert fixture.child_sentinel.exists(), result.stderr
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "child"
     assert result.returncode == 0, result.stderr
     assert fixture.state_dir.joinpath(".officecli", "current").is_symlink()
     assert fixture.state_dir.joinpath("skills", "officecli").is_symlink()
@@ -107,11 +106,11 @@ def test_malformed_near_missing_or_duplicate_manifest_skips_officecli(tmp_path: 
     fixture.fixture_dir.joinpath("SHA256SUMS").write_text(manifest, encoding="utf-8")
 
     # When
-    result = fixture.run("sh", "-c", ":")
+    result = fixture.run("sh", "-c", 'printf child > "$CHILD_SENTINEL"')
 
     # Then
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
+    assert fixture.child_sentinel.read_text(encoding="utf-8") == "child"
     assert not (fixture.state_dir / ".officecli" / "current").exists()
 
 

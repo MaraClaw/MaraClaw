@@ -15,9 +15,8 @@ import pytest
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 WRAPPER_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-officecli.sh"
-TENCENT_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-memory-tencentdb.sh"
-OFFICECLI_TAG: Final = "v1.0.156"
-OFFICECLI_ARM64_SHA256: Final = "972198c8db1f992ffd3fec4ecf6694533ecbdbae8da7a021ab513e73ecb2f15c"
+OFFICECLI_TAG: Final = "v1.0.158"
+OFFICECLI_ARM64_SHA256: Final = "b1d5e74d93a8471a47b037cc7774ac29c559940e226f99b9fdf788966cc395b8"
 OFFICECLI_SKILL_SHA256: Final = "c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
 RELEASE_ROOT: Final = "https://github.com/iOfficeAI/OfficeCLI/releases/download"
 SKILL_ROOT: Final = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI"
@@ -45,7 +44,6 @@ class BootstrapFixture:
     fixture_dir: Path
     bin_dir: Path
     curl_log: Path
-    tencent_sentinel: Path
     child_sentinel: Path
     poison_path: Path
 
@@ -71,13 +69,10 @@ class BootstrapFixture:
         environment.update(
             {
                 "OPENCLAW_STATE_DIR": str(self.state_dir),
-                "OPENCLAW_MEMORY_TENCENTDB_ENABLED": "true",
-                "OPENCLAW_MEMORY_TENCENTDB_ARCHIVE": str(self.root / "missing-memory-tencentdb.tgz"),
                 "PATH": os.pathsep.join((str(self.bin_dir), str(self.root / "inherited-bin"), environment["PATH"])),
                 "FAKE_CURL_FIXTURES": str(self.fixture_dir),
                 "FAKE_CURL_LOG": str(self.curl_log),
                 "OFFICECLI_FAKE_MODE": mode,
-                "TENCENT_SENTINEL": str(self.tencent_sentinel),
                 "CHILD_SENTINEL": str(self.child_sentinel),
                 "OFFICECLI_POISON_PATH": str(self.poison_path),
                 "OFFICECLI_SKIP_UPDATE": "1",
@@ -120,9 +115,7 @@ def create_fake_network_fixture(root: Path) -> BootstrapFixture:
     script_dir.mkdir()
     wrapper = script_dir / "bootstrap-officecli.sh"
     shutil.copy2(WRAPPER_SOURCE, wrapper)
-    shutil.copy2(TENCENT_SOURCE, script_dir / "bootstrap-memory-tencentdb.sh")
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
-    (script_dir / "bootstrap-memory-tencentdb.sh").chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
     fixture_dir = root / "release-fixtures"
     fixture_dir.mkdir()
@@ -138,11 +131,8 @@ import os
 import sys
 from pathlib import Path
 
-arguments = sys.argv[1:]
-if arguments[:2] == ["plugins", "install"]:
-    Path(os.environ["TENCENT_SENTINEL"]).write_text("entered", encoding="utf-8")
-else:
-    Path(os.environ["CHILD_SENTINEL"]).write_text("\\0".join(arguments), encoding="utf-8")
+Path(os.environ["CHILD_SENTINEL"]).write_text("\\0".join(sys.argv[1:]), encoding="utf-8")
+raise SystemExit(int(os.environ.get("CHILD_EXIT_CODE", "0")))
 """,
     )
     _write_executable(
@@ -190,7 +180,6 @@ Path(output_path).write_bytes(source.read_bytes())
         fixture_dir=fixture_dir,
         bin_dir=bin_dir,
         curl_log=root / "curl.log",
-        tencent_sentinel=root / "tencent-entered",
         child_sentinel=root / "child-entered",
         poison_path=root / "poisoned",
     )
@@ -228,6 +217,8 @@ def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: P
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v1.2.3", "first")
     child_command = (
+        'set -eu; skill="$OPENCLAW_STATE_DIR/skills/officecli/SKILL.md"; '
+        'test -r "$skill"; cmp "$skill" "$FAKE_CURL_FIXTURES/SKILL.md"; '
         'printf "%s\\n%s\\n%s\\n" "$(command -v officecli)" "$OFFICECLI_SKIP_UPDATE" '
         '"$OFFICECLI_NO_AUTO_RESIDENT" > "$CHILD_SENTINEL"'
     )
@@ -238,7 +229,6 @@ def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: P
     # Then
     release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8").splitlines() == [
         str(fixture.state_dir / ".officecli" / "current" / "officecli"),
         "1",
@@ -278,19 +268,20 @@ def test_refreshes_same_tag_without_skipping_then_selects_newer_tag_on_every_sta
     assert fixture.requested_urls() == expected_urls("v1.0.0") * 2 + expected_urls("v1.0.1")
 
 
-def test_no_arguments_reaches_unchanged_tencent_gateway_default(tmp_path: Path) -> None:
+@pytest.mark.parametrize("exit_code", [0, 37])
+@pytest.mark.parametrize("mode", ["", "binary_fail"])
+def test_exec_preserves_downstream_arguments_and_exit_status(tmp_path: Path, exit_code: int, mode: str) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v2.0.0", "gateway")
+    arguments = ("gateway", "argument with spaces", "", "$(literal);*", "--flag=value")
 
     # When
-    result = fixture.run()
+    result = fixture.run("env", f"CHILD_EXIT_CODE={exit_code}", "openclaw", *arguments, mode=mode)
 
     # Then
-    assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
-    assert fixture.child_sentinel.read_text(encoding="utf-8") == "gateway"
-    assert fixture.requested_urls() == expected_urls("v2.0.0")
+    assert result.returncode == exit_code, result.stderr
+    assert fixture.child_sentinel.read_text(encoding="utf-8").split("\0") == list(arguments)
 
 
 @pytest.mark.parametrize("mode", ["binary_fail", "manifest_bad", "skill_fail"])
@@ -304,7 +295,6 @@ def test_initial_fetch_failures_continue_without_officecli(tmp_path: Path, mode:
 
     # Then
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
     assert not fixture.poison_path.exists()
     assert not (fixture.state_dir / ".officecli" / "current").exists()

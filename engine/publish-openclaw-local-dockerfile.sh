@@ -16,7 +16,7 @@
 #   OPENCLAW_PUBLISH_IMAGE  full repo name          (default: ${DOCKERHUB_NAMESPACE}/openclaw)
 #   IMAGE_TAG               Hub tag                 (default: $OPENCLAW_VERSION)
 #   PUSH_LATEST=1           also tag and push :latest
-#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_*, TENCENTDB_PLUGIN_VERSION, DOCKER_PLATFORM
+#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_*, DOCKER_PLATFORM
 #                           same pins as the local build script
 #
 # Requires an existing `docker login` to Docker Hub. This script does not store credentials.

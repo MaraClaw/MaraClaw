@@ -15,10 +15,7 @@ EXPECTED_OFFICECLI_ENV: Final = (
 EXPECTED_ENTRYPOINT: Final = ("tini", "-s", "--", "/usr/local/bin/bootstrap-officecli.sh")
 EXPECTED_CMD: Final = ("/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway")
 EXPECTED_CHMOD_RUN: Final = (
-    "chmod 0755 /usr/local/bin/bootstrap-officecli.sh && "
-    "chmod 0755 /usr/local/bin/bootstrap-memory-tencentdb.sh && "
-    "chmod 0755 /usr/local/bin/validate-gogcli.sh && "
-    "chmod 0755 /opt/openclaw-plugin-cache/openclaw-after-tool-call-messages.patch.sh"
+    "chmod 0755 /usr/local/bin/bootstrap-officecli.sh && chmod 0755 /usr/local/bin/validate-gogcli.sh"
 )
 OFFICECLI_COPY: Final[FileInstruction] = (
     "COPY",
@@ -28,15 +25,6 @@ OFFICECLI_COPY: Final[FileInstruction] = (
 )
 REQUIRED_COPIES: Final = (
     (OFFICECLI_COPY, "OfficeCLI helper"),
-    (
-        (
-            "COPY",
-            ("docker/openclaw/bootstrap-memory-tencentdb.sh",),
-            "/usr/local/bin/bootstrap-memory-tencentdb.sh",
-            ("--chown=node:node",),
-        ),
-        "TencentDB bootstrap",
-    ),
     (
         (
             "COPY",
@@ -54,15 +42,15 @@ REGRESSION_CASES: Final = (
     ("ENTRYPOINT", "USER root\nENTRYPOINT", "final USER"),
     ("ENTRYPOINT", "ENTRYPOINT_BROKEN", "ENTRYPOINT"),
     ('"tini"', '"not-tini"', "ENTRYPOINT"),
-    ('bootstrap-officecli.sh"]', 'bootstrap-memory-tencentdb.sh"]', "ENTRYPOINT"),
+    ('bootstrap-officecli.sh"]', 'bootstrap-other.sh"]', "ENTRYPOINT"),
     ("CMD", "CMD_BROKEN", "CMD"),
     ('"gateway"]', '"agent"]', "CMD"),
     ("docker/openclaw/bootstrap-officecli.sh", "docker/openclaw/bootstrap-other.sh", "OfficeCLI helper COPY"),
     ("RUN chmod 0755 /usr/local/bin/bootstrap-officecli.sh", "RUN true", "OfficeCLI helper chmod"),
     (
-        "COPY --chown=node:node docker/openclaw/bootstrap-memory-tencentdb.sh /usr/local/bin/bootstrap-memory-tencentdb.sh\nCOPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh",
-        "# COPY --chown=node:node docker/openclaw/bootstrap-memory-tencentdb.sh /usr/local/bin/bootstrap-memory-tencentdb.sh\n# COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh",
-        "TencentDB bootstrap COPY",
+        "COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh",
+        "# COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh",
+        "Gogcli validator COPY",
     ),
     (
         "RUN chmod 0755 /usr/local/bin/bootstrap-officecli.sh",
@@ -75,8 +63,8 @@ REGRESSION_CASES: Final = (
         "OfficeCLI helper chmod",
     ),
     (
-        "&& chmod 0755 /usr/local/bin/bootstrap-memory-tencentdb.sh",
-        "'&&' chmod 0755 /usr/local/bin/bootstrap-memory-tencentdb.sh",
+        "&& chmod 0755 /usr/local/bin/validate-gogcli.sh",
+        "'&&' chmod 0755 /usr/local/bin/validate-gogcli.sh",
         "OfficeCLI helper chmod",
     ),
     (
@@ -94,10 +82,9 @@ REGRESSION_CASES: Final = (
         'CMD ["/usr/local/bin/validate-gogcli.sh", "openclaw", "gateway"]\nRUN echo "unterminated',
         "malformed shell tokenization",
     ),
-    ("@tencentdb-agent-memory/memory-tencentdb", "@other/memory", "TencentDB archive"),
     ("docker/openclaw/validate-gogcli.sh", "docker/openclaw/validate-other.sh", "Gogcli validator COPY"),
     ("ARG GOGCLI_SHA256=", "ARG GOGCLI_SHA256_BROKEN=", "Gogcli checksum"),
-    ("ARG TENCENTDB_PLUGIN_VERSION=1.0.3", "ARG OFFICECLI_VERSION=1.2.3", "OfficeCLI ARG pins"),
+    ("ARG OPENCLAW_VERSION=", "ARG OFFICECLI_VERSION=1.2.3\nARG OPENCLAW_VERSION=", "OfficeCLI ARG pins"),
     (
         "RUN chmod 0755",
         "RUN curl https://api.github.com/repos/iOfficeAI/OfficeCLI\nRUN chmod 0755",
@@ -190,8 +177,6 @@ def _contract_errors(source: str) -> tuple[str, ...]:
     officecli_environment = tuple(sorted(pair for pair in environment if pair[0].startswith("OFFICECLI_")))
     if officecli_environment != EXPECTED_OFFICECLI_ENV:
         errors.append("OfficeCLI runtime flags must be exactly the two documented values")
-    if ("OPENCLAW_MEMORY_TENCENTDB_ARCHIVE", "/opt/openclaw-plugin-cache/memory-tencentdb.tgz") not in environment:
-        errors.append("missing TencentDB archive environment")
 
     users = _instruction_values(instructions, "USER")
     if not users or users[-1] != "node":
@@ -222,7 +207,6 @@ def _contract_errors(source: str) -> tuple[str, ...]:
         errors.append("OfficeCLI helper chmod is required")
 
     for label, fragment in (
-        ("TencentDB archive", "@tencentdb-agent-memory/memory-tencentdb@${TENCENTDB_PLUGIN_VERSION}"),
         ("Gogcli asset", "ARG GOGCLI_VERSION="),
         ("Gogcli checksum", "ARG GOGCLI_SHA256="),
         ("Gogcli binary", "/usr/local/bin/gog"),

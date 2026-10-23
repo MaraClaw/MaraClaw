@@ -25,9 +25,6 @@ def configure_fake_gnu_mv_log(fixture: BootstrapFixture, monkeypatch: pytest.Mon
 def prepare_lkg(fixture: BootstrapFixture) -> tuple[bytes, bytes, bytes, str]:
     fixture.configure_release("v1.2.3", "lkg")
     assert fixture.run("sh", "-c", ":").returncode == 0
-    fixture.tencent_sentinel.unlink()
-    marker = fixture.state_dir / ".bootstrap-tencentdb-version"
-    marker.unlink()
     release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
     return (
         release.joinpath("officecli").read_bytes(),
@@ -42,7 +39,6 @@ def assert_lkg_execution(
 ) -> None:
     release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "lkg"
     assert release.joinpath("officecli").read_bytes() == snapshot[0]
     assert release.joinpath("skill", "SKILL.md").read_bytes() == snapshot[1]
@@ -138,7 +134,6 @@ def test_untrusted_manifests_skip_officecli_and_still_start_gateway(tmp_path: Pa
 
     # Then
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
     assert not (fixture.state_dir / ".officecli" / "current").exists()
 
@@ -172,7 +167,6 @@ def test_matching_tampered_manifest_and_binary_skip_officecli_and_still_start_ga
 
     # Then
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
     assert not (fixture.state_dir / ".officecli" / "current").exists()
 
@@ -266,7 +260,6 @@ def test_corrupt_lkg_is_not_used_but_gateway_still_starts(tmp_path: Path, corrup
 
     # Then
     assert result.returncode == 0, result.stderr
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
     assert not fixture.poison_path.exists()
 
@@ -287,7 +280,6 @@ def test_unmanaged_skill_directory_blocks_refresh_without_deletion(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     assert skill_link.is_dir()
     assert not skill_link.is_symlink()
-    assert fixture.tencent_sentinel.read_text(encoding="utf-8") == "entered"
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "reached"
 
 
@@ -320,7 +312,7 @@ def test_linux_fixture_uses_real_mv_until_failure_injection(tmp_path: Path, monk
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v1.2.3", "candidate")
     assert not fixture.bin_dir.joinpath("mv").exists()
-    result = fixture.run(mode="activation_fail")
+    result = fixture.run("openclaw", "gateway", mode="activation_fail")
 
     # Then
     assert result.returncode == 0, result.stderr
