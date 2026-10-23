@@ -10,9 +10,9 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useQuery, useWorkspaceSession, WorkspaceSessionContext } from '@/hooks/session-workspace'
 import { createSessionQueryScope } from '@/hooks/session-query-scope'
+import { notificationUnreadOptions } from '@/hooks/notification-options'
 import { authSession, type SessionOwner } from '@/lib/auth-session'
 import { fetchMyTenant } from '@/lib/auth-api'
-import { unreadNotificationCount } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
 const nav: { to: string; label: string; icon: NavIconName }[] = [
@@ -100,12 +100,8 @@ function AppShellFrame() {
   const scope = useWorkspaceSession()
   const { user, logout } = useAuth()
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
-  const unreadQuery = useQuery({
-    queryKey: ['notifications', 'unread'],
-    queryFn: unreadNotificationCount,
-    refetchInterval: 30_000,
-  })
-  const unread = unreadQuery.data?.unread_count ?? unreadQuery.data?.count ?? 0
+  const unreadQuery = useQuery(notificationUnreadOptions('all'))
+  const unread = unreadQuery.data ?? 0
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">

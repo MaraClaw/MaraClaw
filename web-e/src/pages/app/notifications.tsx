@@ -1,14 +1,18 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
-import { notificationReadOptions, notificationsReadAllOptions } from '@/hooks/notification-options'
-import { useMutation, useQuery } from '@/hooks/session-workspace'
+import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { notificationListOptions, notificationReadOptions, notificationsReadAllOptions, notificationUnreadOptions } from '@/hooks/notification-options'
+import { useInfiniteQuery, useMutation, useQuery } from '@/hooks/session-workspace'
 import { userFacingRequestError } from '@/lib/http'
+import { notificationCategories, notificationCategorySchema, type NotificationCategory } from '@/lib/notifications-api'
 import { relativeTime } from '@/lib/relative-time'
-import { listNotifications } from '@/lib/workspace-api'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal'
+const categoryLabels = { all: 'All', tool: 'Tools', approval: 'Approvals', social: 'Social', broadcast: 'Broadcasts' } satisfies Record<NotificationCategory, string>
 
 function memberLink(link?: string | null): string | null {
   if (!link) return null
@@ -17,12 +21,15 @@ function memberLink(link?: string | null): string | null {
 }
 
 export function NotificationsPage() {
+  const [category, setCategory] = useState<NotificationCategory>('all')
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: ['notifications'], queryFn: listNotifications })
+  const query = useInfiniteQuery(notificationListOptions(category))
+  const unreadQuery = useQuery(notificationUnreadOptions(category))
   const markRead = useMutation(notificationReadOptions(queryClient))
   const markAll = useMutation(notificationsReadAllOptions(queryClient))
   const pending = markRead.isPending || markAll.isPending
-  const hasUnread = query.data?.some((item) => !item.is_read) ?? false
+  const hasUnread = (unreadQuery.data ?? 0) > 0
+  const items = query.data?.pages.flat() ?? []
 
   function resetErrors() {
     markRead.reset()
@@ -33,19 +40,31 @@ export function NotificationsPage() {
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">Inbox</h1>
-        <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate() }}>
+        <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
           {markAll.isPending ? 'Marking all read…' : 'Mark all read'}
         </Button>
       </div>
-      <p role="status" className="sr-only">{markRead.isSuccess ? 'Notification marked as read.' : markAll.isSuccess ? 'All notifications marked as read.' : ''}</p>
+      <div className="space-y-2">
+        <Label htmlFor="notification-category">Category</Label>
+        <Select id="notification-category" value={category} onChange={(event) => { resetErrors(); setCategory(notificationCategorySchema.parse(event.currentTarget.value)) }}>
+          {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
+        </Select>
+        <p id="notification-bulk-scope" className="text-sm text-muted-foreground">Mark all read covers ALL notifications matching this category, including those not loaded.</p>
+        <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
+        {unreadQuery.isError ? <div className="space-y-2">
+          <p role="alert" className="text-sm text-destructive">Unable to check unread notifications.</p>
+          <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={() => void unreadQuery.refetch()}>Retry unread count</Button>
+        </div> : null}
+      </div>
+      <p role="status" className="sr-only">{markRead.isSuccess ? 'Notification marked as read.' : markAll.isSuccess ? `All notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
       {markRead.isError || markAll.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(markRead.error ?? markAll.error, 'Unable to mark notifications as read. Try again.')}</p> : null}
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading notifications…</p> : null}
-      {query.isError ? <div className="space-y-3 rounded-xl border border-border p-4">
+      {query.isError && !query.isFetchNextPageError ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')}</p>
         <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</Button>
       </div> : null}
       <ul aria-label="Notifications" className="space-y-2">
-        {query.data?.map((item) => {
+        {items.map((item) => {
           const link = memberLink(item.link)
           return <li key={item.id} className="space-y-3 rounded-xl border border-border px-3 py-3">
             <div className="space-y-1">
@@ -62,7 +81,11 @@ export function NotificationsPage() {
           </li>
         })}
       </ul>
-      {query.isSuccess && query.data.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
+      {query.isFetchNextPageError ? <p role="alert" className="text-sm text-destructive">Unable to load more notifications. Try again.</p> : null}
+      {query.hasNextPage ? <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
+        {query.isFetchingNextPage ? 'Loading more…' : query.isFetchNextPageError ? 'Retry load more' : 'Load more'}
+      </Button> : null}
+      {query.isSuccess && items.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p className="text-sm text-muted-foreground">No notifications yet. Refresh to check for new updates.</p>
         <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh Inbox</Button>
       </div> : null}
