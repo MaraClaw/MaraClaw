@@ -1,6 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { formatDistanceToNowStrict } from 'date-fns'
-import { useId, useRef } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { type ComponentProps, useId, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useParams } from 'react-router-dom'
 import { z } from 'zod'
@@ -20,6 +21,12 @@ import { admissionMethodLabels, admissionStatusLabels } from './admission-labels
 const reasonDraftSchema = z.object({ reason: admissionReasonSchema })
 type ReasonDraft = z.infer<typeof reasonDraftSchema>
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
+const statusVariants = {
+  pending: 'warning',
+  approved: 'success',
+  rejected: 'destructive',
+  withdrawn: 'secondary',
+} as const satisfies Record<AdmissionDetail['status'], ComponentProps<typeof Badge>['variant']>
 
 function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail; readonly ready: boolean }) {
   const reasonId = useId()
@@ -50,7 +57,7 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
           <h2 className="font-display text-lg font-semibold">Request details</h2>
-          <Badge variant={request.status === 'pending' ? 'warning' : 'secondary'}>{admissionStatusLabels[request.status]}</Badge>
+          <Badge variant={statusVariants[request.status]}>{admissionStatusLabels[request.status]}</Badge>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <dl className="grid gap-4 sm:grid-cols-2">
@@ -97,7 +104,9 @@ export function AdmissionApprovalDetailPage() {
   return (
     <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <header className="flex flex-col gap-3">
-        <Link to="/admission-approvals" className="inline-flex min-h-11 items-center self-start rounded-lg py-2 text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">Back to admission approvals</Link>
+        <Button asChild variant="outline" className="self-start">
+          <Link to="/admission-approvals"><ArrowLeft aria-hidden="true" className="size-4" />Back to admission approvals</Link>
+        </Button>
         <h1 className="font-display text-2xl font-semibold tracking-tight">Admission request</h1>
       </header>
       {!parsedId.success ? <p role="alert" className="text-sm text-destructive">This admission request link is invalid.</p> : <>

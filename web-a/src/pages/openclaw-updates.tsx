@@ -108,7 +108,7 @@ export function OpenClawUpdatesPage() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <header className="flex flex-col gap-2">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">OpenClaw updates</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Updates</h1>
         <p className="text-muted-foreground">Send a global upgrade notice. This is separate from an organization broadcast.</p>
       </header>
       <div ref={feedback} tabIndex={-1} role={sendError || storageError ? 'alert' : 'status'} className="flex flex-col gap-4 empty:hidden focus-visible:outline-2 focus-visible:outline-ring">

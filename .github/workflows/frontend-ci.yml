@@ -45,6 +45,3 @@ jobs:
         run: npm run build
       - name: Build final nginx image
         run: docker build --tag maraclaw-${{ matrix.package }}:ci .
-      - name: Smoke final nginx image
-        working-directory: .
-        run: bash deploy/smoke_frontend_image.sh maraclaw-${{ matrix.package }}:ci

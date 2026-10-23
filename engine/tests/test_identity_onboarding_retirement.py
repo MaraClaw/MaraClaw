@@ -155,6 +155,7 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
     info = ExternalUserInfo(provider_type="feishu", provider_union_id="union-123", email="ada@example.com", name="Ada")
     create = AsyncMock(return_value=user)
     update = AsyncMock(return_value=updated)
+    welcome = AsyncMock()
     with (
         patch(
             "app.services.registration_service.registration_service.find_or_create_identity",
@@ -167,6 +168,7 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
         patch("app.services.registration_service.resolve_email_config_async", AsyncMock(return_value=None)),
         patch("app.services.registration_service.registration_service.bind_org_member", AsyncMock()),
         patch("app.services.registration_service.participant_dao.create_for_user", AsyncMock()),
+        patch("app.services.org_welcome.send_organization_welcome", welcome),
         patch("app.services.auth_provider.user_dao.create", create),
         patch("app.services.sso_company_admission.user_dao.update", update),
     ):
@@ -174,6 +176,7 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
         result = await FeishuAuthProvider()._create_new_user(info, None)
     # Then
     assert result.identity is identity
+    welcome.assert_not_awaited()
     assert create.await_args is not None
     fields = create.await_args.kwargs["obj_in"]
     assert fields["identity_id"] == identity.id

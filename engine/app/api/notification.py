@@ -1,14 +1,18 @@
 """Notification API - list, count, mark-read, and broadcast."""
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
+from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx, flush_request_transaction
+from app.records.broadcast_email import NewBroadcastEmail
 from app.records.user import UserRecord
 from app.schemas.notification_responses import (
     NotificationBroadcastResponse,
@@ -16,7 +20,6 @@ from app.schemas.notification_responses import (
     NotificationResponse,
     NotificationUnreadCountResponse,
 )
-from app.services.system_email_service import BroadcastEmailRecipient, deliver_broadcast_emails
 
 router = APIRouter(tags=["notifications"])
 
@@ -30,9 +33,11 @@ CATEGORY_TYPE_MAP: dict[str, list[str]] = {
 
 
 def _types_for_category(category: str | None) -> list[str] | None:
-    if category not in (None, "") and category != "all" and category in CATEGORY_TYPE_MAP:
-        return CATEGORY_TYPE_MAP[category]
-    return None
+    if category is None or category == "all":
+        return None
+    if category not in CATEGORY_TYPE_MAP:
+        raise HTTPException(400, "Unknown notification category")
+    return CATEGORY_TYPE_MAP[category]
 
 
 @router.get("/notifications")
@@ -89,9 +94,12 @@ async def mark_read(
 
 
 @router.post("/notifications/read-all")
-async def mark_all_read(current_user: UserRecord = Depends(get_current_user)) -> NotificationReadResponse:
-    """Mark all notifications as read for the current user."""
-    await notification_dao.mark_all_read_for_user(current_user.id)
+async def mark_all_read(
+    current_user: UserRecord = Depends(get_current_user),
+    category: Annotated[str | None, Query()] = None,
+) -> NotificationReadResponse:
+    """Mark matching notifications as read for the current user."""
+    await notification_dao.mark_all_read_for_user(current_user.id, types=_types_for_category(category))
     return {"ok": True}
 
 
@@ -107,7 +115,6 @@ class BroadcastRequest(BaseModel):
 @router.post("/notifications/broadcast")
 async def broadcast_notification(
     req: BroadcastRequest,
-    background_tasks: BackgroundTasks,
     current_user: UserRecord = Depends(get_current_user),
 ) -> NotificationBroadcastResponse:
     """Send a notification to all users and agents in the current tenant.
@@ -124,7 +131,7 @@ async def broadcast_notification(
     count_users = 0
     count_agents = 0
     count_emails = 0
-    email_recipients: list[BroadcastEmailRecipient] = []
+    broadcast_id = uuid.uuid4()
 
     if req.send_email:
         from app.services.system_email_service import resolve_email_config_async
@@ -133,47 +140,52 @@ async def broadcast_notification(
         if not email_config:
             raise HTTPException(400, "System email is not configured. Please configure it in Platform Settings.")
 
-    users = await user_dao.list_active_for_tenant(
-        tenant_id,
-        exclude_user_id=current_user.id,
-        include_identity=req.send_email,
-    )
-    for user in users:
-        _ = await send_notification(
-            user_id=user.id,
-            type="broadcast",
-            title=req.title,
-            body=req.body,
-            sender_name=sender_name,
+    async with connection_ctx():
+        users = await user_dao.list_active_for_tenant(
+            tenant_id,
+            exclude_user_id=current_user.id,
+            include_identity=req.send_email,
         )
-        count_users += 1
-
-    agents = await agent_dao.list_for_tenant(tenant_id)
-    for agent in agents:
-        _ = await send_notification(
-            agent_id=agent.id,
-            type="broadcast",
-            title=req.title,
-            body=req.body,
-            sender_name=sender_name,
-        )
-        count_agents += 1
-
-    if req.send_email:
         for user in users:
-            if user.email in (None, ""):
-                continue
-            email_recipients.append(
-                BroadcastEmailRecipient(
-                    email=user.email,
-                    subject=req.title,
-                    body=(f"{req.body}\n\nSent by: {sender_name}" if req.body.strip() else f"Sent by: {sender_name}"),
-                ),
+            _ = await send_notification(
+                user_id=user.id,
+                type="broadcast",
+                title=req.title,
+                body=req.body,
+                sender_name=sender_name,
             )
-            count_emails += 1
+            count_users += 1
 
-    if email_recipients:
-        background_tasks.add_task(deliver_broadcast_emails, email_recipients)
+        agents = await agent_dao.list_for_tenant(tenant_id)
+        for agent in agents:
+            _ = await send_notification(
+                agent_id=agent.id,
+                type="broadcast",
+                title=req.title,
+                body=req.body,
+                sender_name=sender_name,
+            )
+            count_agents += 1
+
+        if req.send_email:
+            count_emails = await broadcast_email_dao.enqueue_many(
+                [
+                    NewBroadcastEmail(
+                        broadcast_id=broadcast_id,
+                        tenant_id=tenant_id,
+                        user_id=user.id,
+                        to_email=user.email,
+                        subject=req.title,
+                        body=(
+                            f"{req.body}\n\nSent by: {sender_name}" if req.body.strip() else f"Sent by: {sender_name}"
+                        ),
+                    )
+                    for user in users
+                    if user.email not in (None, "")
+                ]
+            )
+        await flush_request_transaction()
+
     return {
         "ok": True,
         "users_notified": count_users,

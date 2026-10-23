@@ -61,7 +61,7 @@ export function NotificationsPage() {
         {items.map((item) => {
           const link = safeNotificationLink(item.link)
           return <li key={item.id}>
-            <Card>
+            <Card className={item.is_read ? 'bg-card border-border' : 'bg-accent border-primary/30'}>
               <CardContent className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant={item.is_read ? 'secondary' : 'soft'}>{item.is_read ? 'Read' : 'Unread'}</Badge>

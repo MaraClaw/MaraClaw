@@ -1951,7 +1951,7 @@ wheels = [
 
 [[package]]
 name = "maraclaw"
-version = "2.2.2"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "aioboto3" },

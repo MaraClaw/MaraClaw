@@ -1,7 +1,7 @@
 # components/ - family router
 
-**Generated:** 2026-10-20
-**Commit:** 3942af0
+**Generated:** 2026-10-23
+**Commit:** e009080
 **Branch:** 2026Oct
 
 Parent: [web-e/AGENTS.md](../../AGENTS.md). Shared components span landing, auth, and member workspace; route and session contracts remain in the package guide.
@@ -10,7 +10,7 @@ Parent: [web-e/AGENTS.md](../../AGENTS.md). Shared components span landing, auth
 
 | Family / task | Source and local contract |
 |---------------|---------------------------|
-| `auth/` | `auth-shell.tsx` provides auth chrome; `sso-buttons.tsx` starts provider authorization. Flows: [pages guide](../pages/AGENTS.md). |
+| `auth/` | `auth-shell.tsx` provides auth chrome; `sso-buttons.tsx` starts provider authorization; `admission-pending.tsx` shows pending admission status and links to the request. Flows: [pages guide](../pages/AGENTS.md). |
 | `brand/` | `maraclaw-logo.tsx` exports MaraClawLogo; static counterpart is `public/maraclaw-mark.svg`. |
 | `chat/` | `markdown.tsx` exports ChatMarkdown, escaping text before its limited markup rendering. Socket lifecycle belongs in `lib/chat/`, not here. |
 | `layout/` | Workspace/agent rails, gates, marketing header/footer: [layout/AGENTS.md](./layout/AGENTS.md). |

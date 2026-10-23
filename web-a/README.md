@@ -54,7 +54,8 @@ docker build -t maraclaw-web-a \
   --build-arg VITE_API_BASE_URL=https://api.example.com \
   .
 
-docker run --rm -p 8080:8080 maraclaw-web-a
+# Prerequisite: engine already running with alias maraclaw-engine on maraclaw_network.
+docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 # open http://localhost:8080
 # health: http://localhost:8080/healthz
 ```
@@ -63,7 +64,7 @@ Notes:
 
 - Image runs as non-root (`nginx` uid), SPA fallback for React Router.
 - `VITE_AUTH_BYPASS` is ignored in production builds (`import.meta.env.DEV` only).
-- Edge/ingress should reverse-proxy `/api` → engine when `VITE_API_BASE_URL` is empty.
+- nginx proxies same-origin `/api/` → `http://maraclaw-engine:8000` without stripping `/api`. The engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
 
 ## Structure
 

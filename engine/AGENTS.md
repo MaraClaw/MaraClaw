@@ -1,7 +1,7 @@
 # Engine Platform Guide
 
-**Generated:** 2026-10-20
-**Commit:** 3942af0
+**Generated:** 2026-10-23
+**Commit:** e009080
 **Branch:** 2026Oct
 
 Monorepo router: `../AGENTS.md`. This guide owns engine-wide rules; nested guides own local contracts.
@@ -23,7 +23,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 | Tools / `TOOL_HANDLERS` | Under `app/services/`: `agent_tool_exec/registry.py` (`@register`), `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/`; seed vs OpenAI catalogs. `read_webpage`, `search_x` (xAI); Linkup skills handle web search. |
 | LLM | `app/services/llm/`: `caller.py` orchestrates, `factory.py` builds registered protocol clients; shared types from `base.py` / `types.py`. |
 | Storage / sandbox / workers / channels | Under `app/services/`: mixed flat files + `storage_runtime/`, `sandbox/registry.py` (`get_sandbox_backend`), `trigger_runtime/`, `realtime_runtime/`, `channels/`, `linkup/`, `*_stream.py`, `*_gateway.py`; facades `storage.py`, `realtime.py`. |
-| OpenClaw upgrades | `docs/openclaw-updates.md`: global notices (`app/api/openclaw_updates.py`, `openclaw_update_service.py`), gates (`openclaw_update_gate.py`, `openclaw_update_exclusion.py`), worker cutover/rollback (`openclaw_update_executor.py`, `_worker.py`, `_docker.py`, `_snapshot.py`, `_store.py`), `dao/openclaw_update_dao.py`. |
+| OpenClaw upgrades | `docs/openclaw-updates.md`: global notices (`app/api/openclaw_updates.py`, `openclaw_update_service.py`), gates (`openclaw_update_gate.py`, `openclaw_update_exclusion.py`), worker cutover/rollback (`openclaw_update_executor.py`, `openclaw_update_worker.py`, `openclaw_update_docker.py`, `openclaw_update_snapshot.py`, `openclaw_update_store.py`), `dao/openclaw_update_dao.py`. |
 | Documents | `app/services/document_parser/`: inbound local anydoc (`firecrawl-anydoc==0.2.4`), isolated spawn; `app/services/document_conversion/`: outbound conversion. |
 | Shared organization members | `org_members` retains identity/contact/profile fields and agent relationship references; provider department hierarchy and people sync are retired. SSO/auth and IM channels remain separate. |
 | Templates / scripts | `agent_template/` is copied workspace scaffold; `agent_templates/` is DB-seeded role catalog. `app/scripts/` holds bootstrap/one-offs; `scripts/` holds schema/freeze/lint helpers; `docs/` holds operations/refactoring. |

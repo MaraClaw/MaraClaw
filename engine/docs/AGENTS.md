@@ -15,7 +15,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | OpenClaw upgrades | `openclaw-updates.md` | Global notices, per-agent worker cutover/rollback, work and write gates, HTTP contract |
 | ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
-| Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Org-sync references are historical: provider directory sync is retired. Live split plan: repo `.omgb/plans/engine-top5-modularize-20260815.md`. `psycopg-migration.md` is **historical dual-stack**. |
+| Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Org-sync references are historical: provider directory sync is retired. `psycopg-migration.md` is **historical dual-stack**. |
 
 ## Update Triggers
 

@@ -12,7 +12,7 @@ from httpcore._backends.base import SOCKET_OPTION
 
 from app.core import outbound_policy, outbound_transport
 from app.core.outbound_policy import OutboundPolicyError
-from app.core.outbound_transport import public_http_client
+from app.core.outbound_transport import operator_http_client, public_http_client
 
 
 class RecordingStream(httpcore.AsyncNetworkStream):
@@ -287,4 +287,56 @@ async def test_policy_error_is_not_retried(wire: RecordingBackend, monkeypatch: 
         with pytest.raises(OutboundPolicyError):
             await client.get("https://public.example/")
     assert calls == 1
+    assert wire.connections == []
+
+
+async def test_operator_client_reaches_private_host_directly_with_verified_tls_and_no_proxies(
+    wire: RecordingBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://127.0.0.1:9999")
+    async with operator_http_client(timeout=1, origin="https://10.0.0.5:8443/api") as client:
+        response = await client.get("https://10.0.0.5:8443/status")
+    assert response.text == "ok"
+    assert wire.connections == ["10.0.0.5"]
+    assert wire.streams[0].tls == ("10.0.0.5", ssl.CERT_REQUIRED, True)
+    assert wire.streams[0].closed
+
+
+@pytest.mark.parametrize("target", ["https://10.0.0.6:8443/x", "https://10.0.0.5:9443/x", "http://10.0.0.5:8443/x"])
+async def test_operator_client_blocks_other_origins_before_connecting(wire: RecordingBackend, target: str) -> None:
+    async with operator_http_client(timeout=1, origin="https://10.0.0.5:8443") as client:
+        with pytest.raises(OutboundPolicyError):
+            await client.get(target, headers={"Authorization": "Bearer secret"})
+    assert wire.connections == []
+
+
+@pytest.mark.parametrize("location", ["https://10.0.0.5:8443/next", "https://other.example/x"])
+async def test_operator_client_never_follows_redirects(wire: RecordingBackend, location: str) -> None:
+    wire.responses = [f"HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n".encode()]
+    async with operator_http_client(timeout=1, origin="https://10.0.0.5:8443") as client:
+        response = await client.get("https://10.0.0.5:8443/start")
+    assert response.status_code == 302
+    assert wire.connections == ["10.0.0.5"]
+
+
+async def test_operator_client_blocks_host_and_sni_overrides(wire: RecordingBackend) -> None:
+    async with operator_http_client(timeout=1, origin="https://10.0.0.5:8443") as client:
+        request = client.build_request("GET", "https://10.0.0.5:8443/")
+        request.headers["host"] = "internal.example"
+        with pytest.raises(OutboundPolicyError):
+            await client.send(request)
+    assert wire.connections == []
+
+
+async def test_public_client_still_rejects_private_hosts_after_operator_client_exists(
+    wire: RecordingBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 6, "", ("10.0.0.5", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", lookup)
+    async with public_http_client(timeout=1, origin="https://10.0.0.5:8443") as client:
+        with pytest.raises(OutboundPolicyError):
+            await client.get("https://10.0.0.5:8443/")
     assert wire.connections == []

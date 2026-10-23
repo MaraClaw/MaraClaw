@@ -7,6 +7,9 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useAuth } from '@/hooks/use-auth'
+import { canViewTriggerExecutions } from '@/lib/trigger-executions-query'
+import { TriggerExecutionHistory } from './trigger-execution-history'
 import {
   completeFocus,
   createTask,
@@ -24,6 +27,7 @@ import {
 export function AgentTasksPage() {
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
+  const { user } = useAuth()
   const queryClient = useQueryClient()
   const [title, setTitle] = useState('')
   const [focusTitle, setFocusTitle] = useState('')
@@ -144,33 +148,38 @@ export function AgentTasksPage() {
         <h2 className="pt-4 font-display text-lg font-semibold">Triggers</h2>
         <ul className="space-y-2">
           {(triggers.data ?? []).map((trigger) => (
-            <li key={trigger.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2 text-sm">
-              <span>{trigger.name}</span>
-              <div className="flex items-center gap-2">
-                <label className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={trigger.is_enabled}
-                    onChange={(event) =>
-                      scope.isCurrent() && void patchTrigger(agent.id, trigger.id, { is_enabled: event.target.checked }).then(scope.effect(() =>
+            <li key={`${agent.id}:${trigger.id}`} className="min-w-0 rounded-xl border border-border px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 wrap-anywhere">{trigger.name}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={trigger.is_enabled}
+                      onChange={(event) =>
+                        scope.isCurrent() && void patchTrigger(agent.id, trigger.id, { is_enabled: event.target.checked }).then(scope.effect(() =>
+                          queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
+                        )).catch(scope.rethrowCurrent)
+                      }
+                    />
+                    Enabled
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      scope.isCurrent() && void deleteTrigger(agent.id, trigger.id).then(scope.effect(() =>
                         queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
                       )).catch(scope.rethrowCurrent)
                     }
-                  />
-                  Enabled
-                </label>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    scope.isCurrent() && void deleteTrigger(agent.id, trigger.id).then(scope.effect(() =>
-                      queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
-                    )).catch(scope.rethrowCurrent)
-                  }
-                >
-                  Delete
-                </Button>
+                  >
+                    Delete
+                  </Button>
+                </div>
               </div>
+              {canViewTriggerExecutions(agent, user) ? <TriggerExecutionHistory
+                target={{ agentId: agent.id, triggerId: trigger.id }} name={trigger.name}
+              /> : null}
             </li>
           ))}
         </ul>

@@ -4,8 +4,8 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
-import { NotificationBell } from '@/components/layout/notification-bell'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
@@ -22,9 +22,10 @@ const navItems: {
   admissionReviewOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
+  { to: '/notifications', label: 'Notifications', icon: 'notifications' },
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
-  { to: '/openclaw-updates', label: 'OpenClaw updates', icon: 'tools', platformAdminOnly: true },
+  { to: '/openclaw-updates', label: 'Updates', icon: 'tools', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
@@ -51,20 +52,29 @@ function NavItemContent({
   compact,
   active = false,
   dimmed = false,
+  unreadCount,
 }: {
   icon: NavIconName
   label: string
   compact?: boolean
   active?: boolean
   dimmed?: boolean
+  readonly unreadCount?: number
 }) {
   return (
     <>
-      <NavIcon
-        name={icon}
-        active={active}
-        className={cn(compact ? 'size-8' : 'size-12', dimmed && 'opacity-50')}
-      />
+      <span className="relative inline-flex shrink-0">
+        <NavIcon
+          name={icon}
+          active={active}
+          className={cn(compact ? 'size-8' : 'size-12', dimmed && 'opacity-50')}
+        />
+        {unreadCount !== undefined && unreadCount > 0 ? (
+          <Badge className="absolute -end-1 -top-1 min-w-5 px-1.5 py-0 text-center tabular-nums" aria-hidden>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </Badge>
+        ) : null}
+      </span>
       <span
         className={cn(
           'max-w-full text-center font-medium leading-tight text-pretty',
@@ -80,9 +90,11 @@ function NavItemContent({
 function NavItems({
   onNavigate,
   compact,
+  unreadCount,
 }: {
   onNavigate?: () => void
   compact?: boolean
+  readonly unreadCount?: number
 }) {
   const { mustChangePassword, user } = useAuth()
   const platformAdmin = isPlatformAdminUser(user)
@@ -93,6 +105,7 @@ function NavItems({
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (admissionReviewOnly && !canReviewAdmissions(user)) return null
+        const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
           return (
@@ -117,6 +130,7 @@ function NavItems({
             to={to}
             end={end}
             onClick={onNavigate}
+            aria-label={notificationCount === undefined ? undefined : `${label}, ${notificationCount} unread`}
             className={({ isActive }) =>
               navItemClass(
                 Boolean(compact),
@@ -130,7 +144,13 @@ function NavItems({
             }
           >
             {({ isActive }) => (
-              <NavItemContent icon={icon} label={label} compact={compact} active={isActive} />
+              <NavItemContent
+                icon={icon}
+                label={label}
+                compact={compact}
+                active={isActive}
+                unreadCount={notificationCount}
+              />
             )}
           </NavLink>
         )
@@ -164,11 +184,8 @@ export function AdminShell() {
             <p className="truncate text-xs text-muted-foreground">Admin Console</p>
           </div>
         </Link>
-        <div className="px-3 pb-3">
-          <NotificationBell expanded unreadCount={unread.data?.unread_count} locked={mustChangePassword} />
-        </div>
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Admin">
-          <NavItems />
+          <NavItems unreadCount={unread.data?.unread_count} />
           {mustChangePassword ? (
             <p className="px-2 pt-2 text-center text-xs leading-relaxed text-muted-foreground">
               Change your password on Account to unlock the rest of the console.
@@ -195,7 +212,6 @@ export function AdminShell() {
               <span className="font-display text-sm font-semibold">Admin</span>
             </Link>
             <div className="flex items-center gap-1">
-              <NotificationBell unreadCount={unread.data?.unread_count} locked={mustChangePassword} />
               <ThemeToggle />
               <Button variant="ghost" size="sm" onClick={logout}>
                 <LogOut className="size-3.5" aria-hidden />
@@ -208,7 +224,7 @@ export function AdminShell() {
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
             aria-label="Admin"
           >
-            <NavItems compact />
+            <NavItems compact unreadCount={unread.data?.unread_count} />
           </nav>
         </header>
         <main

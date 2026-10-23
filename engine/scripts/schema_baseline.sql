@@ -1156,6 +1156,34 @@ CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created
 
 CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
 
+CREATE TABLE IF NOT EXISTS broadcast_emails (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    broadcast_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    to_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+    available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    deliver_by TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() + INTERVAL '24 hours'),
+    claim_token UUID,
+    lease_expires_at TIMESTAMP WITH TIME ZONE,
+    last_error TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    settled_at TIMESTAMP WITH TIME ZONE,
+    CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL)),
+    CHECK ((status = 'pending') = (settled_at IS NULL)),
+    UNIQUE (broadcast_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_broadcast_emails_due
+    ON broadcast_emails (available_at, id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
+    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed');
+CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id);
+
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,
 	request_id UUID NOT NULL,

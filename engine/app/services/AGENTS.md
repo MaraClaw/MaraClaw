@@ -25,7 +25,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - Other flat hotspots include `skill_seeder.py`, `resource_discovery.py`, `heartbeat.py`, `agent_context.py`, `workspace_collaboration.py`, `email_service.py`, `template_seeder.py`, `channel_user_service.py`, `sso_service.py`, `dingtalk_stream.py`, and `okr_scheduler.py`; extend them only when the change belongs to that exact domain.
 - `chat_persist.py` wraps post-LLM message/session/`last_active_at` writes in one `connection_ctx`. `agent_context_cache.py` is the short-TTL Redis cache for soul/memory/skills; invalidate on those workspace writes only. Sets carry `observed_ver` so a stale fill cannot win after invalidate.
 - `im_token_cache.py` shares Feishu/WeCom/DingTalk bearer tokens across workers. Keys hash public id **and** secret. DingTalk OAuth2 vs oapi use different provider prefixes. Drop on channel config rotate and WeCom 401. `channels/dedup.py` `*_shared` helpers add Redis SET NX on top of the process-local store.
-- `agent_runtime/` is leftover `__pycache__` only (no `.py`, no importers). Do not add `AGENTS.md` or treat it as live. Same for deleted `group_*` / `heartbeat_runtime` bytecode.
+- `agent_runtime/` is removed. Do not recreate it, add `AGENTS.md`, or treat it as live. Same for deleted `group_*` / `heartbeat_runtime` bytecode.
 
 ## Guest Lifecycle
 

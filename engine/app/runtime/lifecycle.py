@@ -95,6 +95,7 @@ class Runtime:
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
             from app.services.agent_setup import start_agent_setup_worker
+            from app.services.broadcast_email_worker import start_broadcast_email_worker
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.linkup.export import start_web_search_export_daemon
             from app.services.openclaw_update_worker import start_openclaw_update_worker
@@ -103,6 +104,7 @@ class Runtime:
 
             self.tasks.start("trigger_daemon", start_trigger_daemon(), requirement="loop")
             self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
+            self.tasks.start("broadcast_email", start_broadcast_email_worker(), requirement="loop")
             self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
             self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")

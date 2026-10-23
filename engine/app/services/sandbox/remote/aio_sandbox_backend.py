@@ -15,8 +15,9 @@ from app.core.json_types import (
     json_object_from_response,
 )
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
-from app.services.sandbox.config import SandboxConfig
+from app.services.sandbox.config import ENDPOINT_BLOCKED_MESSAGE, SandboxConfig
 
 
 class AioSandboxBackend(BaseSandboxBackend):
@@ -41,7 +42,7 @@ class AioSandboxBackend(BaseSandboxBackend):
 
     def __init__(self, config: SandboxConfig):
         self.config: SandboxConfig = config
-        self.base_url: object = config.api_url.rstrip("/") if config.api_url else ""
+        self.base_url: str = config.api_url.rstrip("/") if config.api_url else ""
 
         if not self.base_url:
             raise ValueError(
@@ -62,9 +63,12 @@ class AioSandboxBackend(BaseSandboxBackend):
     async def health_check(self) -> bool:
         """Check if aio-sandbox service is available."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.base_url, timeout=5.0) as client:
                 response = await client.get(f"{self.base_url}/v1/sandbox", timeout=5.0)
                 return response.status_code == 200
+        except OutboundPolicyError:
+            logger.warning("[AioSandbox] Health check blocked by outbound network policy")
+            return False
         except Exception:
             return False
 
@@ -115,7 +119,7 @@ class AioSandboxBackend(BaseSandboxBackend):
             headers["Authorization"] = f"Bearer {self.config.api_key}"
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with self.config.http_client(base_url=self.base_url, timeout=float(timeout + 10)) as client:
                 response = await client.post(endpoint, json=payload, headers=headers, timeout=float(timeout + 10))
 
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -195,6 +199,17 @@ class AioSandboxBackend(BaseSandboxBackend):
                 exit_code=124,
                 duration_ms=duration_ms,
                 error=f"Code execution timed out after {timeout}s",
+            )
+
+        except OutboundPolicyError:
+            logger.warning("[AioSandbox] Execution blocked by outbound network policy")
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=1,
+                duration_ms=int((time.time() - start_time) * 1000),
+                error=ENDPOINT_BLOCKED_MESSAGE,
             )
 
         except Exception as e:

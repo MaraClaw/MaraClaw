@@ -1,7 +1,7 @@
 # web-e - end-user web UI
 
-**Generated:** 2026-10-20
-**Commit:** 3942af0
+**Generated:** 2026-10-23
+**Commit:** e009080
 **Branch:** 2026Oct
 
 Parent: [monorepo router](../AGENTS.md). Prefer the deepest guide below; engine routes/tests remain behavior truth.
@@ -69,5 +69,5 @@ docker build -t maraclaw-web-e .
 docker run --rm -p 8080:8080 maraclaw-web-e
 ```
 
-`npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs lint, `tsc -b`, `npm test`, build, Docker build, then `deploy/smoke_frontend_image.sh` from the repo root against the built image.
-Playwright `test:e2e` is separate: `e2e/landing.spec.ts` on preview :4173 covers only landing/login smoke, not broad `/app` or API behavior, and is not in current frontend CI.
+`npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs lint, `tsc -b`, `npm test`, build and Docker build.
+Playwright `test:e2e` is separate: `playwright.config.ts` uses `testDir: './e2e'` (currently 32 `*.spec.ts` files, including workspace, auth, chat, schedules and notifications), with a build + preview webServer at `http://127.0.0.1:4173`. `test:e2e` is not run in `frontend-ci.yml`.

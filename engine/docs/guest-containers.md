@@ -2,8 +2,7 @@
 
 This describes the implemented engine policy, not live-host validation or a
 capacity recommendation. It does not update existing guests automatically and
-does not add a worker auto-restart feature. Deployment admission remains separate;
-see [autoscaling policy](../../deploy/AUTOSCALING.md#policy-and-admission).
+does not add a worker auto-restart feature. Deployment admission is not documented here.
 
 ## Ownership And Replacement
 

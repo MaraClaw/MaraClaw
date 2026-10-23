@@ -220,6 +220,8 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: str) ->
                     raise DefaultOrgUnavailableError("Organization is disabled")
                 user = current_user
                 tenant = current_tenant
+            if user.tenant_id == tenant.id:
+                return user
             if previous_tenant_id is not None and previous_tenant_id != tenant.id:
                 await org_member_dao.unbind_user_from_tenant(user.id, previous_tenant_id)
             updated = await user_dao.update(

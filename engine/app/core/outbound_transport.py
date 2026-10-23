@@ -52,13 +52,13 @@ class _PublicNetworkBackend(httpcore.AsyncNetworkBackend):
 
 
 class _PublicHTTPTransport(httpx.AsyncHTTPTransport):
-    def __init__(self, timeout: float, origin: str | None) -> None:
+    def __init__(self, timeout: float, origin: str | None, *, public_only: bool = True) -> None:
         context = ssl.create_default_context()
         super().__init__(verify=context, trust_env=False)
         self._origin: str | None = str(_parse_url(origin)) if origin is not None else None
         self._pool: httpcore.AsyncConnectionPool = httpcore.AsyncConnectionPool(
             ssl_context=context,
-            network_backend=_PublicNetworkBackend(timeout),
+            network_backend=_PublicNetworkBackend(timeout) if public_only else AnyIOBackend(),
             retries=0,
             max_connections=100,
             max_keepalive_connections=20,
@@ -86,5 +86,19 @@ def public_http_client(
         transport=_PublicHTTPTransport(timeout, origin),
         timeout=timeout,
         follow_redirects=follow_redirects,
+        trust_env=False,
+    )
+
+
+def operator_http_client(*, timeout: float, origin: str) -> httpx.AsyncClient:
+    """Create a client for an operator-owned endpoint that may resolve to a private address.
+
+    Only server-established configuration may call this. The origin guard, TLS verification, proxy-free
+    transport and absence of redirects match ``public_http_client``; only the public-address check is lifted.
+    """
+    return httpx.AsyncClient(
+        transport=_PublicHTTPTransport(timeout, origin, public_only=False),
+        timeout=timeout,
+        follow_redirects=False,
         trust_env=False,
     )

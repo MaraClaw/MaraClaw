@@ -37,6 +37,66 @@ async function prepare(page: Page, detail: AdmissionDetail = pending, tenantId: 
   return calls
 }
 
+for (const width of [390, 1440]) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`detail Back link remains labelled and keyboard-operable at ${width}px in ${theme}`, async ({ page }) => {
+      // Given
+      await prepare(page)
+      await page.setViewportSize({ width, height: 900 })
+      await page.addInitScript((value) => localStorage.setItem('maraclaw-theme', value), theme)
+      await page.goto('/app/admissions/request-a')
+      const back = page.getByRole('link', { name: 'All admission requests', exact: true })
+      await expect(back).toBeVisible()
+      await expect(back).toHaveAttribute('href', '/app/admissions')
+      await expect(back.locator('svg[aria-hidden="true"]')).toHaveCount(1)
+      await expect(back).toHaveCSS('border-radius', '16px')
+      await expect(back).toHaveCSS('border-top-width', '1px')
+      expect((await back.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+      // When
+      await back.focus()
+      await expect(back).toBeFocused()
+      await expect(back).not.toHaveCSS('box-shadow', 'none')
+      await back.press('Enter')
+      // Then
+      await expect(page).toHaveURL('/app/admissions')
+    })
+
+    for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) {
+      test(`detail ${status} badge keeps its semantic colour at ${width}px in ${theme}`, async ({ page }) => {
+        // Given
+        await prepare(page, { ...pending, status })
+        await page.setViewportSize({ width, height: 900 })
+        await page.addInitScript((value) => localStorage.setItem('maraclaw-theme', value), theme)
+        const styles = {
+          pending: { color: 'var(--foreground)', background: 'var(--card)', border: 'var(--border)' },
+          approved: { color: `var(--color-emerald-${theme === 'dark' ? '300' : '700'})`, background: 'color-mix(in oklab, var(--color-emerald-500) 12%, transparent)', border: 'transparent' },
+          rejected: { color: 'var(--destructive)', background: 'color-mix(in oklab, var(--destructive) 12%, transparent)', border: 'transparent' },
+          withdrawn: { color: 'var(--foreground)', background: 'var(--card)', border: 'var(--border)' },
+        } satisfies Record<AdmissionDetail['status'], Readonly<{ color: string; background: string; border: string }>>
+        // When
+        await page.goto('/app/admissions/request-a')
+        // Then
+        const badge = page.getByRole('region', { name: 'Admission status' }).locator('[data-slot="badge"]')
+        await expect(badge).toBeVisible()
+        const colours = await badge.evaluate((element, expected) => {
+          const probe = document.createElement('span')
+          Object.assign(probe.style, { color: expected.color, backgroundColor: expected.background, borderColor: expected.border })
+          document.body.append(probe)
+          const actualStyle = getComputedStyle(element)
+          const expectedStyle = getComputedStyle(probe)
+          const result = {
+            actual: [actualStyle.color, actualStyle.backgroundColor, actualStyle.borderTopColor],
+            expected: [expectedStyle.color, expectedStyle.backgroundColor, expectedStyle.borderTopColor],
+          }
+          probe.remove()
+          return result
+        }, styles[status])
+        expect(colours.actual).toEqual(colours.expected)
+      })
+    }
+  }
+}
+
 for (const flow of ['suggested join', 'invite transfer', 'domain transfer'] as const) {
   test(`${flow} persists a pending request without replacing the source session`, async ({ page }) => {
     // Given

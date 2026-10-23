@@ -8,7 +8,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - `main.py` imports `lifespan()` from `runtime/lifecycle.py`: pool initialization, role-gated bootstrap, then realtime/worker/connector work. Ownership/readiness/shutdown: `runtime/AGENTS.md`.
 - `config.py` is the only pydantic-settings surface. New env vars need `.env.example` (includes `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`).
 - `db/` is the live data layer. Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/` or `app/database.py`.
-- `templates/` is a **third** template tree: fallback `HEARTBEAT.md` + `reflections.md` copied by `agent_manager` when a workspace is missing them. Not `agent_template/` (scaffold) and not `agent_templates/` (role catalog).
+- `templates/` is a **third** template tree: fallback `HEARTBEAT.md` + `reflections.md` loaded in `services/agent_workspace.py`; `write_missing_agent_files`, invoked from `agent_manager` and `agent_setup`, writes missing workspace files. Not `agent_template/` (scaffold) and not `agent_templates/` (role catalog).
 
 ## Local Rules
 

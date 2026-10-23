@@ -11,6 +11,7 @@ from app.core.json_types import int_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.db.errors import LockNotAvailableError, UniqueViolationError
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
+from app.records.trigger_execution_history import TriggerExecutionHistoryRecord
 
 ENQUEUE_LOCK_ATTEMPTS = 3
 
@@ -188,6 +189,30 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
     table: ClassVar[str] = "trigger_executions"
     columns: ClassVar[tuple[str, ...]] = _EXECUTION_COLUMNS
     record_factory = staticmethod(TriggerExecutionRecord.from_row)
+
+    async def list_history_for_trigger(
+        self,
+        agent_id: UUID,
+        trigger_id: UUID,
+        *,
+        limit: int = 21,
+        before: tuple[datetime, UUID] | None = None,
+    ) -> list[TriggerExecutionHistoryRecord]:
+        """Read a bounded safe projection, including at most one page lookahead."""
+        params: dict[str, object] = {"agent_id": agent_id, "trigger_id": trigger_id, "limit": max(1, min(limit, 101))}
+        position_filter = ""
+        if before is not None:
+            position_filter = " AND (created_at, id) < (%(before_created_at)s, %(before_id)s)"
+            params.update(before_created_at=before[0], before_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id, trigger_id, agent_id, source, status, scheduled_at, started_at, finished_at, created_at "
+                "FROM trigger_executions WHERE agent_id = %(agent_id)s AND trigger_id = %(trigger_id)s"
+                + position_filter
+                + " ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
+                params,
+            )
+        return [TriggerExecutionHistoryRecord.from_row(row) for row in rows]
 
     async def renew_lease(self, execution_id: UUID, *, lease_token: str, lease_until: datetime) -> bool:
         async with self.session() as db:

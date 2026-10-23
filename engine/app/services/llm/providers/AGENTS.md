@@ -30,7 +30,7 @@ Provider-specific LLM clients live here. They translate external protocols into 
 
 ## Avoid
 
-- Do not add provider parsing or protocol-specific retries to `llm/client.py`; it is compatibility glue.
+- `llm/client.py` is retired; keep provider parsing and protocol-specific retries in the owning provider modules, not a recreated compatibility facade.
 - Do not bypass the parent `finish` tool protocol or tool-call sanitization from provider code.
 - HTTP is acquired from `app.services.llm.http_pool`. Wrapper `close()` detaches only; do not `aclose()` the pooled transport.
 - Do not log API keys, request headers, raw credentials, or full prompt payloads in provider errors.

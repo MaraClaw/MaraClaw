@@ -1,4 +1,6 @@
 import uuid
+from collections.abc import Sequence
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +12,8 @@ from app.api import auth as auth_api
 from app.api.notification import BroadcastRequest, broadcast_notification
 from app.config import Settings
 from app.core.security import hash_password, verify_password
+from app.records.broadcast_email import NewBroadcastEmail
+from app.records.user import UserRecord
 from app.schemas.schemas import ForgotPasswordRequest, ResetPasswordRequest
 from app.services import (
     frontend_origin,
@@ -459,7 +463,7 @@ async def test_reset_password_updates_user(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_broadcast_notification_rejects_missing_system_email_config(monkeypatch):
-    current_user = make_user(role="org_admin")
+    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin", display_name="Alice")
 
     async def fake_resolve_email_config_async():
         return None
@@ -472,7 +476,6 @@ async def test_broadcast_notification_rejects_missing_system_email_config(monkey
     with pytest.raises(HTTPException) as excinfo:
         await broadcast_notification(
             BroadcastRequest(title="Maintenance", body="Tonight", send_email=True),
-            background_tasks=BackgroundTasks(),
             current_user=current_user,
         )
 
@@ -482,9 +485,16 @@ async def test_broadcast_notification_rejects_missing_system_email_config(monkey
 
 @pytest.mark.asyncio
 async def test_broadcast_notification_queues_email_delivery(monkeypatch):
-    current_user = make_user(role="org_admin")
+    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin", display_name="Alice")
     target_user = make_user(email="bob@example.com", tenant_id=current_user.tenant_id)
-    background_tasks = BackgroundTasks()
+    accepted: list[NewBroadcastEmail] = []
+
+    async def enqueue(items: Sequence[NewBroadcastEmail]) -> int:
+        accepted.extend(items)
+        return len(items)
+
+    monkeypatch.setattr("app.api.notification.connection_ctx", nullcontext)
+    monkeypatch.setattr("app.api.notification.broadcast_email_dao.enqueue_many", enqueue)
 
     async def fake_resolve_email_config_async():
         return configured_system_email()
@@ -510,34 +520,13 @@ async def test_broadcast_notification_queues_email_delivery(monkeypatch):
 
     response = await broadcast_notification(
         BroadcastRequest(title="Maintenance", body="Tonight", send_email=True),
-        background_tasks=background_tasks,
         current_user=current_user,
     )
 
     assert response["ok"] is True
     assert response["emails_sent"] == 1
     assert len(notifications) == 1
-    assert len(background_tasks.tasks) == 1
-
-
-@pytest.mark.asyncio
-async def test_deliver_broadcast_emails_continues_after_single_failure(monkeypatch):
-    from app.services.system_email_service import BroadcastEmailRecipient, deliver_broadcast_emails
-
-    delivered = []
-
-    async def fake_send_system_email(email: str, subject: str, body: str) -> None:
-        if email == "bad@example.com":
-            raise RuntimeError("smtp down")
-        delivered.append((email, subject, body))
-
-    monkeypatch.setattr("app.services.system_email_service.send_system_email", fake_send_system_email)
-
-    await deliver_broadcast_emails(
-        [
-            BroadcastEmailRecipient(email="bad@example.com", subject="s1", body="b1"),
-            BroadcastEmailRecipient(email="good@example.com", subject="s2", body="b2"),
-        ]
-    )
-
-    assert delivered == [("good@example.com", "s2", "b2")]
+    assert [(item.user_id, item.to_email, item.subject, item.body) for item in accepted] == [
+        (target_user.id, "bob@example.com", "Maintenance", "Tonight\n\nSent by: Alice")
+    ]
+    assert accepted[0].tenant_id == current_user.tenant_id

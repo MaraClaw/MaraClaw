@@ -8,13 +8,17 @@ Supports both:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
-from dataclasses import dataclass
+import smtplib
+from contextvars import Context
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid
-from typing import TypedDict
+from functools import partial
+from typing import Literal, TypedDict
+
+import anyio
 
 from app.core.email import send_smtp_email
 from app.core.json_types import json_as_str, json_object_from
@@ -57,13 +61,45 @@ class SystemEmailConfig:
     smtp_timeout_seconds: int
 
 
-@dataclass(slots=True)
-class BroadcastEmailRecipient:
-    """Prepared broadcast recipient payload."""
+@dataclass(frozen=True, slots=True)
+class EmailAttemptOutcome:
+    """Broadcast SMTP result; error codes never include message content or credentials."""
 
-    email: str
-    subject: str
-    body: str
+    kind: Literal["sent", "not_configured", "permanent", "transient"]
+    error: str | None = None
+
+
+async def attempt_email(to: str, subject: str, body: str, *, message_id: str) -> EmailAttemptOutcome:
+    """Attempt one broadcast message without inheriting a caller's DB transaction.
+
+    Cancellation propagates, even while the native SMTP thread is still running.
+    The worker must then exit without settling or starting another batch.
+    """
+    config = await asyncio.create_task(resolve_email_config_async(), context=Context())
+    if config is None:
+        return EmailAttemptOutcome("not_configured", "not_configured")
+    send = partial(
+        _send_email_with_config_sync,
+        replace(config, smtp_timeout_seconds=min(config.smtp_timeout_seconds, 15)),
+        to,
+        subject,
+        body,
+        message_id=message_id,
+    )
+    try:
+        await anyio.to_thread.run_sync(partial(Context().run, send), abandon_on_cancel=True)
+    except smtplib.SMTPRecipientsRefused as exc:
+        codes = [code for code, _message in exc.recipients.values()]
+        permanent = bool(codes) and all(500 <= code < 600 for code in codes)
+        return EmailAttemptOutcome("permanent" if permanent else "transient", "recipient_refused")
+    except smtplib.SMTPResponseException as exc:
+        kind = "permanent" if 500 <= exc.smtp_code < 600 else "transient"
+        return EmailAttemptOutcome(kind, f"smtp_{exc.smtp_code}")
+    except (smtplib.SMTPNotSupportedError, ValueError, UnicodeError) as exc:
+        return EmailAttemptOutcome("permanent", type(exc).__name__)
+    except (smtplib.SMTPException, OSError) as exc:
+        return EmailAttemptOutcome("transient", type(exc).__name__)
+    return EmailAttemptOutcome("sent")
 
 
 async def resolve_email_config_async(*, include_disabled: bool = False) -> SystemEmailConfig | None:
@@ -122,13 +158,15 @@ async def send_system_email(to: str, subject: str, body: str) -> None:
     await asyncio.to_thread(_send_email_with_config_sync, config, to, subject, body)
 
 
-def _send_email_with_config_sync(config: SystemEmailConfig, to: str, subject: str, body: str) -> None:
+def _send_email_with_config_sync(
+    config: SystemEmailConfig, to: str, subject: str, body: str, *, message_id: str | None = None
+) -> None:
     """Send email with provided config."""
     msg = MIMEMultipart()
     msg["From"] = formataddr((config.from_name, config.from_address))
     msg["To"] = to
     msg["Subject"] = subject
-    msg["Message-ID"] = make_msgid()
+    msg["Message-ID"] = make_msgid() if message_id is None else message_id
     msg["Date"] = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S %z")
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
@@ -189,15 +227,6 @@ async def send_company_invitation_email(
     }
     subject, body = await render_email_template("company_invitation", variables)
     await send_system_email(to, subject, body)
-
-
-async def deliver_broadcast_emails(recipients: Iterable[BroadcastEmailRecipient]) -> None:
-    """Deliver broadcast emails while isolating per-recipient failures."""
-    for recipient in recipients:
-        try:
-            await send_system_email(recipient.email, recipient.subject, recipient.body)
-        except Exception as exc:
-            logger.warning("Failed to deliver broadcast email to %s: %s", recipient.email, exc)
 
 
 # ── Email Templates ──────────────────────────────────────────────────────────

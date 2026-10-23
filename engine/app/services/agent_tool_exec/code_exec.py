@@ -7,6 +7,7 @@ from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.sandbox.config import SandboxConfigOverrides
+from app.services.tool_runtime.provenance import config_provenance
 
 from .registry import ToolArguments, ToolOutputCallback
 
@@ -106,7 +107,10 @@ async def _execute_code(
         tool_config = await agent_tools._get_tool_config(agent_id, tool_name)
 
         if tool_config is not None and tool_config:
-            sandbox_config = SandboxConfig.from_dict(_sandbox_overrides(tool_config), fallback_config)
+            # Loader provenance travels beside the JSON overrides, never inside them.
+            sandbox_config = SandboxConfig.from_dict(
+                _sandbox_overrides(tool_config), fallback_config, provenance=config_provenance(tool_config)
+            )
         else:
             sandbox_config = fallback_config
             logger.info(f"[Sandbox] No per-agent config found for '{tool_name}', using fallback")

@@ -41,19 +41,22 @@ ENV_DENYLIST_REGEX='^(PATH|HOME|USER|SHELL|PWD|OLDPWD|TMPDIR|LANG|LC_ALL|TERM|HO
 
 # ---- Load .env (host-side) -------------------------------------------------
 ENV_FILE="${ENV_FILE:-.env}"
+case "$ENV_FILE" in
+    /*) ;;
+    *) ENV_FILE="./$ENV_FILE" ;;
+esac
 ENV_KEYS=""
 if [ -f "$ENV_FILE" ]; then
     echo "[docker-run] Sourcing $ENV_FILE into host shell"
     set -a
     # shellcheck disable=SC1090
-    . "./$ENV_FILE"
+    . "$ENV_FILE"
     set +a
 
     # Collect KEY names declared in the file (KEY=... lines only, no comments).
     # We forward these to the container via -e KEY.
-    ENV_KEYS=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" \
-                   | sed -E 's/=.*//' \
-                   | grep -vE "$ENV_DENYLIST_REGEX" \
+    ENV_KEYS=$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$ENV_FILE" \
+                   | sed -E "/$ENV_DENYLIST_REGEX/d" \
                    | sort -u)
 fi
 
@@ -185,7 +188,7 @@ RUN_ARGS=(
 
 # Host `docker` is often macOS Mach-O and cannot run in the Linux engine.
 # Mount a Linux CLI so python-on-whales works even on an older engine image.
-DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:29.9.0-cli}"
+DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:29.9.2-cli}"
 DOCKER_CLI_HOST="$DATA_DIR/.bin/docker"
 if [ ! -x "$DOCKER_CLI_HOST" ]; then
     echo "[docker-run] Fetching Linux docker CLI from $DOCKER_CLI_IMAGE"

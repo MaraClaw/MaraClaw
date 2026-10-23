@@ -18,7 +18,14 @@ from app.services.wechat_channel import WeChatPollManager
 async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
 ) -> None:
-    from app.services import agent_setup, audit_logger, gateway_report_relay, scheduler, trigger_daemon
+    from app.services import (
+        agent_setup,
+        audit_logger,
+        broadcast_email_worker,
+        gateway_report_relay,
+        scheduler,
+        trigger_daemon,
+    )
     from app.services.linkup import export
 
     runtime = lifecycle.Runtime()
@@ -60,6 +67,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
     monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
+    monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)

@@ -1,7 +1,7 @@
 # web-a - Admin Console
 
-**Generated:** 2026-10-20
-**Commit:** 3942af0
+**Generated:** 2026-10-23
+**Commit:** e009080
 **Branch:** 2026Oct
 
 Parent: `../AGENTS.md`. Follow the owning child guide below for implementation details.
@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains, Users + org departments, Models, Tools catalog/MCP/configuration, Linkup keys + search analytics.
+Live: auth, force-change, companies + claimed domains, Users + org departments, Models, Tools catalog/MCP/configuration, Linkup keys + search analytics, Broadcast, Notifications, Activity, OpenClaw updates (`/openclaw-updates`, platform admin).
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -31,7 +31,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - JWT storage: `maraclaw-admin-token`. `AuthProvider` bootstraps `GET /api/auth/me`; reject non-admin roles even after valid credentials.
 - OR `must_change_password` from token / `user` / `identity`. Redirect to `/account`; allow `/account`, `/settings` and their subpaths until cleared. After `PUT /api/auth/me/password`, call `refreshUser()`.
 - `403 { must_change_password: true }` means force-change, not logout. Keep the token.
-- Companies + Search require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
+- Companies + Search + OpenClaw updates require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 
@@ -58,16 +58,16 @@ npx tsc -b
 npm test
 npm run build
 docker build -t maraclaw-web-a .
-docker run --rm -p 8080:8080 maraclaw-web-a
+docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 ```
 
-`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: 11 Node test files, not a browser runner.
-No npm e2e script exists; the three `tests/*.browser.mjs` scripts are standalone browser checks, outside `npm test` and CI.
-`../.github/workflows/frontend-ci.yml`: lint, `tsc -b`, tests, build, Docker build, then final-image `../deploy/smoke_frontend_image.sh`.
+`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: 26 Node test files, not a browser runner.
+No npm e2e script exists; the 14 `tests/*.browser.mjs` files include standalone browser checks, harnesses and fixtures. No npm script runs them; they are outside CI.
+`../.github/workflows/frontend-ci.yml`: lint, `tsc -b`, tests, build, Docker build.
 
 ## DEVELOPMENT AND PRODUCTION
 
 - `vite.config.ts`: dev `:5174`; `/api` proxies to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. This is dev-only.
-- `Dockerfile` + `docker/nginx.conf`: Node 26.12.1 build, nginx-unprivileged static SPA on `:8080`, CSP and `/healthz`; no production `/api` proxy. Route API traffic at the edge.
+- `Dockerfile` + `docker/nginx.conf`: Node 26.12.1 build, nginx-unprivileged SPA on `:8080`, CSP and `/healthz`; `/api/` proxies to `http://maraclaw-engine:8000` preserving `/api`. Engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
 - `.env.example`: empty `VITE_API_BASE_URL` = same-origin; image override is `--build-arg VITE_API_BASE_URL=...`.
 - Reset emails: engine `public_base_url` must point at this admin app.

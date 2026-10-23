@@ -56,14 +56,14 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         clauses = ["user_id = %(user_id)s"]
         if unread_only:
             clauses.append("is_read IS FALSE")
-        if types is not None and types:
+        if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
         where = " AND ".join(clauses)
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM notifications "
-                + f"WHERE {where} ORDER BY created_at DESC "
+                + f"WHERE {where} ORDER BY created_at DESC, id DESC "
                 + "OFFSET %(offset)s LIMIT %(limit)s",
                 params,
             )
@@ -77,7 +77,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
     ) -> int:
         params: dict[str, object] = {"user_id": user_id}
         clauses = ["user_id = %(user_id)s", "is_read IS FALSE"]
-        if types is not None and types:
+        if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
         where = " AND ".join(clauses)
@@ -104,11 +104,17 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 {"id": notification_id, "user_id": user_id},
             )
 
-    async def mark_all_read_for_user(self, user_id: UUID) -> None:
+    async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[str] | None = None) -> None:
+        params: dict[str, object] = {"user_id": user_id}
+        clauses = ["user_id = %(user_id)s", "is_read IS FALSE"]
+        if types is not None:
+            clauses.append("type = ANY(%(types)s)")
+            params["types"] = list(types)
+        where = " AND ".join(clauses)
         async with self.session() as db:
             await db.execute(
-                "UPDATE notifications SET is_read = TRUE WHERE user_id = %(user_id)s AND is_read IS FALSE",
-                {"user_id": user_id},
+                f"UPDATE notifications SET is_read = TRUE WHERE {where}",
+                params,
             )
 
     async def delete_system_task_failed(

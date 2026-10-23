@@ -1,6 +1,6 @@
 # lib/ - engine clients
 
-**Generated:** 2026-10-07 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-10-23 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -13,20 +13,30 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `api.ts` | `getApiBaseUrl` / `apiUrl` / `wsUrl`. Empty `VITE_API_BASE_URL` = same-origin. Rejects hostname `0.0.0.0`. |
 | `http.ts` | Only fetch wrapper: `apiRequest`, `apiFormRequest`, `apiBinaryRequest`, `ApiError`, `formatApiDetail`, `userFacingRequestError`. Bearer unless `token` overridden. Owner fences cover headers/body awaits; current-owner 401 expires that session. JSON 204 → `undefined`. Binary previews stream with a 20 MiB cap, no-store and no redirects. |
 | `auth-storage.ts` | localStorage `maraclaw-enduser-token` |
-| `auth-api.ts` | `/api/auth/*` and `/api/tenants/*` (login/register/SSO/password/join/switch). Public calls pass `token: null`. |
+| `auth-api.ts` | `/api/auth/*` and `/api/tenants/*` (login/register/SSO/password/join/switch). `issueChatTicket` mints tickets via POST `/api/auth/chat-ticket`. Public calls pass `token: null`. |
 | `types/auth.ts` | `UserOut`, `TokenResponse`, `MultiTenantResponse`, `isPlatformAdminUser`, `isTokenResponse` |
 | `company-admissions-api.ts`, `types/company-admissions.ts` | Zod-parsed applicant request summaries/details from `/api/company-admissions/mine` and `/:id`; owner/signal-fenced. Pending join/transfer/register responses reuse the summary schema without installing target membership. |
 | `sso-storage.ts` | sessionStorage `maraclaw-sso-state` / `provider` / `intent` |
 | `auth-highlights.ts` | AuthShell copy for forgot/reset/verify/sso. Login/register inline their own. |
-| `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, schedules, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, notifications, onboarding + `ONBOARDING_SKIP_KEY`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
+| `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, onboarding + `ONBOARDING_SKIP_KEY`. Re-exports schedule operations and `ScheduleOut` from `schedules-api.ts`; notifications live in `notifications-api.ts`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
+| `notifications-api.ts` | Zod-parsed notification lists and unread counts; mark-one/read-all requests under `/api/notifications`. Defines `unreadNotificationCount`. |
+| `schedules-api.ts` | Zod-parsed schedule CRUD, manual runs, run receipts/cancellation and history, including cursor-paginated outcome filters. |
+| `schedule-editor.ts` | `ScheduleDraft`, default draft values and changed-field patches via `scheduleChanges`. |
+| `schedule-time.ts` | IANA timezone validation and next-run formatting in the schedule's timezone. |
+| `openclaw-updates-api.ts` | Zod-parsed update notice details, per-agent update status and upgrade requests. |
+| `openclaw-update-policy.ts` | `openclawUpdateRoute` (`updates/:noticeId`), notice/settings paths and OpenClaw update work/outlet gates. |
+| `trigger-executions-api.ts` | Owner/signal-fenced, Zod-parsed cursor pages from `/api/agents/:agentId/triggers/:triggerId/executions`. |
+| `trigger-executions-query.ts` | Trigger execution visibility checks and session-scoped infinite-query options. |
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
 | `plaza-api.ts` | `/api/plaza/*` |
 | `okr-api.ts` | `/api/okr/*` |
 | `directory-api.ts` | People directory: `/api/org/users`. Provider organization directory/sync is retired. Not org departments. |
 | `org-departments-api.ts` | Own-tenant org department summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from the people directory and agent grants. |
 | `agent-departments-api.ts` | `GET /api/agents/:id/permissions/departments` for the permissions tab. |
-| `chat/ws-client.ts` | `connectAgentChat` issues a fresh bearer-authenticated `/api/auth/chat-ticket` per attempt, then `WS /ws/chat/{agentId}?ticket=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. No JWT in the socket URL. |
+| `chat/ws-client.ts` | `connectAgentChat` calls `issueChatTicket` in `auth-api.ts` for a fresh bearer-authenticated ticket per attempt, then `WS /ws/chat/{agentId}?ticket=&lang=&session_id=`. Reconnect backoff. Stops on 4001/4003. No JWT in the socket URL. |
 | `attachment-preview-api.ts`, `attachment-cache.ts`, `attachment-request.ts`, `office-preview.ts` | Chat-only metadata/bytes preview; metadata reauthorizes every opening before cached display. A single owner-object/agent/path/version LRU holds at most 64 MiB, 20 MiB per entry; retirement/denial/version change evicts. Query deduplicates requests but stores no binary results. View-local object URLs are revoked; PDF/Office workers receive copies. Lazy local DOCX/XLSX/PPTX viewers disable hyperlinks, external fonts and optional engines; archive admission is 32 MiB/entry, 64 MiB total, 2000 entries, with bounded worker/load time and owned-viewer destruction. Legacy Office stays download-only. |
+| `file-download.ts` | Files-tab preview state/reducer; ignores stale request events and permits one re-mint after an image error. |
+| `relative-time.ts` | `relativeTime` formats timestamps with `Intl.RelativeTimeFormat`. |
 | `utils.ts` | `cn()` |
 | `motion.ts` | Landing tokens only (`easeOut`, `fadeUp`, …). `springSnappy` unused. `/app` does not import this. |
 

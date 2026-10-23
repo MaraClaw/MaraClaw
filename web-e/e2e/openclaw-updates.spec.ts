@@ -60,6 +60,32 @@ for (const width of [390, 1440, 1920]) {
   for (const colorScheme of ['light', 'dark'] as const) {
     test.describe(`${width}, ${colorScheme}`, () => {
       test.use({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390, deviceScaleFactor: width === 390 ? 3 : 1, colorScheme, reducedMotion: 'reduce' })
+      test('notification detail groups content in a card below the back link', async ({ page }, testInfo) => {
+        // Given
+        await prepare(page)
+        await page.goto('/app/notifications')
+        // When
+        await page.getByRole('link', { name: `Open notification: ${notice.title}` }).click()
+        // Then
+        const back = page.getByRole('link', { name: 'Back to Inbox', exact: true })
+        await expect(back).toBeVisible()
+        await expect(back.locator('svg.lucide-arrow-left')).toBeVisible()
+        await expect(back.locator('svg.lucide-arrow-left')).toHaveAttribute('aria-hidden', 'true')
+        const detail = page.locator('[data-slot="card"]').filter({ has: page.getByRole('heading', { name: notice.title, exact: true }) })
+        await expect(detail).toBeVisible()
+        await expect(detail).toHaveCSS('border-top-width', '1px')
+        await expect(detail).toHaveCSS('border-top-style', 'solid')
+        await expect(detail.getByText(notice.body)).toBeVisible()
+        await expect(detail.getByRole('region', { name: 'Agents for this update' })).toBeVisible()
+        await expect(detail.getByRole('link', { name: 'Back to Inbox', exact: true })).toHaveCount(0)
+        expect(await back.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThan(await detail.evaluate((element) => element.getBoundingClientRect().top))
+        await page.screenshot({ path: testInfo.outputPath('notice-detail.png') })
+        await back.focus()
+        await expect(back).toBeFocused()
+        await back.press('Enter')
+        await expect(page).toHaveURL('/app/notifications')
+        await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+      })
       test('mandatory upgrade stays gated through failure and releases on completion', async ({ page }, testInfo) => {
       // Given
       const state = await prepare(page)

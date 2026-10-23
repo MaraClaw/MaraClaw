@@ -100,15 +100,6 @@ export type FocusItem = {
   kind?: string
 }
 
-export type NotificationRow = {
-  id: string
-  title: string
-  body?: string
-  link?: string | null
-  is_read?: boolean
-  created_at?: string
-}
-
 export type OnboardingStatus = {
   exists: boolean
   status: string
@@ -327,22 +318,6 @@ export async function listTriggers(agentId: string): Promise<Array<{
 
 export async function patchTrigger(agentId: string, triggerId: string, body: { is_enabled?: boolean }): Promise<void> {
   await apiRequest(`/api/agents/${agentId}/triggers/${triggerId}`, { method: 'PATCH', body })
-}
-
-export async function listNotifications(): Promise<NotificationRow[]> {
-  return apiRequest('/api/notifications')
-}
-
-export async function unreadNotificationCount(): Promise<{ count?: number; unread_count?: number }> {
-  return apiRequest('/api/notifications/unread-count')
-}
-
-export async function markNotificationRead(id: string): Promise<void> {
-  await apiRequest(`/api/notifications/${id}/read`, { method: 'POST' })
-}
-
-export async function markAllNotificationsRead(): Promise<void> {
-  await apiRequest('/api/notifications/read-all', { method: 'POST' })
 }
 
 export async function lockFile(agentId: string, path: string): Promise<void> {

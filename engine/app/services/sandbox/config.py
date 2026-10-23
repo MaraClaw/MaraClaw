@@ -1,11 +1,19 @@
 """Sandbox configuration models."""
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import ClassVar, TypedDict
+from typing import ClassVar, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from app.core.json_types import json_as_str_or
 from app.core.logging import logger
+from app.core.outbound_policy import OutboundPolicyError, ensure_same_origin
+from app.core.outbound_transport import operator_http_client, public_http_client
+from app.services.tool_runtime.provenance import ConfigLayer, ConfigProvenance
+
+ENDPOINT_BLOCKED_MESSAGE = "Sandbox endpoint is blocked by the outbound network policy"
 
 
 class SandboxConfigOverrides(TypedDict, total=False):
@@ -37,6 +45,57 @@ class SandboxType(StrEnum):
     CODEDANDBOX = "codesandbox"
     SELF_HOSTED = "self_hosted"
     AIO_SANDBOX = "aio_sandbox"
+
+
+def _same_origin(left: str, right: str) -> bool:
+    """Compare endpoint origins; an empty URL means the backend default and only matches itself."""
+    if left == right:
+        return True
+    if not left or not right:
+        return False
+    try:
+        ensure_same_origin(left, right)
+    except OutboundPolicyError:
+        return False
+    return True
+
+
+def _writer(config: Mapping[str, object], provenance: ConfigProvenance | None, key: str) -> ConfigLayer | None:
+    """Layer that supplied a configured value, or ``None`` when the platform default supplies it."""
+    if config.get(key) in (None, ""):
+        return None
+    source = provenance.sources.get(key) if provenance is not None else None
+    return source.layer if source is not None else ConfigLayer.UNTRUSTED
+
+
+def _bound_api_key(
+    config: Mapping[str, object], fallback: SandboxConfig | None, provenance: ConfigProvenance | None, api_url: str
+) -> str:
+    """Return the key only for the origin it was issued for: its own layer's endpoint, else the platform's."""
+    fallback_url = fallback.api_url if fallback is not None else ""
+    key = json_as_str_or(config.get("api_key"))
+    if key:
+        source = provenance.sources.get("api_key") if provenance is not None else None
+        issued_for = (source.endpoint if source is not None else json_as_str_or(config.get("api_url"))) or fallback_url
+    else:
+        key, issued_for = (fallback.api_key, fallback_url) if fallback is not None else ("", "")
+    if key and not _same_origin(issued_for, api_url):
+        logger.warning("[SandboxConfig] Dropped api_key issued for a different endpoint")
+        return ""
+    return key
+
+
+def _operator_authorized(
+    config: Mapping[str, object], fallback: SandboxConfig | None, provenance: ConfigProvenance | None, api_url: str
+) -> bool:
+    """Operator authority needs the endpoint and adapter chosen by built-in global or platform settings."""
+    url_layer = _writer(config, provenance, "api_url")
+    type_layer = _writer(config, provenance, "sandbox_type")
+    if not api_url or any(layer not in (None, ConfigLayer.BUILTIN_GLOBAL) for layer in (url_layer, type_layer)):
+        return False
+    if url_layer is not None:
+        return True
+    return fallback is not None and fallback.operator_url is not None and _same_origin(fallback.operator_url, api_url)
 
 
 class SandboxConfig(BaseModel):
@@ -79,6 +138,26 @@ class SandboxConfig(BaseModel):
         }
     )
 
+    # Server-established authority to reach a private endpoint. A private attribute cannot be set from JSON,
+    # validation input or ``model_validate``; it never appears in dumps.
+    _operator_url: str | None = PrivateAttr(default=None)
+
+    @property
+    def operator_url(self) -> str | None:
+        """Endpoint granted private-network authority by server-owned configuration, if any."""
+        return self._operator_url
+
+    def grant_operator_endpoint(self) -> Self:
+        """Mark ``api_url`` as operator-owned. Only server-owned construction may call this."""
+        self._operator_url = self.api_url or None
+        return self
+
+    def http_client(self, *, base_url: str, timeout: float) -> httpx.AsyncClient:
+        """Return an origin-bound client; private destinations are allowed only for the operator's origin."""
+        if self._operator_url is not None and _same_origin(self._operator_url, base_url):
+            return operator_http_client(timeout=timeout, origin=base_url)
+        return public_http_client(timeout=timeout, origin=base_url)
+
     def resolve_proxy_env(self) -> dict[str, str]:
         """Build guest proxy env vars from config when network is allowed.
 
@@ -106,12 +185,18 @@ class SandboxConfig(BaseModel):
         cls,
         config: SandboxConfigOverrides,
         fallback_config: SandboxConfig | None = None,
+        *,
+        provenance: ConfigProvenance | None = None,
     ) -> SandboxConfig:
         """Build SandboxConfig from a dict with field-level fallback support.
+
+        The loader owns decryption, so ``api_key`` arrives as plaintext. A key is kept only for the origin it was
+        issued for; no key is substituted when the endpoint changes.
 
         Args:
             config: Tool configuration dict.
             fallback_config: Fallback configuration, usually from environment variables.
+            provenance: Layer facts captured by the loader; without it the dict is treated as untrusted.
 
         Returns:
             SandboxConfig instance.
@@ -133,20 +218,8 @@ class SandboxConfig(BaseModel):
         except ValueError:
             sandbox_type = SandboxType.SUBPROCESS
 
-        api_key = get_value(
-            config.get("api_key"),
-            fallback_config.api_key if fallback_config else "",
-        )
-        if api_key:
-            try:
-                from app.config import get_settings
-                from app.core.security import decrypt_data
-
-                settings = get_settings()
-                api_key = decrypt_data(api_key, settings.SECRET_KEY)
-            except Exception as error:
-                logger.warning(f"[SandboxConfig] Failed to decrypt api_key: {error}")
-                api_key = fallback_config.api_key if fallback_config else ""
+        api_url = get_value(config.get("api_url"), fallback_config.api_url if fallback_config else "")
+        api_key = _bound_api_key(config, fallback_config, provenance, api_url)
 
         allow_network = get_value(
             config.get("allow_network"),
@@ -154,11 +227,11 @@ class SandboxConfig(BaseModel):
         )
         logger.info(f"[SandboxConfig] allow_network: raw={config.get('allow_network')!r}, resolved={allow_network!r}")
 
-        return cls(
+        resolved = cls(
             type=sandbox_type,
             enabled=True,  # Always enabled when explicitly configured
             api_key=api_key,
-            api_url=get_value(config.get("api_url"), fallback_config.api_url if fallback_config else ""),
+            api_url=api_url,
             cpu_limit=get_value(config.get("cpu_limit"), fallback_config.cpu_limit if fallback_config else "0.5"),
             memory_limit=get_value(
                 config.get("memory_limit"),
@@ -193,3 +266,6 @@ class SandboxConfig(BaseModel):
                 fallback_config.no_proxy if fallback_config else None,
             ),
         )
+        if _operator_authorized(config, fallback_config, provenance, api_url):
+            _ = resolved.grant_operator_endpoint()
+        return resolved

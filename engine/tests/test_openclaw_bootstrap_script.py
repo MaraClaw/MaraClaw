@@ -373,7 +373,6 @@ def test_unset_version_skips_install_after_old_marker_upgrade(tmp_path: Path) ->
         ("build-openclaw-local-dockerfile.sh", r'TENCENTDB_PLUGIN_VERSION="\$\{TENCENTDB_PLUGIN_VERSION:-([^}]+)\}"'),
         ("docker/openclaw/bootstrap-memory-tencentdb.sh", r'PLUGIN_VERSION="\$\{TENCENTDB_PLUGIN_VERSION:-([^}]+)\}"'),
         (".env.example", r"^TENCENTDB_PLUGIN_VERSION=(\S+)$"),
-        ("../.env.example", r"^TENCENTDB_PLUGIN_VERSION=(\S+)$"),
     ],
 )
 def test_tencent_version_defaults_stay_synchronized(relative_path: str, pattern: str) -> None:
