@@ -1,6 +1,6 @@
 [project]
 name = "maraclaw"
-version = "2.2.2"
+version = "1.0.3"
 description = "Backend workspace for the MaraClaw enterprise digital employee platform."
 requires-python = ">=3.14.8"
 dependencies = [
