@@ -6,6 +6,7 @@ const recoverySteps = {
   agent_expired: 'Ask an admin to renew this agent.',
   no_company_model: 'Ask an admin to set up a company model.',
   enqueue_failed: 'Retry this message.',
+  guest_config_failed: "Wait a moment, then retry. If the problem continues, ask an admin to check this agent's configuration.",
   invalid_submission_id: 'Start a new message.',
   submission_conflict: 'Start a new message instead of retrying this submission.',
   invalid_attachments: 'Upload the attachment again, then send a new message.',
