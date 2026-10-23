@@ -16,7 +16,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - OpenClaw Docker guests do not call the engine LLM. `app.services.openclaw_routing` classifies at enqueue, persists the slot on `gateway_messages`, and rewrites the bind-mounted `openclaw.json` primary (fail-closed: a pending primary blocks a secondary downgrade). Guest failover still uses the tenant fallback slot, never secondary.
 - `turn.py` is the preloaded `TurnContext` / `ModelBundle` (agent/models/user) so callers skip redundant DAO loads. Do not hold a DB connection across `call_llm*`.
 - `utils.py` handles strict encrypted API-key decryption (invalid ciphertext is rejected; no plaintext fallback), chat-history conversion, and truncation that preserves assistant/tool-result pairs.
-- `reasoning.py` maps canonical `none|low|medium|high|xhigh` onto provider-native request fields. Do not encode those translations in individual provider clients.
+- `reasoning.py` maps canonical `none|low|medium|high|xhigh|max|ultra` onto provider-native request fields. Do not encode those translations in individual provider clients.
 - `vision_content.py` builds vision/screenshot parts when the selected model supports vision.
 - `finish.py` defines the required `finish(content=...)` control tool.
 - `failover.py` classifies retryable provider failures.

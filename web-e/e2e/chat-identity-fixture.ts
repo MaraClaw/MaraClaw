@@ -80,6 +80,10 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       if (gate) await gate.promise
       return route.fulfill({ json: snapshot })
     }
+    if (path.endsWith('/files/') && route.request().method() === 'GET') {
+      expect(new URL(route.request().url()).searchParams.get('path')).toBe('skills')
+      return route.fulfill({ status: 404, json: { detail: 'No installed skills directory' } })
+    }
     return route.fallback()
   })
   await page.routeWebSocket('**/ws/chat/**', (route) => {

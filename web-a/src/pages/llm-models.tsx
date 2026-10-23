@@ -22,8 +22,10 @@ import {
   createLlmModel,
   deleteLlmModel,
   getGrokSubscriptionStatus,
+  isReasoningEffort,
   listLlmModels,
   listLlmProviders,
+  REASONING_EFFORTS,
   setDefaultLlmModel,
   setFallbackLlmModel,
   setSecondaryLlmModel,
@@ -47,7 +49,7 @@ const schema = z.object({
   api_key: z.string().trim().min(1, 'Enter an API key').max(512),
   base_url: z.string().trim().max(500).optional(),
   temperature: z.string().optional(),
-  reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']),
+  reasoning_effort: z.enum(REASONING_EFFORTS),
   enabled: z.boolean(),
   supports_vision: z.boolean(),
 })
@@ -180,7 +182,7 @@ export function LlmModelsPage() {
     const currentEffort = watch('reasoning_effort')
     if (addEfforts.length > 0 && currentEffort && !addEfforts.includes(currentEffort)) {
       const next = addEfforts.includes('none') ? 'none' : addEfforts[0]
-      if (next === 'none' || next === 'low' || next === 'medium' || next === 'high' || next === 'xhigh') {
+      if (isReasoningEffort(next)) {
         setValue('reasoning_effort', next)
       }
     }
@@ -352,10 +354,6 @@ export function LlmModelsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-temp`}>Temperature (optional)</Label>
-              <Input id={`${formId}-temp`} inputMode="decimal" placeholder="0.2" {...register('temperature')} />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
               <Select id={`${formId}-effort`} {...register('reasoning_effort')}>
                 {addEfforts.map((effort) => (
@@ -378,6 +376,26 @@ export function LlmModelsPage() {
                 Supports vision
               </label>
             </div>
+            <details className="min-w-0 border-t border-border pt-1 sm:col-span-2">
+              <summary className="min-h-11 cursor-pointer content-center rounded-md py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Advanced settings
+              </summary>
+              <div className="grid gap-4 pt-2 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor={`${formId}-temp`}>Temperature (optional)</Label>
+                  <Input
+                    id={`${formId}-temp`}
+                    inputMode="decimal"
+                    placeholder="Provider default"
+                    aria-describedby={`${formId}-temp-help`}
+                    {...register('temperature')}
+                  />
+                  <p id={`${formId}-temp-help`} className="text-xs text-muted-foreground">
+                    Leave blank to use the provider default.
+                  </p>
+                </div>
+              </div>
+            </details>
             {formError ? (
               <p className="text-sm text-destructive sm:col-span-2" role="alert">
                 {formError}

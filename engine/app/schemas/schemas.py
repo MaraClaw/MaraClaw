@@ -412,7 +412,7 @@ class LLMModelCreate(BaseModel):
     supports_vision: bool = False
     max_output_tokens: int | None = None
     request_timeout: int | None = None
-    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh|max|ultra)$")
 
 
 class LLMModelUpdate(BaseModel):
@@ -427,7 +427,7 @@ class LLMModelUpdate(BaseModel):
     supports_vision: bool | None = None
     max_output_tokens: int | None = None
     request_timeout: int | None = None
-    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh)$")
+    reasoning_effort: str | None = Field(None, pattern="^(none|low|medium|high|xhigh|max|ultra)$")
 
 
 class LLMModelOut(BaseModel):

@@ -6,10 +6,13 @@ import { toast } from 'sonner'
 
 import { ChatMarkdown } from '@/components/chat/markdown'
 import { ChatMessageContent } from '@/components/chat/message-content'
+import { SkillMentionInput } from '@/components/chat/skill-mention-input'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { installedAgentSkillsOptions } from '@/hooks/agent-skills-options'
+import { useQuery as useWorkspaceQuery } from '@/hooks/session-workspace'
 import { authSession } from '@/lib/auth-session'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
+import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
@@ -108,6 +111,10 @@ export function AgentChatPage() {
   const activeSession = sessionsQuery.data?.find((session) => session.id === activeId)
     ?? (sharedSessionQuery.data?.id === activeId ? sharedSessionQuery.data : undefined)
   const writable = !sessionId || isWritableSession(activeSession)
+  const installedSkillsQuery = useWorkspaceQuery({
+    ...installedAgentSkillsOptions(agent.id),
+    enabled: authSession.isCurrent(mountedOwner) && Boolean(token) && writable,
+  })
   const shared = activeSession?.source_channel === 'shared'
   const submissions = useMemo(() => createChatSubmissions(owner, agent.id, activeId), [owner, agent.id, activeId])
   const submissionScopeRef = useRef(submissions)
@@ -394,8 +401,9 @@ export function AgentChatPage() {
       toast.error('Sign in again to send.')
       return
     }
-    const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), content: text })
-    const pendingLine: Line = { role: 'user', content: text, composerText: draft, pending: true,
+    const content = buildSkillMentionContent(draft, installedSkillsQuery.data ?? [])
+    const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), ...content })
+    const pendingLine: Line = { role: 'user', content: content.display_content ?? content.content, composerText: draft, pending: true,
       client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' }
     setSlow(false)
     if (!activeId) {
@@ -539,19 +547,15 @@ export function AgentChatPage() {
             void send()
           }}
         >
-          <Textarea
-            ref={composerRef}
-            aria-label={`Message ${agent.name}`}
+          <SkillMentionInput
+            key={agent.id}
+            agentName={agent.name}
+            textareaRef={composerRef}
             value={draft}
-            onChange={(event) => { if (isCurrent()) setDraft(event.target.value) }}
-            placeholder={`Message ${agent.name}…`}
-            className="max-h-32"
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                void send()
-              }
-            }}
+            onValueChange={(value) => { if (isCurrent()) setDraft(value) }}
+            onSend={() => { void send() }}
+            skillsQuery={installedSkillsQuery}
+            isCurrent={isCurrent}
           />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <input

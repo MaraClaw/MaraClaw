@@ -238,6 +238,7 @@ export function AgentFilesPage() {
                           scope.isCurrent() && void restoreFileRevision(agent.id, rev.id).then(() => {
                             if (!scope.isCurrent()) return
                             toast.success('Restored')
+                            void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
                             openFile.mutate(selected)
                           }).catch(scope.rethrowCurrent)
                         }
