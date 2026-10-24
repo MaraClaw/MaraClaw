@@ -40,6 +40,7 @@ export type UserOut = {
   tenant_id: string | null
   email_verified: boolean
   must_change_password?: boolean
+  readonly timezone?: string | null
 }
 
 export type TokenResponse = {

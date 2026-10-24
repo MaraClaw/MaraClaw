@@ -75,7 +75,7 @@ export async function fetchCurrentUser(token: string, signal?: AbortSignal, owne
 }
 
 export async function updateCurrentUser(
-  body: { display_name?: string; email?: string },
+  body: { display_name?: string; email?: string; timezone?: string | null },
   owner?: SessionOwner,
 ): Promise<UserOut> {
   return apiRequest<UserOut>('/api/auth/me', {

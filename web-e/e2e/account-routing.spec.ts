@@ -88,7 +88,7 @@ for (const mustChangePassword of [true, false]) {
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
     await expect(page.getByRole('main').locator('h1')).toHaveCount(1)
     await expect(page.getByLabel('Username', { exact: true })).toHaveCount(0)
-    await expect(page.locator('main [data-slot="card-title"]')).toHaveText(['Profile', 'Password', 'Organization', 'Session'])
+    await expect(page.locator('main [data-slot="card-title"]')).toHaveText(['Profile', 'Timezone', 'Password', 'Organization', 'Session'])
     await expect(page.locator('nav a[href="/app/account"]')).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Account', exact: true, includeHidden: true })).toHaveCount(0)
     await expect(page.getByRole('main').getByRole('button', { name: 'Sign out', exact: true })).toBeEnabled()
@@ -230,7 +230,7 @@ test('settings places active connected sign-in after password and retains unlink
     await route.fulfill({ json: member })
   })
   await page.goto('/app/settings')
-  await expect(page.locator('main [data-slot="card-title"]')).toHaveText(['Profile', 'Password', 'Connected sign-in', 'Organization', 'Session'])
+  await expect(page.locator('main [data-slot="card-title"]')).toHaveText(['Profile', 'Timezone', 'Password', 'Connected sign-in', 'Organization', 'Session'])
   await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(1)
   // When
   await page.getByRole('button', { name: 'Remove', exact: true }).click()
