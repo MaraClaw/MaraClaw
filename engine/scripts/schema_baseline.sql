@@ -908,6 +908,8 @@ CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (c
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id);
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_page ON admin_audit_logs (created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_page ON admin_audit_logs (tenant_id, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS channel_configs (
 	id UUID NOT NULL, 
