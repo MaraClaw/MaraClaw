@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { SessionOwner } from './auth-session.ts'
 import { joinOrgResponseSchema } from './types/auth.ts'
 import { admissionSummarySchema } from './types/company-admissions.ts'
+import { paymentReviewResponseSchema, type TransferInput } from './types/company-transfers.ts'
 import type {
   AuthProvider,
   ChangePasswordResponse,
@@ -107,12 +108,8 @@ export async function joinDefaultOrg(owner?: SessionOwner): Promise<JoinOrgRespo
   }))
 }
 
-export async function transferOrg(body: {
-  password: string
-  invitation_code?: string
-  tenant_id?: string
-}, owner?: SessionOwner): Promise<JoinOrgResponse> {
-  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/transfer', {
+export async function transferOrg(body: TransferInput, owner?: SessionOwner) {
+  return z.union([paymentReviewResponseSchema, joinOrgResponseSchema]).parse(await apiRequest<unknown>('/api/tenants/transfer', {
     method: 'POST',
     body,
     ...requestContext(owner),

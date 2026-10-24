@@ -26,6 +26,7 @@ const AgentPlaywrightPage = lazy(() => import('@/pages/app/agent-playwright').th
 const DirectoryPage = lazy(() => import('@/pages/app/directory').then((module) => ({ default: module.DirectoryPage })))
 const AdmissionsPage = lazy(() => import('@/pages/app/admissions').then((module) => ({ default: module.AdmissionsPage })))
 const AdmissionDetailPage = lazy(() => import('@/pages/app/admission-detail').then((module) => ({ default: module.AdmissionDetailPage })))
+const TransferDetailPage = lazy(() => import('@/pages/app/transfer-detail').then((module) => ({ default: module.TransferDetailPage })))
 const NotificationsPage = lazy(() => import('@/pages/app/notifications').then((module) => ({ default: module.NotificationsPage })))
 const OpenClawUpdateDetailPage = lazy(() => import('@/pages/app/openclaw-update-detail').then((module) => ({ default: module.OpenClawUpdateDetailPage })))
 const OkrPage = lazy(() => import('@/pages/app/okr').then((module) => ({ default: module.OkrPage })))
@@ -63,6 +64,7 @@ export function AppRouter() {
               <Route path="settings" element={<SettingsPage />} />
               <Route path="admissions" element={<AdmissionsPage />} />
               <Route path="admissions/:id" element={<AdmissionDetailPage />} />
+              <Route path="admissions/transfers/:id" element={<TransferDetailPage />} />
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />
