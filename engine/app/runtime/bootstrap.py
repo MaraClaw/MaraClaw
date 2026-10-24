@@ -6,6 +6,7 @@ from app.core.logging import logger
 async def bootstrap() -> None:
     from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
     from app.services.system_org_seeder import SystemOrgSeedError, ensure_system_orgs
+    from app.services.transfer_policy import seed_transfer_policy
 
     try:
         _ = await ensure_system_orgs()
@@ -22,6 +23,8 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.error("[startup] Platform admin seed failed: {}", exc)
         raise
+
+    await seed_transfer_policy()
 
     try:
         from app.services.tool_seeder import clean_orphaned_mcp_tools, seed_builtin_tools
