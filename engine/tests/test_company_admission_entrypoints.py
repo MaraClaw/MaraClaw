@@ -52,8 +52,8 @@ async def test_company_transfer_requires_password_before_admission(
         "/api/tenants/transfer", json=body, headers=scenario.headers(scenario.applicant)
     )
 
-    assert response.status_code == (202 if password == "qa-password" else 401), response.text
-    assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == (password == "qa-password")
+    assert response.status_code == (409 if password == "qa-password" else 401), response.text
+    assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == 0
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
     assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
 

@@ -93,6 +93,7 @@ def surface(monkeypatch, tmp_path):
     monkeypatch.setattr(api.agent_dao, "update", runtime.update)
     monkeypatch.setattr(api, "_agent_to_out", serialize)
     monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", gate)
     monkeypatch.setattr(exclusion, "setup_workspace_lock", lock)
     monkeypatch.setattr(lifecycle.agent_manager, "_agent_dir", lambda _id: tmp_path / str(_id))
     app = FastAPI()

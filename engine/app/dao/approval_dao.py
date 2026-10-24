@@ -127,7 +127,10 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
             clauses.append("agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)")
             params["tenant_id"] = tenant_id
         if creator_id is not None:
-            clauses.append("agent_id IN (SELECT id FROM agents WHERE creator_id = %(creator_id)s)")
+            clauses.append(
+                "agent_id IN (SELECT a.id FROM agents a JOIN users u ON u.id=a.creator_id "
+                "WHERE a.creator_id = %(creator_id)s AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id)"
+            )
             params["creator_id"] = creator_id
         if status not in (None, ""):
             clauses.append("status = %(status)s")

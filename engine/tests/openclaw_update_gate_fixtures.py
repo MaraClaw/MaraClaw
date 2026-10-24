@@ -20,5 +20,6 @@ def open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
         yield
 
     monkeypatch.setattr(exclusion, "assert_no_active_run", AsyncMock())
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())
     monkeypatch.setattr(exclusion, "setup_workspace_lock", free_lock)
     monkeypatch.setattr(exclusion, "check_agent_access", AsyncMock(return_value=(None, "manage")))

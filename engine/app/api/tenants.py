@@ -22,9 +22,11 @@ from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import TenantDeletionPreview, tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
+from app.records.company_transfer import TransferChoice
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import PendingAdmissionResponse
+from app.schemas.company_transfer import PaymentReviewResponse
 from app.schemas.organization_response_tenant import (
     TenantAssignmentResponse,
     TenantDeletedResponse,
@@ -261,6 +263,8 @@ class TransferRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
     invitation_code: str | None = Field(default=None, max_length=32)
     tenant_id: uuid.UUID | None = None
+    transfer_choice: TransferChoice | None = None
+    free_destructive_consent: bool = False
 
 
 def _require_join_allowed(current_user: UserRecord) -> None:
@@ -276,7 +280,7 @@ async def _require_admission_join_source(current_user: UserRecord) -> None:
         return
     source = await tenant_dao.get(current_user.tenant_id)
     if source is None or not source.is_default_end_user_org:
-        raise HTTPException(status_code=409, detail="Use /api/tenants/transfer to leave your current organization")
+        raise HTTPException(status_code=409, detail="Only default-organization members may transfer to a company")
 
 
 @router.post("/join", response_model=JoinResponse, responses={202: {"model": PendingAdmissionResponse}})
@@ -439,7 +443,11 @@ async def join_default_org(current_user: UserRecord = Depends(get_current_user))
     )
 
 
-@router.post("/transfer", response_model=JoinOrgResponse, responses={202: {"model": PendingAdmissionResponse}})
+@router.post(
+    "/transfer",
+    response_model=JoinOrgResponse,
+    responses={202: {"model": PendingAdmissionResponse | PaymentReviewResponse}},
+)
 async def transfer_organization(
     data: TransferRequest,
     current_user: UserRecord = Depends(get_current_user),
@@ -467,6 +475,7 @@ async def transfer_organization(
         raise HTTPException(status_code=400, detail="This account cannot confirm a password")
     if not await verify_password_async(data.password, identity.password_hash):
         raise HTTPException(status_code=401, detail="Password is incorrect")
+    await _require_admission_join_source(current_user)
 
     target = None
     if data.invitation_code not in (None, ""):
@@ -506,13 +515,16 @@ async def transfer_organization(
 
     if not target.is_default_end_user_org and not target.is_system:
         from app.records.company_admission import AdmissionMethod
-        from app.schemas.company_admission import PendingAdmissionResponse
-        from app.services.company_admissions import submit_request, summarize
+        from app.services.company_transfer_entrypoint import transfer_response
+        from app.services.company_transfer_requests import TransferDestination, TransferSelection
 
         method = AdmissionMethod.INVITATION if bool(data.invitation_code) else AdmissionMethod.VERIFIED_DOMAIN
-        request = await submit_request(current_user, target.id, method, invitation_code=data.invitation_code)
-        return JSONResponse(
-            status_code=202, content=PendingAdmissionResponse(request=await summarize(request)).model_dump(mode="json")
+        return await transfer_response(
+            current_user,
+            TransferDestination(target.id, method, data.invitation_code),
+            TransferSelection(data.transfer_choice, data.free_destructive_consent)
+            if data.transfer_choice is not None
+            else None,
         )
 
     try:

@@ -13,6 +13,8 @@ from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionDecision
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.company_admissions import fresh_user, require_genesis, validate_method
+from app.services.company_transfer_disposition import apply_disposition
+from app.services.company_transfer_fence import fence_owned_agents
 from app.services.notification_service import send_notification
 from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, transfer_user_to_org
 from app.services.org_welcome import send_organization_welcome
@@ -27,6 +29,9 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
         reviewer = await user_dao.get(reviewer_id)
         if applicant is None or reviewer is None:
             raise HTTPException(404, "Membership not found")
+        fenced_ids = frozenset[UUID]()
+        if snapshot.status == AdmissionStatus.PENDING and decision.decision == "approved":
+            fenced_ids = await fence_owned_agents(applicant)
         await lock_tenants(
             db, (snapshot.source_tenant_id, snapshot.target_tenant_id, applicant.tenant_id, reviewer.tenant_id)
         )
@@ -52,6 +57,8 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
             if target is None or not target.is_active:
                 raise HTTPException(409, "Company is disabled")
             await validate_method(current, target.id, request.method, request.invitation_code)
+            await apply_disposition(request, current, fenced_ids)
+            await db.execute("DELETE FROM local_department_memberships WHERE user_id=%(user)s", {"user": current.id})
             sso_members = await db.fetchall(
                 "SELECT m.id FROM org_members m JOIN identity_providers p ON p.id=m.provider_id "
                 "WHERE m.user_id=%(user)s AND (p.tenant_id=%(target)s OR p.tenant_id IS NULL) "

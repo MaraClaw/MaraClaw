@@ -23,6 +23,7 @@ from app.services import (
     admin_provisioning,
     agent_orphans,
     agent_stops,
+    company_transfer_cleanup,
     heartbeat,
     openclaw_hot_cache,
     openclaw_routing,
@@ -35,6 +36,7 @@ from app.services.agent_manager import agent_manager
 @pytest.fixture(autouse=True)
 def _isolated_workspace_locks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+    monkeypatch.setattr(company_transfer_cleanup, "reconcile_transfer_cleanup", AsyncMock())
 
 
 def _agent() -> AgentRecord:

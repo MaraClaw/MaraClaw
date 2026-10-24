@@ -118,6 +118,7 @@ async def test_missing_reference_reconciliation_converges_without_repeating_stop
     monkeypatch.setattr(agent_stops.agent_manager, "_agent_dir", agent_dir)
     monkeypatch.setattr(agent_stops.agent_manager, "stop_container", missing)
     monkeypatch.setattr(agent_stops, "sweep_orphan_containers", AsyncMock())
+    monkeypatch.setattr("app.services.company_transfer_cleanup.reconcile_transfer_cleanup", AsyncMock())
     # When repeated reconciliation ticks process the same database.
     for _ in range(2):
         await agent_stops.reconcile_stopped_containers(NOW)

@@ -346,6 +346,7 @@ async def test_real_config_preparation_rejects_without_accepting_a_turn(
     monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
     gate = AsyncMock(side_effect=[None, OpenClawUpdateInProgressError()]) if failure == "upgrade" else AsyncMock()
     monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())
     monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
     monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
     writer = Mock(side_effect=OSError("private config path"))

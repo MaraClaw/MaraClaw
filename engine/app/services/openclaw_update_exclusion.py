@@ -22,6 +22,7 @@ from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.company_transfer_runtime_gate import assert_transfer_ready
 from app.services.openclaw_update_gate import assert_no_active_run
 
 GUEST_WRITE_LOCK_TIMEOUT_SECONDS = 1.0
@@ -35,6 +36,7 @@ async def guest_write_section(agent_id: UUID) -> AsyncGenerator[None]:
         agent_manager._agent_dir(agent_id), shared=True, timeout_seconds=GUEST_WRITE_LOCK_TIMEOUT_SECONDS
     ):
         await assert_no_active_run(agent_id)
+        await assert_transfer_ready(agent_id)
         yield
 
 
@@ -57,4 +59,5 @@ async def locked_fresh_agent(agent_id: UUID) -> AsyncGenerator[AgentRecord]:
         if fresh is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
         await assert_no_active_run(agent_id)
+        await assert_transfer_ready(agent_id)
         yield fresh

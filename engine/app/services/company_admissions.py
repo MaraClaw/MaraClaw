@@ -7,11 +7,13 @@ from fastapi import HTTPException
 from app.core.acl_locks import lock_tenants, lock_user
 from app.core.json_types import uuid_from_row
 from app.dao.company_admission_dao import company_admission_dao as admissions
+from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionApplicant, AdmissionTenant, RequestDetail, RequestSummary
+from app.schemas.company_transfer import TransferDisposition
 from app.services.notification_service import send_notification
 
 
@@ -44,6 +46,7 @@ async def summarize(request: CompanyAdmissionRecord) -> RequestSummary:
     tenant = await admissions.tenant(request.target_tenant_id)
     if tenant is None:
         raise HTTPException(404, "Company not found")
+    transfer = await transfers.for_admission(request.id)
     return RequestSummary(
         id=request.id,
         status=request.status,
@@ -53,6 +56,15 @@ async def summarize(request: CompanyAdmissionRecord) -> RequestSummary:
         created_at=request.created_at,
         decided_at=request.decided_at,
         decision_reason=request.decision_reason,
+        transfer=TransferDisposition(
+            transfer_request_id=transfer.id,
+            choice=transfer.choice,
+            fee_amount_minor=transfer.fee_amount_minor,
+            currency=transfer.currency,
+            free_consent_at=transfer.free_consent_at,
+        )
+        if transfer
+        else None,
     )
 
 
@@ -71,6 +83,7 @@ async def detail(request: CompanyAdmissionRecord) -> RequestDetail:
         created_at=summary.created_at,
         decided_at=summary.decided_at,
         decision_reason=summary.decision_reason,
+        transfer=summary.transfer,
         applicant=AdmissionApplicant(id=applicant.id, email=applicant.email),
         source_tenant=AdmissionTenant(id=source.id, name=source.name) if source else None,
         decided_by_user_id=request.decided_by_user_id,
@@ -119,7 +132,10 @@ async def submit_request(
     *,
     invitation_code: str | None = None,
     newly_registered: bool = False,
+    transfer_id: UUID | None = None,
 ) -> CompanyAdmissionRecord:
+    from app.services.company_transfer_guards import require_admission_transfer
+
     async with connection_ctx() as db:
         await lock_tenants(db, (applicant.tenant_id, target_id))
         await lock_user(db, applicant.id, applicant.tenant_id)
@@ -131,6 +147,7 @@ async def submit_request(
             raise HTTPException(400, "Target must be an active company")
         if current.tenant_id == target_id:
             raise HTTPException(409, "You already belong to that company")
+        await require_admission_transfer(current, target_id, transfer_id)
         pending = await admissions.pending_for(current.id)
         if pending is not None:
             if pending.target_tenant_id != target_id:

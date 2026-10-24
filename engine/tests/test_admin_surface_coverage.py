@@ -107,6 +107,8 @@ def pending_admission(monkeypatch):
         summarize = AsyncMock(return_value=summary)
         monkeypatch.setattr("app.services.company_admissions.submit_request", submit)
         monkeypatch.setattr("app.services.company_admissions.summarize", summarize)
+        monkeypatch.setattr("app.services.company_transfer_entrypoint.submit_request", submit)
+        monkeypatch.setattr("app.services.company_transfer_entrypoint.summarize", summarize)
         return SimpleNamespace(submit=submit, summarize=summarize, summary=summary)
 
     return configure
@@ -555,13 +557,14 @@ async def test_tenants_pending_join_registration_and_me(monkeypatch, pending_adm
 
 @pytest.mark.asyncio
 async def test_transfer_requires_correct_password_then_requests_admission(monkeypatch, pending_admission):
-    source = _tenant()
+    source = _tenant(is_default_end_user_org=True)
     dest = _tenant()
     member = _user(role="member", tenant_id=source.id)
     member.identity = SimpleNamespace(password_hash="hashed")
     code = SimpleNamespace(tenant_id=dest.id, used_count=0, max_uses=3)
     monkeypatch.setattr("app.services.org_membership.require_active_invitation", AsyncMock(return_value=code))
-    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=dest))
+    tenants = {source.id: source, dest.id: dest}
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(side_effect=tenants.get))
     consume = AsyncMock()
     monkeypatch.setattr("app.services.org_membership.consume_invitation_code", consume)
     monkeypatch.setattr(
@@ -1661,11 +1664,13 @@ async def test_join_company_invitation_validation_and_deferred_attach_conflict(m
 
 
 @pytest.mark.asyncio
-async def test_transfer_validation_pending_company_and_immediate_default_paths(monkeypatch, pending_admission):
+async def test_transfer_validation_pending_company_and_same_default_paths(monkeypatch, pending_admission):
     from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, InvitationError
 
     dest = _tenant()
-    source = _tenant()
+    source = _tenant(is_default_end_user_org=True)
+    tenants = {source.id: source, dest.id: dest}
+    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(side_effect=tenants.get))
     member = _user(role="member", tenant_id=source.id)
     member.identity = SimpleNamespace(id=member.identity_id, password_hash="hashed")
     admission = pending_admission(member, dest, AdmissionMethod.VERIFIED_DOMAIN)
@@ -1737,7 +1742,7 @@ async def test_transfer_validation_pending_company_and_immediate_default_paths(m
         "app.services.org_membership.require_active_invitation",
         AsyncMock(return_value=SimpleNamespace(tenant_id=dest.id)),
     )
-    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=None))
+    tenants.pop(dest.id)
     with pytest.raises(HTTPException) as missing_dest:
         await tenants_api.transfer_organization(
             tenants_api.TransferRequest(password="secret1", invitation_code="X"),
@@ -1745,7 +1750,7 @@ async def test_transfer_validation_pending_company_and_immediate_default_paths(m
         )
     assert missing_dest.value.status_code == 400
 
-    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=source))
+    tenants[dest.id] = source
     with pytest.raises(HTTPException) as same_org:
         await tenants_api.transfer_organization(
             tenants_api.TransferRequest(password="secret1", invitation_code="X"),
@@ -1754,7 +1759,7 @@ async def test_transfer_validation_pending_company_and_immediate_default_paths(m
     assert same_org.value.status_code == 400
     admission.submit.assert_not_awaited()
 
-    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=dest))
+    tenants[dest.id] = dest
     monkeypatch.setattr(
         "app.services.org_membership.lookup_tenant_for_verified_email",
         AsyncMock(return_value=dest),
@@ -1811,37 +1816,19 @@ async def test_transfer_validation_pending_company_and_immediate_default_paths(m
     token.assert_not_called()
     assert member.tenant_id == source.id
 
-    fallback = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True, is_system=True)
-    monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=fallback))
+    fallback = source
     monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
     monkeypatch.setattr("app.services.org_membership.lookup_tenant_for_verified_email", AsyncMock(return_value=None))
     transfer.side_effect = None
-    transfer.return_value = _user(role="member", tenant_id=fallback.id)
-    moved = await tenants_api.transfer_organization(
-        tenants_api.TransferRequest(password="secret1", tenant_id=fallback.id), member
-    )
-    assert isinstance(moved, tenants_api.JoinOrgResponse)
-    assert moved.access_token == "tok"
-    assert moved.tenant.id == fallback.id
-    transfer.assert_awaited_once_with(member, fallback)
-    token.assert_called_once_with(str(transfer.return_value.id), "member")
+    with pytest.raises(HTTPException) as same_default:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", tenant_id=fallback.id),
+            member,
+        )
+    assert same_default.value.status_code == 400
+    transfer.assert_not_awaited()
+    token.assert_not_called()
     assert admission.submit.await_count == 3
-
-    transfer.side_effect = AlreadyInOrgError("already")
-    with pytest.raises(HTTPException) as transfer_conflict:
-        await tenants_api.transfer_organization(
-            tenants_api.TransferRequest(password="secret1", tenant_id=fallback.id),
-            member,
-        )
-    assert transfer_conflict.value.status_code == 403
-
-    transfer.side_effect = DefaultOrgUnavailableError("gone")
-    with pytest.raises(HTTPException) as unavailable:
-        await tenants_api.transfer_organization(
-            tenants_api.TransferRequest(password="secret1", tenant_id=fallback.id),
-            member,
-        )
-    assert unavailable.value.status_code == 400
 
     with pytest.raises(HTTPException) as no_target:
         await tenants_api.transfer_organization(tenants_api.TransferRequest(password="secret1"), member)

@@ -350,6 +350,9 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, *, fresh: boo
 
         clear_entity_memo()
     user_id = user.id
+    from app.services.company_transfer_runtime_gate import assert_transfer_ready
+
+    await assert_transfer_ready(agent_id)
     memo = access_cache.memo_get(user_id, agent_id)
     if memo is not None:
         _reject_expired_use(memo[0], memo[1])

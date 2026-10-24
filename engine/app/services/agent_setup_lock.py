@@ -15,13 +15,25 @@ class WorkspaceLockTimeoutError(TimeoutError):
 
 @asynccontextmanager
 async def setup_workspace_lock(
-    agent_dir: Path, *, shared: bool = False, timeout_seconds: float | None = None
+    agent_dir: Path,
+    *,
+    shared: bool = False,
+    timeout_seconds: float | None = None,
+    until_transaction_end: bool = False,
 ) -> AsyncGenerator[None]:
     """Exclusive by default; ``shared`` lets concurrent guest-visible writers coexist and only fences exclusive holders."""
     mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
     lock_dir = agent_dir.parent / "_setup_locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    with (lock_dir / f"{agent_dir.name}.lock").open("a+b") as lock:
+    lock = (lock_dir / f"{agent_dir.name}.lock").open("a+b")
+    deferred = False
+
+    def release() -> None:
+        if not lock.closed:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+
+    try:
         deadline = None if timeout_seconds is None else anyio.current_time() + timeout_seconds
         while True:
             try:
@@ -32,10 +44,17 @@ async def setup_workspace_lock(
                 if remaining is not None and remaining <= 0:
                     raise WorkspaceLockTimeoutError("Timed out waiting for the workspace lock.") from exc
                 await anyio.sleep(0.05 if remaining is None else min(0.05, remaining))
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+        if until_transaction_end:
+            from app.db.session import get_connection, run_after_commit
+
+            if get_connection() is None:
+                raise RuntimeError("A transaction-owned workspace lock requires a connection scope")
+            run_after_commit(release, release)
+            deferred = True
+        yield
+    finally:
+        if not deferred:
+            release()
 
 
 async def drain_on_cancel[Result](operation: Coroutine[object, object, Result]) -> Result:

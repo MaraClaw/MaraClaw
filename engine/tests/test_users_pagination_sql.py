@@ -105,7 +105,9 @@ async def test_batches_active_counts_when_page_has_multiple_creators(connection:
     assert len(connection.queries) == 1
     query, params = connection.queries[0]
     assert params == {"creator_ids": [first, second]}
-    assert "creator_id = ANY(%(creator_ids)s) AND is_expired IS FALSE GROUP BY creator_id" in query
+    assert "FROM agents a JOIN users u ON u.id=a.creator_id" in query
+    assert "WHERE a.creator_id = ANY(%(creator_ids)s) AND a.is_expired IS FALSE" in query
+    assert "AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id GROUP BY a.creator_id" in query
     assert "status" not in query
 
 

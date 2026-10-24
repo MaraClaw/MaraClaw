@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
+from app.schemas.company_transfer import TransferDisposition
 
 
 class AdmissionTenant(BaseModel):
@@ -26,6 +27,7 @@ class RequestSummary(BaseModel):
     created_at: datetime
     decided_at: datetime | None
     decision_reason: str | None
+    transfer: TransferDisposition | None = None
 
 
 class RequestDetail(RequestSummary):

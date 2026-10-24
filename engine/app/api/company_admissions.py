@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.company_transfers import router as transfers_router
 from app.core.security import get_current_user, load_user_principal
 from app.dao.company_admission_dao import company_admission_dao as admissions
 from app.records.company_admission import AdmissionStatus
@@ -12,6 +13,7 @@ from app.services.company_admission_decisions import decide
 from app.services.company_admissions import detail, require_genesis, summarize, withdraw_request
 
 router = APIRouter(prefix="/company-admissions", tags=["company-admissions"])
+router.include_router(transfers_router)
 
 
 @router.get("/mine", response_model=list[RequestSummary])

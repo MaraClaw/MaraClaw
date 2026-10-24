@@ -493,6 +493,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
 CREATE INDEX IF NOT EXISTS ix_company_admission_review
     ON company_admission_requests(target_tenant_id,status,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS company_transfer_requests (
+    id UUID PRIMARY KEY,
+    applicant_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    target_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    choice VARCHAR(8) NOT NULL CHECK (choice IN ('paid','free')),
+    status VARCHAR(24) NOT NULL DEFAULT 'payment_review'
+        CHECK (status IN ('payment_review','admission_created','rejected','withdrawn')),
+    method VARCHAR(24) NOT NULL CHECK (method IN ('invitation','verified_domain','sso')),
+    invitation_code VARCHAR(32),
+    fee_amount_minor BIGINT NOT NULL CHECK (fee_amount_minor >= 0),
+    currency VARCHAR(3) NOT NULL,
+    instructions TEXT NOT NULL,
+    free_consent_at TIMESTAMPTZ,
+    payment_confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    review_reason TEXT,
+    admission_request_id UUID UNIQUE REFERENCES company_admission_requests(id) ON DELETE CASCADE,
+    CHECK (source_tenant_id <> target_tenant_id),
+    CHECK ((choice='paid' AND free_consent_at IS NULL) OR (choice='free' AND free_consent_at IS NOT NULL)),
+    CHECK (status <> 'admission_created' OR admission_request_id IS NOT NULL),
+    CHECK (admission_request_id IS NULL OR choice='free' OR payment_confirmed_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_company_transfer_payment_applicant
+    ON company_transfer_requests(applicant_user_id) WHERE status='payment_review';
+CREATE INDEX IF NOT EXISTS ix_company_transfer_review
+    ON company_transfer_requests(status,created_at DESC,id DESC);
+
+CREATE OR REPLACE FUNCTION protect_company_transfer_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF ROW(NEW.applicant_user_id,NEW.source_tenant_id,NEW.target_tenant_id,NEW.choice,NEW.method,
+           NEW.invitation_code,NEW.fee_amount_minor,NEW.currency,NEW.instructions,NEW.free_consent_at,NEW.created_at)
+       IS DISTINCT FROM
+       ROW(OLD.applicant_user_id,OLD.source_tenant_id,OLD.target_tenant_id,OLD.choice,OLD.method,
+           OLD.invitation_code,OLD.fee_amount_minor,OLD.currency,OLD.instructions,OLD.free_consent_at,OLD.created_at) THEN
+RAISE EXCEPTION 'Transfer policy snapshot and consent are immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER company_transfer_snapshot_immutable BEFORE UPDATE ON company_transfer_requests
+    FOR EACH ROW EXECUTE FUNCTION protect_company_transfer_snapshot();
+
 CREATE TABLE IF NOT EXISTS okr_key_results (
 	id UUID NOT NULL, 
 	objective_id UUID NOT NULL, 
@@ -624,6 +669,29 @@ CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id);
 CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
+
+CREATE TABLE IF NOT EXISTS company_transfer_retained_agents (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE RESTRICT,
+    transfer_request_id UUID NOT NULL REFERENCES company_transfer_requests(id) ON DELETE RESTRICT,
+    original_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+    holder_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    sealed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS company_transfer_runtime_cleanup (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    transfer_request_id UUID NOT NULL REFERENCES company_transfer_requests(id) ON DELETE RESTRICT,
+    choice TEXT NOT NULL CHECK (choice IN ('paid','free')),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','completed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS ix_company_transfer_cleanup_pending
+ON company_transfer_runtime_cleanup(created_at,agent_id) WHERE state='pending';
 
 CREATE TABLE IF NOT EXISTS agent_setups (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,

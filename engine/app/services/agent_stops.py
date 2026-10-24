@@ -84,6 +84,9 @@ def schedule_container_stops(agents: Sequence[AgentRecord]) -> None:
 
 
 async def reconcile_stopped_containers(now: datetime) -> None:
+    from app.services.company_transfer_cleanup import reconcile_transfer_cleanup
+
+    await reconcile_transfer_cleanup()
     agents = await agent_dao.prepare_container_stops(now)
     await stop_containers(agents)
     await sweep_orphan_containers(now)
