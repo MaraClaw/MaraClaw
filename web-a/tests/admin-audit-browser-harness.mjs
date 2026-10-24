@@ -40,7 +40,7 @@ export async function createHarness() {
     receipt.cleanup.browsersCreated++
     const errors = []
     const failedRequests = []
-    const state = { user: { ...admin, ...options.user }, token: 'synthetic-audit-token', status: 200, result: [event, nullableEvent], gate: null, exchanges: [] }
+    const state = { user: { ...admin, ...options.user }, token: 'synthetic-audit-token', status: 200, result: [event, nullableEvent], nextCursor: options.nextCursor ?? null, gate: null, exchanges: [] }
     let context
     let page
     try {
@@ -61,11 +61,11 @@ export async function createHarness() {
         else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
         else if (path === '/api/admin/search-analytics/summary') body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }
         else if (path === '/api/admin/search-analytics/orgs') body = []
-        else if (path === '/api/admin/audit-logs' || path === '/api/users/admin-audit-logs') {
+        else if (path === '/api/admin/audit-logs/page' || path === '/api/users/admin-audit-logs/page') {
           exchange = { path, params: Object.fromEntries(url.searchParams), status: state.status, gate: state.gate, delivered: Promise.withResolvers() }
           state.exchanges.push(exchange)
           status = state.status
-          body = status === 200 ? state.result : { detail: status === 403 ? 'Synthetic access denied' : 'Synthetic activity service unavailable' }
+          body = status === 200 ? { items: state.result, next_cursor: state.nextCursor } : { detail: status === 400 ? 'Invalid cursor' : status === 403 ? 'Synthetic access denied' : 'Synthetic activity service unavailable' }
           if (exchange.gate) await exchange.gate.promise
           receipt.requests.push({ scenario: options.name, path, params: exchange.params, status })
         } else throw new Error(`Unexpected synthetic API ${route.request().method()} ${path}`)
