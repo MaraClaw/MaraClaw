@@ -91,8 +91,11 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         return
       case '/api/agents/templates':
       case '/api/auth/providers':
-      case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages`:
         await route.fulfill({ json: [] })
+        return
+      case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages/page`:
+        expect(new URL(request.url()).searchParams.get('limit')).toBe('50')
+        await route.fulfill({ json: { items: [], next_cursor: null, has_more: false } })
         return
       case `/api/agents/${originalAgent.id}/openclaw-update`:
       case `/api/agents/${replacementAgent.id}/openclaw-update`:

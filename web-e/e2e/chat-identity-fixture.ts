@@ -33,7 +33,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
   let onboarded = originalAgent.onboarded_for_me
   let requests = 0
   let ensures = 0
-  let deferred: ReturnType<typeof Promise.withResolvers<void>> | undefined
+  let deferred: { readonly release: ReturnType<typeof Promise.withResolvers<void>>; readonly finished: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   let delayedTicket: { readonly requested: ReturnType<typeof Promise.withResolvers<void>>; readonly response: ReturnType<typeof Promise.withResolvers<number>>; readonly finished: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   const tickets: { readonly ticket: string; readonly session_id: string; readonly agent_id: string }[] = []
   const used = new Set<string>()
@@ -71,14 +71,25 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       id: secondSession, agent_id: agent.id, user_id: originalUser.id, title: 'Identity thread 2',
       source_channel: 'agent', created_at: '2030-01-01T00:00:00Z', message_count: 1, unread_count: 0,
     }] })
-    if (path.endsWith('/messages')) {
+    if (path.endsWith('/messages/page')) {
+      const params = new URL(route.request().url()).searchParams
+      expect(route.request().method()).toBe('GET')
+      expect(params.get('limit')).toBe('50')
       requests++
       const snapshot = path.includes(firstSession) ? history : path.includes(archivedSession)
         ? [message('archive-reply', 'Authorized archived history')] : [message('other-session', 'Current second session')]
+      const cursor = params.get('cursor')
+      const end = cursor === null ? snapshot.length : snapshot.findIndex((row) => row.entry_id === cursor)
+      expect(end).toBeGreaterThanOrEqual(0)
+      const start = Math.max(0, end - 50)
       const gate = deferred
       deferred = undefined
-      if (gate) await gate.promise
-      return route.fulfill({ json: snapshot })
+      if (gate) await gate.release.promise
+      try {
+        return await route.fulfill({ json: { items: snapshot.slice(start, end), next_cursor: start > 0 ? snapshot[start]?.entry_id : null, has_more: start > 0 } })
+      } finally {
+        gate?.finished.resolve()
+      }
     }
     if (path.endsWith('/files/') && route.request().method() === 'GET') {
       expect(new URL(route.request().url()).searchParams.get('path')).toBe('skills')
@@ -110,9 +121,9 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     setHistory: (rows: readonly ChatMessage[]) => { history = rows },
     setOnboarded: (value: boolean) => { onboarded = value },
     holdNextHistory: () => {
-      const gate = Promise.withResolvers<void>()
+      const gate = { release: Promise.withResolvers<void>(), finished: Promise.withResolvers<void>() }
       deferred = gate
-      return () => gate.resolve()
+      return async () => { gate.release.resolve(); await gate.finished.promise }
     },
     socket: async (index = 0) => {
       await expect.poll(() => sockets.length).toBeGreaterThan(index)

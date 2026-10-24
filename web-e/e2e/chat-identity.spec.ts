@@ -18,7 +18,7 @@ test('busy polling still recovers a persisted reply without a completion frame',
   await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
   chat.setHistory([{ ...question, client_submission_id: submitted(socket).client_submission_id }, reply])
   const refreshed = page.waitForEvent('requestfinished', {
-    predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages`),
+    predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages/page`),
   })
   // When
   await page.clock.runFor(5_000)

@@ -1,4 +1,5 @@
 export type ChatAttachment = { readonly path: string; readonly name: string }
+export type ChatJsonValue = string | number | boolean | null | readonly ChatJsonValue[] | { readonly [key: string]: ChatJsonValue }
 
 export type ChatMessage = {
   readonly client_submission_id?: string | null
@@ -10,9 +11,13 @@ export type ChatMessage = {
   readonly file_name?: string
   readonly attachments?: readonly ChatAttachment[]
   readonly toolName?: string
+  readonly toolArgs?: ChatJsonValue
   readonly toolStatus?: string
   readonly toolResult?: string
+  readonly toolThinking?: string
   readonly thinking?: string
+  readonly sender_name?: string
+  readonly participant_id?: string
 }
 
 export function getChatMessageText(message: ChatMessage): string {

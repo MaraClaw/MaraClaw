@@ -6,9 +6,12 @@ import { toast } from 'sonner'
 
 import { ChatMarkdown } from '@/components/chat/markdown'
 import { ChatMessageContent } from '@/components/chat/message-content'
+import { HistoryControl } from '@/components/chat/history-control'
 import { SkillMentionInput } from '@/components/chat/skill-mention-input'
 import { Button } from '@/components/ui/button'
 import { installedAgentSkillsOptions } from '@/hooks/agent-skills-options'
+import { useChatHistory } from '@/hooks/use-chat-history'
+import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { useQuery as useWorkspaceQuery } from '@/hooks/session-workspace'
 import { authSession } from '@/lib/auth-session'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
@@ -22,7 +25,6 @@ import { isWritableSession } from '@/lib/chat/sessions'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
-  listSessionMessages,
   listSessions,
   uploadChatFile,
   type AgentOut,
@@ -69,7 +71,7 @@ export function AgentChatPage() {
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
   const [slow, setSlow] = useState(false)
-  const [retryVersion, setRetryVersion] = useState(0)
+  const [retryStartedAt, setRetryStartedAt] = useState<number | null>(null)
   const [socketReady, setSocketReady] = useState(0)
   const [socketStopped, setSocketStopped] = useState(false)
   const [info, setInfo] = useState<string | null>(null)
@@ -137,6 +139,7 @@ export function AgentChatPage() {
       setLivePreview(null)
       setBusy(false)
       setSlow(false)
+      setRetryStartedAt(null)
     }
     activeSessionRef.current = activeId
     if (queuedSendRef.current?.sessionId !== activeId) queuedSendRef.current = null
@@ -161,11 +164,11 @@ export function AgentChatPage() {
     setBusy(false)
   }, [sharedSessionQuery.error, activeId, sessionId, isCurrent, submissions, updateLines])
 
-  const historyQuery = useQuery({
-    queryKey: ['messages', agent.id, activeId],
-    queryFn: () => activeId ? listSessionMessages(agent.id, activeId) : [],
-    enabled: authSession.isCurrent(mountedOwner) && Boolean(token && activeId),
-    refetchOnMount: 'always',
+  const historyQuery = useChatHistory(agent.id, activeId, authSession.isCurrent(mountedOwner) && Boolean(token))
+  const threadScroll = useChatScroll(threadRef, {
+    scope: `${agent.id}:${activeId ?? ''}`, ready: historyQuery.data !== undefined,
+    hasEarlier: historyQuery.hasEarlier, loadingEarlier: historyQuery.loadingEarlier,
+    earlierError: historyQuery.earlierError, loadEarlier: historyQuery.loadEarlier,
   })
 
   useEffect(() => {
@@ -207,13 +210,14 @@ export function AgentChatPage() {
 
   useEffect(() => {
     if (!isCurrent(owner) || !busy) return
+    const delay = retryStartedAt === null ? THINKING_TIMEOUT_MS : Math.max(0, retryStartedAt + THINKING_TIMEOUT_MS - Date.now())
     const timer = window.setTimeout(() => {
       if (!isCurrent() || !submissions.active) return
       setSlow(true)
       setThinking('')
-    }, THINKING_TIMEOUT_MS)
+    }, delay)
     return () => window.clearTimeout(timer)
-  }, [busy, owner, isCurrent, submissions, retryVersion])
+  }, [busy, owner, isCurrent, submissions, retryStartedAt])
 
   useEffect(() => {
     if (!isCurrent(owner) || !socketReady) return
@@ -227,14 +231,6 @@ export function AgentChatPage() {
     setInfo(null)
     sendFn(queued.line.submission)
   }, [activeId, historyQuery.isLoading, socketReady, owner, isCurrent, updateLines])
-
-  useEffect(() => {
-    if (!isCurrent(owner)) return
-    const thread = threadRef.current
-    if (!thread) return
-    const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80
-    if (nearBottom) thread.scrollTop = thread.scrollHeight
-  }, [lines, live, thinking, info, owner, isCurrent])
 
   useEffect(() => {
     if (!isCurrent() || !token || !activeId || !writable || historyQuery.isLoading || historyQuery.isError) return
@@ -406,6 +402,7 @@ export function AgentChatPage() {
     const pendingLine: Line = { role: 'user', content: content.display_content ?? content.content, composerText: draft, pending: true,
       client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' }
     setSlow(false)
+    setRetryStartedAt(null)
     if (!activeId) {
       if (queuedSendRef.current || sharedSessionQuery.isError) return
       queuedSendRef.current = { line: pendingLine }
@@ -437,6 +434,7 @@ export function AgentChatPage() {
     }
     setBusy(true)
     setSlow(false)
+    setRetryStartedAt(null)
     const uploadSession = activeSessionRef.current
     try {
       const uploaded = await uploadChatFile(file, agent.id)
@@ -465,7 +463,7 @@ export function AgentChatPage() {
     rejectedTurnRef.current = false
     setBusy(true)
     setSlow(false)
-    setRetryVersion((version) => version + 1)
+    setRetryStartedAt(Date.now())
     setInfo(null)
     sendRef.current(line.submission)
   }
@@ -491,12 +489,14 @@ export function AgentChatPage() {
         ) : null}
         <div
           ref={threadRef}
-          className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4"
+          onScroll={threadScroll.onScroll}
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4 [overflow-anchor:none]"
           aria-busy={busy}
         >
-          {historyQuery.error ? <p role="alert" className="text-sm text-destructive">
-            {historyQuery.error instanceof ApiError ? formatApiDetail(historyQuery.error.detail) ?? historyQuery.error.message : 'Could not load this conversation.'}
-          </p> : null}
+          <HistoryControl ready={historyQuery.data !== undefined} loading={Boolean(activeId) && historyQuery.isLoading}
+            error={historyQuery.error} hasEarlier={historyQuery.hasEarlier} loadingEarlier={historyQuery.loadingEarlier}
+            earlierError={historyQuery.earlierError} onRefresh={() => { if (isCurrent()) void historyQuery.refetch() }}
+            onLoadEarlier={() => { if (isCurrent()) threadScroll.loadEarlier() }} />
           {!sessionId && sharedSessionQuery.error ? <div role="alert" className="space-y-2 text-sm text-destructive">
             <p>Could not open the shared conversation.</p>
             <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
@@ -504,6 +504,7 @@ export function AgentChatPage() {
           {visible.map((line, index) => (
             <article
               key={line.entry_id ?? line.client_submission_id ?? `${line.created_at ?? 'row'}-${index}`}
+              data-chat-entry={line.entry_id ?? line.client_submission_id ?? line.message_id ?? `local-${index}`}
               className={cn(
                 'max-w-2xl rounded-2xl px-3.5 py-2.5 text-sm whitespace-pre-wrap',
                 line.role === 'user' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',

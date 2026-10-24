@@ -31,7 +31,7 @@ test('authorized archive links stay readable and read-only with a return to shar
 
 test('an unauthorized archive response never falls back to shared history or enables sending', async ({ page }) => {
   const chat = await prepareChat(page, [message('secret-shared', 'Not the requested archive')])
-  await page.route(`**/sessions/${archivedSession}/messages?*`, (route) => route.fulfill({ status: 403, json: { detail: 'Archive access denied' } }))
+  await page.route(`**/sessions/${archivedSession}/messages/page?*`, (route) => route.fulfill({ status: 403, json: { detail: 'Archive access denied' } }))
   await page.goto(chatPath(archivedSession))
   await expect(page.getByText('Archive access denied', { exact: true })).toBeVisible()
   await expect(page.locator('article')).toHaveCount(0)
@@ -42,7 +42,7 @@ test('an unauthorized archive response never falls back to shared history or ena
 
 test('switching from a live shared conversation to a denied archive clears the retired view', async ({ page }) => {
   const chat = await prepareChat(page, [message('shared-before-archive', 'Only in the shared conversation')])
-  await page.route(`**/sessions/${archivedSession}/messages?*`, (route) => route.fulfill({ status: 403, json: { detail: 'Archive access denied' } }))
+  await page.route(`**/sessions/${archivedSession}/messages/page?*`, (route) => route.fulfill({ status: 403, json: { detail: 'Archive access denied' } }))
   await page.goto(chatPath())
   const socket = await chat.socket()
   socket.route.send(JSON.stringify({ type: 'agentbay_live', env: 'browser', live_preview: { screenshot_url: '/preview.png' } }))
@@ -62,7 +62,9 @@ test('switching from a live shared conversation to a denied archive clears the r
 
 test('an archive ending in a human turn does not pretend to await a new reply', async ({ page }) => {
   await prepareChat(page)
-  await page.route(`**/sessions/${archivedSession}/messages?*`, (route) => route.fulfill({ json: [message('archived-user', 'Last archived question', 'user')] }))
+  await page.route(`**/sessions/${archivedSession}/messages/page?*`, (route) => route.fulfill({ json: {
+    items: [message('archived-user', 'Last archived question', 'user')], next_cursor: null, has_more: false,
+  } }))
   await page.goto(chatPath(archivedSession))
   await expect(page.locator('article')).toHaveText(['Last archived question'])
   await expect(page.getByText('Thinking', { exact: true })).toHaveCount(0)
