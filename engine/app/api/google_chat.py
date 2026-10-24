@@ -14,6 +14,7 @@ from app.api.background_tasks import schedule_background_task
 from app.core.json_types import json_as_str_or, json_loads_value, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
@@ -266,14 +267,17 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
     returned only for membership events / errors; messages still attempt a bounded
     sync LLM path as a fallback.
     """
+    body_bytes = await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE)
+    if body_bytes is None:
+        return Response(status_code=413)
+
     config = await channel_config.get_channel_config(agent_id, CHANNEL_TYPE)
     if not config or not config.is_configured:
         return Response(status_code=404)
 
-    body_bytes = await request.body()
     try:
         body: dict[str, Any] = json.loads(body_bytes) if body_bytes else {}
-    except json.JSONDecodeError:
+    except ValueError, UnicodeError:
         return Response(status_code=400)
     if not isinstance(body, dict):
         return Response(status_code=400)
@@ -289,7 +293,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
     elif config.verification_token not in (None, ""):
         token = str(body.get("token") or "").strip()
         expected = config.verification_token
-        if not hmac.compare_digest(token, expected):
+        if not hmac.compare_digest(token.encode(errors="surrogatepass"), expected.encode(errors="surrogatepass")):
             logger.warning("[GoogleChat] verification_token mismatch for agent %s", agent_id)
             return Response(status_code=401)
     else:
