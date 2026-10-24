@@ -88,6 +88,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/platform-admins` | - | Platform admin list with `is_genesis` / `is_active` |
 | `PATCH` | `/api/admin/platform-admins/{user_id}/active` | `{ is_active }` | Genesis PA only. Cannot target self or genesis. Deactivating the last active PA is blocked. |
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
+| `GET` | `/api/admin/audit-logs/page` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; deterministic older-event seek pagination. Page size clamped to 1-500. |
 | `GET` | `/api/admin/platform-settings` | - | `{ invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
 | `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
@@ -218,7 +219,18 @@ does not include an existing-database migration.
 | `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
 | `GET` | `/api/users/admin-audit-logs` | org_admin | Query: `action?`, `limit=100` | Company-scoped admin action trail |
+| `GET` | `/api/users/admin-audit-logs/page` | org_admin | Query: `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; tenant comes only from the authenticated principal. Page size clamped to 1-500. |
 | `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Genesis rows cannot change role. Blocks demoting the last *active* admin. |
+
+#### Audit page navigation
+
+Both `/page` endpoints order events by `created_at DESC, id DESC`, preserving timestamp
+microseconds. Pass `next_cursor` unchanged to fetch older events; `null` means there is no
+next page. Cursors are versioned, limited to 1024 characters, and bound to the effective
+role, tenant and filters. Malformed or mismatched cursors return **400** after authorization;
+the existing force-password-change gate still applies. Changing filters requires a fresh
+root request without a cursor. These pages are not a snapshot: refresh from the root to
+include new inserts or late commits. The existing array endpoints remain unchanged.
 
 #### `UserOut` (users router)
 

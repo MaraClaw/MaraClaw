@@ -29,6 +29,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
+from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.admin_metrics import (
     AdminAgentLeaderboardEntry,
     AdminChannelDistributionEntry,
@@ -40,6 +41,7 @@ from app.schemas.admin_metrics import (
     AdminToolCategoryEntry,
 )
 from app.services.admin_audit import field_change, write_admin_audit
+from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page
 from app.services.admin_provisioning import (
     AdminActivationError,
     create_additional_platform_admin,
@@ -348,6 +350,24 @@ async def set_platform_admin_active(
         is_active=updated.is_active,
         is_genesis=bool(getattr(updated, "is_genesis", getattr(target, "is_genesis", False))),
         created_at=updated.created_at,
+    )
+
+
+@router.get("/audit-logs/page", response_model=AdminAuditPageOut)
+async def list_admin_audit_logs_page(
+    tenant_id: uuid.UUID | None = None,
+    actor_id: uuid.UUID | None = None,
+    action: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> AdminAuditPageOut:
+    """Seek older events; refresh without a cursor to include newly committed events."""
+    _ = current_user
+    return await list_admin_audit_page(
+        AdminAuditScope(role="platform_admin", tenant_id=tenant_id, actor_id=actor_id, action=action),
+        cursor=cursor,
+        limit=limit,
     )
 
 
