@@ -3,29 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import threading
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import override
 
 import pytest
+from anyio import Event, create_task_group, fail_after
 from python_on_whales.exceptions import DockerException
 
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
 from app.services import openclaw_update_executor as executor_module
 from app.services.agent_manager import guest_container_name
+from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_docker import ContainerInfo
 from app.services.openclaw_update_executor import READY_PASSES, UpgradeExecutor
-from app.services.openclaw_update_snapshot import commit_snapshot, restore_snapshot, snapshot_path
+from app.services.openclaw_update_snapshot import commit_snapshot, drop_snapshot, restore_snapshot, snapshot_path
 from openclaw_update_fakes import NEW_IMAGE, OLD_IMAGE, FakeContainer, FakeDocker, FakeManager, FakeStore
 
 
 class Harness:
     def __init__(self, tmp_path: Path) -> None:
-        self.agent = AgentRecord(
+        self.agent: AgentRecord = AgentRecord(
             id=uuid.uuid4(),
             name="Ada",
             creator_id=uuid.uuid4(),
@@ -33,19 +37,19 @@ class Harness:
             container_id="old-id",
             container_port=18800,
         )
-        self.run = OpenClawUpdateRunRecord(
+        self.run: OpenClawUpdateRunRecord = OpenClawUpdateRunRecord(
             id=uuid.uuid4(), notice_id=uuid.uuid4(), agent_id=self.agent.id, state="pending"
         )
-        self.docker = FakeDocker()
+        self.docker: FakeDocker = FakeDocker()
         self.docker.containers["old-id"] = FakeContainer(
             "old-id", guest_container_name(self.agent.id), OLD_IMAGE, agent_id=str(self.agent.id)
         )
-        self.manager = FakeManager(self.docker, tmp_path)
-        self.store = FakeStore({self.agent.id: self.agent}, {self.run.id: self.run})
-        self.agent_dir = self.manager._agent_dir(self.agent.id)
+        self.manager: FakeManager = FakeManager(self.docker, tmp_path)
+        self.store: FakeStore = FakeStore({self.agent.id: self.agent}, {self.run.id: self.run})
+        self.agent_dir: Path = self.manager._agent_dir(self.agent.id)
         (self.agent_dir / "workspace").mkdir(parents=True)
         (self.agent_dir / "workspace" / "memory.md").write_text("before", encoding="utf-8")
-        self.executor = UpgradeExecutor(
+        self.executor: UpgradeExecutor = UpgradeExecutor(
             self.store,
             self.docker,
             self.manager,
@@ -440,3 +444,277 @@ async def test_cutover_rejects_foreign_refs_before_journaling_or_stopping(h: Har
     assert h.docker.calls == []
     assert h.stored_run.state == "pending"
     assert h.stored_run.journal == {}
+
+
+class _WorkerCrash(BaseException):
+    """Simulate process death without entering the executor's exception rollback."""
+
+
+@pytest.fixture
+async def leaked(h: Harness, monkeypatch: pytest.MonkeyPatch) -> Harness:
+    # Given publication commits, but the worker dies before either cleanup operation.
+    async def crash(_run: OpenClawUpdateRunRecord, _agent_dir: Path, _old_id: str = "") -> None:
+        raise _WorkerCrash
+
+    with monkeypatch.context() as patch:
+        patch.setattr(h.executor, "_cleanup_success", crash)
+        with pytest.raises(_WorkerCrash):
+            await h.executor.process(h.run.id)
+    assert h.stored_run.state == "succeeded"
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
+    assert "old-id" in h.docker.containers
+    h.docker.calls.clear()
+    return h
+
+
+async def test_reconcile_reclaims_published_crash_artifacts_and_is_idempotent(leaked: Harness) -> None:
+    # Given a changed parked name and unrelated lookalikes, including a colliding short run ID.
+    h = leaked
+    h.docker.containers["old-id"].name = "renamed-by-operator"
+    sibling_id = uuid.UUID(hex=h.run.id.hex[:8] + ("0" * 23) + "1")
+    sibling = snapshot_path(h.agent_dir, sibling_id)
+    sibling.mkdir()
+    parked = h.stored_run.journal.get("parked_name")
+    assert parked is not None
+    h.docker.containers["unrelated"] = FakeContainer("unrelated", parked, OLD_IMAGE)
+    # When a restarted executor sweeps, and another restart repeats the same candidate.
+    await UpgradeExecutor(h.store, h.docker, h.manager).reconcile_success_artifacts()
+    await UpgradeExecutor(h.store, h.docker, h.manager).reconcile_success_artifacts()
+    # Then only the journal's old ID and full-UUID snapshot were removed, exactly once.
+    assert h.docker.calls == [("remove", "old-id")]
+    assert set(h.docker.containers) == {h.stored_agent.container_id, "unrelated"}
+    assert not snapshot_path(h.agent_dir, h.run.id).exists()
+    assert sibling.is_dir()
+    assert (h.agent_dir / "workspace" / "written-by-new-writer.txt").read_text() == "new"
+    assert h.stored_run.state == "succeeded"
+
+
+@pytest.mark.parametrize("state", ["pending", "cutover"])
+async def test_reconcile_skips_agents_with_active_runs(leaked: Harness, state: str) -> None:
+    # Given another upgrade has claimed this agent.
+    h = leaked
+    active = replace(h.run, id=uuid.uuid4(), state="pending" if state == "pending" else "cutover")
+    h.store.runs[active.id] = active
+    # When old successful artifacts are revisited.
+    await h.executor.reconcile_success_artifacts()
+    # Then neither artifact is touched while the agent has an active run.
+    assert h.docker.calls == []
+    assert "old-id" in h.docker.containers
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
+
+
+@pytest.mark.parametrize("owner", [None, "foreign-agent"])
+async def test_reconcile_refuses_foreign_or_unlabelled_container_but_drops_snapshot(
+    leaked: Harness, owner: str | None
+) -> None:
+    # Given Docker now reports a mismatched or missing ownership label.
+    h = leaked
+    h.docker.containers["old-id"].agent_id = owner
+    # When the completed journal is reconciled.
+    await h.executor.reconcile_success_artifacts()
+    # Then refusal preserves the guest and published state, without blocking filesystem cleanup.
+    assert h.docker.calls == []
+    assert "old-id" in h.docker.containers
+    assert h.stored_run.state == "succeeded"
+    assert not snapshot_path(h.agent_dir, h.run.id).exists()
+
+
+@pytest.mark.parametrize("by_name", [False, True])
+async def test_reconcile_never_removes_the_live_guest_even_via_a_journal_alias(leaked: Harness, by_name: bool) -> None:
+    # Given a stale/corrupted journal points at the current guest, directly or via its name.
+    h = leaked
+    live = h.stored_agent.container_id
+    assert live is not None
+    reference = h.docker.containers[live].name if by_name else live
+    h.store.runs[h.run.id] = replace(h.stored_run, journal=RunJournal(old_container_id=reference))
+    # When cleanup resolves the journal reference.
+    await h.executor.reconcile_success_artifacts()
+    # Then neither the live guest nor any non-journalled container is removed.
+    assert h.docker.calls == []
+    assert h.docker.containers[live].running
+    assert "old-id" in h.docker.containers
+
+
+@pytest.mark.parametrize("code", ["start_failed", "rollback_failed"])
+async def test_reconcile_preserves_failed_run_artifacts(leaked: Harness, code: str) -> None:
+    # Given the journal belongs to a failed run, including unrecoverable rollback.
+    h = leaked
+    h.store.runs[h.run.id] = replace(h.stored_run, state="failed", failure_code=code)
+    # When the periodic sweep runs.
+    await h.executor.reconcile_success_artifacts()
+    # Then both artifacts remain available for operator recovery.
+    assert h.docker.calls == []
+    assert "old-id" in h.docker.containers
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
+
+
+def _assert_exclusive_workspace_lock(agent_dir: Path) -> None:
+    lock_path = agent_dir.parent / "_setup_locks" / f"{agent_dir.name}.lock"
+    with lock_path.open("a+b") as lock, pytest.raises(BlockingIOError):
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+
+async def test_reconcile_rereads_terminal_state_under_exclusive_lock(
+    leaked: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a stale succeeded candidate whose durable state changes before its locked reread.
+    h = leaked
+    observed: list[uuid.UUID] = []
+    get_run = FakeStore.get_run
+
+    async def reread(store: FakeStore, run_id: uuid.UUID) -> OpenClawUpdateRunRecord | None:
+        _assert_exclusive_workspace_lock(h.agent_dir)
+        observed.append(run_id)
+        store.runs[run_id] = replace(store.runs[run_id], state="failed", failure_code="rollback_failed")
+        return await get_run(store, run_id)
+
+    monkeypatch.setattr(FakeStore, "get_run", reread)
+    # When the candidate is processed under the actual filesystem flock.
+    await h.executor.reconcile_success_artifacts()
+    # Then stale state cannot authorize either removal.
+    assert observed == [h.run.id]
+    assert h.docker.calls == []
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
+
+
+async def test_reconcile_holds_exclusive_lock_through_both_removals(
+    leaked: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given probes on the real removal seams, not a replacement lock implementation.
+    h = leaked
+    observed: list[str] = []
+    remove = FakeDocker.remove
+
+    def remove_locked(docker: FakeDocker, reference: str) -> None:
+        _assert_exclusive_workspace_lock(h.agent_dir)
+        observed.append("container")
+        remove(docker, reference)
+
+    def drop_locked(agent_dir: Path, run_id: uuid.UUID) -> None:
+        _assert_exclusive_workspace_lock(agent_dir)
+        observed.append("snapshot")
+        drop_snapshot(agent_dir, run_id)
+
+    monkeypatch.setattr(FakeDocker, "remove", remove_locked)
+    monkeypatch.setattr(executor_module, "drop_snapshot", drop_locked)
+    # When both artifacts are reclaimed.
+    await h.executor.reconcile_success_artifacts()
+    # Then the exclusive lock covers the Docker and filesystem mutations.
+    assert observed == ["container", "snapshot"]
+
+
+async def test_reconcile_advances_past_full_batches_of_already_clean_runs(leaked: Harness) -> None:
+    # Given a full first page needs no cleanup, followed by the crashed run.
+    h = leaked
+    for index in range(1, 101):
+        run = replace(h.stored_run, id=uuid.UUID(int=h.run.id.int - index), journal=RunJournal())
+        h.store.runs[run.id] = run
+    # When two bounded passes traverse the keyset.
+    await h.executor.reconcile_success_artifacts()
+    assert h.docker.calls == []
+    await h.executor.reconcile_success_artifacts()
+    # Then the already-clean prefix does not starve the leaked artifacts.
+    assert h.docker.calls == [("remove", "old-id")]
+    assert not snapshot_path(h.agent_dir, h.run.id).exists()
+
+
+async def test_fake_succeeded_query_filters_by_completion_time_and_pages() -> None:
+    # Given old, failed and active journals alongside recently completed runs.
+    since = datetime(2026, 1, 1, tzinfo=UTC)
+    agent_id = uuid.uuid4()
+    base = OpenClawUpdateRunRecord(
+        id=uuid.UUID(int=1), notice_id=uuid.uuid4(), agent_id=agent_id, state="succeeded", created_at=since
+    )
+    records = [replace(base, id=uuid.UUID(int=index)) for index in range(1, 103)]
+    records.extend(
+        [replace(base, id=uuid.UUID(int=103), state="failed"), replace(base, id=uuid.UUID(int=104), state="cutover")]
+    )
+    store = FakeStore({}, {run.id: run for run in records})
+    store.updated_at[base.id] = since - timedelta(days=1)
+    # When the store is traversed from its bounded first page.
+    first = await store.list_recent_succeeded(since, None)
+    second = await store.list_recent_succeeded(since, first[-1].id)
+    # Then only recent successful completions are returned, with no duplicates or skipped tail.
+    assert [run.id.int for run in first] == list(range(2, 102))
+    assert [run.id.int for run in second] == [102]
+
+
+@pytest.mark.parametrize("operation", ["container", "snapshot"])
+async def test_reconcile_retries_a_logged_cleanup_failure(
+    leaked: Harness, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    # Given one post-success cleanup operation fails while the other can finish.
+    h = leaked
+
+    def refuse_remove(_docker: FakeDocker, _reference: str) -> None:
+        raise DockerException(["docker", "remove"], 1)
+
+    def refuse_drop(_agent_dir: Path, _run_id: uuid.UUID) -> None:
+        raise OSError("snapshot temporarily unavailable")
+
+    with monkeypatch.context() as patch:
+        if operation == "container":
+            patch.setattr(FakeDocker, "remove", refuse_remove)
+        else:
+            patch.setattr(executor_module, "drop_snapshot", refuse_drop)
+        await h.executor.reconcile_success_artifacts()
+    assert ("old-id" in h.docker.containers) == (operation == "container")
+    assert snapshot_path(h.agent_dir, h.run.id).exists() == (operation == "snapshot")
+    # When another executor retries the succeeded journal after the transient failure clears.
+    await UpgradeExecutor(h.store, h.docker, h.manager).reconcile_success_artifacts()
+    # Then the surviving artifact is reclaimed without altering publication.
+    assert "old-id" not in h.docker.containers
+    assert not snapshot_path(h.agent_dir, h.run.id).exists()
+    assert h.stored_run.state == "succeeded"
+
+
+async def test_post_publication_store_error_never_rolls_back_success(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given the fresh active-run lookup fails after the success transaction committed.
+    async def unavailable(_store: FakeStore, _agent_id: uuid.UUID) -> OpenClawUpdateRunRecord | None:
+        raise OSError("store temporarily unavailable")
+
+    monkeypatch.setattr(FakeStore, "active_for_agent", unavailable)
+    # When immediate cleanup encounters that database boundary failure.
+    with pytest.raises(OSError, match="store temporarily unavailable"):
+        await h.executor.process(h.run.id)
+    # Then the live replacement stays published and rollback artifacts remain for the sweep.
+    assert h.stored_run.state == "succeeded"
+    assert h.stored_agent.openclaw_image_id == NEW_IMAGE
+    assert h.stored_agent.container_id != "old-id"
+    assert not h.docker.containers["old-id"].running
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
+
+
+async def test_reconcile_rereads_after_waiting_for_another_workspace_owner(
+    leaked: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given the candidate is discovered while another worker owns the real workspace lock.
+    h = leaked
+    listed, completed = Event(), Event()
+    list_recent = FakeStore.list_recent_succeeded
+
+    async def discovered(store: FakeStore, since: datetime, after: uuid.UUID | None) -> list[OpenClawUpdateRunRecord]:
+        runs = await list_recent(store, since, after)
+        listed.set()
+        return runs
+
+    async def sweep() -> None:
+        await h.executor.reconcile_success_artifacts()
+        completed.set()
+
+    monkeypatch.setattr(FakeStore, "list_recent_succeeded", discovered)
+    # When the lock holder changes state after discovery but before releasing the workspace.
+    with fail_after(5):
+        async with create_task_group() as group:
+            async with setup_workspace_lock(h.agent_dir):
+                group.start_soon(sweep)
+                await listed.wait()
+                h.store.runs[h.run.id] = replace(h.stored_run, state="failed", failure_code="rollback_failed")
+                assert not completed.is_set()
+                assert h.docker.calls == []
+            await completed.wait()
+    # Then the sweep uses the fresh locked state, not the originally selected candidate.
+    assert h.docker.calls == []
+    assert snapshot_path(h.agent_dir, h.run.id).is_dir()
