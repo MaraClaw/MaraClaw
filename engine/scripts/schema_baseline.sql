@@ -1175,7 +1175,7 @@ CREATE TABLE IF NOT EXISTS broadcast_emails (
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
     message_id TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed', 'cancelled')),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
     available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     deliver_by TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() + INTERVAL '24 hours'),
@@ -1191,8 +1191,9 @@ CREATE TABLE IF NOT EXISTS broadcast_emails (
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_due
     ON broadcast_emails (available_at, id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
-    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed');
+    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed', 'cancelled');
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_broadcast_emails_scope ON broadcast_emails (tenant_id, broadcast_id);
 
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,

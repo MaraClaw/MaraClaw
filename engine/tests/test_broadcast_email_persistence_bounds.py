@@ -4,7 +4,7 @@ from datetime import timedelta
 import pytest
 
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
-from app.db.errors import UniqueViolationError
+from app.db.errors import CheckViolationError, UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.broadcast_email import NewBroadcastEmail
 from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue
@@ -90,13 +90,15 @@ async def test_recipient_uniqueness_rolls_back_the_entire_enqueue_batch(broadcas
 
 
 async def test_retention_purges_only_bounded_old_terminal_rows(broadcast_db: PersistenceDB):
-    rows = await enqueue(broadcast_db, 4)
+    rows = await enqueue(broadcast_db, 5)
     now = rows[0].created_at + timedelta(seconds=1)
-    claims = await outbox.claim_batch(limit=3, lease_seconds=30, now=now)
+    claims = await outbox.claim_batch(limit=4, lease_seconds=30, now=now)
     assert await outbox.mark_sent(claims[0], now=now)
     assert await outbox.fail(claims[1], error="permanent", now=now)
     assert await outbox.fail(claims[2], error="recent", now=now + timedelta(seconds=5))
+    assert (await outbox.cancel_email(rows[0].tenant_id, rows[0].broadcast_id)).cancelled_now == 1
     cutoff = now + timedelta(seconds=1)
+    assert await outbox.purge_settled(older_than=cutoff, limit=1) == 1
     assert await outbox.purge_settled(older_than=cutoff, limit=1) == 1
     assert await outbox.purge_settled(older_than=cutoff, limit=10) == 1
     assert await outbox.purge_settled(older_than=cutoff, limit=10) == 0
@@ -104,6 +106,23 @@ async def test_retention_purges_only_bounded_old_terminal_rows(broadcast_db: Per
         "SELECT count(*) FILTER (WHERE status = 'pending') AS pending, "
         "count(*) FILTER (WHERE status = 'failed') AS failed FROM broadcast_emails"
     ) == {"pending": 1, "failed": 1}
+
+
+async def test_cancelled_requires_settlement_and_retention_skips_locked_rows(broadcast_db: PersistenceDB):
+    # Given: cancellation is terminal, and one old terminal row is locked elsewhere.
+    rows = await enqueue(broadcast_db, 2)
+    with pytest.raises(CheckViolationError):
+        await broadcast_db.admin.execute("UPDATE broadcast_emails SET status = 'cancelled'")
+    _ = await outbox.cancel_email(rows[0].tenant_id, rows[0].broadcast_id)
+    cutoff = rows[0].created_at + timedelta(days=1)
+    # When: bounded retention encounters a locked cancellation.
+    async with connection_ctx() as db:
+        await db.execute("SELECT id FROM broadcast_emails WHERE id = %(id)s FOR UPDATE", {"id": rows[0].id})
+        assert await outbox.purge_settled(older_than=cutoff, limit=1) == 1
+    # Then: the locked row survives until a later purge, after which status is unavailable.
+    assert (await outbox.email_status(rows[0].tenant_id, rows[0].broadcast_id)).cancelled == 1
+    assert await outbox.purge_settled(older_than=cutoff, limit=1) == 1
+    assert not (await outbox.email_status(rows[0].tenant_id, rows[0].broadcast_id)).available
 
 
 async def test_retry_fail_and_purge_do_not_join_ambient_transaction(broadcast_db: PersistenceDB):

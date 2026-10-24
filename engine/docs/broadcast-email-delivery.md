@@ -8,6 +8,58 @@ SMTP delivery or inbox receipt. Recipients without an email address are excluded
 from that count. No SMTP work runs inside the request transaction, and there is no
 in-memory/background-task fallback if persistence fails.
 
+`POST /api/notifications/broadcast` also returns `broadcast_id` (a UUID string).
+The existing `ok`, `users_notified`, `agents_notified`, and `emails_sent` fields
+retain their meanings, including when email is not requested or no recipients
+have addresses.
+
+## Administrator email management
+
+Both operations require the ordinary authenticated, active PA/OA principal and
+pass the force-password-change gate. They operate only in the principal's
+current tenant; platform administrators do not get cross-tenant lookup here.
+
+- `GET /api/notifications/broadcast/{broadcast_id}/email-status`
+- `POST /api/notifications/broadcast/{broadcast_id}/cancel-email` (no body)
+
+Status returns exactly:
+
+```json
+{
+  "broadcast_id": "00000000-0000-0000-0000-000000000001",
+  "available": true,
+  "queued": 3,
+  "claimed": 1,
+  "smtp_accepted": 2,
+  "failed": 0,
+  "cancelled": 0
+}
+```
+
+`queued` counts pending rows with a null claim token, including delayed retries.
+`claimed` counts pending rows with a non-null token **regardless of lease expiry**.
+`smtp_accepted` maps to persisted `sent`, not inbox receipt. No response includes
+addresses, subjects, bodies, message IDs, recipient IDs, or private errors.
+
+Cancellation returns the same post-operation counters plus `cancelled_now`, the
+number changed by that operation. It atomically settles only pending rows whose
+claim token is null, commits in an independently owned transaction **before**
+responding, and is idempotent. Claimed work, SMTP-accepted/failed rows, and in-app
+notifications remain untouched. A concurrent worker may claim some recipients
+first, so inspect the returned counts rather than assuming every queued row was
+cancelled. No SMTP configuration is needed for either operation.
+
+Expired leases are not proof that an external SMTP thread stopped. Cancellation
+never recalls mail and never cancels a non-null token, even after interruption or
+lease expiry. A later worker can reclaim that token under the existing fences;
+a retry that clears ownership can subsequently become cancellable.
+
+Missing, foreign-tenant, no-email, no-address/no-recipient, and fully
+retention-purged identifiers all return HTTP 200 with `available: false` and
+zero counters (`cancelled_now: 0` for cancellation). There is no separate
+existence lookup. Invalid UUIDs return 422; unauthenticated requests return 401,
+non-administrators and force-change principals 403, and tenantless admins 400.
+
 The outbox table belongs to `scripts/schema_baseline.sql`, for **fresh installs
 only**. This change supplies no migration or automatic upgrade patch for an
 existing database. Provision a compatible schema before deploying this worker;
@@ -36,7 +88,7 @@ deadline. Permanent failures settle immediately. Claiming, retrying and settling
 are independent committed transactions; settlement is fenced by the claim token
 and a live lease. An expired or superseded owner cannot settle a row.
 
-Terminal rows older than 14 days are purged in batches of at most 500, at most
+Terminal `sent`, `failed`, and `cancelled` rows older than 14 days are purged in batches of at most 500, at most
 once per minute per worker. Pending rows are not retention-purged. Multiple
 worker processes each have these bounds; total concurrency scales with workers.
 

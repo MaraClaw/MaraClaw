@@ -12,9 +12,11 @@ from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction
-from app.records.broadcast_email import NewBroadcastEmail
+from app.records.broadcast_email import BroadcastEmailStatus, NewBroadcastEmail
 from app.records.user import UserRecord
 from app.schemas.notification_responses import (
+    NotificationBroadcastEmailCancellationResponse,
+    NotificationBroadcastEmailStatusResponse,
     NotificationBroadcastResponse,
     NotificationReadResponse,
     NotificationResponse,
@@ -135,6 +137,42 @@ class BroadcastRequest(BaseModel):
     send_email: bool = False
 
 
+def _broadcast_tenant(current_user: UserRecord) -> uuid.UUID:
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(403, "Only org admins can send broadcasts")
+    if not current_user.tenant_id:
+        raise HTTPException(400, "No tenant associated with your account")
+    return current_user.tenant_id
+
+
+def _email_status_response(status: BroadcastEmailStatus) -> NotificationBroadcastEmailStatusResponse:
+    return {
+        "broadcast_id": status.broadcast_id,
+        "available": status.available,
+        "queued": status.queued,
+        "claimed": status.claimed,
+        "smtp_accepted": status.smtp_accepted,
+        "failed": status.failed,
+        "cancelled": status.cancelled,
+    }
+
+
+@router.get("/notifications/broadcast/{broadcast_id}/email-status")
+async def broadcast_email_status(
+    broadcast_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationBroadcastEmailStatusResponse:
+    status = await broadcast_email_dao.email_status(_broadcast_tenant(current_user), broadcast_id)
+    return _email_status_response(status)
+
+
+@router.post("/notifications/broadcast/{broadcast_id}/cancel-email")
+async def cancel_broadcast_email(
+    broadcast_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationBroadcastEmailCancellationResponse:
+    result = await broadcast_email_dao.cancel_email(_broadcast_tenant(current_user), broadcast_id)
+    return {**_email_status_response(result.status), "cancelled_now": result.cancelled_now}
+
+
 @router.post("/notifications/broadcast")
 async def broadcast_notification(
     req: BroadcastRequest,
@@ -142,14 +180,10 @@ async def broadcast_notification(
 ) -> NotificationBroadcastResponse:
     """Send a notification to all users and agents in the current tenant.
     Requires org_admin or platform_admin role."""
-    if current_user.role not in ("platform_admin", "org_admin"):
-        raise HTTPException(403, "Only org admins can send broadcasts")
-    if not current_user.tenant_id:
-        raise HTTPException(400, "No tenant associated with your account")
+    tenant_id = _broadcast_tenant(current_user)
 
     from app.services.notification_service import send_notification
 
-    tenant_id = current_user.tenant_id
     sender_name = current_user.display_name or current_user.email or "Admin"
     count_users = 0
     count_agents = 0
@@ -211,6 +245,7 @@ async def broadcast_notification(
 
     return {
         "ok": True,
+        "broadcast_id": broadcast_id,
         "users_notified": count_users,
         "agents_notified": count_agents,
         "emails_sent": count_emails,

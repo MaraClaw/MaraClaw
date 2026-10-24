@@ -93,6 +93,12 @@ async def test_interrupted_worker_recovers_committed_claim_after_pool_reopen(
 
     # Then: a replacement worker reclaims the durable snapshot, rejecting its predecessor.
     clock.current = durable.lease_expires_at + timedelta(seconds=1)
+    await broadcast_db.admin.execute(
+        "UPDATE broadcast_emails SET lease_expires_at = clock_timestamp() - interval '1 second'"
+    )
+    cancellation = await outbox.cancel_email(original.tenant_id, original.broadcast_id)
+    assert cancellation.cancelled_now == 0
+    assert cancellation.status.claimed == 1
     real_claim_batch = outbox.claim_batch
     reclaimed: list[BroadcastEmailRecord] = []
 

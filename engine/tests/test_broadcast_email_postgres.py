@@ -140,7 +140,13 @@ async def test_api_accepts_only_selected_recipient_snapshots(
         notification_api.BroadcastRequest(title="Update", body="Details", send_email=True), current_user=sender
     )
     rows = await broadcast_db.admin.fetchall("SELECT * FROM broadcast_emails")
-    assert result == {"ok": True, "users_notified": 1, "agents_notified": 0, "emails_sent": 1}
+    assert result == {
+        "ok": True,
+        "broadcast_id": rows[0]["broadcast_id"],
+        "users_notified": 1,
+        "agents_notified": 0,
+        "emails_sent": 1,
+    }
     assert [(row["user_id"], row["tenant_id"], row["subject"], row["body"]) for row in rows] == [
         (selected.id, tenant_id, "Update", "Details\n\nSent by: Alice")
     ]
