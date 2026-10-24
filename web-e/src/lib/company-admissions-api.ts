@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import type { SessionOwner } from './auth-session.ts'
 import { apiRequest } from './http.ts'
-import { admissionDetailSchema, admissionSummarySchema, type AdmissionDetail, type AdmissionSummary } from './types/company-admissions.ts'
+import { admissionDetailSchema, admissionPageRequestSchema, admissionSummaryPageSchema, admissionSummarySchema, type AdmissionDetail, type AdmissionPageRequest, type AdmissionSummary, type AdmissionSummaryPage } from './types/company-admissions.ts'
 type RequestContext = {
   readonly owner?: SessionOwner
   readonly signal?: AbortSignal
@@ -30,6 +30,18 @@ export async function getMyAdmission(id: string, context: RequestContext): Promi
   const { owner, signal } = context
   return admissionDetailSchema.parse(
     await apiRequest<unknown>(`/api/company-admissions/${encodeURIComponent(id)}`, requestContext(owner, signal)),
+  )
+}
+
+export async function listMyAdmissionsPage(page: AdmissionPageRequest, context: RequestContext): Promise<AdmissionSummaryPage> {
+  const { owner, signal } = context
+  const { status, limit, cursor } = admissionPageRequestSchema.parse(page)
+  const query = new URLSearchParams()
+  if (status !== undefined) query.set('status', status)
+  if (limit !== undefined) query.set('limit', String(limit))
+  if (cursor !== undefined) query.set('cursor', cursor)
+  return admissionSummaryPageSchema.parse(
+    await apiRequest<unknown>(`/api/company-admissions/mine/page?${query}`, requestContext(owner, signal)),
   )
 }
 
