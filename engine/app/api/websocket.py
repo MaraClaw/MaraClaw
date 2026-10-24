@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import anyio
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from redis.exceptions import RedisError
 
 from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
@@ -70,22 +71,25 @@ class ConnectionManager:
     async def connect(
         self, agent_id: str, websocket: WebSocket, session_id: str | None = None, user_id: str | None = None
     ):
-        if agent_id not in self.active_connections:
-            self.active_connections[agent_id] = []
-        self.active_connections[agent_id].append((websocket, session_id, user_id))
         _ = await realtime_router.register_connection(
             agent_id=agent_id,
             websocket=websocket,
             session_id=session_id,
             user_id=user_id,
         )
+        if agent_id not in self.active_connections:
+            self.active_connections[agent_id] = []
+        self.active_connections[agent_id].append((websocket, session_id, user_id))
 
     async def disconnect(self, agent_id: str, websocket: WebSocket):
         if agent_id in self.active_connections:
             self.active_connections[agent_id] = [
                 (ws, sid, uid) for ws, sid, uid in self.active_connections[agent_id] if ws != websocket
             ]
-        await realtime_router.unregister_connection(agent_id=agent_id, websocket=websocket)
+        try:
+            await realtime_router.unregister_connection(agent_id=agent_id, websocket=websocket)
+        except RedisError as error:
+            logger.warning("[WS] Failed to unregister connection for agent {}: {}", agent_id, error)
 
     def _local_connections(self, agent_id: str) -> list[WebSocketConnection]:
         return self.active_connections.get(agent_id, [])
@@ -236,34 +240,37 @@ class WebSocketChatHandler:
     async def run(self):
         """Main entry point for handling the lifecycle of the WebSocket connection."""
         try:
-            await self.websocket.accept()
-            if not self.ticket:
-                raise HTTPException(400, "Chat ticket required")
-            self.binding = await chat_tickets.redeem(self.ticket)
-            self.ticket = ""
-            if (
-                str(self.binding.agent_id) != str(self.agent_id)
-                or str(self.binding.session_id) != self.session_id_param
-            ):
-                raise HTTPException(400, "Chat ticket binding mismatch")
-            remaining = self.binding.auth_deadline - time.time()
-            if remaining <= 0:
-                raise HTTPException(401, "Authentication expired")
-            with anyio.fail_after(remaining):
-                if not await self.setup():
-                    return
-                await self.message_loop()
-        except TimeoutError:
-            await self.websocket.close(code=4001)
-        except HTTPException as exc:
-            code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
-            await self.websocket.send_json({"type": "error", "content": exc.detail})
-            await self.websocket.close(code=code)
+            try:
+                await self.websocket.accept()
+                if not self.ticket:
+                    raise HTTPException(400, "Chat ticket required")
+                self.binding = await chat_tickets.redeem(self.ticket)
+                self.ticket = ""
+                if (
+                    str(self.binding.agent_id) != str(self.agent_id)
+                    or str(self.binding.session_id) != self.session_id_param
+                ):
+                    raise HTTPException(400, "Chat ticket binding mismatch")
+                remaining = self.binding.auth_deadline - time.time()
+                if remaining <= 0:
+                    raise HTTPException(401, "Authentication expired")
+                with anyio.fail_after(remaining):
+                    if not await self.setup():
+                        return
+                    await self.message_loop()
+            except TimeoutError:
+                await self.websocket.close(code=4001)
+            except HTTPException as exc:
+                code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
+                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await self.websocket.close(code=code)
+            except WebSocketDisconnect:
+                pass
+            except Exception:
+                logger.exception("[WS] Unexpected chat error")
+                await self.websocket.close(code=1011)
         except WebSocketDisconnect:
             pass
-        except Exception:
-            logger.exception("[WS] Unexpected chat error")
-            await self.websocket.close(code=1011)
         finally:
             with anyio.CancelScope(shield=True):
                 await manager.disconnect(str(self.agent_id), self.websocket)
