@@ -91,8 +91,10 @@ def install_session(
     return dao, user, session_id
 
 
-async def test_winning_poll_preserves_login_response(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("timezone", [None, "Asia/Ho_Chi_Minh"])
+async def test_winning_poll_preserves_login_response(monkeypatch: pytest.MonkeyPatch, timezone: str | None) -> None:
     dao, user, session_id = install_session(monkeypatch)
+    user.timezone = timezone
 
     response = await sso.get_sso_session_status(session_id)
 
