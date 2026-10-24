@@ -12,6 +12,7 @@ from app.services.openclaw_update_executor import UpgradeExecutor
 from app.services.openclaw_update_store import PostgresUpgradeStore, UpgradeStore
 
 POLL_SECONDS = 5.0
+ARTIFACT_SWEEP_SECONDS = 60.0
 
 
 async def drive_active_runs(store: UpgradeStore, executor: UpgradeExecutor) -> int:
@@ -32,11 +33,26 @@ async def start_openclaw_update_worker() -> None:
     store = PostgresUpgradeStore()
     if client is None:
         logger.warning("[OpenClawUpdate] Docker unavailable; upgrade runs will not progress")
-    executor = UpgradeExecutor(store, UpgradeDocker(client), agent_manager) if client is not None else None
-    while True:
-        if executor is not None:
+        await anyio.sleep_forever()
+        return
+    executor = UpgradeExecutor(store, UpgradeDocker(client), agent_manager)
+    async with anyio.create_task_group() as group:
+        group.start_soon(_sweep_success_artifacts, executor)
+        while True:
             try:
                 _ = await drive_active_runs(store, executor)
             except Exception:
                 logger.exception("[OpenClawUpdate] worker pass failed")
-        await anyio.sleep(POLL_SECONDS)
+            await anyio.sleep(POLL_SECONDS)
+
+
+async def _sweep_success_artifacts(executor: UpgradeExecutor) -> None:
+    """Run at startup and independently of active polling, including while a cutover holds a lock."""
+    while True:
+        new_trace_id()
+        clear_row_memo()
+        try:
+            await executor.reconcile_success_artifacts()
+        except Exception:
+            logger.exception("[OpenClawUpdate] succeeded-artifact sweep failed")
+        await anyio.sleep(ARTIFACT_SWEEP_SECONDS)
