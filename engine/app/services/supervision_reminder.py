@@ -194,6 +194,9 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
 
 async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
     """Send a single supervision reminder. Target can be an Agent or a Member."""
+    current = await task_dao.get(task.id)
+    if current is None or current.remind_schedule in (None, ""):
+        return
     try:
         import json as _json
 
