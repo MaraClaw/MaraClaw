@@ -7,6 +7,7 @@ can send events to, which triggers the corresponding agent.
 import hashlib
 import hmac
 import json
+import re
 import time
 from collections.abc import Awaitable
 from typing import Protocol
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from app.core.events import get_redis
 from app.core.json_types import int_from_row, json_loads_value
 from app.core.logging import logger
+from app.core.request_body import read_bounded_body
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.errors import LockNotAvailableError
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 RATE_LIMIT = 5  # max hits per minute per token
 MAX_PAYLOAD_SIZE = 65536  # 64KB max payload
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
 
 
 class _RedisExecute(Protocol):
@@ -43,6 +46,8 @@ async def _count_from_pipeline(pipe: _RedisExecute) -> int:
 
 async def _record_and_count_hits(token: str) -> int:
     """Record the current hit in Redis and return the rolling 60-second count."""
+    if _TOKEN_PATTERN.fullmatch(token) is None:
+        return 0
     redis = await get_redis()
     now = time.time()
     key = f"webhook:rate:{token}"
@@ -66,6 +71,10 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     - Rate limiting (5 requests/minute per token)
     - Payload size limit (64KB)
     """
+    body = await read_bounded_body(request, MAX_PAYLOAD_SIZE)
+    if body is None:
+        return JSONResponse({"ok": True}, status_code=413)
+
     # Rate limiting - use per-agent limit if available
     hit_count = await _record_and_count_hits(token)
 
@@ -74,12 +83,6 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     if hit_count >= 60:  # hard ceiling: 60/min regardless of config
         logger.warning(f"Webhook hard rate limit exceeded for token {token[:8]}...")
         return JSONResponse({"ok": True}, status_code=429)
-
-    # Payload size check
-    body = await request.body()
-    if len(body) > MAX_PAYLOAD_SIZE:
-        logger.warning(f"Webhook payload too large for token {token[:8]}...: {len(body)} bytes")
-        return JSONResponse({"ok": True}, status_code=413)
 
     # Look up trigger by token (enabled webhooks only)
     target = await agent_trigger_dao.find_webhook_by_token(token)
@@ -117,7 +120,7 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     if isinstance(secret, str) and secret:
         sig_header = request.headers.get("x-hub-signature-256", "")
         expected_sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig_header, expected_sig):
+        if not hmac.compare_digest(sig_header.encode(), expected_sig.encode()):
             logger.warning(f"Webhook signature mismatch for trigger {target_name}")
             # Still return 200 to not leak info
             return JSONResponse({"ok": True})
