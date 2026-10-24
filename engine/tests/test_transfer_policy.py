@@ -64,9 +64,23 @@ async def test_policy_service_fails_closed_when_seed_missing() -> None:
     assert db.events == ["read", "rollback"]
 
 
-async def test_policy_service_rejects_corrupt_storage_without_fallback() -> None:
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"fee_amount_minor": -1},
+        {"fee_amount_minor": 9007199254740992},
+        {"fee_amount_minor": True},
+        {"fee_amount_minor": 1.0},
+        {"fee_amount_minor": "1"},
+        {"currency": "CAD"},
+        {"currency": "XXX"},
+    ],
+)
+async def test_policy_service_rejects_corrupt_storage_without_fallback(invalid: dict[str, object]) -> None:
     # Given
-    db = MemoryPolicyConnection({"fee_amount_minor": -1, "currency": "USD", "instructions": "Payment destination"})
+    db = MemoryPolicyConnection(
+        {"fee_amount_minor": 0, "currency": "USD", "instructions": "Payment destination", **invalid}
+    )
     # When
     with pytest.raises(ValidationError):
         async with transaction(db=db):

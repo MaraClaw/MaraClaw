@@ -127,6 +127,8 @@ async def test_force_password_change_blocks_transfer_policy(policy_case: PolicyC
     ("field", "value"),
     [
         ("fee_amount_minor", -1),
+        ("fee_amount_minor", 9007199254740992),
+        ("fee_amount_minor", 1.0),
         ("fee_amount_minor", 1.5),
         ("fee_amount_minor", True),
         ("fee_amount_minor", "2500"),
@@ -134,6 +136,8 @@ async def test_force_password_change_blocks_transfer_policy(policy_case: PolicyC
         ("currency", "US"),
         ("currency", "US1"),
         ("currency", "USD\n"),
+        ("currency", "CAD"),
+        ("currency", "XXX"),
         ("instructions", " \n\t"),
         ("instructions", "x" * 4001),
         ("extra", "unknown"),
@@ -159,6 +163,22 @@ async def test_replacement_requires_all_fields(policy_case: PolicyCase) -> None:
     # Then
     assert response.status_code == 422
     assert case.db.value == INITIAL
+
+
+@pytest.mark.parametrize("currency", ["USD", "EUR", "GBP", "VND", "JPY", "KWD"])
+@pytest.mark.parametrize("fee", [0, 9007199254740991])
+async def test_supported_currency_and_safe_integer_bounds_round_trip(
+    policy_case: PolicyCase, currency: str, fee: int
+) -> None:
+    # Given
+    case = policy_case
+    body = {**REPLACEMENT, "currency": currency, "fee_amount_minor": fee}
+    # When
+    response = await case.client.put(URL, json=body)
+    # Then
+    assert response.status_code == 200
+    assert response.json() == body
+    assert case.db.committed_value == body
 
 
 async def test_failed_policy_update_rolls_back_without_audit(policy_case: PolicyCase) -> None:
