@@ -374,6 +374,7 @@ CREATE TABLE IF NOT EXISTS users (
 	display_name VARCHAR(100) NOT NULL, 
 	avatar_url VARCHAR(500), 
 	title VARCHAR(100), 
+	timezone VARCHAR(100),
 	role user_role_enum NOT NULL DEFAULT 'member', 
 	is_active BOOLEAN NOT NULL DEFAULT true, 
 	registration_source VARCHAR(50), 
@@ -908,6 +909,8 @@ CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (c
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id);
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_page ON admin_audit_logs (created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_page ON admin_audit_logs (tenant_id, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS channel_configs (
 	id UUID NOT NULL, 
@@ -1144,6 +1147,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 	ref_id UUID, 
 	sender_name VARCHAR(100), 
 	is_read BOOLEAN NOT NULL, 
+	archived_at TIMESTAMP WITH TIME ZONE,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
@@ -1156,6 +1160,12 @@ CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created
 
 CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
 
+CREATE INDEX IF NOT EXISTS ix_notifications_user_active ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS ix_notifications_user_archived ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS broadcast_emails (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1165,7 +1175,7 @@ CREATE TABLE IF NOT EXISTS broadcast_emails (
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
     message_id TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed', 'cancelled')),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
     available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     deliver_by TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() + INTERVAL '24 hours'),
@@ -1181,8 +1191,9 @@ CREATE TABLE IF NOT EXISTS broadcast_emails (
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_due
     ON broadcast_emails (available_at, id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
-    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed');
+    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed', 'cancelled');
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_broadcast_emails_scope ON broadcast_emails (tenant_id, broadcast_id);
 
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,

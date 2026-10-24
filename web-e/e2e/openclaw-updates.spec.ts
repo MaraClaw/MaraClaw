@@ -27,7 +27,7 @@ async function prepare(page: Page) {
       case '/api/tenants/me': return route.fulfill({ json: { id: 'tenant', name: 'Example team', slug: 'example' } })
       case '/api/onboarding/status': return route.fulfill({ json: { status: 'completed' } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 1 } })
-      case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: 'openclaw_update', is_read: false, link: `/app/updates/${notice.id}` }] })
+      case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: 'openclaw_update', is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })
       case '/api/agents/': return route.fulfill({ json: [state.agent] })
       case `/api/agents/${agentId}`: return route.fulfill({ json: state.agent })
       case `/api/agents/${agentId}/metrics`: return route.fulfill({ json: {} })

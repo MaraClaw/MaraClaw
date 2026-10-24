@@ -17,6 +17,7 @@ import { authorizeProvider, changePasswordRequest, fetchMyTenants, listAuthProvi
 import { SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import type { AuthProvider } from '@/lib/types/auth'
+import { SettingsTimezoneCard } from './settings-timezone-card'
 
 const passwordSchema = z
   .object({
@@ -151,6 +152,8 @@ export function SettingsPage() {
           </form>
         </CardContent>
       </Card>
+
+      <SettingsTimezoneCard />
 
       <Card>
         <CardHeader>

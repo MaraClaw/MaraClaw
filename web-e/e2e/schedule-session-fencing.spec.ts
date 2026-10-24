@@ -14,12 +14,12 @@ for (const status of [200, 401, 503]) {
       requested.resolve()
       await release.promise
       await route.fulfill({ status, json: status === 200
-        ? { ...savedSchedule, timezone: 'America/New_York', next_run_at: '2026-01-15T14:00:00Z' }
+        ? { ...savedSchedule, timezone: 'Etc/GMT+5', next_run_at: '2026-01-15T14:00:00Z' }
         : { detail: 'Obsolete timezone save refused' } })
     })
     await page.goto(schedulesPath)
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
-    await page.getByLabel('IANA timezone').fill('America/New_York')
+    await page.getByLabel('Timezone').selectOption('Etc/GMT+5')
     await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
     await requested.promise
     await writeFromOtherTab(page, replacementToken)

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { listNotifications, markAllNotificationsRead, unreadNotificationCount } from '../src/lib/notifications-api.ts'
+import { archiveNotification, listNotifications, markAllNotificationsRead, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
+import { ApiError } from '../src/lib/http.ts'
 
 test('notification list sends default and explicit offset paging with its category', async (t) => {
   // Given
@@ -12,10 +13,10 @@ test('notification list sends default and explicit offset paging with its catego
   })
   // When
   await listNotifications()
-  await listNotifications({ category: 'approval', limit: 200, offset: 400 })
+  await listNotifications({ category: 'approval', view: 'archived', limit: 200, offset: 400 })
   // Then
   assert.deepEqual(urls.map((url) => Object.fromEntries(url.searchParams)), [
-    { category: 'all', limit: '50', offset: '0' }, { category: 'approval', limit: '200', offset: '400' },
+    { category: 'all', limit: '50', offset: '0', view: 'active' }, { category: 'approval', limit: '200', offset: '400', view: 'archived' },
   ])
 })
 
@@ -31,13 +32,56 @@ test('notification list rejects invalid paging before sending a request', async 
 
 test('notification list accepts the engine response with a null timestamp', async (t) => {
   // Given
-  const notification = { id: 'notice', title: 'Title', body: 'Body', type: 'future_type', link: null, is_read: false, created_at: null }
+  const notification = { id: 'notice', title: 'Title', body: 'Body', type: 'future_type', link: null, is_read: false, created_at: null, archived_at: null }
   t.mock.method(globalThis, 'fetch', async () => Response.json([notification]))
   // When
   const rows = await listNotifications()
   // Then
   assert.deepEqual(rows, [notification])
 })
+
+test('archived notification timestamps survive parsing without changing read state', async (t) => {
+  // Given
+  const row = { id: 'archived', title: 'Archived unread', is_read: false, archived_at: '2030-01-02T12:30:00+08:00' }
+  t.mock.method(globalThis, 'fetch', async () => Response.json([row]))
+  // When
+  const rows = await listNotifications({ view: 'archived' })
+  // Then
+  assert.deepEqual(rows, [row])
+})
+
+for (const archived_at of ['yesterday', undefined]) {
+  test(`notification boundary rejects invalid archive timestamp ${archived_at}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'bad', title: 'Bad', archived_at }]))
+    // When / Then
+    await assert.rejects(listNotifications())
+  })
+}
+
+for (const action of [archiveNotification, restoreNotification]) {
+  test(`${action.name} encodes the row id and accepts repeated successful writes`, async (t) => {
+    // Given
+    const requests: { readonly url: string; readonly method: string | undefined }[] = []
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), method: init?.method })
+      return Response.json({ ok: true })
+    })
+    // When
+    await action('notice/with ?#')
+    await action('notice/with ?#')
+    // Then
+    const suffix = action === archiveNotification ? 'archive' : 'restore'
+    assert.deepEqual(requests, Array.from({ length: 2 }, () => ({ url: `/api/notifications/notice%2Fwith%20%3F%23/${suffix}`, method: 'POST' })))
+  })
+
+  test(`${action.name} exposes missing or foreign row errors`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Not found' }, { status: 404 }))
+    // When / Then
+    await assert.rejects(action('foreign'), (error: unknown) => error instanceof ApiError && error.status === 404)
+  })
+}
 
 test('notification list and count requests preserve the supplied abort signal', async (t) => {
   // Given

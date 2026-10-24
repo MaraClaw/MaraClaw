@@ -114,3 +114,55 @@ for (const status of [200, 401, 503]) {
     expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(replacementToken)
   })
 }
+
+test('withdrawal invalidates cached pending, withdrawn and keyset history pages', async ({ page }) => {
+  // Given
+  const fixture = await prepareAdmission(page)
+  let withdrawn = false
+  const cursor = 'withdraw-keyset'
+  const calls: string[] = []
+  await page.route('**/api/company-admissions/mine/page*', async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    const status = query.get('status')
+    const older = query.get('cursor')
+    calls.push(`${status ?? 'all'}:${older ?? 'root'}`)
+    expect(route.request().method()).toBe('GET')
+    expect(query.get('limit')).toBe('50')
+    expect(older === null || older === cursor).toBe(true)
+    const detail = withdrawn ? withdrawnAdmission : pendingAdmission
+    await route.fulfill({ json: {
+      items: status === null || status === detail.status ? [detail] : [],
+      next_cursor: older === null && status === null ? cursor : null,
+    } })
+  })
+  await page.route(`**${admissionPath}/withdraw`, async (route) => {
+    expect(route.request().method()).toBe('POST')
+    expect(route.request().postData()).toBeNull()
+    withdrawn = true
+    fixture.setDetail(withdrawnAdmission)
+    await route.fulfill({ json: withdrawnAdmission })
+  })
+  await page.goto('/app/admissions')
+  await page.getByLabel('Request status').selectOption('pending')
+  await expect(page.getByRole('listitem')).toHaveCount(1)
+  await page.getByLabel('Request status').selectOption('withdrawn')
+  await expect(page.getByRole('listitem')).toHaveCount(0)
+  await page.getByLabel('Request status').selectOption('all')
+  await page.getByRole('button', { name: 'Older requests' }).click()
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: `View request for ${pendingAdmission.target_tenant.name}` }).click()
+  // When
+  await page.getByRole('button', { name: 'Withdraw request', exact: true }).click()
+  // Then
+  await expect(page.getByRole('region', { name: 'Admission status' }).getByText('Withdrawn', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'All admission requests' }).click()
+  await expect(page.getByRole('listitem').getByText('Withdrawn', { exact: true })).toBeVisible()
+  await page.getByLabel('Request status').selectOption('pending')
+  await expect(page.getByText('No awaiting review requests match this filter.')).toBeVisible()
+  await page.getByLabel('Request status').selectOption('withdrawn')
+  await expect(page.getByRole('listitem').getByText('Withdrawn', { exact: true })).toBeVisible()
+  await page.getByLabel('Request status').selectOption('all')
+  await page.getByRole('button', { name: 'Older requests' }).click()
+  await expect(page.getByRole('listitem').getByText('Withdrawn', { exact: true })).toBeVisible()
+  for (const key of ['pending:root', 'withdrawn:root', `all:${cursor}`]) expect(calls.filter((call) => call === key)).toHaveLength(2)
+})

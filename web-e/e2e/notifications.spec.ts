@@ -60,7 +60,7 @@ test('bulk read includes unread rows beyond the page and preserves unrelated bad
   const bulk = page.getByRole('button', { name: 'Mark all read', exact: true })
   await expect(page.getByRole('button', { name: /^Mark as read:/ })).toHaveCount(0)
   await expect(bulk).toBeEnabled()
-  await expect(bulk).toHaveAccessibleDescription(/ALL notifications matching this category, including those not loaded/)
+  await expect(bulk).toHaveAccessibleDescription(/ALL active notifications matching this category, including those not loaded/)
   // When
   await bulk.click()
   // Then
@@ -98,7 +98,7 @@ test('failed list requests can retry to an empty category', async ({ page }) => 
   // When
   await page.getByRole('button', { name: 'Retry', exact: true }).click()
   // Then
-  await expect(page.getByText('No notifications yet.', { exact: false })).toBeVisible()
+  await expect(page.getByText('No active notifications yet.', { exact: false })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Refresh Inbox', exact: true })).toBeEnabled()
 })
 
@@ -141,7 +141,7 @@ test('late paginated rows cannot cross a retired session boundary', async ({ pag
   await prepareNotifications(page, Array.from({ length: 50 }, (_, index) => notice(`Original ${index}`, 'autonomy_l2')))
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/notifications?category=all&limit=50&offset=50', async (route) => {
+  await page.route('**/api/notifications?category=all&limit=50&offset=50&view=active', async (route) => {
     requested.resolve()
     await release.promise
     await route.fulfill({ json: [notice('Obsolete next page', 'autonomy_l2')] })
@@ -157,6 +157,60 @@ test('late paginated rows cannot cross a retired session boundary', async ({ pag
   await expect(page.getByRole('list', { name: 'Notifications' }).getByRole('listitem')).toHaveCount(1)
   await expect(page.getByText('Obsolete next page', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
+})
+
+test('archive preserves unread state and links while Active bulk read excludes Archived', async ({ page }) => {
+  // Given
+  await prepareNotifications(page, [{ ...notice('Announcement', 'broadcast'), link: '/plaza?post=one' }, notice('Tool', 'autonomy_l2')])
+  await page.goto(inboxPath)
+  const category = page.getByLabel('Category', { exact: true })
+  await category.selectOption('broadcast')
+  // When
+  await page.getByRole('button', { name: 'Archive notification: Announcement', exact: true }).click()
+  // Then
+  await expect(page.getByText('No active notifications yet.', { exact: false })).toBeVisible()
+  await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Archived', exact: true }).click()
+  await expect(category).toHaveValue('broadcast')
+  await expect(page.getByRole('button', { name: 'Mark all read', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Open notification: Announcement', exact: true })).toHaveAttribute('href', '/app/plaza?post=one')
+  await expect(page.getByRole('button', { name: 'Mark as read: Announcement', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Active', exact: true }).click()
+  await category.selectOption('all')
+  await page.getByRole('button', { name: 'Mark all read', exact: true }).click()
+  await expect(page.getByText('0 unread in All', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Archived', exact: true }).click()
+  await page.getByRole('button', { name: 'Restore notification: Announcement', exact: true }).click()
+  await expect(page.getByText('1 unread in All', { exact: true })).toBeVisible()
+  await expect(page.getByText('No archived notifications', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Active', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Mark as read: Announcement', exact: true })).toBeVisible()
+  await category.selectOption('social')
+  await expect(page.getByText('1 unread in Social', { exact: true })).toBeVisible()
+})
+
+test('view switches retain category and restart both previously loaded page sequences', async ({ page }) => {
+  // Given
+  const fixture = await prepareNotifications(page, ['active', 'archived'].flatMap((view) => Array.from({ length: 51 }, (_, index) => ({ ...notice(`${view} ${index}`, 'autonomy_l2'), archived_at: view === 'archived' ? '2030-01-02T00:00:00Z' : null }))))
+  await page.goto(inboxPath)
+  const category = page.getByLabel('Category', { exact: true })
+  await category.selectOption('tool')
+  const rows = page.getByRole('list', { name: 'Notifications' }).getByRole('listitem')
+  await page.getByRole('button', { name: 'Load more', exact: true }).click()
+  await expect(rows).toHaveCount(51)
+  await page.getByRole('button', { name: 'Archived', exact: true }).click()
+  await page.getByRole('button', { name: 'Load more', exact: true }).click()
+  await expect(rows).toHaveCount(51)
+  // When
+  await page.getByRole('button', { name: 'Active', exact: true }).click()
+  // Then
+  await expect(category).toHaveValue('tool')
+  await expect(rows).toHaveCount(50)
+  await expect(rows.first()).toContainText('active 0')
+  await page.getByRole('button', { name: 'Archived', exact: true }).click()
+  await expect(rows).toHaveCount(50)
+  await expect(rows.first()).toContainText('archived 0')
+  expect(fixture.requests.filter((request) => request.path === '/api/notifications' && request.category === 'tool').map(({ view, offset }) => [view, offset])).toEqual([['active', 0], ['active', 50], ['archived', 0], ['archived', 50], ['active', 0], ['archived', 0]])
 })
 
 for (const width of [390, 1440, 1920]) {
@@ -205,6 +259,14 @@ for (const width of [390, 1440, 1920]) {
             await page.screenshot({ path: testInfo.outputPath(`${readMode}-read-end.png`), fullPage: true })
           }
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+          if (readMode === 'one') {
+            await page.getByRole('button', { name: 'Archive notification: Tool request ready', exact: true }).click()
+            await page.getByRole('button', { name: 'Archived', exact: true }).click()
+            await expect(rows).toHaveCount(1)
+            await expect(page.getByRole('button', { name: 'Restore notification: Tool request ready', exact: true })).toBeEnabled()
+            await page.screenshot({ path: testInfo.outputPath('archived.png'), fullPage: true })
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+          }
         })
       }
     })

@@ -88,6 +88,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/platform-admins` | - | Platform admin list with `is_genesis` / `is_active` |
 | `PATCH` | `/api/admin/platform-admins/{user_id}/active` | `{ is_active }` | Genesis PA only. Cannot target self or genesis. Deactivating the last active PA is blocked. |
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
+| `GET` | `/api/admin/audit-logs/page` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; deterministic older-event seek pagination. Page size clamped to 1-500. |
 | `GET` | `/api/admin/platform-settings` | - | `{ invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
 | `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
@@ -218,7 +219,18 @@ does not include an existing-database migration.
 | `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
 | `GET` | `/api/users/admin-audit-logs` | org_admin | Query: `action?`, `limit=100` | Company-scoped admin action trail |
+| `GET` | `/api/users/admin-audit-logs/page` | org_admin | Query: `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; tenant comes only from the authenticated principal. Page size clamped to 1-500. |
 | `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Genesis rows cannot change role. Blocks demoting the last *active* admin. |
+
+#### Audit page navigation
+
+Both `/page` endpoints order events by `created_at DESC, id DESC`, preserving timestamp
+microseconds. Pass `next_cursor` unchanged to fetch older events; `null` means there is no
+next page. Cursors are versioned, limited to 1024 characters, and bound to the effective
+role, tenant and filters. Malformed or mismatched cursors return **400** after authorization;
+the existing force-password-change gate still applies. Changing filters requires a fresh
+root request without a cursor. These pages are not a snapshot: refresh from the root to
+include new inserts or late commits. The existing array endpoints remain unchanged.
 
 #### `UserOut` (users router)
 
@@ -400,13 +412,26 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 | `PUT` | `/api/skills/browse/write` | admin | `{ path, content }` | Path-based skill file write |
 | `DELETE` | `/api/skills/browse/delete` | admin | Query: `path` | Delete file or whole skill folder |
 
-### B9. Notifications broadcast
+### B9. Notifications
 
 **Router:** `app/api/notification.py`
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
+| `GET` | `/api/notifications` | authenticated user | Query: `view=active\|archived` (default `active`), `category?`, `unread_only=false`, `limit=50`, `offset=0` | Own notifications only, newest first; each item includes nullable `archived_at`. Invalid view returns **422**. |
+| `GET` | `/api/notifications/unread-count` | authenticated user | Query: `category?` | `{ unread_count }` counts only active unread notifications. |
+| `POST` | `/api/notifications/{id}/read` | authenticated user | - | `{ ok: true }`; reading an archived notice does not restore it. |
+| `POST` | `/api/notifications/read-all` | authenticated user | Query: `category?` | `{ ok: true }`; marks matching active notices read, including unloaded pages, without changing archived notices. |
+| `POST` | `/api/notifications/{id}/archive` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, preserving `is_read` and the first archive timestamp. Missing or foreign IDs return the same **404**. |
+| `POST` | `/api/notifications/{id}/restore` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, clearing `archived_at` without changing `is_read`. Missing or foreign IDs return the same **404**. |
 | `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email needs system SMTP. Fan-out to tenant users/agents |
+
+Archive state is independent of read state: restoring an unread notice adds it back to
+active unread counts. Category filters retain their existing overlapping membership
+(for example, broadcast notices also appear in social). Agent unread consumption and
+specialized notification deduplication are unchanged. The nullable archive column and
+indexes belong to the fresh, rerunnable schema baseline; this change does not upgrade
+an existing database.
 
 ### B10. Templates (market) - advanced router
 

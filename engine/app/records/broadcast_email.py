@@ -29,7 +29,7 @@ class BroadcastEmailRecord:
     subject: str
     body: str
     message_id: str
-    status: Literal["pending", "sent", "failed"]
+    status: Literal["pending", "sent", "failed", "cancelled"]
     attempts: int
     available_at: datetime
     deliver_by: datetime
@@ -45,3 +45,27 @@ class BroadcastEmailRecord:
 
 
 _RECORD_ADAPTER = TypeAdapter(BroadcastEmailRecord)
+
+
+@dataclass(frozen=True, slots=True)
+class BroadcastEmailStatus:
+    broadcast_id: UUID
+    available: bool
+    queued: int
+    claimed: int
+    smtp_accepted: int
+    failed: int
+    cancelled: int
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> BroadcastEmailStatus:
+        return _STATUS_ADAPTER.validate_python(dict(row))
+
+
+@dataclass(frozen=True, slots=True)
+class BroadcastEmailCancellation:
+    status: BroadcastEmailStatus
+    cancelled_now: int
+
+
+_STATUS_ADAPTER = TypeAdapter(BroadcastEmailStatus)

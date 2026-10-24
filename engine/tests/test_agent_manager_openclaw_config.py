@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 from python_on_whales.exceptions import NoSuchContainer
 
 from app.config import Settings
@@ -80,17 +79,12 @@ class GuestSettings:
         return getattr(self.wrapped_settings, name)
 
 
-@pytest.mark.parametrize("legacy_marker", [False, True])
-def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_path, legacy_marker):
+def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_path):
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     manager = AgentManager.__new__(AgentManager)
     agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4(), primary_model_id=None)
-    agent_dir = tmp_path / str(agent.id)
-    agent_dir.mkdir()
-    if legacy_marker:
-        (agent_dir / ".bootstrap-tencentdb-version").write_text("1.0.3", encoding="utf-8")
 
     # When
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
@@ -178,7 +172,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     assert "auth" not in config
 
 
-def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cache(monkeypatch, tmp_path) -> None:
+def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(monkeypatch, tmp_path) -> None:
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
@@ -189,24 +183,15 @@ def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cach
     agent = AgentRecord(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4())
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
-    (agent_dir / ".bootstrap-tencentdb-version").write_text("1.0.3", encoding="utf-8")
-    tencentdb_plugins = {
-        "enabled": True,
-        "slots": {"memory": "memory-tencentdb", "contextEngine": "memory-tencentdb"},
-        "entries": {
-            "memory-tencentdb": {
-                "enabled": True,
-                "hooks": {"allowConversationAccess": True},
-                "config": {"storeBackend": "sqlite", "offload": {"enabled": True}},
-            },
-        },
-    }
     config_path = agent_dir / "openclaw.json"
     config_path.write_text(
         json.dumps(
             {
-                "agents": {"defaults": {"memorySearch": {"enabled": False, "provider": "none"}}},
-                "plugins": tencentdb_plugins,
+                "memory": {"search": {"enabled": False, "provider": "auto"}},
+                "plugins": {
+                    "slots": {"memory": "none"},
+                    "entries": {"custom": {"enabled": True, "config": {"keep": "custom-value"}}},
+                },
             }
         ),
         encoding="utf-8",
@@ -222,7 +207,7 @@ def test_write_guest_config_repairs_legacy_memory_search_with_empty_process_cach
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {
         "slots": {"memory": "memory-core"},
-        "entries": {"memory-tencentdb": {"enabled": False}},
+        "entries": {"custom": {"enabled": True, "config": {"keep": "custom-value"}}},
     }
 
 
@@ -413,8 +398,6 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["envs"]["OPENCLAW_HOME"] == "/home/node"
     assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/.openclaw"
     assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
-    assert "TENCENTDB_PLUGIN_VERSION" not in run_kwargs["envs"]
-    assert "OPENCLAW_MEMORY_TENCENTDB_ENABLED" not in run_kwargs["envs"]
     assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
@@ -426,17 +409,15 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     }
 
 
-async def test_start_container_keeps_native_memory_with_legacy_bootstrap_marker(monkeypatch, tmp_path):
+async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_path):
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    marker = agent_dir / ".bootstrap-tencentdb-version"
-    marker.write_text("7.8.9", encoding="utf-8")
     (agent_dir / "openclaw.json").write_text(
-        json.dumps({"agents": {"defaults": {"memorySearch": {"enabled": False, "provider": "none"}}}}),
+        json.dumps({"memory": {"search": {"enabled": False, "provider": "auto"}}}),
         encoding="utf-8",
     )
     manager = AgentManager.__new__(AgentManager)
@@ -466,7 +447,6 @@ async def test_start_container_keeps_native_memory_with_legacy_bootstrap_marker(
     assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
-    assert marker.read_text(encoding="utf-8") == "7.8.9"
 
 
 async def test_start_container_returns_none_when_python_on_whales_client_is_missing(monkeypatch, tmp_path):

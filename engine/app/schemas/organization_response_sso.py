@@ -22,6 +22,7 @@ class SSOUserPayload(TypedDict):
     is_platform_admin: bool
     tenant_id: UUID | None
     title: str | None
+    timezone: str | None
     primary_mobile: str | None
     registration_source: str | None
     is_active: bool
@@ -42,6 +43,7 @@ def sso_user_payload(user: UserOut) -> SSOUserPayload:
         "is_platform_admin": user.is_platform_admin,
         "tenant_id": user.tenant_id,
         "title": user.title,
+        "timezone": user.timezone,
         "primary_mobile": user.primary_mobile,
         "registration_source": user.registration_source,
         "is_active": user.is_active,

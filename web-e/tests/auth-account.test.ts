@@ -89,3 +89,22 @@ test('profile updates send only the display name', async (context) => {
   assert.deepEqual(typeof init.body === 'string' ? JSON.parse(init.body) : null, { display_name: 'Updated member' })
   assert.equal(result.display_name, 'Updated member')
 })
+
+for (const timezone of ['Etc/GMT-7', 'America/New_York', null]) {
+  test(`timezone preference ${String(timezone)} uses the existing auth/me patch contract`, async (context) => {
+    // Given
+    const arrived = Promise.withResolvers<{ readonly path: string; readonly init: RequestInit }>()
+    context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
+      arrived.resolve({ path, init })
+      return Response.json({ ...user, timezone })
+    })
+    // When
+    const result = await updateCurrentUser({ timezone })
+    // Then
+    const { path, init } = await arrived.promise
+    assert.equal(path, '/api/auth/me')
+    assert.equal(init.method, 'PATCH')
+    assert.deepEqual(typeof init.body === 'string' ? JSON.parse(init.body) : null, { timezone })
+    assert.equal(result.timezone, timezone)
+  })
+}

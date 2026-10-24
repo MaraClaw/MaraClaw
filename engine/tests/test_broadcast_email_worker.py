@@ -2,7 +2,7 @@ import asyncio
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
@@ -42,6 +42,15 @@ def claim() -> BroadcastEmailRecord:
         created_at=NOW,
         settled_at=None,
     )
+
+
+def test_cancelled_terminal_record_round_trips_for_delivery_cleanup() -> None:
+    # Given: a persisted cancellation with a settlement and no worker ownership.
+    cancelled = replace(claim(), status="cancelled", settled_at=NOW, claim_token=None, lease_expires_at=None)
+    # When: the PostgreSQL record boundary reads the terminal variant.
+    restored = BroadcastEmailRecord.from_row(asdict(cancelled))
+    # Then: cancellation remains a typed terminal state rather than a pending delivery.
+    assert restored == cancelled
 
 
 class DeliveryDAO:

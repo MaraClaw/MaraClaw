@@ -25,6 +25,7 @@ class NotificationRecord:
     sender_name: str | None = None
     is_read: bool = False
     created_at: datetime | None = None
+    archived_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> NotificationRecord:
@@ -40,4 +41,5 @@ class NotificationRecord:
             sender_name=str_from_row(row["sender_name"]) or None,
             is_read=bool(row.get("is_read", False)),
             created_at=datetime_from_row(row.get("created_at")),
+            archived_at=datetime_from_row(row.get("archived_at")),
         )

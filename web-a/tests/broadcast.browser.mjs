@@ -1,86 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { chromium, devices, expect } from '@playwright/test'
-import { createServer } from 'vite'
+import { expect } from '@playwright/test'
 import { assertReducedPress } from './company-deletion-browser-evidence.mjs'
+import { admin, compose, createBroadcastHarness, details, flush } from './broadcast-browser-harness.mjs'
+import { runBroadcastEmailCases } from './broadcast-email-browser-cases.mjs'
 
-const output = process.env.BROADCAST_ARTIFACTS ?? join(process.env.TMPDIR, 'broadcast-evidence')
-await mkdir(output, { recursive: true })
-const server = await createServer({ server: { host: '127.0.0.1', port: 0, watch: { ignored: (path) => path.startsWith(output) } } })
-await server.listen()
-const base = server.resolvedUrls.local[0]
-const counts = { ok: true, users_notified: 7, agents_notified: 3, emails_sent: 5 }
-const details = { 400: 'System email is not configured. Please configure it in Platform Settings.', 403: 'Only org admins can send broadcasts', 503: 'Synthetic service unavailable' }
-const admin = {
-  id: 'operator', identity_id: 'identity', email: 'operator@example.test', display_name: 'Operator',
-  avatar_url: null, role: 'org_admin', is_platform_admin: false, tenant_id: 'tenant-a', title: null, primary_mobile: null,
-  registration_source: null, is_active: true, email_verified: true, must_change_password: false, created_at: '2026-10-20T00:00:00Z',
-}
-const evidence = []
-let closedContexts = 0
-let closedBrowsers = 0
+const harness = await createBroadcastHarness()
+const { base, output, scenario, capture } = harness
 let completed = false
-
-async function scenario(options, exercise) {
-  const browser = await chromium.launch({ headless: true })
-  let context
-  const state = { user: { ...admin, ...options.user }, token: 'synthetic-token', status: 200, gate: null, exchanges: [] }
-  const errors = []
-  try {
-    context = await browser.newContext({ ...(options.mobile ? devices['iPhone 13'] : { viewport: { width: 1365, height: 1100 } }), colorScheme: options.scheme ?? 'light', reducedMotion: 'reduce' })
-    await context.addInitScript(() => localStorage.setItem('maraclaw-admin-token', 'synthetic-token'))
-    const page = await context.newPage()
-    page.on('pageerror', (error) => errors.push(error.message))
-    await page.route('**/api/**', async (route) => {
-      const path = new URL(route.request().url()).pathname
-      let body
-      let status = 200
-      let exchange
-      if (path === '/api/auth/me') body = state.user
-      else if (path === '/api/auth/login') body = { access_token: state.token, token_type: 'bearer', user: state.user }
-      else if (path === '/api/admin/search-analytics/summary') body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }
-      else if (path === '/api/admin/search-analytics/orgs') body = []
-      else if (path === '/api/notifications/broadcast' && route.request().method() === 'POST') {
-        exchange = { payload: route.request().postDataJSON(), status: state.status, gate: state.gate, delivered: Promise.withResolvers() }
-        state.exchanges.push(exchange)
-        if (exchange.gate) await exchange.gate.promise
-        status = exchange.status
-        body = status === 200 ? counts : { detail: details[status] }
-      } else throw new Error(`Unexpected synthetic API ${route.request().method()} ${path}`)
-      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-      exchange?.delivered.resolve()
-    })
-    await page.goto(`${base}broadcast`)
-    await exercise(page, state)
-    assert.deepEqual(errors, [])
-    evidence.push(options.name)
-    console.log(`PASS ${options.name}`)
-  } finally {
-    for (const exchange of state.exchanges) exchange.gate?.resolve()
-    await context?.close()
-    closedContexts++
-    await browser.close()
-    closedBrowsers++
-  }
-}
-
-async function compose(page, draft = { title: '  Maintenance  ', body: 'First line\nSecond line', send_email: true }) {
-  await page.getByLabel('Title', { exact: true }).fill(draft.title)
-  await page.getByLabel('Body (optional)', { exact: true }).fill(draft.body)
-  await page.getByLabel('Also send email', { exact: true }).setChecked(draft.send_email)
-  await page.getByRole('button', { name: 'Review broadcast', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Review broadcast' })).toBeFocused()
-}
-
-async function capture(page, name) {
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
-  await page.screenshot({ path: join(output, `${name}.png`), animations: 'disabled' })
-}
-
-async function flush(page) {
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-}
 
 try {
   for (const mobile of [false, true]) for (const [role, platform, target] of [
@@ -249,10 +176,8 @@ try {
     await expect(page.getByLabel('Body (optional)')).toHaveValue(draft.body)
     assert.equal(state.exchanges.length, 0)
   })
+  await runBroadcastEmailCases(harness)
   completed = true
 } finally {
-  await server.close()
-  const receipt = { completed, passed: evidence.length, scenarios: evidence, output, cleanup: { closedContexts, closedBrowsers, viteClosed: true, syntheticAPIsOnly: true } }
-  await writeFile(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2))
-  console.log(JSON.stringify(receipt))
+  await harness.close(completed)
 }

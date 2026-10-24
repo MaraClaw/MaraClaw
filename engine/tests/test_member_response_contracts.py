@@ -1,5 +1,4 @@
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import nullcontext
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -86,11 +85,17 @@ async def test_notification_list_preserves_nullable_and_populated_fields(client,
             "ref_id": str(AGENT_ID) if populated else None,
             "sender_name": "Sender" if populated else None,
             "is_read": populated,
+            "archived_at": None,
             "created_at": STAMP.isoformat() if populated else None,
         },
     ]
     listing.assert_awaited_once_with(
-        member.id, unread_only=True, types=["plaza_comment", "plaza_reply", "mention", "broadcast"], limit=2, offset=3
+        member.id,
+        unread_only=True,
+        types=["plaza_comment", "plaza_reply", "mention", "broadcast"],
+        limit=2,
+        offset=3,
+        view="active",
     )
 
 
@@ -241,32 +246,6 @@ async def test_member_routes_require_authentication(app, client, path):
     app.dependency_overrides.clear()
     response = await client.get(f"/api/{path}")
     assert response.status_code == 401
-
-
-@pytest.mark.parametrize(("role", "has_tenant", "status"), [("member", True, 403), ("org_admin", False, 400)])
-async def test_broadcast_enforces_role_and_tenant(client, member, role, has_tenant, status):
-    member.role = role
-    if not has_tenant:
-        member.tenant_id = None
-    response = await client.post("/api/notifications/broadcast", json={"title": "Update"})
-    assert response.status_code == status
-
-
-async def test_broadcast_response_keeps_counts_and_tenant_scope(client, member, monkeypatch, stub):
-    member.role = "org_admin"
-    monkeypatch.setattr(notification_api, "connection_ctx", nullcontext)
-    users = stub(notification_api.user_dao, "list_active_for_tenant", [member])
-    agents = stub(
-        notification_api.agent_dao, "list_for_tenant", [AgentRecord(id=AGENT_ID, name="Agent", creator_id=member.id)]
-    )
-    sender = AsyncMock()
-    monkeypatch.setattr("app.services.notification_service.send_notification", sender)
-    response = await client.post("/api/notifications/broadcast", json={"title": "Update"})
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "users_notified": 1, "agents_notified": 1, "emails_sent": 0}
-    users.assert_awaited_once_with(member.tenant_id, exclude_user_id=member.id, include_identity=False)
-    agents.assert_awaited_once_with(member.tenant_id)
-    assert sender.await_count == 2
 
 
 async def test_unread_count_rejects_invalid_response_through_fastapi(client, stub):

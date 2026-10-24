@@ -54,6 +54,31 @@ class CompanyAdmissionDAO(BaseDAO[CompanyAdmissionRecord]):
             )
             return [self.record_factory(row) for row in rows]
 
+    async def list_mine_page(
+        self,
+        applicant_id: UUID,
+        status: AdmissionStatus | None,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None = None,
+    ) -> list[CompanyAdmissionRecord]:
+        params: dict[str, UUID | datetime | str | int] = {"applicant_id": applicant_id, "limit": limit + 1}
+        filters = ""
+        if status is not None:
+            filters += " AND status=%(status)s"
+            params["status"] = status.value
+        if before is not None:
+            filters += " AND (created_at,id) < (%(created_at)s,%(request_id)s)"
+            params.update(created_at=before[0], request_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT * FROM company_admission_requests WHERE applicant_user_id=%(applicant_id)s"
+                + filters
+                + " ORDER BY created_at DESC,id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [self.record_factory(row) for row in rows]
+
     async def list_review(
         self, tenant_id: UUID, status: AdmissionStatus, *, limit: int, offset: int
     ) -> list[CompanyAdmissionRecord]:

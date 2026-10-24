@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { expect as playwrightExpect } from '@playwright/test'
 
 import { actorId, createHarness, event, flush, nullableEvent, signInReplacement, tenantId } from './admin-audit-browser-harness.mjs'
+import { runPagingScenarios } from './admin-audit-paging.browser.mjs'
 
 const expect = playwrightExpect.configure({ timeout: 15_000 })
 const harness = await createHarness()
@@ -44,7 +45,7 @@ try {
         await page.getByRole('link', { name: 'Account', exact: true }).click()
         await nav.click()
         await expect(page.getByRole('heading', { name: 'Recent activity', exact: true })).toBeVisible()
-        assert.equal(state.exchanges[0].path, role === 'platform_admin' ? '/api/admin/audit-logs' : '/api/users/admin-audit-logs')
+        assert.equal(state.exchanges[0].path, role === 'platform_admin' ? '/api/admin/audit-logs/page' : '/api/users/admin-audit-logs/page')
         assert.deepEqual(state.exchanges[0].params, { limit: '100' })
       })
     }
@@ -75,7 +76,7 @@ try {
     await page.getByLabel('Action', { exact: true }).fill('failed.filter')
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
     if (status === 'offline') {
-      await expect(page.getByRole('status')).toContainText('Waiting for a connection.')
+      await expect(page.getByRole('status').filter({ hasText: 'Waiting for a connection.' })).toBeVisible()
       await capture(page, 'offline-waiting')
       state.status = 503
       await page.context().setOffline(false)
@@ -111,27 +112,36 @@ try {
     await capture(page, `filter-${lateStatus}-current`)
   })
 
-  for (const sameToken of [true, false]) for (const status of [200, 401, 403]) await scenario({ name: `late ${status} after ${sameToken ? 'same' : 'different'} token session replacement` }, async (page, state) => {
+  for (const sameToken of [true, false]) for (const status of [200, 401, 403]) await scenario({ name: `late older-page ${status} after ${sameToken ? 'same' : 'different'} token session replacement`, nextCursor: 'retired-owner-page-2', user: { role: 'platform_admin', is_platform_admin: true } }, async (page, state) => {
     await expect(page.getByRole('heading', { name: '2 recent events' })).toBeVisible()
+    await page.getByLabel('Action', { exact: true }).fill('retired.owner.filter')
+    await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+    await expect.poll(() => state.exchanges.at(-1)?.params.action).toBe('retired.owner.filter')
+    await expect(page.getByRole('button', { name: 'Older', exact: true })).toBeEnabled()
     const initialCount = state.exchanges.length
     state.gate = Promise.withResolvers(); state.status = status
     state.result = [{ ...event, action: 'retired.owner.result' }]
-    await page.getByLabel('Action', { exact: true }).fill('retired.owner.filter')
-    await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+    await page.getByRole('button', { name: 'Older', exact: true }).click()
     await expect.poll(() => state.exchanges.length).toBe(initialCount + 1)
     const pending = state.exchanges.at(-1)
-    state.user = { ...state.user, id: tenantId, tenant_id: actorId }
+    assert.equal(pending.params.cursor, 'retired-owner-page-2')
+    state.user = { ...state.user, id: tenantId, tenant_id: actorId, role: 'org_admin', is_platform_admin: false }
     if (!sameToken) state.token = 'synthetic-replacement-token'
-    state.gate = null; state.status = 200
+    state.gate = null; state.status = 200; state.nextCursor = null
     state.result = [{ ...event, action: 'replacement.owner.result' }]
     await signInReplacement(page)
     await expect(page.getByRole('heading', { name: 'replacement.owner.result', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeDisabled()
+    assert.equal(state.exchanges.at(-1).path, '/api/users/admin-audit-logs/page')
+    assert.deepEqual(state.exchanges.at(-1).params, { limit: '100' })
     pending.gate.resolve(); await pending.delivered.promise; await flush(page)
     await expect(page.getByRole('heading', { name: 'retired.owner.result', exact: true })).toHaveCount(0)
     await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(page).toHaveURL(`${base}activity`)
     await capture(page, `replacement-${sameToken}-${status}`)
   })
+
+  await runPagingScenarios(harness)
 
   for (const mobile of [false, true]) await scenario({ name: `${mobile ? 'phone' : 'desktop'} password requirement locks direct route and navigation`, mobile, user: { must_change_password: true } }, async (page, state) => {
     await expect(page).toHaveURL(`${base}account`)

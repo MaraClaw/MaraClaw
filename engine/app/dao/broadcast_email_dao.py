@@ -4,13 +4,20 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import ClassVar
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from pydantic import TypeAdapter
 
 from app.dao.base import BaseDAO
 from app.db.connection import DbConnection
 from app.db.pool import get_pool
 from app.db.session import transaction
-from app.records.broadcast_email import BroadcastEmailRecord, NewBroadcastEmail
+from app.records.broadcast_email import (
+    BroadcastEmailCancellation,
+    BroadcastEmailRecord,
+    BroadcastEmailStatus,
+    NewBroadcastEmail,
+)
 
 
 @asynccontextmanager
@@ -18,6 +25,20 @@ async def _delivery_transaction() -> AsyncGenerator[DbConnection]:
     # Explicit db means transaction() owns this checkout, even inside a request.
     async with get_pool().connection() as raw, transaction(DbConnection(raw)) as db:
         yield db
+
+
+async def _email_status(db: DbConnection, tenant_id: UUID, broadcast_id: UUID) -> BroadcastEmailStatus:
+    [row] = await db.fetchall(
+        """SELECT %(broadcast_id)s::uuid AS broadcast_id, count(*) > 0 AS available,
+                  count(*) FILTER (WHERE status = 'pending' AND claim_token IS NULL) AS queued,
+                  count(*) FILTER (WHERE status = 'pending' AND claim_token IS NOT NULL) AS claimed,
+                  count(*) FILTER (WHERE status = 'sent') AS smtp_accepted,
+                  count(*) FILTER (WHERE status = 'failed') AS failed,
+                  count(*) FILTER (WHERE status = 'cancelled') AS cancelled
+           FROM broadcast_emails WHERE tenant_id = %(tenant_id)s AND broadcast_id = %(broadcast_id)s""",
+        {"tenant_id": tenant_id, "broadcast_id": broadcast_id},
+    )
+    return BroadcastEmailStatus.from_row(row)
 
 
 class BroadcastEmailDAO(BaseDAO[BroadcastEmailRecord]):
@@ -75,6 +96,24 @@ class BroadcastEmailDAO(BaseDAO[BroadcastEmailRecord]):
                 rows,
             )
         return len(rows)
+
+    async def email_status(self, tenant_id: UUID, broadcast_id: UUID) -> BroadcastEmailStatus:
+        async with self.session() as db:
+            return await _email_status(db, tenant_id, broadcast_id)
+
+    async def cancel_email(self, tenant_id: UUID, broadcast_id: UUID) -> BroadcastEmailCancellation:
+        async with _delivery_transaction() as db:
+            count = await db.fetchval(
+                """WITH cancelled AS (
+                       UPDATE broadcast_emails SET status = 'cancelled', settled_at = clock_timestamp()
+                       WHERE tenant_id = %(tenant_id)s AND broadcast_id = %(broadcast_id)s
+                         AND status = 'pending' AND claim_token IS NULL
+                       RETURNING id
+                   ) SELECT count(*) FROM cancelled""",
+                {"tenant_id": tenant_id, "broadcast_id": broadcast_id},
+            )
+            status = await _email_status(db, tenant_id, broadcast_id)
+        return BroadcastEmailCancellation(status, TypeAdapter(int).validate_python(count))
 
     async def claim_batch(self, *, limit: int, lease_seconds: int, now: datetime) -> list[BroadcastEmailRecord]:
         if limit <= 0:
@@ -158,7 +197,8 @@ class BroadcastEmailDAO(BaseDAO[BroadcastEmailRecord]):
         async with _delivery_transaction() as db:
             rows = await db.fetchall(
                 """WITH expired AS (
-                       SELECT id FROM broadcast_emails WHERE status IN ('sent', 'failed') AND settled_at < %(cutoff)s
+                       SELECT id FROM broadcast_emails
+                       WHERE status IN ('sent', 'failed', 'cancelled') AND settled_at < %(cutoff)s
                        ORDER BY settled_at, id LIMIT %(limit)s FOR UPDATE SKIP LOCKED
                    ) DELETE FROM broadcast_emails AS email USING expired
                      WHERE email.id = expired.id RETURNING email.id""",

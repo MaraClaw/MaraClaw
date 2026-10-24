@@ -36,6 +36,7 @@ _USER_COLUMNS = (
     "display_name",
     "avatar_url",
     "title",
+    "timezone",
     "role",
     "is_active",
     "registration_source",

@@ -11,6 +11,7 @@ import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { broadcastDraftSchema, sendBroadcast, type BroadcastDraft, type BroadcastResult } from '@/lib/broadcast-api'
 import { ApiError } from '@/lib/http'
+import { BroadcastEmailProgress } from './broadcast-email-progress'
 
 const emptyDraft = { title: '', body: '', send_email: false }
 const buttonMotion = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
@@ -107,6 +108,7 @@ export function BroadcastPage() {
           </div>
         ) : null}
       </div>
+      {result ? <BroadcastEmailProgress key={result.broadcast_id} receipt={result} /> : null}
       {snapshot ? (
         <Card role="region" aria-labelledby={`${id}-review`} onKeyDown={(event) => {
           if (event.key === 'Escape') { event.preventDefault(); closeReview() }

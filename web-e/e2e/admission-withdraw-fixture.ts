@@ -32,6 +32,15 @@ export async function prepareAdmission(page: Page, initial: AdmissionDetail = pe
         return route.fulfill({ json: detail })
       case '/api/company-admissions/mine':
         return route.fulfill({ json: [detail] })
+      case '/api/company-admissions/mine/page': {
+        expect(request.method()).toBe('GET')
+        const query = new URL(request.url()).searchParams
+        expect(query.get('limit')).toBe('50')
+        expect(query.has('offset')).toBe(false)
+        const status = query.get('status')
+        expect(status === null || ['pending', 'approved', 'rejected', 'withdrawn'].includes(status)).toBe(true)
+        return route.fulfill({ json: { items: status === null || status === detail.status ? [detail] : [], next_cursor: null } })
+      }
       default:
         throw new Error(`Unsupported applicant fixture endpoint: ${path}`)
     }

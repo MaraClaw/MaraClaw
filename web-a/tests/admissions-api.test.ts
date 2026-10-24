@@ -164,7 +164,7 @@ test('only a genesis org_admin can enter the admission review workflow', () => {
 
 test('pending admission notifications link only to safe local admission review routes', () => {
   // Given
-  const notification = notificationSchema.parse({ id: '4837a9ec-b4f8-483a-9893-b398a406bc61', type: 'company_admission_pending', title: 'Review request', body: '', link: `/admission-approvals/${pendingAdmission.id}`, ref_id: pendingAdmission.id, sender_name: null, is_read: false, created_at: null })
+  const notification = notificationSchema.parse({ id: '4837a9ec-b4f8-483a-9893-b398a406bc61', type: 'company_admission_pending', title: 'Review request', body: '', link: `/admission-approvals/${pendingAdmission.id}`, ref_id: pendingAdmission.id, sender_name: null, is_read: false, created_at: null, archived_at: null })
   // When
   const links = [notification.link, '/admission-approvals', '//external.test/admission-approvals', '/admission-approvals/../users', '/admission-approvals/%2f%2fexternal.test'].map(safeNotificationLink)
   // Then

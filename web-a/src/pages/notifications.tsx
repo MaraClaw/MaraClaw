@@ -1,46 +1,67 @@
 import { formatDistanceToNowStrict } from 'date-fns'
-import { ArrowRight, CheckCheck, Inbox } from 'lucide-react'
-import { useState } from 'react'
+import { Archive, ArchiveRestore, ArrowRight, CheckCheck, Inbox } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifications'
+import { useSessionCurrent } from '@/hooks/use-auth'
 import { safeNotificationLink } from '@/lib/notification-links'
-import { NOTIFICATIONS_PAGE_SIZE } from '@/lib/notifications-api'
+import { NOTIFICATIONS_PAGE_SIZE, type NotificationView } from '@/lib/notifications-api'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function NotificationsPage() {
   const [offset, setOffset] = useState(0)
-  const { notifications, markRead, markAllRead } = useNotifications(offset)
+  const [view, setView] = useState<NotificationView>('active')
+  const heading = useRef<HTMLHeadingElement>(null)
+  const isCurrent = useSessionCurrent()
+  const { notifications, markRead, markAllRead, archive, restore } = useNotifications(offset, view)
   const unread = useNotificationUnreadCount()
-  const pending = markRead.isPending || markAllRead.isPending
+  const pending = markRead.isPending || markAllRead.isPending || archive.isPending || restore.isPending
   const items = notifications.data ?? []
-  const hasUnread = (unread.data?.unread_count ?? 0) > 0 || items.some((item) => !item.is_read)
-  const mutationError = markRead.isError || markAllRead.isError
+  const hasUnread = (unread.data?.unread_count ?? 0) > 0 || items.some((item) => !item.is_read && item.archived_at === null)
+  const mutationError = archive.isError ? 'Unable to archive this notification. Try again.'
+    : restore.isError ? 'Unable to restore this notification. Try again.'
+    : markRead.isError || markAllRead.isError ? 'Unable to mark notifications as read. Try again.' : null
 
   function resetErrors() {
     markRead.reset()
     markAllRead.reset()
+    archive.reset()
+    restore.reset()
+  }
+
+  function focusInbox() {
+    if (isCurrent()) heading.current?.focus()
   }
 
   return (
     <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Inbox</h1>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Notifications for your admin account.</p>
+          <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus-visible:outline focus-visible:outline-ring">Inbox</h1>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Notifications for your admin account. Only active unread notifications count toward your badge.</p>
         </div>
-        <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAllRead.mutate() }}>
+        {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAllRead.mutate() }}>
           <CheckCheck className="size-4" aria-hidden />
           {markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read'}
-        </Button>
+        </Button> : null}
       </div>
 
-      <p role="status" className="sr-only">{markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All notifications marked as read.' : ''}</p>
-      {mutationError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">Unable to mark notifications as read. Try again.</p> : null}
+      <fieldset className="flex flex-wrap gap-3">
+        <legend className="sr-only">Inbox view</legend>
+        {(['active', 'archived'] as const).map((value) => <Button key={value} variant={view === value ? 'secondary' : 'outline'} className={actionClass}
+          aria-pressed={view === value} disabled={pending} onClick={() => { resetErrors(); setOffset(0); setView(value) }}>
+          {value === 'active' ? <Inbox className="size-4" aria-hidden /> : <Archive className="size-4" aria-hidden />}
+          {value === 'active' ? 'Active' : 'Archived'}
+        </Button>)}
+      </fieldset>
+
+      <p role="status" className="sr-only">{archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : ''}</p>
+      {mutationError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{mutationError}</p> : null}
       {unread.isError ? <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         <p>Unread count could not be updated.</p>
         <Button variant="outline" className={actionClass} disabled={unread.isFetching} onClick={() => { void unread.refetch() }}>Retry count</Button>
@@ -53,15 +74,15 @@ export function NotificationsPage() {
 
       {notifications.isSuccess && items.length === 0 ? <Card><CardContent className="flex flex-col items-center gap-3 py-6 text-center">
         <Inbox className="size-8 text-muted-foreground" aria-hidden />
-        <h2 className="font-display text-lg font-semibold">{offset === 0 ? 'No notifications yet' : 'No more notifications'}</h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">{offset === 0 ? 'New updates will appear here. This Inbox refreshes automatically.' : 'Return to the previous page to see earlier updates.'}</p>
+        <h2 className="font-display text-lg font-semibold">{offset > 0 ? 'No more notifications' : view === 'active' ? 'No active notifications' : 'No archived notifications'}</h2>
+        <p className="text-sm leading-relaxed text-muted-foreground">{offset > 0 ? 'Return to the previous page to see earlier updates.' : view === 'active' ? 'New updates will appear here. Check Archived for saved notifications.' : 'Archive an active notification to keep it here without changing its read state.'}</p>
       </CardContent></Card> : null}
 
-      {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label="Notifications">
+      {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label="Notifications" aria-busy={pending}>
         {items.map((item) => {
           const link = safeNotificationLink(item.link)
           return <li key={item.id}>
-            <Card className={item.is_read ? 'bg-card border-border' : 'bg-accent border-primary/30'}>
+            <Card className={item.is_read ? 'bg-card' : 'bg-accent'}>
               <CardContent className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant={item.is_read ? 'secondary' : 'soft'}>{item.is_read ? 'Read' : 'Unread'}</Badge>
@@ -75,6 +96,13 @@ export function NotificationsPage() {
                   {!item.is_read ? <Button variant="secondary" className={actionClass} disabled={pending} aria-label={`Mark as read: ${item.title}`} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
                     {markRead.isPending && markRead.variables === item.id ? 'Marking as read...' : 'Mark as read'}
                   </Button> : null}
+                  {item.archived_at === null ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Archive notification: ${item.title}`} onClick={() => { resetErrors(); archive.mutate(item.id, { onSuccess: focusInbox }) }}>
+                    <Archive className="size-4" aria-hidden />
+                    {archive.isPending && archive.variables === item.id ? 'Archiving...' : 'Archive'}
+                  </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Restore notification: ${item.title}`} onClick={() => { resetErrors(); restore.mutate(item.id, { onSuccess: focusInbox }) }}>
+                    <ArchiveRestore className="size-4" aria-hidden />
+                    {restore.isPending && restore.variables === item.id ? 'Restoring...' : 'Restore'}
+                  </Button>}
                 </div>
               </CardContent>
             </Card>

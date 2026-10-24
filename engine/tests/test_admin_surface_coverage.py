@@ -827,6 +827,46 @@ async def test_admin_audit_dao_list_recent_sql(monkeypatch):
     assert captured["params"]["limit"] == 5
 
 
+@pytest.mark.parametrize("before", [None, (_NOW, uuid.uuid4())])
+@pytest.mark.parametrize("limit", [-1, 2, 501])
+async def test_admin_audit_dao_page_sql_is_bounded_and_parameterized(monkeypatch, before, limit):
+    # Given a DAO connection that captures SQL without a database dependency.
+    from app.dao.admin_audit_dao import AdminAuditLogDAO
+
+    dao = AdminAuditLogDAO()
+    db = SimpleNamespace(fetchall=AsyncMock(return_value=[]))
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=db)
+    context.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(dao, "session", lambda: context)
+    tenant_id, actor_id = uuid.uuid4(), uuid.uuid4()
+    action = "tenant_create' OR TRUE --"
+    # When a filtered seek page is requested.
+    await dao.list_page(tenant_id=tenant_id, actor_id=actor_id, action=action, limit=limit, before=before)
+    # Then filters and the complete timestamp/UUID boundary remain bound parameters.
+    sql, params = db.fetchall.await_args.args
+    assert "ORDER BY created_at DESC, id DESC LIMIT %(limit)s" in sql
+    assert "OFFSET" not in sql
+    assert action not in sql
+    assert params["tenant_id"] == tenant_id
+    assert params["actor_id"] == actor_id
+    assert params["action"] == action
+    assert params["limit"] == min(max(limit, 1), 500) + 1
+    if before is not None:
+        assert "(created_at, id) < (%(before_created_at)s, %(before_id)s)" in sql
+        assert (params["before_created_at"], params["before_id"]) == before
+
+
+async def test_org_audit_page_requires_principal_tenant_before_cursor_decode():
+    # Given an organization administrator without a company.
+    principal = _user(role="org_admin", tenant_id=None)
+    # When even a malformed cursor is supplied.
+    with pytest.raises(HTTPException) as exc:
+        await users_api.list_org_admin_audit_logs_page(cursor="!", current_user=principal)
+    # Then organization authorization wins over cursor parsing.
+    assert exc.value.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_platform_metrics(monkeypatch):
     day = datetime(2026, 8, 1, tzinfo=UTC)

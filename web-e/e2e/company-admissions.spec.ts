@@ -25,6 +25,7 @@ async function prepare(page: Page, detail: AdmissionDetail = pending, tenantId: 
       case '/api/tenants/me': await route.fulfill({ json: targetSession ? target : source }); break
       case '/api/tenants/lookup-by-email': await route.fulfill({ json: { match: target, fallback: source } }); break
       case '/api/company-admissions/mine': await route.fulfill({ json: [detail] }); break
+      case '/api/company-admissions/mine/page': await route.fulfill({ json: { items: [detail], next_cursor: null } }); break
       case '/api/company-admissions/request-a': await route.fulfill({ json: detail }); break
       case '/api/tenants/join-suggested':
       case '/api/tenants/transfer': await route.fulfill({ status: 202, json: { status: 'pending', request: pending } }); break
@@ -127,8 +128,9 @@ test('a persisted rejection retains the source organization and exposes the deci
   await page.goto('/app/admissions')
   await page.getByRole('link', { name: `View request for ${target.name}` }).click()
   // Then
-  await expect(page.getByText('Rejected', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/app\/admissions\/request-a$/)
   await expect(page.getByText('No matching team', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rejected', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: `Open ${target.name}` })).toHaveCount(0)
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('source-token')
   expect(calls).not.toContain('/api/auth/switch-tenant')
@@ -169,7 +171,7 @@ test('an admission notification opens its persisted result and marking read clea
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/read')) { read = true; await route.fulfill({ json: { ok: true } }); return }
     if (path.endsWith('/unread-count')) { await route.fulfill({ json: { count: read ? 0 : 1 } }); return }
-    await route.fulfill({ json: [{ id: 'notice', title: 'Admission decided', body: null, link: '/app/admissions/request-a', is_read: read }] })
+    await route.fulfill({ json: [{ id: 'notice', title: 'Admission decided', body: null, link: '/app/admissions/request-a', is_read: read, archived_at: null }] })
   })
   await page.goto('/app/notifications')
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()

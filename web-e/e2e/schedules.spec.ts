@@ -2,46 +2,49 @@ import { expect, test } from '@playwright/test'
 
 import { fillSchedule, prepareSchedules, savedSchedule, schedulesApiPath, schedulesPath } from './schedules-fixture'
 import { historyPath, historyRun } from './schedule-history-fixture'
+import { registerScheduleRecurrenceTests } from './schedules-recurrence-cases'
 
 test.use({ timezoneId: 'Pacific/Honolulu' })
+registerScheduleRecurrenceTests()
 
 test('creation persists an explicit timezone across reload and displays saved-zone time', async ({ page }) => {
   const fixture = await prepareSchedules(page)
   await page.goto(schedulesPath)
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('UTC')
+  await expect(page.getByLabel('Timezone')).toHaveValue('UTC')
   await fillSchedule(page)
 
   await page.getByRole('button', { name: 'Add schedule', exact: true }).click()
 
   await expect.poll(() => fixture.creations).toEqual([{
     name: savedSchedule.name, instruction: savedSchedule.instruction,
-    cron_expr: savedSchedule.cron_expr, timezone: 'Asia/Shanghai', is_enabled: true,
+    cron_expr: savedSchedule.cron_expr, timezone: 'Etc/GMT-8', is_enabled: true,
   }])
   await page.reload()
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
-  await expect(row).toContainText('Asia/Shanghai')
+  await expect(row).toContainText('GMT +8')
   await expect(row).toContainText('15 Jan 2026, 09:00 GMT+8')
   await row.getByRole('button', { name: 'Edit', exact: true }).click()
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('Asia/Shanghai')
+  await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT-8')
 })
 
 test('timezone-only editing sends only timezone and reloads the recomputed next run', async ({ page }) => {
   const fixture = await prepareSchedules(page, [savedSchedule])
   await page.goto(schedulesPath)
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('Asia/Shanghai')
+  await expect(page.getByLabel('Timezone')).toHaveValue('Asia/Shanghai')
 
-  await page.getByLabel('IANA timezone').fill('America/New_York')
+  await page.getByLabel('Timezone').selectOption('Etc/GMT+5')
   await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
 
-  await expect.poll(() => fixture.patches).toEqual([{ timezone: 'America/New_York' }])
+  await expect.poll(() => fixture.patches).toEqual([{ timezone: 'Etc/GMT+5' }])
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
-  await expect(row).toContainText('America/New_York')
+  await expect(row).toContainText('GMT -5')
   await expect(row).toContainText('15 Jan 2026, 09:00 GMT-5')
   await page.reload()
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('America/New_York')
-  await expect(page.getByLabel('Cron', { exact: true })).toHaveValue(savedSchedule.cron_expr)
+  await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
+  await expect(page.getByLabel('Repeat', { exact: true })).toHaveValue('daily')
+  await expect(page.getByLabel('Time', { exact: true })).toHaveValue('09:00')
 })
 
 test('timezone-only editing preserves an empty instruction across reload', async ({ page }) => {
@@ -50,16 +53,16 @@ test('timezone-only editing preserves an empty instruction across reload', async
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue('')
 
-  await page.getByLabel('IANA timezone').fill('America/New_York')
+  await page.getByLabel('Timezone').selectOption('Etc/GMT+5')
   await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
 
-  await expect.poll(() => fixture.patches).toEqual([{ timezone: 'America/New_York' }])
+  await expect.poll(() => fixture.patches).toEqual([{ timezone: 'Etc/GMT+5' }])
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
-  await expect(row).toContainText('America/New_York')
+  await expect(row).toContainText('GMT -5')
   await page.reload()
-  await expect(row).toContainText('America/New_York')
+  await expect(row).toContainText('GMT -5')
   await row.getByRole('button', { name: 'Edit', exact: true }).click()
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('America/New_York')
+  await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
   await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue('')
 })
 
@@ -76,22 +79,22 @@ test('editing another field preserves the timezone through patch omission', asyn
   const row = page.getByRole('listitem', { name: 'Renamed report', exact: true })
   await expect(row).toContainText('Asia/Shanghai')
   await row.getByRole('button', { name: 'Edit', exact: true }).click()
-  await expect(page.getByLabel('IANA timezone')).toHaveValue('Asia/Shanghai')
+  await expect(page.getByLabel('Timezone')).toHaveValue('Asia/Shanghai')
 })
 
-test('invalid timezone focuses actionable feedback without sending a request', async ({ page }) => {
-  const fixture = await prepareSchedules(page)
+test('invalid legacy timezone focuses actionable feedback without sending a request', async ({ page }) => {
+  const fixture = await prepareSchedules(page, [{ ...savedSchedule, timezone: 'Not/A_Zone' }])
   await page.goto(schedulesPath)
-  await fillSchedule(page)
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
 
-  await page.getByLabel('IANA timezone').fill('Not/A_Zone')
-  await page.getByRole('button', { name: 'Add schedule', exact: true }).click()
+  await expect(page.getByLabel('Timezone')).toHaveValue('Not/A_Zone')
+  await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
 
-  await expect(page.getByLabel('IANA timezone')).toHaveAttribute('aria-invalid', 'true')
-  await expect(page.getByLabel('IANA timezone')).toBeFocused()
+  await expect(page.getByLabel('Timezone')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByLabel('Timezone')).toBeFocused()
   await expect(page.locator('#schedule-timezone-error')).toBeVisible()
   await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue(savedSchedule.instruction)
-  expect(fixture.creations).toEqual([])
+  expect(fixture.patches).toEqual([])
 })
 
 for (const status of [422, 503]) {
@@ -107,16 +110,16 @@ for (const status of [422, 503]) {
     })
     await page.goto(schedulesPath)
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
-    await page.getByLabel('IANA timezone').fill('America/New_York')
+    await page.getByLabel('Timezone').selectOption('Etc/GMT+5')
 
     await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
     await requested.promise
-    await expect(page.getByLabel('IANA timezone')).toBeDisabled()
+    await expect(page.getByLabel('Timezone')).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Saving...', exact: true })).toBeDisabled()
     release.resolve()
 
     await expect(page.getByRole('button', { name: 'Save schedule', exact: true })).toBeEnabled()
-    await expect(page.getByLabel('IANA timezone')).toHaveValue('America/New_York')
+    await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
     await expect(page.getByRole('status').filter({ hasText: /timezone/i })).toBeVisible()
     await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue(savedSchedule.instruction)
   })
@@ -128,7 +131,7 @@ test('manage access without creator ownership keeps schedules read-only', async 
 
   await expect(page.getByRole('listitem', { name: savedSchedule.name, exact: true })).toContainText('Asia/Shanghai')
 
-  await expect(page.getByLabel('IANA timezone')).toHaveCount(0)
+  await expect(page.getByLabel('Timezone')).toHaveCount(0)
   for (const name of ['Add schedule', 'Run', 'Edit', 'History', 'Delete']) {
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }
