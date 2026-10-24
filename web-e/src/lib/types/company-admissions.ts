@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { transferDispositionSchema } from './company-transfers.ts'
 
 const tenantSchema = z.object({ id: z.string().min(1), name: z.string() }).readonly()
 export const admissionStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn'])
@@ -11,6 +12,7 @@ const summarySchema = z.object({
   created_at: z.string(),
   decided_at: z.string().nullable(),
   decision_reason: z.string().nullable(),
+  transfer: transferDispositionSchema.nullable().optional(),
 })
 
 export const admissionSummarySchema = summarySchema.readonly()

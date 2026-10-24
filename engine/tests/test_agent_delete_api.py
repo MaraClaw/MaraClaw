@@ -77,6 +77,7 @@ def delete_runtime(monkeypatch):
         yield raw
 
     monkeypatch.setattr(session, "get_pool", lambda: SimpleNamespace(connection=connection))
+    monkeypatch.setattr(agents_api, "assert_agent_deletion_allowed", AsyncMock())
     monkeypatch.setattr(agent_deletion_history.task_dao, "list_for_agent", AsyncMock(return_value=[]))
     return raw
 

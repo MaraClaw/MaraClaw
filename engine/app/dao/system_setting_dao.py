@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import ClassVar, final
 
-from app.core.json_types import is_str_dict
+from app.core.json_types import JsonObject, is_str_dict
 from app.dao.base import BaseDAO
+from app.db.types import as_jsonb
 from app.records.system_setting import SystemSettingRecord
 
 _COLUMNS = ("key", "value", "updated_at")
@@ -20,13 +21,22 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(SystemSettingRecord.from_row)
 
-    async def get_by_key(self, key: str) -> SystemSettingRecord | None:
+    async def get_by_key(self, key: str, *, for_update: bool = False) -> SystemSettingRecord | None:
+        lock = " FOR UPDATE" if for_update else ""
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM system_settings WHERE key = %(key)s",
+                f"SELECT {self._select_list()} FROM system_settings WHERE key = %(key)s{lock}",
                 {"key": key},
             )
             return SystemSettingRecord.from_row(row) if row is not None else None
+
+    async def insert_if_missing(self, key: str, value: JsonObject) -> None:
+        """Atomically preserve existing values, including concurrent inserts."""
+        async with self.session() as db:
+            await db.execute(
+                "INSERT INTO system_settings (key, value) VALUES (%(key)s, %(value)s) ON CONFLICT (key) DO NOTHING",
+                {"key": key, "value": as_jsonb(value)},
+            )
 
     async def get_value(self, key: str, default: object = None) -> object:
         setting = await self.get_by_key(key)

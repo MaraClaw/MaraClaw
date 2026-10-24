@@ -13,11 +13,13 @@ from fastapi import FastAPI
 from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
 from app.core.events import close_redis, get_redis
+from app.core.incident_reporting import report_exception
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
 from app.db.pool import close_pool, init_pool
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.bootstrap import bootstrap
 from app.runtime.diagnostics import log_bwrap_startup_status
+from app.runtime.incident_alerts import IncidentAlerts
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
 from app.runtime.tasks import OwnedTasks
@@ -50,6 +52,7 @@ def connector_managers() -> tuple[ConnectorManager, ...]:
 class Runtime:
     def __init__(self) -> None:
         self.tasks: OwnedTasks = OwnedTasks()
+        self.incidents: IncidentAlerts = IncidentAlerts()
         self.readiness: Readiness = Readiness(self.tasks)
         self.managers: tuple[ConnectorManager, ...] = ()
         self.proxy: ShadowsocksProxy = ShadowsocksProxy()
@@ -75,6 +78,7 @@ class Runtime:
             logger.warning("[startup] Default secrets configured; set unique SECRET_KEY and JWT_SECRET_KEY")
         self.pool_attempted = True
         _ = await init_pool()
+        self.incidents.start()
         if role_enabled(roles, "bootstrap"):
             await bootstrap()
         if any(role_enabled(roles, role) for role in ("api", "worker", "connector")):
@@ -86,12 +90,14 @@ class Runtime:
             try:
                 await realtime_router.start(ws_manager.deliver_pubsub_message)
             except Exception as exc:
+                report_exception(exc, source="runtime", operation="realtime-startup")
                 logger.error("[startup] realtime router start failed: {}", exc)
         try:
             from app.services.audit_logger import write_audit_log
 
             await write_audit_log("server_startup", {"pid": os.getpid()})
         except Exception as exc:
+            report_exception(exc, source="runtime", operation="startup-audit")
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
             from app.services.agent_setup import start_agent_setup_worker
@@ -111,6 +117,7 @@ class Runtime:
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
+            from app.services.company_transfer_cleanup import start_transfer_cleanup_reconciler
             from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
@@ -118,6 +125,12 @@ class Runtime:
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
                 self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")
+
+            async def reconcile_transfers() -> None:
+                await asyncio.gather(*(task for task, finite in self.tasks.required.values() if finite))
+                await start_transfer_cleanup_reconciler()
+
+            self.tasks.start("transfer_cleanup", reconcile_transfers(), requirement="loop")
         self.readiness.initialized = True
 
     @staticmethod
@@ -137,6 +150,7 @@ class Runtime:
         await self._cleanup("ss-local", self.proxy.stop)
         if self.realtime_attempted:
             await self._cleanup("realtime", realtime_router.stop)
+        await self._cleanup("incident alerts", self.incidents.stop)
         if self.pool_attempted:
             await self._cleanup("database", close_pool)
             await self._cleanup("redis", close_redis)
@@ -154,7 +168,11 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     runtime = Runtime()
     _app.state.readiness = runtime.readiness
     try:
-        await runtime.start(roles)
+        try:
+            await runtime.start(roles)
+        except Exception as error:
+            report_exception(error, source="runtime", operation="startup")
+            raise
         yield
     finally:
         runtime.readiness.draining = True

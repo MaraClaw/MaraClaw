@@ -11,6 +11,7 @@ import { ApiError, formatApiDetail, userFacingRequestError } from '@/lib/http'
 import { relativeTime } from '@/lib/relative-time'
 import { admissionStatusSchema, type AdmissionStatus } from '@/lib/types/company-admissions'
 import { admissionStatuses } from './admission-labels'
+import { TransferRequests } from './transfer-requests'
 
 const pageSize = 50
 
@@ -51,9 +52,11 @@ export function AdmissionsPage() {
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">Organization admissions</h1>
-        <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching} onClick={refresh}>Refresh status</Button>
+        <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching} onClick={scope.effect(refresh)}>Refresh status</Button>
       </div>
       <p className="text-sm text-muted-foreground">Track your company admission requests. Pending and rejected requests do not change your current organization.</p>
+      <TransferRequests refreshVersion={refreshVersion} />
+      <h2 className="font-display text-lg font-semibold">Destination admission requests</h2>
       <div className="max-w-xs space-y-2">
         <Label htmlFor="admission-status">Request status</Label>
         <Select id="admission-status" value={status} onChange={(event) => {

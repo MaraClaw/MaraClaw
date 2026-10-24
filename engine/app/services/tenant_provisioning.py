@@ -22,6 +22,7 @@ from app.db.session import connection_ctx
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
+from app.services.company_transfer_retention import assert_tenant_deletion_allowed
 
 
 class AdminEmailTakenError(Exception):
@@ -224,7 +225,8 @@ async def attach_genesis_org_admin(
 
 async def delete_tenant_and_release_identities(tenant_id: UUID) -> None:
     """Cascade-delete a company and tombstone identities that have no remaining membership."""
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        await assert_tenant_deletion_allowed(db, tenant_id)
         identity_ids = await user_dao.list_identity_ids_for_tenant(tenant_id)
         agents = await agent_dao.list_for_tenant(tenant_id)
         teardown = await snapshot_agent_teardown(agents)

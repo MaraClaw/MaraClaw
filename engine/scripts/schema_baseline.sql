@@ -493,6 +493,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
 CREATE INDEX IF NOT EXISTS ix_company_admission_review
     ON company_admission_requests(target_tenant_id,status,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS company_transfer_requests (
+    id UUID PRIMARY KEY,
+    applicant_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    target_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    choice VARCHAR(8) NOT NULL CHECK (choice IN ('paid','free')),
+    status VARCHAR(24) NOT NULL DEFAULT 'payment_review'
+        CHECK (status IN ('payment_review','admission_created','rejected','withdrawn')),
+    method VARCHAR(24) NOT NULL CHECK (method IN ('invitation','verified_domain','sso')),
+    invitation_code VARCHAR(32),
+    fee_amount_minor BIGINT NOT NULL CHECK (fee_amount_minor >= 0),
+    currency VARCHAR(3) NOT NULL,
+    instructions TEXT NOT NULL,
+    free_consent_at TIMESTAMPTZ,
+    payment_confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    review_reason TEXT,
+    admission_request_id UUID UNIQUE REFERENCES company_admission_requests(id) ON DELETE CASCADE,
+    CHECK (source_tenant_id <> target_tenant_id),
+    CHECK ((choice='paid' AND free_consent_at IS NULL) OR (choice='free' AND free_consent_at IS NOT NULL)),
+    CHECK (status <> 'admission_created' OR admission_request_id IS NOT NULL),
+    CHECK (admission_request_id IS NULL OR choice='free' OR payment_confirmed_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_company_transfer_payment_applicant
+    ON company_transfer_requests(applicant_user_id) WHERE status='payment_review';
+CREATE INDEX IF NOT EXISTS ix_company_transfer_review
+    ON company_transfer_requests(status,created_at DESC,id DESC);
+
+CREATE OR REPLACE FUNCTION protect_company_transfer_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF ROW(NEW.applicant_user_id,NEW.source_tenant_id,NEW.target_tenant_id,NEW.choice,NEW.method,
+           NEW.invitation_code,NEW.fee_amount_minor,NEW.currency,NEW.instructions,NEW.free_consent_at,NEW.created_at)
+       IS DISTINCT FROM
+       ROW(OLD.applicant_user_id,OLD.source_tenant_id,OLD.target_tenant_id,OLD.choice,OLD.method,
+           OLD.invitation_code,OLD.fee_amount_minor,OLD.currency,OLD.instructions,OLD.free_consent_at,OLD.created_at) THEN
+RAISE EXCEPTION 'Transfer policy snapshot and consent are immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER company_transfer_snapshot_immutable BEFORE UPDATE ON company_transfer_requests
+    FOR EACH ROW EXECUTE FUNCTION protect_company_transfer_snapshot();
+
 CREATE TABLE IF NOT EXISTS okr_key_results (
 	id UUID NOT NULL, 
 	objective_id UUID NOT NULL, 
@@ -624,6 +669,29 @@ CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id);
 CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
+
+CREATE TABLE IF NOT EXISTS company_transfer_retained_agents (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE RESTRICT,
+    transfer_request_id UUID NOT NULL REFERENCES company_transfer_requests(id) ON DELETE RESTRICT,
+    original_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source_tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+    holder_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    sealed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS company_transfer_runtime_cleanup (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    transfer_request_id UUID NOT NULL REFERENCES company_transfer_requests(id) ON DELETE RESTRICT,
+    choice TEXT NOT NULL CHECK (choice IN ('paid','free')),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','completed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS ix_company_transfer_cleanup_pending
+ON company_transfer_runtime_cleanup(created_at,agent_id) WHERE state='pending';
 
 CREATE TABLE IF NOT EXISTS agent_setups (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -977,7 +1045,9 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created ON chat_messages (conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (conversation_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
 ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
@@ -1014,6 +1084,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	last_read_at_by_user TIMESTAMP WITH TIME ZONE, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	last_message_at TIMESTAMP WITH TIME ZONE, 
+	history_revision UUID NOT NULL DEFAULT gen_random_uuid(),
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_chat_sessions_agent_ext_conv UNIQUE (agent_id, external_conv_id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
@@ -1033,6 +1104,43 @@ CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_prim
 CREATE INDEX IF NOT EXISTS ix_chat_sessions_created_at ON chat_sessions (created_at);
 
 CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent_id, last_message_at DESC);
+
+-- Durable cache fingerprints cover all writers, including raw cascade SQL,
+-- row edits/deletes and conversation reassignment, in the writer's transaction.
+CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
+DECLARE
+    old_conversation TEXT;
+    new_conversation TEXT;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN old_conversation := OLD.conversation_id; END IF;
+    IF TG_OP <> 'DELETE' THEN new_conversation := NEW.conversation_id; END IF;
+    UPDATE chat_sessions SET history_revision = gen_random_uuid()
+    WHERE id IN (
+        CASE WHEN old_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+             THEN old_conversation::uuid END,
+        CASE WHEN new_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+             THEN new_conversation::uuid END
+    );
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'chat_sessions'::regclass
+          AND attname = 'history_revision'
+          AND NOT attisdropped
+    ) THEN
+        CREATE OR REPLACE TRIGGER chat_history_revision_changed
+        AFTER INSERT OR UPDATE OR DELETE ON chat_messages
+        FOR EACH ROW EXECUTE FUNCTION refresh_chat_history_revision();
+    ELSE
+        DROP TRIGGER IF EXISTS chat_history_revision_changed ON chat_messages;
+    END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS daily_token_usage (
 	id UUID NOT NULL, 

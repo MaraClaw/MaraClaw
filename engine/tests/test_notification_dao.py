@@ -8,6 +8,13 @@ from notification_db_fakes import NotificationConnection, notification_db as not
 
 USER_ID = UUID(int=100)
 pytestmark = pytest.mark.usefixtures("notification_db")
+RETAINED_SCOPE = (
+    "NOT EXISTS(SELECT 1 FROM company_transfer_retained_agents r "
+    "WHERE notifications.agent_id=r.agent_id OR notifications.ref_id=r.agent_id "
+    "OR notifications.ref_id IN (SELECT id FROM tasks WHERE agent_id=r.agent_id) "
+    "OR notifications.ref_id IN (SELECT id FROM approval_requests WHERE agent_id=r.agent_id) "
+    "OR notifications.link LIKE '%%' || r.agent_id::text || '%%')"
+)
 
 
 @pytest.mark.parametrize("types", [None, [], ["broadcast"], ["approval_pending", "company_admission_pending"]])
@@ -23,6 +30,7 @@ async def test_bulk_read_predicates_include_user_unread_and_optional_types(
         "UPDATE notifications SET is_read = TRUE WHERE user_id = %(user_id)s "
         "AND is_read IS FALSE AND archived_at IS NULL"
     )
+    expected += " AND " + RETAINED_SCOPE
     if types is not None:
         expected += " AND type = ANY(%(types)s)"
     assert query == expected
@@ -44,7 +52,7 @@ async def test_list_predicates_and_order_are_stable_and_parameterized(
     )
     # Then
     query, params = notification_db.executed[0]
-    where = "user_id = %(user_id)s"
+    where = "user_id = %(user_id)s AND " + RETAINED_SCOPE
     where += " AND archived_at IS NULL" if view == "active" else " AND archived_at IS NOT NULL"
     if unread_only:
         where += " AND is_read IS FALSE"
@@ -66,6 +74,7 @@ async def test_count_predicates_match_bulk_scope(
     expected = (
         "SELECT COUNT(*) FROM notifications WHERE user_id = %(user_id)s AND is_read IS FALSE AND archived_at IS NULL"
     )
+    expected += " AND " + RETAINED_SCOPE
     if types is not None:
         expected += " AND type = ANY(%(types)s)"
     assert query == expected

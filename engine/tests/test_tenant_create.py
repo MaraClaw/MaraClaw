@@ -314,6 +314,7 @@ async def test_delete_tenant_and_release_identities(monkeypatch):
 
     tenant_id = uuid.uuid4()
     ids = [uuid.uuid4()]
+    monkeypatch.setattr("app.services.tenant_provisioning.assert_tenant_deletion_allowed", AsyncMock())
     monkeypatch.setattr(
         "app.services.tenant_provisioning.user_dao.list_identity_ids_for_tenant", AsyncMock(return_value=ids)
     )

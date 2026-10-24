@@ -224,12 +224,8 @@ for (const boundary of ['session', 'owner'] as const) {
     const current = await chat.socket(chat.sockets.length - 1)
     expect(current.session).toBe(secondSession)
     await expect(page.getByText('Current second session', { exact: true })).toBeVisible()
-    const completed = page.waitForEvent('requestfinished', {
-      predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages`),
-    })
     // When
-    release()
-    await completed
+    await release()
     complete(reconnect.route, message('obsolete-frame', 'Obsolete live reply'))
     complete(current.route, message('current-frame', 'Current live reply'))
     // Then

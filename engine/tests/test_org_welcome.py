@@ -145,6 +145,7 @@ class _Move:
         self.welcome: AsyncMock = AsyncMock()
         self.update: AsyncMock = AsyncMock(side_effect=lambda *, db_obj, obj_in: replace(db_obj, **obj_in))
         self.unbind: AsyncMock = AsyncMock()
+        self.tenants: dict[uuid.UUID, TenantRecord] = {target.id: target}
 
         @asynccontextmanager
         async def _ctx():
@@ -154,7 +155,8 @@ class _Move:
         monkeypatch.setattr("app.core.acl_locks.lock_tenants", AsyncMock())
         monkeypatch.setattr("app.core.acl_locks.lock_user", AsyncMock())
         monkeypatch.setattr(membership.user_dao, "get", AsyncMock(return_value=fresh))
-        monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(return_value=target))
+        monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(side_effect=self.tenants.get))
+        monkeypatch.setattr("app.services.company_transfer_guards.has_owned_agents", AsyncMock(return_value=False))
         monkeypatch.setattr(membership.user_dao, "update", self.update)
         monkeypatch.setattr(membership.org_member_dao, "unbind_user_from_tenant", self.unbind)
         monkeypatch.setattr("app.services.registration_service.registration_service.bind_org_member", AsyncMock())
@@ -177,11 +179,30 @@ async def test_direct_transfer_sends_no_welcome(monkeypatch: pytest.MonkeyPatch)
     target = _tenant()
     stale = _user(tenant_id=source)
     move = _Move(monkeypatch, _user(user_id=stale.id, tenant_id=source), target)
+    move.tenants[source] = replace(_tenant(tenant_id=source), is_default_end_user_org=True)
 
     transferred = await membership.transfer_user_to_org(stale, target)
 
     assert transferred.tenant_id == target.id
     move.unbind.assert_awaited_once_with(stale.id, source)
+    move.welcome.assert_not_awaited()
+
+
+async def test_nondefault_source_transfer_is_rejected_without_welcome(monkeypatch: pytest.MonkeyPatch):
+    # Given a member of a company rather than the default organization.
+    source = _tenant()
+    target = _tenant()
+    member = _user(tenant_id=source.id)
+    move = _Move(monkeypatch, member, target)
+    move.tenants[source.id] = source
+
+    # When the locked membership transfer checks its source.
+    with pytest.raises(membership.AlreadyInOrgError):
+        await membership.transfer_user_to_org(member, target)
+
+    # Then neither membership nor welcome delivery changes.
+    move.update.assert_not_awaited()
+    move.unbind.assert_not_awaited()
     move.welcome.assert_not_awaited()
 
 

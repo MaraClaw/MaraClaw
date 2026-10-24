@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { canReviewAdmissions, canSendBroadcast } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
+import { TransferReviewRoute } from '@/routes/transfer-review'
 
 const AccountPage = lazy(() => import('@/pages/account').then((module) => ({ default: module.AccountPage })))
 const BroadcastPage = lazy(() => import('@/pages/broadcast').then((module) => ({ default: module.BroadcastPage })))
@@ -26,6 +27,8 @@ const NotificationsPage = lazy(() => import('@/pages/notifications').then((modul
 const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) => ({ default: module.AdminAuditPage })))
 const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
+const TransferPaymentsPage = lazy(() => import('@/pages/transfer-payments').then((module) => ({ default: module.TransferPaymentsPage })))
+const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
 
 function BroadcastRoute() {
   const { user } = useAuth()
@@ -52,6 +55,10 @@ export function AppRouter() {
               <Route path="account" element={<AccountPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="activity" element={<AdminAuditPage />} />
+              <Route element={<TransferReviewRoute />}>
+                <Route path="transfer-payments" element={<TransferPaymentsPage />} />
+                <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
+              </Route>
               <Route element={<AdmissionReviewRoute />}>
                 <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
                 <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />

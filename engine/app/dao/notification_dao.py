@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
+from app.dao.company_transfer_disposition_sql import VISIBLE_NOTIFICATION_SQL
 from app.records.notification import NotificationRecord
 
 _NOTIFICATION_COLUMNS = (
@@ -55,7 +56,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         offset: int = 0,
     ) -> Sequence[NotificationRecord]:
         params: dict[str, object] = {"user_id": user_id, "limit": limit, "offset": offset}
-        clauses = ["user_id = %(user_id)s"]
+        clauses = ["user_id = %(user_id)s", VISIBLE_NOTIFICATION_SQL]
         match view:
             case "active":
                 clauses.append("archived_at IS NULL")
@@ -85,7 +86,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         types: Sequence[str] | None = None,
     ) -> int:
         params: dict[str, object] = {"user_id": user_id}
-        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL"]
+        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL", VISIBLE_NOTIFICATION_SQL]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
@@ -109,13 +110,14 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
     async def mark_read_for_user(self, notification_id: UUID, user_id: UUID) -> None:
         async with self.session() as db:
             await db.execute(
-                "UPDATE notifications SET is_read = TRUE WHERE id = %(id)s AND user_id = %(user_id)s",
+                "UPDATE notifications SET is_read = TRUE WHERE id = %(id)s AND user_id = %(user_id)s AND "
+                + VISIBLE_NOTIFICATION_SQL,
                 {"id": notification_id, "user_id": user_id},
             )
 
     async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[str] | None = None) -> None:
         params: dict[str, object] = {"user_id": user_id}
-        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL"]
+        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL", VISIBLE_NOTIFICATION_SQL]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
@@ -130,7 +132,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE notifications SET archived_at = COALESCE(archived_at, now()) "
-                "WHERE id = %(id)s AND user_id = %(user_id)s RETURNING id",
+                "WHERE id = %(id)s AND user_id = %(user_id)s AND " + VISIBLE_NOTIFICATION_SQL + " RETURNING id",
                 {"id": notification_id, "user_id": user_id},
             )
             return row is not None
@@ -138,7 +140,9 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
     async def restore_for_user(self, notification_id: UUID, user_id: UUID) -> bool:
         async with self.session() as db:
             row = await db.fetchone(
-                "UPDATE notifications SET archived_at = NULL WHERE id = %(id)s AND user_id = %(user_id)s RETURNING id",
+                "UPDATE notifications SET archived_at = NULL WHERE id = %(id)s AND user_id = %(user_id)s AND "
+                + VISIBLE_NOTIFICATION_SQL
+                + " RETURNING id",
                 {"id": notification_id, "user_id": user_id},
             )
             return row is not None
@@ -164,6 +168,9 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 f"SELECT {self._select_list()} FROM notifications "
                 + "WHERE user_id = %(user_id)s AND ref_id = %(ref_id)s "
                 + "AND type = 'system' AND title LIKE %(title_pat)s "
+                + "AND "
+                + VISIBLE_NOTIFICATION_SQL
+                + " "
                 + "ORDER BY created_at DESC LIMIT 1",
                 {"user_id": user_id, "ref_id": ref_id, "title_pat": "%task failed%"},
             )

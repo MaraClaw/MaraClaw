@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
+import { isPlatformAdminUser } from '@/lib/types/auth'
+import { TransferPolicySettings } from './transfer-policy-settings'
 
 export function SettingsPage() {
   const { user, logout } = useAuth()
@@ -38,6 +40,8 @@ export function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      {isPlatformAdminUser(user) ? <TransferPolicySettings /> : null}
     </div>
   )
 }

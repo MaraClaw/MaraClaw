@@ -366,13 +366,17 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def list_ids_for_creator(self, creator_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT id FROM agents WHERE creator_id = %(creator_id)s",
+                "SELECT a.id FROM agents a JOIN users u ON u.id=a.creator_id "
+                "WHERE a.creator_id = %(creator_id)s AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id",
                 {"creator_id": creator_id},
             )
             return uuid_list_from_rows(rows)
 
     async def list_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
-        clauses = ["creator_id = %(creator_id)s"]
+        clauses = [
+            "creator_id = %(creator_id)s",
+            "tenant_id IS NOT DISTINCT FROM (SELECT tenant_id FROM users WHERE id=%(creator_id)s)",
+        ]
         params: dict[str, Any] = {"creator_id": creator_id}
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")
@@ -506,7 +510,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def count_active_for_creator(self, creator_id: UUID) -> int:
         async with self.session() as db:
             value = await db.fetchval(
-                "SELECT COUNT(*) FROM agents WHERE creator_id = %(creator_id)s AND is_expired IS FALSE",
+                "SELECT COUNT(*) FROM agents a JOIN users u ON u.id=a.creator_id "
+                "WHERE a.creator_id = %(creator_id)s AND a.is_expired IS FALSE "
+                "AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id",
                 {"creator_id": creator_id},
             )
             return int_from_row(value)
@@ -516,8 +522,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return {}
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT creator_id, COUNT(*) AS count FROM agents "
-                "WHERE creator_id = ANY(%(creator_ids)s) AND is_expired IS FALSE GROUP BY creator_id",
+                "SELECT a.creator_id, COUNT(*) AS count FROM agents a JOIN users u ON u.id=a.creator_id "
+                "WHERE a.creator_id = ANY(%(creator_ids)s) AND a.is_expired IS FALSE "
+                "AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id GROUP BY a.creator_id",
                 {"creator_ids": list(creator_ids)},
             )
             return {uuid_from_row(row["creator_id"]): int_from_row(row["count"]) for row in rows}

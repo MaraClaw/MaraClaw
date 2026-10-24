@@ -132,6 +132,11 @@ async def test_transfer_user_to_org_moves_member(monkeypatch):
         yield None
 
     monkeypatch.setattr(membership.user_dao, "update", AsyncMock(return_value=updated))
+    monkeypatch.setattr(
+        membership.tenant_dao,
+        "get",
+        AsyncMock(return_value=_tenant(is_default_end_user_org=True)),
+    )
     monkeypatch.setattr(membership.org_member_dao, "unbind_user_from_tenant", unbind)
     monkeypatch.setattr("app.services.registration_service.registration_service.bind_org_member", AsyncMock())
     monkeypatch.setattr(membership, "connection_ctx", _ctx)

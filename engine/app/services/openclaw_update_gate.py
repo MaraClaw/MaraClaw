@@ -12,6 +12,7 @@ from typing import override
 from uuid import UUID
 
 from app.dao.openclaw_update_dao import openclaw_update_notice_dao
+from app.services.company_transfer_runtime_gate import assert_transfer_ready
 
 REQUIRED_CODE = "openclaw_update_required"
 IN_PROGRESS_CODE = "openclaw_update_in_progress"
@@ -72,7 +73,8 @@ async def assert_no_active_run(agent_id: UUID) -> None:
 
 
 async def assert_work_allowed(agent_id: UUID) -> None:
-    """Reject new user work: active run first, then an outstanding mandatory notice."""
+    """Reject new user work during transfer cleanup or an outstanding upgrade."""
+    await assert_transfer_ready(agent_id)
     active, required = await openclaw_update_notice_dao.gate_state(agent_id)
     if active:
         raise OpenClawUpdateInProgressError

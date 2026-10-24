@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
+from app.api.admin_transfer_policy import router as transfer_policy_router
 from app.core.json_types import (
     date_from_row,
     int_from_row,
@@ -60,6 +61,7 @@ async def get_client_ip(request: Request) -> str | None:
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+router.include_router(transfer_policy_router)
 
 
 # ─── Schemas ────────────────────────────────────────────

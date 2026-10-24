@@ -10,6 +10,7 @@ import { switchTenant } from '@/lib/auth-api'
 import { getMyAdmission, withdrawMyAdmission } from '@/lib/company-admissions-api'
 import { userFacingRequestError } from '@/lib/http'
 import { relativeTime } from '@/lib/relative-time'
+import { formatMoney } from '@/lib/format-money'
 import type { AdmissionSummary } from '@/lib/types/company-admissions'
 import { admissionStatuses } from './admission-labels'
 
@@ -94,6 +95,11 @@ function AdmissionDetail({ id }: { readonly id: string }) {
                 <Button className="h-auto min-h-11 max-w-full whitespace-normal" disabled={opening || query.isFetching || query.isError} onClick={() => void openWorkspace()}>{opening ? 'Opening workspace…' : `Open ${request.target_tenant.name}`}</Button>
             ) : null}
           </section>
+          {request.transfer ? <section aria-label="Transfer choice" className="space-y-2 rounded-xl border border-border p-4 text-sm">
+            <h2 className="font-medium">{request.transfer.choice === 'paid' ? 'Paid · Keep agents and integrations' : 'Free · Delete agents and integrations'}</h2>
+            {request.transfer.choice === 'paid' ? <p>Saved fee: {formatMoney(request.transfer.fee_amount_minor, request.transfer.currency)} ({request.transfer.currency}). Payment review is separate from this destination approval.</p> : <p>Deletion takes effect only on final destination approval. Agents expire and become unavailable; integrations, credentials, permissions, relationships, schedules, triggers and public pages are deleted. Historical chats, tasks, audit and activity records, accounting, Plaza content, revisions, files and memory remain retained in the source organization, inaccessible to you after the transfer.</p>}
+            <Link className="inline-flex min-h-11 items-center font-medium text-primary hover:underline" to={`/app/admissions/transfers/${encodeURIComponent(request.transfer.transfer_request_id)}`}>View saved transfer policy</Link>
+          </section> : null}
           <dl className="grid gap-4 rounded-xl border border-border p-4 text-sm sm:grid-cols-2">
             <div><dt className="text-muted-foreground">Applicant</dt><dd>{request.applicant.email ?? request.applicant.id}</dd></div>
             <div><dt className="text-muted-foreground">Source organization</dt><dd>{request.source_tenant?.name ?? 'No organization'}</dd></div>

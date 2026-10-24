@@ -17,6 +17,7 @@ from app.services.system_org_seeder import SystemOrgSeedError
 SEEDS = (
     "system_org_seeder.ensure_system_orgs",
     "platform_admin_seeder.ensure_platform_admin",
+    "transfer_policy.seed_transfer_policy",
     "tool_seeder.seed_builtin_tools",
     "tool_seeder.clean_orphaned_mcp_tools",
     "tool_seeder.seed_atlassian_rovo_config",
@@ -104,4 +105,18 @@ async def test_bootstrap_continues_other_boundaries_after_optional_seed_failure(
     # When
     await bootstrap()
     # Then: the failed tools block skips its cleanup, but later seeds remain ordered.
-    assert seed_calls == list(SEEDS[:2] + SEEDS[4:])
+    assert seed_calls == list(SEEDS[:3] + SEEDS[5:])
+
+
+async def test_bootstrap_stops_when_transfer_policy_cannot_be_seeded(
+    monkeypatch: pytest.MonkeyPatch, seed_calls: list[str]
+) -> None:
+    # Given: the required fee settings cannot be persisted.
+    monkeypatch.setattr(
+        "app.services.transfer_policy.seed_transfer_policy", AsyncMock(side_effect=RuntimeError("seed"))
+    )
+    # When
+    with pytest.raises(RuntimeError, match="seed"):
+        await bootstrap()
+    # Then: no optional seeder runs with a missing policy.
+    assert seed_calls == list(SEEDS[:2])

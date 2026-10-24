@@ -222,6 +222,17 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: str) ->
                 tenant = current_tenant
             if user.tenant_id == tenant.id:
                 return user
+            if user.tenant_id is not None:
+                source = await tenant_dao.get(user.tenant_id)
+                if source is None or not source.is_active or not source.is_default_end_user_org:
+                    raise AlreadyInOrgError("Only default-organization members may transfer")
+                if tenant.is_system:
+                    raise AlreadyInOrgError("Members cannot transfer to the system organization")
+                if db is not None:
+                    from app.services.company_transfer_guards import has_owned_agents
+
+                    if await has_owned_agents(user):
+                        raise AlreadyInOrgError("Agent disposition requires an approved company admission")
             if previous_tenant_id is not None and previous_tenant_id != tenant.id:
                 await org_member_dao.unbind_user_from_tenant(user.id, previous_tenant_id)
             updated = await user_dao.update(

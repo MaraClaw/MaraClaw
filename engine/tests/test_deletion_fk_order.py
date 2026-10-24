@@ -28,6 +28,10 @@ def test_cleanup_resolves_baseline_foreign_keys_before_deleting_parents(statemen
             if reference is None:
                 continue
             parent = reference[1]
+            if child == "company_transfer_retained_agents":
+                assert "ON DELETE RESTRICT" in declaration
+                assert child not in deletes
+                continue
             if (
                 parent not in deletes
                 or parent == child

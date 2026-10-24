@@ -24,6 +24,8 @@ async function prepare(page: Page, detail: AdmissionDetail = pending, tenantId: 
         break
       case '/api/tenants/me': await route.fulfill({ json: targetSession ? target : source }); break
       case '/api/tenants/lookup-by-email': await route.fulfill({ json: { match: target, fallback: source } }); break
+      case '/api/company-admissions/transfer-quote': await route.fulfill({ json: { fee_amount_minor: 1000, currency: 'USD', instructions: 'Synthetic instructions', source_eligible: true, has_owned_agents: false, explicit_choice_required: false, free_requires_destructive_consent: true } }); break
+      case '/api/company-admissions/transfers/mine': await route.fulfill({ json: [] }); break
       case '/api/company-admissions/mine': await route.fulfill({ json: [detail] }); break
       case '/api/company-admissions/mine/page': await route.fulfill({ json: { items: [detail], next_cursor: null } }); break
       case '/api/company-admissions/request-a': await route.fulfill({ json: detail }); break
