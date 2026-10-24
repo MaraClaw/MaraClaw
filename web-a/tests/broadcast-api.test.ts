@@ -10,7 +10,7 @@ import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { canSendBroadcast } from '../src/lib/types/auth.ts'
 import { adminUser, createFixture } from './helpers.ts'
 
-const counts = { ok: true, users_notified: 7, agents_notified: 3, emails_sent: 5 }
+const counts = { ok: true, broadcast_id: '0d75651c-8c6c-4404-9046-50e1b3ff6dd2', users_notified: 7, agents_notified: 3, emails_sent: 5 }
 const draft = { title: '  Maintenance  ', body: 'First line\nSecond line', send_email: false }
 
 test('broadcast posts the exact current-tenant payload and parses distinct counts', async (t) => {
@@ -29,6 +29,7 @@ test('broadcast posts the exact current-tenant payload and parses distinct count
 
 for (const malformed of [
   null, {}, { ...counts, ok: false }, { ...counts, ok: 'true' },
+  ...[undefined, null, 'not-a-uuid'].map((broadcast_id) => ({ ...counts, broadcast_id })),
   ...['users_notified', 'agents_notified', 'emails_sent'].flatMap((field) =>
     [-1, 1.5, '2', null, undefined].map((value) => ({ ...counts, [field]: value }))),
 ]) {
@@ -44,7 +45,7 @@ for (const malformed of [
 
 test('broadcast accepts zero counts without inventing recipients', async (t) => {
   // Given
-  const empty = { ok: true, users_notified: 0, agents_notified: 0, emails_sent: 0 }
+  const empty = { ...counts, users_notified: 0, agents_notified: 0, emails_sent: 0 }
   t.mock.method(globalThis, 'fetch', async () => Response.json(empty))
   // When
   const result = await sendBroadcast({ ...draft, body: '', send_email: true })
