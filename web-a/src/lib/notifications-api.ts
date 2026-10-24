@@ -11,6 +11,7 @@ export const notificationSchema = z.object({
   ref_id: z.string().nullable(),
   sender_name: z.string().nullable(),
   is_read: z.boolean(),
+  archived_at: z.iso.datetime({ offset: true, local: true }).nullable(),
   created_at: z.iso.datetime({ offset: true, local: true }).nullable(),
 }).readonly()
 
@@ -21,11 +22,12 @@ const readResultSchema = z.object({ ok: z.literal(true) }).readonly()
 export type AdminNotification = z.infer<typeof notificationSchema>
 export type NotificationId = AdminNotification['id']
 export type NotificationUnreadCount = z.infer<typeof unreadCountSchema>
+export type NotificationView = 'active' | 'archived'
 export const NOTIFICATIONS_PAGE_SIZE = 50
 
-export async function fetchNotifications(offset = 0, signal?: AbortSignal) {
+export async function fetchNotifications(offset = 0, signal?: AbortSignal, view: NotificationView = 'active') {
   return notificationsSchema.parse(await apiRequest<unknown>(
-    `/api/notifications?limit=${NOTIFICATIONS_PAGE_SIZE}&offset=${offset}`, { signal },
+    `/api/notifications?limit=${NOTIFICATIONS_PAGE_SIZE}&offset=${offset}&view=${view}`, { signal },
   ))
 }
 
@@ -39,4 +41,12 @@ export async function markNotificationRead(id: NotificationId) {
 
 export async function markAllNotificationsRead() {
   return readResultSchema.parse(await apiRequest<unknown>('/api/notifications/read-all', { method: 'POST' }))
+}
+
+export async function archiveNotification(id: NotificationId) {
+  return readResultSchema.parse(await apiRequest<unknown>(`/api/notifications/${id}/archive`, { method: 'POST' }))
+}
+
+export async function restoreNotification(id: NotificationId) {
+  return readResultSchema.parse(await apiRequest<unknown>(`/api/notifications/${id}/restore`, { method: 'POST' }))
 }

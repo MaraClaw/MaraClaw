@@ -6,12 +6,12 @@ import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import {
   fetchNotifications, fetchNotificationUnreadCount, markNotificationRead, markAllNotificationsRead,
-  notificationSchema,
+  archiveNotification, restoreNotification, notificationSchema,
 } from '../src/lib/notifications-api.ts'
 
 const notification = {
   id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: 'broadcast', title: 'Maintenance', body: 'Details\nNext line',
-  link: null, ref_id: null, sender_name: null, is_read: false, created_at: '2026-10-20T12:00:00+00:00',
+  link: null, ref_id: null, sender_name: null, is_read: false, created_at: '2026-10-20T12:00:00+00:00', archived_at: null,
 }
 
 test('notifications fetch the requested page and parse nullable fields without changing content', async (t) => {
@@ -20,7 +20,7 @@ test('notifications fetch the requested page and parse nullable fields without c
   // When
   const result = await fetchNotifications(50)
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/notifications?limit=50&offset=50')
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/notifications?limit=50&offset=50&view=active')
   assert.deepEqual(result, [notification])
   assert.equal(Object.isFrozen(result), true)
   assert.equal(Object.isFrozen(result[0]), true)
@@ -35,11 +35,25 @@ test('notifications start at offset zero and forward query cancellation', async 
   controller.abort()
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
-  assert.equal(url, '/api/notifications?limit=50&offset=0')
+  assert.equal(url, '/api/notifications?limit=50&offset=0&view=active')
   assert.equal(options?.signal?.aborted, true)
 })
 
-for (const malformed of [null, {}, [{ ...notification, is_read: 'false' }], [{ ...notification, created_at: 'yesterday' }], [{ ...notification, id: '../read-all' }]]) {
+test('archived notifications preserve unread state and forward view, offset and cancellation', async (t) => {
+  // Given
+  const archived = { ...notification, archived_at: '2026-10-24T01:00:00Z' }
+  const controller = new AbortController()
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json([archived]))
+  // When
+  const result = await fetchNotifications(100, controller.signal, 'archived')
+  // Then
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, '/api/notifications?limit=50&offset=100&view=archived')
+  assert.equal(options?.signal, controller.signal)
+  assert.deepEqual(result, [archived])
+})
+
+for (const malformed of [null, {}, [{ ...notification, is_read: 'false' }], [{ ...notification, created_at: 'yesterday' }], [{ ...notification, archived_at: 'yesterday' }], [{ ...notification, archived_at: undefined }], [{ ...notification, id: '../read-all' }]]) {
   test(`notifications reject malformed data ${JSON.stringify(malformed)}`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json(malformed))
@@ -88,6 +102,35 @@ test('mark-read preserves a transport failure instead of reporting success', asy
   // When / Then
   await assert.rejects(markAllNotificationsRead(), (error) => error instanceof ApiError && error.status === 503)
 })
+
+for (const [action, mutate] of [['archive', archiveNotification], ['restore', restoreNotification]] as const) {
+  test(`${action} posts only the notification id and validates success`, async (t) => {
+    // Given
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json({ ok: true }))
+    // When
+    const result = await mutate(notificationSchema.parse(notification).id)
+    // Then
+    const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+    assert.equal(url, `/api/notifications/${notification.id}/${action}`)
+    assert.equal(options?.method, 'POST')
+    assert.equal(options?.body, undefined)
+    assert.deepEqual(result, { ok: true })
+  })
+
+  test(`${action} preserves a missing or foreign notification 404`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Not found' }, { status: 404 }))
+    // When / Then
+    await assert.rejects(mutate(notificationSchema.parse(notification).id), (error) => error instanceof ApiError && error.status === 404)
+  })
+
+  test(`${action} rejects a malformed success response`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false }))
+    // When / Then
+    await assert.rejects(mutate(notificationSchema.parse(notification).id), z.ZodError)
+  })
+}
 
 for (const link of ['/', '/notifications', '/users/person-1', '/companies/company_1', '/search-engine?tab=analytics', '/settings#email']) {
   test(`notification allows known local admin destination ${link}`, () => {
