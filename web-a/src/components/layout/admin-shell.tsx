@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
+import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
 import { canReviewAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +21,7 @@ const navItems: {
   platformAdminOnly?: boolean
   broadcastOnly?: boolean
   admissionReviewOnly?: boolean
+  paymentReviewOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/notifications', label: 'Notifications', icon: 'notifications' },
@@ -29,6 +31,7 @@ const navItems: {
   { to: '/users', label: 'Users', icon: 'users' },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
+  { to: '/transfer-payments', label: 'Payments', icon: 'analytics', paymentReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
@@ -98,13 +101,15 @@ function NavItems({
 }) {
   const { mustChangePassword, user } = useAuth()
   const platformAdmin = isPlatformAdminUser(user)
+  const paymentAccess = useTransferReviewAccess()
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, admissionReviewOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, admissionReviewOnly, paymentReviewOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (admissionReviewOnly && !canReviewAdmissions(user)) return null
+        if (paymentReviewOnly && !paymentAccess.canReview) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'
         if (locked) {
