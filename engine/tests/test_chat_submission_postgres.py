@@ -35,7 +35,7 @@ class ReceiptDatabase:
 
 
 @pytest.fixture
-async def receipt_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ReceiptDatabase]:
+async def receipt_db(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> AsyncIterator[ReceiptDatabase]:
     conninfo = os.environ.get("CHAT_SUBMISSION_TEST_DATABASE_URL", "")
     if not conninfo:
         pytest.skip("CHAT_SUBMISSION_TEST_DATABASE_URL is required for isolated PostgreSQL receipt QA")
@@ -51,8 +51,23 @@ async def receipt_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ReceiptDa
             ):
                 db = DbConnection(first)
                 async with transaction(db):
+                    baseline = bootstrap_db.SCHEMA_BASELINE.read_text()
+                    if getattr(request, "param", "fresh") == "legacy":
+                        # Model the pre-history-cache schema without altering an existing table.
+                        baseline = "\n".join(
+                            line
+                            for line in baseline.splitlines()
+                            if not line.strip().startswith("history_revision UUID ")
+                        )
+                        statements = [
+                            statement
+                            for statement in bootstrap_db._statement_bodies(baseline)
+                            if "refresh_chat_history_revision" not in statement
+                        ]
+                    else:
+                        statements = bootstrap_db._statement_bodies(baseline)
                     for _ in range(2):
-                        for statement in bootstrap_db._statement_bodies(bootstrap_db.SCHEMA_BASELINE.read_text()):
+                        for statement in statements:
                             await db.execute(statement)
                     user = UserRecord(id=uuid4(), quota_message_limit=1)
                     agent = AgentRecord(id=uuid4(), name="Receipt QA", creator_id=user.id)

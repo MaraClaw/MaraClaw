@@ -575,6 +575,40 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
 
+    async def history_revision(self, session_id: UUID) -> str | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT to_jsonb(s)->>'history_revision' AS history_revision FROM chat_sessions s WHERE s.id = %(id)s",
+                {"id": session_id},
+            )
+            return str(row["history_revision"]) if row is not None and row["history_revision"] is not None else None
+
+    async def sender_names(self, participant_ids: Sequence[UUID]) -> dict[str, str]:
+        if not participant_ids:
+            return {}
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id, display_name FROM participants WHERE id = ANY(%(ids)s)", {"ids": list(participant_ids)}
+            )
+            return {str(row["id"]): str_from_row(row.get("display_name"), "Unknown") or "Unknown" for row in rows}
+
+    async def list_session_page(
+        self, *, conversation_id: str, limit: int, before: tuple[datetime, UUID] | None = None
+    ) -> Sequence[ChatMessageRecord]:
+        params: dict[str, str | int | datetime | UUID] = {"conversation_id": conversation_id, "limit": limit}
+        boundary = ""
+        if before is not None:
+            boundary = " AND (created_at, id) < (%(created_at)s, %(message_id)s)"
+            params.update(created_at=before[0], message_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM chat_messages "
+                f"WHERE conversation_id = %(conversation_id)s{boundary} "
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [ChatMessageRecord.from_row(row) for row in rows]
+
     async def list_for_session(
         self,
         *,

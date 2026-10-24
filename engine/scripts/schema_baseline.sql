@@ -977,7 +977,9 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created ON chat_messages (conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (conversation_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
 ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
@@ -1014,6 +1016,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	last_read_at_by_user TIMESTAMP WITH TIME ZONE, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	last_message_at TIMESTAMP WITH TIME ZONE, 
+	history_revision UUID NOT NULL DEFAULT gen_random_uuid(),
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_chat_sessions_agent_ext_conv UNIQUE (agent_id, external_conv_id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
@@ -1033,6 +1036,43 @@ CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_prim
 CREATE INDEX IF NOT EXISTS ix_chat_sessions_created_at ON chat_sessions (created_at);
 
 CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent_id, last_message_at DESC);
+
+-- Durable cache fingerprints cover all writers, including raw cascade SQL,
+-- row edits/deletes and conversation reassignment, in the writer's transaction.
+CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
+DECLARE
+    old_conversation TEXT;
+    new_conversation TEXT;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN old_conversation := OLD.conversation_id; END IF;
+    IF TG_OP <> 'DELETE' THEN new_conversation := NEW.conversation_id; END IF;
+    UPDATE chat_sessions SET history_revision = gen_random_uuid()
+    WHERE id IN (
+        CASE WHEN old_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+             THEN old_conversation::uuid END,
+        CASE WHEN new_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+             THEN new_conversation::uuid END
+    );
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'chat_sessions'::regclass
+          AND attname = 'history_revision'
+          AND NOT attisdropped
+    ) THEN
+        CREATE OR REPLACE TRIGGER chat_history_revision_changed
+        AFTER INSERT OR UPDATE OR DELETE ON chat_messages
+        FOR EACH ROW EXECUTE FUNCTION refresh_chat_history_revision();
+    ELSE
+        DROP TRIGGER IF EXISTS chat_history_revision_changed ON chat_messages;
+    END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS daily_token_usage (
 	id UUID NOT NULL, 

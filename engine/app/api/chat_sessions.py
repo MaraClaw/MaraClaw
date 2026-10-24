@@ -1,22 +1,13 @@
 """Chat session management API endpoints."""
 
-import json
-import re
 import uuid
 from datetime import UTC, datetime
-from typing import ClassVar, NotRequired, TypedDict
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from app.core.json_types import (
-    JsonValue,
-    is_json_value,
-    json_as_str_or,
-    json_loads_object,
-    json_loads_value,
-    str_from_row,
-)
+from app.core.json_types import str_from_row
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao import agent_dao
@@ -24,32 +15,13 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
-from app.records.chat_attachment import AttachmentRef
+from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
+from app.services.chat_history import ChatMessagePage, get_history_page, parse_cursor
+from app.services.chat_message_projection import ChatMessageEntry, project_messages
 from app.services.shared_chat import ensure_shared_session, is_shared_session
 
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
-
-
-class _ChatMessageContent(TypedDict):
-    role: str
-    content: str
-    created_at: NotRequired[str | None]
-    toolName: NotRequired[str]
-    toolArgs: NotRequired[JsonValue]
-    toolStatus: NotRequired[str]
-    toolResult: NotRequired[str]
-    toolThinking: NotRequired[str]
-    thinking: NotRequired[str]
-    sender_name: NotRequired[str]
-    participant_id: NotRequired[str]
-
-
-class ChatMessageEntry(_ChatMessageContent):
-    message_id: str
-    entry_id: str
-    client_submission_id: NotRequired[str | None]
-    attachments: NotRequired[list[AttachmentRef]]
 
 
 def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
@@ -302,17 +274,7 @@ async def get_session_messages(
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[ChatMessageEntry]:
     """Get chat messages for a specific session."""
-    agent, _ = await check_agent_access(current_user, agent_id)
-    session = await chat_session_dao.get_for_agent_or_peer(session_id, agent_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if (
-        not is_shared_session(session)
-        and str(session.user_id) != str(current_user.id)
-        and not _can_view_all_agent_chat_sessions(current_user, agent)
-    ):
-        raise HTTPException(status_code=403, detail="Not authorized to view this session")
+    session = await _authorize_history(agent_id, session_id, current_user)
 
     before_dt = None
     if before not in (None, ""):
@@ -338,128 +300,47 @@ async def get_session_messages(
             db_obj=session,
             obj_in={"last_read_at_by_user": datetime.now(UTC)},
         )
-
-    sender_cache: dict[str, str] = {}
-    if session.source_channel == "agent":
-        participant_ids = list({m.participant_id for m in messages if m.participant_id})
-        if participant_ids:
-            async with connection_ctx() as conn:
-                rows = await conn.fetchall(
-                    "SELECT id, display_name FROM participants WHERE id = ANY(%(ids)s)",
-                    {"ids": participant_ids},
-                )
-            for row in rows:
-                sender_cache[str(row["id"])] = str_from_row(row.get("display_name"), "Unknown") or "Unknown"
-
-    out: list[ChatMessageEntry] = []
-    for m in messages:
-        sender_name = sender_cache.get(str(m.participant_id)) if m.participant_id else None
-
-        if m.role == "tool_call":
-            entry: ChatMessageEntry = {
-                "message_id": str(m.id),
-                "entry_id": str(m.id),
-                "role": m.role,
-                "content": m.content,
-                "created_at": m.created_at.isoformat() if m.created_at else None,
-            }
-            try:
-                data = json_loads_object(m.content)
-                entry["content"] = ""
-                entry["toolName"] = json_as_str_or(data.get("name")) or json_as_str_or(data.get("tool_name"))
-                entry["toolArgs"] = data.get("args") if data.get("args") is not None else data.get("arguments")
-                entry["toolStatus"] = json_as_str_or(data.get("status"), "done")
-                entry["toolResult"] = json_as_str_or(data.get("result"))
-                entry["toolThinking"] = json_as_str_or(data.get("reasoning_content"))
-            except json.JSONDecodeError, TypeError, AttributeError:
-                entry["content"] = m.content
-            if sender_name not in (None, ""):
-                entry["sender_name"] = sender_name
-            out.append(entry)
-            continue
-
-        if session.source_channel == "agent" and m.role == "assistant" and "```tool_code" in (m.content or ""):
-            parts = _split_inline_tools(m.content)
-            for index, part in enumerate(parts):
-                if sender_name not in (None, ""):
-                    part["sender_name"] = sender_name
-                if m.participant_id:
-                    part["participant_id"] = str(m.participant_id)
-                out.append({**part, "message_id": str(m.id), "entry_id": f"{m.id}:{index}"})
-        else:
-            message_entry: ChatMessageEntry = {
-                "message_id": str(m.id),
-                "entry_id": str(m.id),
-                "role": m.role,
-                "content": m.content,
-                "created_at": m.created_at.isoformat() if m.created_at else None,
-            }
-            if m.role == "user":
-                message_entry["client_submission_id"] = str(m.client_submission_id) if m.client_submission_id else None
-            if m.attachments is not None and m.attachments:
-                message_entry["attachments"] = [ref.as_dict() for ref in m.attachments]
-            if m.thinking not in (None, ""):
-                message_entry["thinking"] = m.thinking
-            if sender_name not in (None, ""):
-                message_entry["sender_name"] = sender_name
-            if m.participant_id:
-                message_entry["participant_id"] = str(m.participant_id)
-            out.append(message_entry)
-
-    return out
+    return await project_messages(messages, session.source_channel)
 
 
-def _split_inline_tools(content: str) -> list[_ChatMessageContent]:
-    """Parse assistant content containing inline ```tool_code blocks.
+async def _authorize_history(agent_id: uuid.UUID, session_id: uuid.UUID, current_user: UserRecord) -> ChatSessionRecord:
+    agent, _ = await check_agent_access(current_user, agent_id)
+    session = await chat_session_dao.get_for_agent_or_peer(session_id, agent_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    Splits into alternating text segments and tool_call entries.
-    Format: ```tool_code\ntool_name\n``` ```json\n{args}\n```
-    """
-    # Pattern: ```tool_code\n<name>\n``` optionally followed by ```json\n<args>\n```
-    pattern = re.compile(
-        r"```tool_code\s*\n\s*(\w+)\s*\n```"  # tool name
-        + r"(?:\s*```json\s*\n(.*?)\n```)?",  # optional JSON args
-        re.DOTALL,
-    )
+    if (
+        not is_shared_session(session)
+        and str(session.user_id) != str(current_user.id)
+        and not _can_view_all_agent_chat_sessions(current_user, agent)
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
-    parts: list[_ChatMessageContent] = []
-    last_end = 0
+    return session
 
-    for match in pattern.finditer(content):
-        # Text before this tool call
-        text_before = content[last_end : match.start()].strip()
-        if text_before:
-            parts.append({"role": "assistant", "content": text_before})
 
-        tool_name = match.group(1)
-        args_str = match.group(2)
-        tool_args: JsonValue | None = None
-        if args_str:
-            try:
-                loaded = json_loads_value(args_str.strip())
-                tool_args = loaded if is_json_value(loaded) else {"raw": args_str.strip()}
-            except Exception:
-                tool_args = {"raw": args_str.strip()}
+@router.get("/{agent_id}/sessions/{session_id}/messages/page")
+async def get_session_messages_page(
+    agent_id: uuid.UUID,
+    session_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=500, description="Maximum database rows; inline tool entries stay together"),
+    cursor: str | None = Query(None, max_length=1024),
+    current_user: UserRecord = Depends(get_current_user),
+) -> ChatMessagePage:
+    session = await _authorize_history(agent_id, session_id, current_user)
+    boundary = parse_cursor(cursor, agent_id, session_id)
+    read_at = datetime.now(UTC)
+    page = await get_history_page(session, limit, boundary, agent_id=agent_id)
 
-        parts.append(
-            {
-                "role": "tool_call",
-                "content": "",
-                "toolName": tool_name,
-                "toolArgs": tool_args,
-                "toolStatus": "done",
-                "toolResult": "",
-            }
+    if (
+        boundary is None
+        and str(session.user_id) == str(current_user.id)
+        and not session.is_group
+        and session.source_channel not in ("agent", "trigger", "shared")
+    ):
+        _ = await chat_session_dao.update(
+            db_obj=session,
+            obj_in={"last_read_at_by_user": read_at},
         )
-        last_end = match.end()
 
-    # Trailing text after last tool
-    trailing = content[last_end:].strip()
-    if trailing:
-        parts.append({"role": "assistant", "content": trailing})
-
-    # If no matches found, return the whole content as-is
-    if not parts:
-        parts.append({"role": "assistant", "content": content})
-
-    return parts
+    return page
