@@ -22,6 +22,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -119,11 +120,15 @@ def _verify_slack_signature(signing_secret: str, body: bytes, headers: Mapping[s
     sig = headers.get("x-slack-signature", "")
     if not ts or not sig:
         return False
-    if abs(time.time() - int(ts)) > 300:
+    try:
+        timestamp = int(ts)
+        base = f"v0:{ts}:{body.decode('utf-8')}".encode()
+    except ValueError, UnicodeError:
         return False
-    base = f"v0:{ts}:{body.decode()}"
-    expected = "v0=" + hmac.new(signing_secret.encode(), base.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    if abs(int(time.time()) - timestamp) > 300:
+        return False
+    expected = "v0=" + hmac.new(signing_secret.encode(), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected.encode(), sig.encode())
 
 
 async def _send_slack_messages(bot_token: str, channel: str, text: str, *, strict: bool = False) -> None:
@@ -150,7 +155,9 @@ async def slack_event_webhook(
     agent_id: uuid.UUID, request: Request
 ) -> Response | OkAcknowledgement | SlackChallengeResponse:
     """Handle Slack Event API callbacks."""
-    body_bytes = await request.body()
+    body_bytes = await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE)
+    if body_bytes is None:
+        return Response(status_code=413)
 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
     if not config:
@@ -165,7 +172,10 @@ async def slack_event_webhook(
     if not _verify_slack_signature(signing_secret, body_bytes, dict(request.headers)):
         return Response(status_code=401)
 
-    body = json_loads_object(body_bytes)
+    try:
+        body = json_loads_object(body_bytes)
+    except ValueError, UnicodeError:
+        return Response(status_code=401)
     logger.info(f"[Slack] Webhook for {agent_id}: type={body.get('type')}")
 
     if body.get("type") == "url_verification":
