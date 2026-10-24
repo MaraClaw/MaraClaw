@@ -374,6 +374,7 @@ CREATE TABLE IF NOT EXISTS users (
 	display_name VARCHAR(100) NOT NULL, 
 	avatar_url VARCHAR(500), 
 	title VARCHAR(100), 
+	timezone VARCHAR(100),
 	role user_role_enum NOT NULL DEFAULT 'member', 
 	is_active BOOLEAN NOT NULL DEFAULT true, 
 	registration_source VARCHAR(50), 

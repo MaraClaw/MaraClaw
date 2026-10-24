@@ -22,6 +22,7 @@ class SessionUserSnapshot(TypedDict):
     display_name: str
     avatar_url: str | None
     title: str | None
+    timezone: str | None
     role: str
     is_active: bool
     registration_source: str | None

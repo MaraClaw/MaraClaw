@@ -21,6 +21,7 @@ class UserRecord:
     display_name: str = ""
     avatar_url: str | None = None
     title: str | None = None
+    timezone: str | None = None
     role: str = "member"
     is_active: bool = True
     registration_source: str | None = "web"
@@ -44,6 +45,7 @@ class UserRecord:
             display_name=str_from_row(row.get("display_name")),
             avatar_url=str_from_row(row.get("avatar_url")) or None,
             title=str_from_row(row.get("title")) or None,
+            timezone=str_from_row(row.get("timezone")) or None,
             role=str_from_row(row.get("role"), "member") or "member",
             is_active=bool(row.get("is_active", True)),
             registration_source=str_from_row(row["registration_source"]) or None,

@@ -73,6 +73,34 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
     assert "password_hash" not in dumped
 
 
+@pytest.mark.parametrize("timezone", ["UTC", "Etc/GMT-7", "Asia/Shanghai", None])
+async def test_session_cache_roundtrip_preserves_timezone(fake_cache: FakeRedis, timezone: str | None) -> None:
+    # Given a member preference, including an explicitly unset preference.
+    user = _user(timezone=timezone)
+    await session_cache.set_cached_user(user)
+    clear_row_memo()
+    # When another request reads the Redis snapshot rather than the row memo.
+    loaded = await session_cache.get_cached_user(user.id)
+    # Then the preference survives serialization and deserialization unchanged.
+    assert loaded is not None
+    assert loaded.timezone == timezone
+
+
+async def test_legacy_session_snapshot_defaults_timezone_to_unset(fake_cache: FakeRedis) -> None:
+    # Given a pre-preference snapshot with no timezone key.
+    user = _user()
+    payload = dict[str, object](session_cache._snapshot(user, "0", "0"))
+    user_payload = payload["user"]
+    assert is_json_object(user_payload)
+    user_payload.pop("timezone", None)
+    await redis_cache.cache_set_json(session_cache._sess_key(user.id), payload, ttl=20)
+    # When the old snapshot is read after deployment.
+    loaded = await session_cache.get_cached_user(user.id)
+    # Then it remains readable with an unset preference.
+    assert loaded is not None
+    assert loaded.timezone is None
+
+
 @pytest.mark.asyncio
 async def test_legacy_snapshot_ignores_retired_field_without_invalidating_session(fake_cache: FakeRedis) -> None:
     user = _user()

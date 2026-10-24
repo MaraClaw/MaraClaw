@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.json_types import JsonObject
 from app.schemas.company_admission import RequestSummary
+from app.services.schedule_time import validate_timezone
 
 # ─── Auth ───────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ class UserOut(BaseModel):
     is_platform_admin: bool = False
     tenant_id: uuid.UUID | None = None
     title: str | None = None
+    timezone: str | None = None
     primary_mobile: str | None = None
     registration_source: str | None = None
     is_active: bool
@@ -202,6 +204,12 @@ class UserUpdate(BaseModel):
     avatar_url: str | None = None
     title: str | None = None
     primary_mobile: str | None = None
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_preference(cls, value: str | None) -> str | None:
+        return validate_timezone(value) if value is not None else None
 
 
 # ─── Agent ──────────────────────────────────────────────
