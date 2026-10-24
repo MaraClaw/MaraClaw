@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable, Coroutine
 from contextvars import Context
 
+from app.core.incident_reporting import report_exception
 from app.core.logging import logger, new_trace_id
 from app.db.session import run_after_commit
 
@@ -26,6 +27,7 @@ def _completed(task: asyncio.Task[None]) -> None:
     error = task.exception()
     if error is not None:
         new_trace_id()
+        report_exception(error, source="scheduler", operation="schedule-execution")
         logger.opt(exception=error).error("Schedule execution failed")
 
 

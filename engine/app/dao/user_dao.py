@@ -426,6 +426,17 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return [UserRecord.from_row(row) for row in rows]
 
+    async def list_active_platform_admins(self) -> Sequence[UserRecord]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('u')}, {self._identity_select()} "
+                + "FROM users u JOIN identities i ON i.id = u.identity_id "
+                + "WHERE u.role = %(role)s AND u.is_active IS TRUE AND i.is_active IS TRUE "
+                + "ORDER BY u.created_at ASC NULLS LAST, u.id ASC",
+                {"role": "platform_admin"},
+            )
+            return [_user_from_joined_row(row) for row in rows]
+
     async def list_org_admins_for_tenant(
         self, tenant_id: UUID, *, include_identity: bool = True
     ) -> Sequence[UserRecord]:

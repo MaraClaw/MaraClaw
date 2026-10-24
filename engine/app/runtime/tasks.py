@@ -5,6 +5,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Literal, TypeIs
 
+from app.core.incident_reporting import report_exception
 from app.core.logging import logger
 
 
@@ -19,10 +20,15 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task[object]]) -> None:
             logger.warning("[shutdown] Owned task failed: {}", result)
 
 
+class RequiredLoopExitedError(RuntimeError):
+    """A required ongoing task returned before runtime shutdown."""
+
+
 class OwnedTasks:
     def __init__(self) -> None:
         self.tasks: set[asyncio.Task[object]] = set()
         self.required: dict[str, tuple[asyncio.Task[object], bool]] = {}
+        self.closing: bool = False
 
     def start(
         self,
@@ -47,12 +53,16 @@ class OwnedTasks:
                 return False
         return True
 
-    @staticmethod
-    def _report(task: asyncio.Task[object]) -> None:
+    def _report(self, task: asyncio.Task[object]) -> None:
         if not task.cancelled() and (error := task.exception()) is not None:
+            report_exception(error, source="runtime", operation="owned-task")
             logger.error("[runtime] Background task {} failed: {}", task.get_name(), error)
+        elif not task.cancelled() and not self.closing:
+            if any(required is task and not finite for required, finite in self.required.values()):
+                report_exception(RequiredLoopExitedError(), source="runtime", operation="required-loop-exited")
 
     async def stop(self) -> None:
+        self.closing = True
         await cancel_tasks(self.tasks)
         self.tasks.clear()
 

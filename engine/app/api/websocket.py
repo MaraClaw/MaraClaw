@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 
+from app.core.incident_reporting import report_exception
 from app.core.json_types import json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -89,6 +90,7 @@ class ConnectionManager:
         try:
             await realtime_router.unregister_connection(agent_id=agent_id, websocket=websocket)
         except RedisError as error:
+            report_exception(error, source="websocket", operation="disconnect")
             logger.warning("[WS] Failed to unregister connection for agent {}: {}", agent_id, error)
 
     def _local_connections(self, agent_id: str) -> list[WebSocketConnection]:
@@ -114,6 +116,7 @@ class ConnectionManager:
                     continue
                 await ws.send_json(payload)
             except Exception as error:
+                report_exception(error, source="websocket", operation="pubsub-delivery")
                 logger.warning(f"[WS] Failed to send message to connected client: {error}")
 
     async def send_message(self, agent_id: str, message: RealtimeMessage):
@@ -266,7 +269,8 @@ class WebSocketChatHandler:
                 await self.websocket.close(code=code)
             except WebSocketDisconnect:
                 pass
-            except Exception:
+            except Exception as error:
+                report_exception(error, source="websocket", operation="chat-lifecycle")
                 logger.exception("[WS] Unexpected chat error")
                 await self.websocket.close(code=1011)
         except WebSocketDisconnect:
@@ -304,6 +308,7 @@ class WebSocketChatHandler:
             )
             logger.info(f"[WS] Loaded {len(self.history_messages)} history messages for session {self.conv_id}")
         except Exception as e:
+            report_exception(e, source="websocket", operation="load-history")
             logger.warning(f"[WS] History load failed (non-fatal): {e}")
 
     def _build_conversation_context(self) -> list[OpenAIMessage]:
@@ -396,7 +401,8 @@ class WebSocketChatHandler:
             except OpenClawUpdateGateError as gate:
                 await self.websocket.send_json({"type": "turn_rejected", **gate.rejection()})
                 continue
-            except GuestConfigWriteError:
+            except GuestConfigWriteError as error:
+                report_exception(error, source="websocket", operation="onboarding-prepare")
                 logger.warning("[WS] Guest config preparation failed for {}", self.agent_id)
                 await self.websocket.send_json(
                     {
@@ -425,7 +431,8 @@ class WebSocketChatHandler:
                     {"type": "turn_rejected", "reason": "quota_exceeded", "content": exc.message}
                 )
                 continue
-            except Exception:
+            except Exception as error:
+                report_exception(error, source="websocket", operation="onboarding-turn")
                 logger.exception("[WS] Turn transaction failed")
                 await self.websocket.send_json(
                     {
@@ -461,7 +468,8 @@ class WebSocketChatHandler:
             rejection.update(reason="no_company_model", content=str(exc))
         except OpenClawUpdateGateError as gate:
             rejection.update(gate.rejection())
-        except GuestConfigWriteError:
+        except GuestConfigWriteError as error:
+            report_exception(error, source="websocket", operation="submission-prepare")
             logger.warning("[WS] Guest config preparation failed for {}", self.agent_id)
             rejection.update(
                 reason="guest_config_failed", content="Guest configuration could not be updated. Please try again."
@@ -474,7 +482,8 @@ class WebSocketChatHandler:
             await self.websocket.send_json({"type": "error", "content": exc.detail})
             await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
             return False
-        except Exception:
+        except Exception as error:
+            report_exception(error, source="websocket", operation="submission-turn")
             logger.exception("[WS] Turn transaction failed")
             rejection.update(reason="enqueue_failed", content="Your message could not be sent. Please try again.")
         else:

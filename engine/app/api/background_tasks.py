@@ -5,6 +5,7 @@ import contextvars
 from collections.abc import Coroutine
 from typing import Any
 
+from app.core.incident_reporting import report_exception
 from app.core.logging import get_trace_id, logger, set_trace_id
 from app.db.session import run_after_commit
 
@@ -61,6 +62,7 @@ def schedule_background_task(
             logger.debug(f"Background task cancelled: {description}")
             return
         if error := completed_task.exception():
+            report_exception(error, source="background", operation="route-task")
             logger.opt(exception=error).error(f"Background task failed: {description}")
 
     def launch() -> None:

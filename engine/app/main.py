@@ -6,9 +6,11 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
 
 from app.config import get_settings
+from app.core.incident_reporting import report_exception
 from app.core.middleware import TraceIdMiddleware
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
@@ -41,6 +43,15 @@ async def public_base_url_not_configured(request: Request, exc: PublicBaseUrlNot
 @app.exception_handler(OpenClawUpdateGateError)
 async def openclaw_update_gate(request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unexpected_exception(request: Request, exc: Exception) -> PlainTextResponse:
+    route = request.scope.get("route")
+    operation = route.path if isinstance(route, Route) else "unmatched-route"
+    report_exception(exc, source="http", operation=operation)
+    # Starlette sends this response and rethrows the original to its server/test client.
+    return PlainTextResponse("Internal Server Error", status_code=500)
 
 
 app.include_router(readiness_router)
