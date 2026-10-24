@@ -2,15 +2,17 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { MutationObserver, QueryClient, type InfiniteData } from '@tanstack/react-query'
 
-import { notificationKeys, notificationListOptions, notificationReadOptions, notificationsReadAllOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
+import { notificationArchiveOptions, notificationKeys, notificationListOptions, notificationReadOptions, notificationRestoreOptions, notificationsReadAllOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
 import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
-import { notificationCategories, unreadNotificationCount, type NotificationCategory, type NotificationRow } from '../src/lib/notifications-api.ts'
+import { ApiError } from '../src/lib/http.ts'
+import { notificationCategories, notificationViews, unreadNotificationCount, type NotificationCategory, type NotificationRow, type NotificationView } from '../src/lib/notifications-api.ts'
 import type { UserOut } from '../src/lib/types/auth.ts'
 
-const first: NotificationRow = { id: 'first', title: 'First', type: 'autonomy_l2', is_read: false }
-const second: NotificationRow = { id: 'second', title: 'Second', type: 'approval_pending', is_read: false }
-const broadcast: NotificationRow = { id: 'broadcast', title: 'Broadcast', type: 'broadcast', is_read: false }
+const first: NotificationRow = { id: 'first', title: 'First', type: 'autonomy_l2', is_read: false, archived_at: null }
+const second: NotificationRow = { id: 'second', title: 'Second', type: 'approval_pending', is_read: false, archived_at: null }
+const broadcast: NotificationRow = { id: 'broadcast', title: 'Broadcast', type: 'broadcast', is_read: false, archived_at: null }
+const archivedAt = '2030-01-02T00:00:00Z'
 const user: UserOut = { id: 'member', email: 'member@example.com', display_name: 'Member', role: 'member', tenant_id: 'source', email_verified: true }
 
 function matches(row: NotificationRow, category: string) {
@@ -36,19 +38,24 @@ async function fixture(t: TestContext) {
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), 'http://fixture.test')
     const category = url.searchParams.get('category') ?? 'all'
+    const view = url.searchParams.get('view') ?? 'active'
     if (init?.method === 'POST') {
       if (failWrites) return Response.json({ detail: 'Unavailable' }, { status: 503 })
-      rows = rows.map((row) => ({ ...row, is_read: row.is_read || (url.pathname.endsWith('/read-all') ? matches(row, category) : url.pathname.includes(`/${row.id}/read`)) }))
+      if (url.pathname.endsWith('/archive') || url.pathname.endsWith('/restore')) {
+        rows = rows.map((row) => url.pathname.includes(`/${row.id}/`) ? { ...row, archived_at: url.pathname.endsWith('/archive') ? row.archived_at ?? archivedAt : null } : row)
+        return Response.json({ ok: true })
+      }
+      rows = rows.map((row) => ({ ...row, is_read: row.is_read || (url.pathname.endsWith('/read-all') ? row.archived_at === null && matches(row, category) : url.pathname.includes(`/${row.id}/read`)) }))
       return new Response(null, { status: 204 })
     }
     const filtered = rows.filter((row) => matches(row, category))
-    return Response.json(url.pathname.endsWith('/unread-count') ? { count: filtered.filter((row) => !row.is_read).length } : filtered)
+    return Response.json(url.pathname.endsWith('/unread-count') ? { count: filtered.filter((row) => row.archived_at === null && !row.is_read).length } : filtered.filter((row) => (row.archived_at === null) === (view === 'active')))
   })
   await Promise.all(notificationCategories.flatMap((category) => [
-    client.fetchInfiniteQuery(notificationListOptions(category)), client.fetchQuery(notificationUnreadOptions(category)),
+    ...notificationViews.map((view) => client.fetchInfiniteQuery(notificationListOptions(category, view))), client.fetchQuery(notificationUnreadOptions(category)),
   ]))
   const count = (category: NotificationCategory) => client.getQueryData(notificationKeys.unread(category))
-  const list = (category: NotificationCategory) => client.getQueryData<InfiniteData<readonly NotificationRow[]>>(notificationKeys.list(category))?.pages.flat()
+  const list = (category: NotificationCategory, view: NotificationView = 'active') => client.getQueryData<InfiniteData<readonly NotificationRow[]>>(notificationKeys.list(category, view))?.pages.flat()
   return { client, scope, store, count, list, failWrites: () => { failWrites = true } }
 }
 
@@ -130,3 +137,86 @@ test('a retired owner cannot commit read-all results into notification caches', 
   assert.deepEqual(list('all'), [first, second, broadcast])
   assert.equal(count('all'), 3)
 })
+
+test('duplicate archive refreshes every overlapping view and count without marking read', async (t) => {
+  // Given
+  const { client, scope, count, list } = await fixture(t)
+  const observer = new MutationObserver(client, fenceMutationOptions(scope, notificationArchiveOptions(client)))
+  // When
+  await observer.mutate(broadcast.id)
+  await observer.mutate(broadcast.id)
+  // Then
+  for (const category of ['all', 'social', 'broadcast'] as const) {
+    assert.equal(list(category)?.some((row) => row.id === broadcast.id), false)
+    assert.deepEqual(list(category, 'archived'), [{ ...broadcast, archived_at: archivedAt }])
+    assert.equal(count(category), category === 'all' ? 2 : 0)
+  }
+  assert.deepEqual(list('tool'), [first])
+  assert.equal(count('approval'), 1)
+})
+
+test('restoring an unread notification refreshes Active counts and removes it from Archived', async (t) => {
+  // Given
+  const { client, scope, count, list } = await fixture(t)
+  await new MutationObserver(client, fenceMutationOptions(scope, notificationArchiveOptions(client))).mutate(broadcast.id)
+  const observer = new MutationObserver(client, fenceMutationOptions(scope, notificationRestoreOptions(client)))
+  // When
+  await observer.mutate(broadcast.id)
+  await observer.mutate(broadcast.id)
+  // Then
+  for (const category of ['all', 'social', 'broadcast'] as const) {
+    assert.equal(list(category)?.find((row) => row.id === broadcast.id)?.is_read, false)
+    assert.deepEqual(list(category, 'archived'), [])
+    assert.equal(count(category), category === 'all' ? 3 : 1)
+  }
+})
+
+test('bulk read excludes archived unread notifications', async (t) => {
+  // Given
+  const { client, scope, count, list } = await fixture(t)
+  await new MutationObserver(client, fenceMutationOptions(scope, notificationArchiveOptions(client))).mutate(first.id)
+  // When
+  await new MutationObserver(client, fenceMutationOptions(scope, notificationsReadAllOptions(client))).mutate('all')
+  // Then
+  assert.deepEqual(list('tool', 'archived'), [{ ...first, archived_at: archivedAt }])
+  assert.equal(count('all'), 0)
+  assert.equal(list('all')?.every((row) => row.is_read), true)
+})
+
+for (const options of [notificationArchiveOptions, notificationRestoreOptions]) {
+  test(`${options.name} failure preserves both caches and counts`, async (t) => {
+    // Given
+    const { client, scope, count, list, failWrites } = await fixture(t)
+    const view = options === notificationRestoreOptions ? 'archived' : 'active'
+    if (view === 'archived') await new MutationObserver(client, fenceMutationOptions(scope, notificationArchiveOptions(client))).mutate(first.id)
+    const before = list('all', view)
+    const unread = count('all')
+    failWrites()
+    // When
+    await assert.rejects(new MutationObserver(client, fenceMutationOptions(scope, options(client))).mutate(first.id))
+    // Then
+    assert.deepEqual(list('all', view), before)
+    assert.equal(count('all'), unread)
+  })
+
+  for (const succeeds of [true, false]) {
+    test(`retired ${options.name} ${succeeds ? 'success' : 'failure'} cannot refresh any notification cache`, async (t) => {
+      // Given
+      const { client, scope, store, count, list } = await fixture(t)
+      const response = Promise.withResolvers<Response>()
+      const started = Promise.withResolvers<void>()
+      const fetch = t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
+      const before = list('all')
+      const rejected = assert.rejects(new MutationObserver(client, fenceMutationOptions(scope, options(client))).mutate(first.id), succeeds ? RetiredWorkspaceError : ApiError)
+      await started.promise
+      store.applySession(store.capture(), { access_token: 'replacement', user })
+      // When
+      response.resolve(succeeds ? Response.json({ ok: true }) : Response.json({ detail: 'Obsolete failure' }, { status: 503 }))
+      await rejected
+      // Then
+      assert.equal(fetch.mock.callCount(), 1)
+      assert.deepEqual(list('all'), before)
+      assert.equal(count('all'), 3)
+    })
+  }
+}

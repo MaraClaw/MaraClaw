@@ -1,23 +1,23 @@
 import type { QueryClient } from '@tanstack/react-query'
 
 import {
-  listNotifications, markAllNotificationsRead, markNotificationRead, unreadNotificationCount,
-  type NotificationCategory, type NotificationRow,
+  archiveNotification, listNotifications, markAllNotificationsRead, markNotificationRead, restoreNotification, unreadNotificationCount,
+  type NotificationCategory, type NotificationRow, type NotificationView,
 } from '../lib/notifications-api.ts'
 
 export const notificationKeys = {
   all: ['notifications'] as const,
-  list: (category: NotificationCategory) => ['notifications', 'list', category] as const,
+  list: (category: NotificationCategory, view: NotificationView = 'active') => ['notifications', 'list', category, view] as const,
   unread: (category: NotificationCategory) => ['notifications', 'unread', category] as const,
 }
 
 const pageSize = 50
 
-export function notificationListOptions(category: NotificationCategory) {
+export function notificationListOptions(category: NotificationCategory, view: NotificationView = 'active') {
   return {
-    queryKey: notificationKeys.list(category),
+    queryKey: notificationKeys.list(category, view),
     initialPageParam: 0,
-    queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) => listNotifications({ category, limit: pageSize, offset: pageParam, signal }),
+    queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) => listNotifications({ category, view, limit: pageSize, offset: pageParam, signal }),
     getNextPageParam: (lastPage: readonly NotificationRow[], _pages: readonly (readonly NotificationRow[])[], lastOffset: number) => lastPage.length === pageSize ? lastOffset + pageSize : undefined,
   }
 }
@@ -49,6 +49,22 @@ export function notificationsReadAllOptions(client: QueryClient) {
   return {
     scope: { id: 'notifications-read' },
     mutationFn: markAllNotificationsRead,
+    onSuccess: () => refreshNotifications(client),
+  }
+}
+
+export function notificationArchiveOptions(client: QueryClient) {
+  return {
+    scope: { id: 'notifications-read' },
+    mutationFn: archiveNotification,
+    onSuccess: () => refreshNotifications(client),
+  }
+}
+
+export function notificationRestoreOptions(client: QueryClient) {
+  return {
+    scope: { id: 'notifications-read' },
+    mutationFn: restoreNotification,
     onSuccess: () => refreshNotifications(client),
   }
 }

@@ -88,3 +88,117 @@ for (const status of [204, 503]) {
     await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
   })
 }
+
+test('a late Active next page cannot appear after switching to Archived', async ({ page }) => {
+  // Given
+  await prepareNotifications(page, [...Array.from({ length: 50 }, (_, index) => notice(`Active ${index}`, 'autonomy_l2')), { ...notice('Archived tool', 'autonomy_l2'), archived_at: '2030-01-02T00:00:00Z' }])
+  const requested = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  await page.route('**/api/notifications?category=tool&limit=50&offset=50&view=active', async (route) => {
+    requested.resolve()
+    await release.promise
+    await route.fulfill({ json: [notice('Obsolete Active page', 'autonomy_l2')] })
+  })
+  try {
+    await page.goto(inboxPath)
+    await page.getByLabel('Category', { exact: true }).selectOption('tool')
+    await page.getByRole('button', { name: 'Load more', exact: true }).click()
+    await requested.promise
+    // When
+    await page.getByRole('button', { name: 'Archived', exact: true }).click()
+    await expect(page.getByText('Archived tool', { exact: true })).toBeVisible()
+    release.resolve()
+    // Then
+    await expect(page.getByRole('button', { name: 'Archived', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('list', { name: 'Notifications' }).getByRole('listitem')).toHaveCount(1)
+    await expect(page.getByText('Obsolete Active page', { exact: true })).toHaveCount(0)
+  } finally {
+    release.resolve()
+  }
+})
+
+for (const action of ['archive', 'restore'] as const) {
+  const label = action === 'archive' ? 'Archive' : 'Restore'
+  test(`failed ${action} retains the row and count until a successful retry`, async ({ page }) => {
+    // Given
+    const fixture = await prepareNotifications(page, [{ ...notice('Move me', 'broadcast'), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
+    await page.goto(inboxPath)
+    if (action === 'restore') await page.getByRole('button', { name: 'Archived', exact: true }).click()
+    fixture.failWrites(true)
+    // When
+    await page.getByRole('button', { name: `${label} notification: Move me`, exact: true }).click()
+    // Then
+    await expect(page.getByRole('alert')).toContainText('Unable to move this notification')
+    await expect(page.getByRole('button', { name: 'Mark as read: Move me', exact: true })).toBeVisible()
+    await expect(page.getByText(`${action === 'archive' ? 1 : 0} unread in All`, { exact: true })).toBeVisible()
+    fixture.failWrites(false)
+    await page.getByRole('button', { name: `${label} notification: Move me`, exact: true }).click()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(page.getByRole('list', { name: 'Notifications' }).getByRole('listitem')).toHaveCount(0)
+    await expect(page.getByText(`${action === 'archive' ? 0 : 1} unread in All`, { exact: true })).toBeVisible()
+  })
+
+  for (const status of [200, 503]) {
+    test(`retired ${action} response ${status} cannot affect a replacement workspace`, async ({ page }) => {
+      // Given
+      const fixture = await prepareNotifications(page, [{ ...notice('Original move', 'broadcast'), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
+      const requested = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      await page.route(`**/api/notifications/Original%20move/${action}`, async (route) => {
+        requested.resolve()
+        await release.promise
+        await route.fulfill({ status, json: status === 200 ? { ok: true } : { detail: 'Obsolete write failed' } })
+      })
+      try {
+        await page.goto(inboxPath)
+        if (action === 'restore') await page.getByRole('button', { name: 'Archived', exact: true }).click()
+        await page.getByRole('button', { name: `${label} notification: Original move`, exact: true }).click()
+        await requested.promise
+        await writeFromOtherTab(page, replacementToken)
+        await expect(page.getByText(replacementNotice.title, { exact: true })).toBeVisible()
+        const before = fixture.requests.length
+        const completed = page.waitForEvent('requestfinished', { predicate: (request) => request.method() === 'POST' && request.url().endsWith(`/${action}`) })
+        // When
+        release.resolve()
+        await completed
+        // Then
+        await expect(page.getByRole('button', { name: `Archive notification: ${replacementNotice.title}`, exact: true })).toBeEnabled()
+        await expect(page.getByRole('alert')).toHaveCount(0)
+        await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
+        expect(fixture.requests.slice(before)).toEqual([])
+      } finally {
+        release.resolve()
+      }
+    })
+  }
+}
+
+test('archive completion refreshes all overlapping categories after the selected view changes', async ({ page }) => {
+  // Given
+  await prepareNotifications(page, [notice('Announcement', 'broadcast'), notice('Tool', 'autonomy_l2')])
+  const requested = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  await page.route('**/api/notifications/Announcement/archive', async (route) => {
+    requested.resolve()
+    await release.promise
+    await route.fallback()
+  })
+  try {
+    await page.goto(inboxPath)
+    const category = page.getByLabel('Category', { exact: true })
+    await category.selectOption('social')
+    await category.selectOption('broadcast')
+    await page.getByRole('button', { name: 'Archive notification: Announcement', exact: true }).click()
+    await requested.promise
+    // When
+    await page.getByRole('button', { name: 'Archived', exact: true }).click()
+    await category.selectOption('social')
+    release.resolve()
+    // Then
+    await expect(page.getByRole('button', { name: 'Restore notification: Announcement', exact: true })).toBeEnabled()
+    await expect(page.getByText('0 unread in Social', { exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
+  } finally {
+    release.resolve()
+  }
+})

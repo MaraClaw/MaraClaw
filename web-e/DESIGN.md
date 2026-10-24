@@ -24,6 +24,8 @@ Writable chat starts with the thread, without a shared-conversation access notic
 Chat attachments use a neutral rounded-2xl card inside the existing message, with a wrapping filename and explicit Preview/Download buttons (44px targets). Preview uses a Radix modal with a titled header, description, Close action and independently scrolling body, inset 4 on phones and capped at max-w-4xl on desktop. Native images fit the viewport; PDFs load on demand and render one navigable, selectable-text page at a time. DOCX/PPTX use one navigable page/slide and selectable text; XLSX keeps a bounded-height scrollable grid with worksheet navigation. Document canvases preserve authored white paper/ink in either app theme. Loading, unavailable, oversized and unsupported states retain Download and Close. Renderers are browser-local; the Files tab is unchanged.
 
 ## 6. Motion & interaction
+Inbox uses labelled Active/Archived pressed buttons above the retained Category select. Switching view restarts at the first page. Archive/Restore are reversible, text-labelled outline actions (44px minimum), with no confirmation dialog. Read state remains separate: unread rows use an accent wash with a neutral hairline; bulk-read and counts cover Active only. Archived rows retain Open and individual Mark as read actions. Live feedback describes moves and errors without taking focus from the user's view selector.
+
 Reuse existing button hover/press/focus states; no new animation. Async actions disable immediately. Status is a polite atomic live region, errors use alert, and unknown-duration updates use words rather than invented percentage progress. An upgrade begins only after an explicit click, never on notice opening or agent start.
 
 ## 7. Depth & surface

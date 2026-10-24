@@ -1,19 +1,19 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
-import { notificationListOptions, notificationReadOptions, notificationsReadAllOptions, notificationUnreadOptions } from '@/hooks/notification-options'
-import { useInfiniteQuery, useMutation, useQuery } from '@/hooks/session-workspace'
+import { notificationArchiveOptions, notificationKeys, notificationListOptions, notificationReadOptions, notificationRestoreOptions, notificationsReadAllOptions, notificationUnreadOptions } from '@/hooks/notification-options'
+import { useInfiniteQuery, useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { userFacingRequestError } from '@/lib/http'
-import { notificationCategories, notificationCategorySchema, type NotificationCategory } from '@/lib/notifications-api'
+import { notificationCategories, notificationCategorySchema, notificationViews, type NotificationCategory, type NotificationView } from '@/lib/notifications-api'
 import { relativeTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal'
 const categoryLabels = { all: 'All', tool: 'Tools', approval: 'Approvals', social: 'Social', broadcast: 'Broadcasts' } satisfies Record<NotificationCategory, string>
+const viewLabels = { active: 'Active', archived: 'Archived' } satisfies Record<NotificationView, string>
 
 function memberLink(link?: string | null): string | null {
   if (!link) return null
@@ -23,42 +23,57 @@ function memberLink(link?: string | null): string | null {
 
 export function NotificationsPage() {
   const [category, setCategory] = useState<NotificationCategory>('all')
-  const queryClient = useQueryClient()
-  const query = useInfiniteQuery(notificationListOptions(category))
+  const [view, setView] = useState<NotificationView>('active')
+  const scope = useWorkspaceSession()
+  const query = useInfiniteQuery(notificationListOptions(category, view))
   const unreadQuery = useQuery(notificationUnreadOptions(category))
-  const markRead = useMutation(notificationReadOptions(queryClient))
-  const markAll = useMutation(notificationsReadAllOptions(queryClient))
-  const pending = markRead.isPending || markAll.isPending
+  const markRead = useMutation(notificationReadOptions(scope.client))
+  const markAll = useMutation(notificationsReadAllOptions(scope.client))
+  const archive = useMutation(notificationArchiveOptions(scope.client))
+  const restore = useMutation(notificationRestoreOptions(scope.client))
+  const pending = markRead.isPending || markAll.isPending || archive.isPending || restore.isPending
   const hasUnread = (unreadQuery.data ?? 0) > 0
   const items = query.data?.pages.flat() ?? []
 
   function resetErrors() {
-    markRead.reset()
-    markAll.reset()
+    if (!markRead.isPending) markRead.reset()
+    if (!markAll.isPending) markAll.reset()
+    if (!archive.isPending) archive.reset()
+    if (!restore.isPending) restore.reset()
   }
 
   return (
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">Inbox</h1>
-        <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
+        {view === 'active' ? <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
           {markAll.isPending ? 'Marking all read…' : 'Mark all read'}
-        </Button>
+        </Button> : null}
       </div>
+      <fieldset className="flex flex-wrap gap-2">
+        <legend className="sr-only">Inbox view</legend>
+        {notificationViews.map((value) => <Button key={value} variant={view === value ? 'secondary' : 'outline'} className={actionClass} aria-pressed={view === value} onClick={scope.effect(() => {
+          if (view === value) return
+          resetErrors()
+          void scope.client.resetQueries({ queryKey: notificationKeys.list(category, value), exact: true })
+          setView(value)
+        })}>{viewLabels[value]}</Button>)}
+      </fieldset>
       <div className="space-y-2">
         <Label htmlFor="notification-category">Category</Label>
         <Select id="notification-category" value={category} onChange={(event) => { resetErrors(); setCategory(notificationCategorySchema.parse(event.currentTarget.value)) }}>
           {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
         </Select>
-        <p id="notification-bulk-scope" className="text-sm text-muted-foreground">Mark all read covers ALL notifications matching this category, including those not loaded.</p>
-        <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
+        <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? 'Mark all read covers ALL active notifications matching this category, including those not loaded.' : 'Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.'}</p>
+        <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking active unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
         {unreadQuery.isError ? <div className="space-y-2">
           <p role="alert" className="text-sm text-destructive">Unable to check unread notifications.</p>
-          <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={() => void unreadQuery.refetch()}>Retry unread count</Button>
+          <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={scope.effect(() => void unreadQuery.refetch())}>Retry unread count</Button>
         </div> : null}
       </div>
-      <p role="status" className="sr-only">{markRead.isSuccess ? 'Notification marked as read.' : markAll.isSuccess ? `All notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
+      <p role="status" aria-atomic="true" className="sr-only">{archive.isSuccess ? 'Notification archived. Its read status is unchanged.' : restore.isSuccess ? 'Notification restored to Active.' : markRead.isSuccess ? 'Notification marked as read.' : markAll.isSuccess ? `All active notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
       {markRead.isError || markAll.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(markRead.error ?? markAll.error, 'Unable to mark notifications as read. Try again.')}</p> : null}
+      {archive.isError || restore.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(archive.error ?? restore.error, 'Unable to move this notification. Try again.')}</p> : null}
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading notifications…</p> : null}
       {query.isError && !query.isFetchNextPageError ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')}</p>
@@ -67,7 +82,7 @@ export function NotificationsPage() {
       <ul aria-label="Notifications" className="space-y-2">
         {items.map((item) => {
           const link = memberLink(item.link)
-          return <li key={item.id} className={cn('space-y-3 rounded-xl border px-3 py-3', item.is_read ? 'border-border bg-card' : 'border-primary/30 bg-accent')}>
+          return <li key={item.id} className={cn('space-y-3 rounded-xl border border-border px-3 py-3', item.is_read ? 'bg-card' : 'bg-accent')}>
             <div className="space-y-1">
               <p className="text-sm font-medium">{item.title}</p>
               {item.body ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}
@@ -78,6 +93,11 @@ export function NotificationsPage() {
               {!item.is_read ? <Button variant="ghost" className={actionClass} disabled={pending} aria-label={`Mark as read: ${item.title}`} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
                 {markRead.isPending && markRead.variables === item.id ? 'Marking as read…' : 'Mark as read'}
               </Button> : <span className="text-xs text-muted-foreground">Read</span>}
+              {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Archive notification: ${item.title}`} onClick={() => { resetErrors(); archive.mutate(item.id) }}>
+                {archive.isPending && archive.variables === item.id ? 'Archiving…' : 'Archive'}
+              </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Restore notification: ${item.title}`} onClick={() => { resetErrors(); restore.mutate(item.id) }}>
+                {restore.isPending && restore.variables === item.id ? 'Restoring…' : 'Restore'}
+              </Button>}
             </div>
           </li>
         })}
@@ -87,7 +107,7 @@ export function NotificationsPage() {
         {query.isFetchingNextPage ? 'Loading more…' : query.isFetchNextPageError ? 'Retry load more' : 'Load more'}
       </Button> : null}
       {query.isSuccess && items.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
-        <p className="text-sm text-muted-foreground">No notifications yet. Refresh to check for new updates.</p>
+        <p className="text-sm text-muted-foreground">{view === 'active' ? 'No active notifications yet. Refresh to check for new updates.' : 'No archived notifications in this category. Archive a notification from Active to keep it here.'}</p>
         <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh Inbox</Button>
       </div> : null}
     </div>
