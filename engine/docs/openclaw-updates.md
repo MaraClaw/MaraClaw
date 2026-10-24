@@ -36,7 +36,7 @@ Guest-visible writes (`files.py` PUT/DELETE content, restore, import-skill/clawh
 
 ## Cutover (worker role only)
 
-`openclaw_update_worker` polls active runs every 5 s. Exclusion is the per-agent `setup_workspace_lock` flock on the shared filesystem: whoever holds it owns the run. No leases, heartbeats or fencing.
+`openclaw_update_worker` polls active runs every 5 s. A separate task reconciles successful-run artifacts at startup and every 60 s, paging through runs completed in the last 30 days without blocking active polling. Exclusion is the per-agent `setup_workspace_lock` flock on the shared filesystem: whoever holds it owns the run. No leases, heartbeats or fencing.
 
 1. Pending: fresh `docker pull` of the configured image, capture its immutable id. Failure → `pull_failed`, old guest untouched. Agent not desired-running → `not_running`.
 2. Under the exclusive lock, journal old container id/image/port, target, parked name and snapshot path in `journal`, CAS `pending → cutover`.
@@ -48,6 +48,8 @@ Guest-visible writes (`files.py` PUT/DELETE content, restore, import-skill/clawh
 
 Ordinary starts use `agents.openclaw_image_id` when set, else the configured image. Orphan sweeps only remove containers whose agent row is gone, so parked containers of existing agents are safe.
 
+Successful-run reconciliation takes that agent's exclusive lock, re-reads the succeeded run and skips agents with a pending or cutover run. It removes only the journaled old container after checking its ownership label and protecting the agent's current container, then drops the full-run-id snapshot. Repeating cleanup is safe; failed runs, including `rollback_failed`, retain their artifacts.
+
 ## Known limits
 
-Cleanup after success is best effort (a crash right after publication can leak a parked container or snapshot directory until the agent is deleted). Large workspaces make the snapshot copy slow. A turn that passed the gate just before a run may still rewrite `openclaw.json` (atomic replace of a regenerated file); rollback can revert it and the next turn regenerates it. Multiple workers serialize on the flock; one worker processes runs sequentially.
+Cleanup after success is best effort, with reconciliation retrying recent succeeded runs; artifacts outside the 30-day lookback need operator attention. Large workspaces make the snapshot copy slow. A turn that passed the gate just before a run may still rewrite `openclaw.json` (atomic replace of a regenerated file); rollback can revert it and the next turn regenerates it. Multiple workers serialize on the flock; one worker processes runs sequentially.

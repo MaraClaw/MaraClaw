@@ -14,9 +14,11 @@ Scope: message bodies, attachment dialogs, native download controls, local previ
 - `markdown.tsx`: `ChatMarkdown`, limited escaped markup rendering.
 - `message-content.tsx`: `ChatMessageContent`, message text and attachment-card composition.
 - `office-viewer.ts`: `createOfficeViewer` and `NavigableOfficeViewer`, uniform Office adapter.
+- `skill-mention-input.tsx`: native composer and installed-skill picker; accent chips are an aria-hidden, noninteractive background mirror, never a second editor.
 
 ## Invariants
 
+- Chip recognition shares `resolveSkillMentionSegments` with submission resolution. Keep both text layers' metrics, wrapping, padding and scrollbar geometry identical; native textarea owns text, selection, caret and scrolling.
 - Preserve library ownership at the existing import seams:
   card/message-content use `@/lib/chat/message`; download uses `@/lib/workspace-api` and `@/lib/http`;
   image/preview use `@/lib/attachment-preview-api`, preview also uses `@/lib/http`;

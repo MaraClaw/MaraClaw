@@ -33,7 +33,7 @@ const turnAcceptedSchema = eventSchema.extend({
 const turnRejectedSchema = eventSchema.extend({
   type: z.literal('turn_rejected'),
   client_submission_id: z.uuid(),
-  reason: z.enum(['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed',
+  reason: z.enum(['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed', 'guest_config_failed',
     'invalid_submission_id', 'submission_conflict', 'invalid_attachments', 'openclaw_update_required', 'openclaw_update_in_progress']),
   content: z.string(),
   notice_id: z.uuid().optional(),

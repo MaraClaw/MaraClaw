@@ -76,48 +76,11 @@ async def get_agent_expiry_reply(agent_name: str) -> str:
 # ── Agent LLM call quota ───────────────────────────────────────────
 
 
-async def check_agent_llm_quota(agent_id: uuid.UUID) -> None:
-    """Check if agent has remaining daily LLM calls."""
-    agent = await agent_dao.get(agent_id)
-    if not agent:
-        return
-
-    now = datetime.now(UTC)
-
-    # Daily reset
-    if agent.llm_calls_reset_at and now.date() > agent.llm_calls_reset_at.date():
-        agent = (
-            await agent_dao.update(
-                db_obj=agent,
-                obj_in={"llm_calls_today": 0, "llm_calls_reset_at": now},
-            )
-            or agent
-        )
-
-    if agent.llm_calls_today >= agent.max_llm_calls_per_day:
+async def consume_agent_llm_call(agent_id: uuid.UUID) -> None:
+    if await agent_dao.consume_llm_call(agent_id) is None:
         raise QuotaExceeded(
-            f"Agent '{agent.name}' has reached daily LLM call limit "
-            + f"({agent.llm_calls_today}/{agent.max_llm_calls_per_day}).",
+            "Agent has reached its daily LLM call limit.",
             quota_type="agent_llm",
-        )
-
-
-async def increment_agent_llm_usage(agent_id: uuid.UUID) -> None:
-    """Increment agent's daily LLM call counter."""
-    agent = await agent_dao.get(agent_id)
-    if not agent:
-        return
-
-    now = datetime.now(UTC)
-    if not agent.llm_calls_reset_at or now.date() > agent.llm_calls_reset_at.date():
-        _ = await agent_dao.update(
-            db_obj=agent,
-            obj_in={"llm_calls_today": 1, "llm_calls_reset_at": now},
-        )
-    else:
-        _ = await agent_dao.update(
-            db_obj=agent,
-            obj_in={"llm_calls_today": (agent.llm_calls_today or 0) + 1},
         )
 
 

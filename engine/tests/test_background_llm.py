@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.services.llm import caller
 from app.services.llm.background_guard import BackgroundCallOutcome, ScheduleLeaseLostError
@@ -113,6 +114,7 @@ def background_case(
     monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", fresh)
     monkeypatch.setattr(caller, "record_token_usage", record)
     monkeypatch.setattr(caller, "execute_tool", execute)
+    monkeypatch.setattr(agent_dao, "consume_llm_call", lambda _agent_id: _async_return(agent))
     return state
 
 

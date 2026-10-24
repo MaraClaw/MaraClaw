@@ -22,7 +22,7 @@ async def test_webhook_waits_for_acceptance_and_retries_failure(monkeypatch, kin
     key = str(uuid4())
     config = SimpleNamespace(verification_token="token", encrypt_key="key")
     request = Request(
-        {"type": "http"},
+        {"type": "http", "headers": []},
         AsyncMock(
             return_value={
                 "type": "http.request",

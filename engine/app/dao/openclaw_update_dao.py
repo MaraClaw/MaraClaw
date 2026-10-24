@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ from app.records.openclaw_update import OpenClawUpdateNoticeRecord, OpenClawUpda
 
 _NOTICE_COLUMNS = ("id", "request_id", "title", "body", "mandatory", "recipients", "created_by", "created_at")
 _RUN_COLUMNS = ("id", "notice_id", "agent_id", "requested_by", "state", "failure_code", "journal", "created_at")
+SUCCEEDED_SWEEP_LIMIT = 100
 
 # A notice is outstanding for an agent when it is newer than the agent and no
 # successful upgrade for the same or a newer notice exists.
@@ -181,6 +183,17 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM openclaw_update_runs "
                 + "WHERE state IN ('pending', 'cutover') ORDER BY created_at, id"
+            )
+            return [OpenClawUpdateRunRecord.from_row(row) for row in rows]
+
+    async def list_recent_succeeded(self, since: datetime, after: UUID | None) -> Sequence[OpenClawUpdateRunRecord]:
+        """Bounded keyset page by completion time, not the run's creation time."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM openclaw_update_runs "
+                + "WHERE state = 'succeeded' AND updated_at >= %(since)s "
+                + "AND (%(after)s::uuid IS NULL OR id > %(after)s) ORDER BY id LIMIT %(limit)s",
+                {"since": since, "after": after, "limit": SUCCEEDED_SWEEP_LIMIT},
             )
             return [OpenClawUpdateRunRecord.from_row(row) for row in rows]
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 from fastapi import HTTPException
 
@@ -16,7 +17,7 @@ from app.api import agents as agents_api, files as files_api
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services import agent_stops, openclaw_update_exclusion as exclusion
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 
 
@@ -54,6 +55,31 @@ async def test_write_is_rejected_immediately_while_a_run_is_active(gate: Gate):
             entered = True
     assert not entered
     assert gate.checks == 1
+
+
+async def test_contended_shared_write_times_out_without_entering_or_leaking_the_lock(gate, tmp_path, monkeypatch):
+    # Given an exclusive holder and a zero-budget shared acquisition.
+    agent_id = uuid.uuid4()
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
+    async with setup_workspace_lock(tmp_path / str(agent_id)):
+        # When a guest writer attempts to enter.
+        with pytest.raises(WorkspaceLockTimeoutError):
+            async with exclusion.guest_write_section(agent_id):
+                pytest.fail("a contended writer must not enter")
+    # Then the failed acquisition left no held shared descriptor or locked recheck.
+    assert gate.checks == 1
+    async with setup_workspace_lock(tmp_path / str(agent_id), timeout_seconds=0):
+        pass
+
+
+async def test_shared_wait_budget_does_not_limit_the_acquired_write(gate, monkeypatch):
+    # Given an available lock with no acquisition wait budget.
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
+    # When the acquired write yields to the event loop.
+    async with exclusion.guest_write_section(uuid.uuid4()):
+        await anyio.lowlevel.checkpoint()
+    # Then only acquisition was bounded; the body and gate recheck completed.
+    assert gate.checks == 2
 
 
 async def test_writer_queued_behind_the_cutover_lock_rechecks_and_never_writes_into_the_snapshot_window(

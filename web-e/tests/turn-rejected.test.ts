@@ -59,6 +59,47 @@ for (const frame of [
   })
 }
 
+test('socket guest_config_failed restores a retryable draft with configuration recovery guidance', async (t) => {
+  // Given
+  const f = fixture()
+  const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+  const conn = connectAgentChat('agent-a', 'thread-a', { ...f.handlers, submissions })
+  t.after(conn.close)
+  await Promise.resolve()
+  const socket = f.socket()
+  socket.open()
+  const envelope = submission('Please review these notes')
+  conn.send(envelope)
+  const draft = '  Please review these notes\n'
+  const lines: ChatLine[] = [{ role: 'user', content: envelope.content, composerText: draft,
+    client_submission_id: firstSubmission, submission: envelope, pending: true }]
+  const frame = { type: 'turn_rejected', reason: 'guest_config_failed',
+    content: 'This agent\'s configuration could not be prepared.', client_submission_id: firstSubmission }
+
+  // When
+  socket.frame(JSON.stringify(frame))
+  const event = f.events[0]
+  assert.ok(event && isTurnRejected(event))
+  const recovery = recoverRejectedTurn(lines, event)
+
+  // Then
+  assert.deepEqual(f.events, [frame])
+  assert.deepEqual(submissions.pending(), [])
+  assert.equal(recovery.matched, true)
+  assert.equal(recovery.restoredText, draft)
+  assert.equal(restoreComposerDraft('New typing', recovery.restoredText), `${draft}\n\nNew typing`)
+  assert.equal(recovery.lines[0]?.delivery, 'rejected')
+  assert.equal(recovery.lines[0]?.pending, false)
+  assert.equal(recovery.lines[0]?.retryable, true)
+  assert.equal(recovery.lines[0]?.submission, envelope)
+  assert.ok(recovery.notice.includes(frame.content))
+  assert.match(recovery.notice, /wait.*retry/i)
+  assert.match(recovery.notice, /ask an admin.*configuration/i)
+  assert.equal(socket.readyState, 1)
+  assert.equal(socket.closes, 0)
+  assert.deepEqual(f.codes, [])
+})
+
 test('rejection marks only its correlated submission and preserves a newer equal-text turn', () => {
   // Given
   const previous: ChatLine = { role: 'user', content: 'question', client_submission_id: secondSubmission, pending: true }
@@ -117,7 +158,7 @@ for (const [current, recovered, expected] of [
   })
 }
 
-for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed'] as const) {
+for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'enqueue_failed', 'guest_config_failed'] as const) {
   test(`socket ${reason} recovery survives history refresh and allows a retry on the same connection`, async (t) => {
     // Given
     const f = fixture()

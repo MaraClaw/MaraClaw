@@ -282,10 +282,10 @@ class GeminiClient(LLMClient):
 
         payload: dict[str, Any] = {
             "contents": contents or [{"role": "user", "parts": [{"text": ""}]}],
-            "generationConfig": {
-                "temperature": temperature,
-            },
+            "generationConfig": {},
         }
+        if temperature is not None:
+            payload["generationConfig"]["temperature"] = temperature
 
         if max_tokens not in (None, 0):
             payload["generationConfig"]["maxOutputTokens"] = max_tokens

@@ -83,6 +83,51 @@ for (const reason of ['no_company_model', 'quota_exceeded', 'enqueue_failed', 'a
   })
 }
 
+test('onboarding guest_config_failed gives recovery guidance and permits retry without rejecting ordinary drafts', async (t) => {
+  // Given
+  const f = fixture()
+  const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+  const conn = connectAgentChat('agent-a', 'thread-a', { ...f.handlers, submissions })
+  t.after(conn.close)
+  await Promise.resolve()
+  const socket = f.socket()
+  socket.open()
+  conn.send({ kind: 'onboarding_trigger' })
+  const envelope = submission('My ordinary draft')
+  conn.send(envelope)
+  const lines: ChatLine[] = [
+    { role: 'user', content: 'Legacy pending row', pending: true },
+    { role: 'user', content: envelope.content, client_submission_id: firstSubmission, submission: envelope, pending: true },
+  ]
+  const frame = { type: 'turn_rejected', reason: 'guest_config_failed',
+    content: 'This agent\'s configuration could not be prepared.' }
+
+  // When
+  socket.frame(JSON.stringify(frame))
+  const event = f.events[0]
+  assert.ok(event && isTurnRejected(event))
+  const recovery = recoverRejectedTurn(lines, event)
+  conn.send({ kind: 'onboarding_trigger' })
+
+  // Then
+  assert.deepEqual(f.events, [frame])
+  assert.deepEqual(submissions.pending(), [envelope])
+  assert.deepEqual(recovery.lines, lines)
+  assert.equal(recovery.matched, false)
+  assert.equal(recovery.restoredText, '')
+  assert.match(recovery.notice, /^Onboarding could not start\./)
+  assert.ok(recovery.notice.includes(frame.content))
+  assert.match(recovery.notice, /wait.*retry/i)
+  assert.match(recovery.notice, /ask an admin.*configuration/i)
+  assert.equal(socket.readyState, 1)
+  assert.equal(socket.closes, 0)
+  assert.equal(f.sockets.length, 1)
+  assert.deepEqual(f.codes, [])
+  assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [
+    { kind: 'onboarding_trigger' }, envelope, { kind: 'onboarding_trigger' },
+  ])
+})
+
 for (const frame of [
   { type: 'turn_rejected', reason: 'enqueue_failed', content: 'Blocked', client_submission_id: 'invalid' },
   { type: 'turn_rejected', reason: 'enqueue_failed', content: 'Blocked', client_submission_id: null },

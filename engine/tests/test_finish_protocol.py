@@ -1,9 +1,16 @@
 import json
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.dao.agent_dao import agent_dao
 from app.records.llm import LLMModelRecord
+
+
+@pytest.fixture(autouse=True)
+def allow_daily_quota(monkeypatch):
+    monkeypatch.setattr(agent_dao, "consume_llm_call", AsyncMock(return_value=object()))
 
 
 class FakeStreamClient:
@@ -88,7 +95,7 @@ def test_finish_tool_schema_is_default_and_requires_content():
     assert FINISH_TOOL_DEFINITION["function"]["parameters"].get("required") == ["content"]
     assert FINISH_TOOL_SEED["name"] == "finish"
     assert FINISH_TOOL_SEED["is_default"] is True
-    assert FINISH_TOOL_SEED["parameters_schema"]["required"] == ["content"]
+    assert FINISH_TOOL_SEED["parameters_schema"].get("required") == ["content"]
 
 
 def test_find_finish_call_validates_arguments():

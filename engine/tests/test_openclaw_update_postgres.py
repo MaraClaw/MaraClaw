@@ -449,7 +449,7 @@ async def _executor_env(db: DbConnection, tmp_path):
     run = await runs.create_pending(notice_id=notice.id, agent_id=agent_id, requested_by=None)
     assert run is not None
     docker = FakeDocker()
-    docker.containers["old"] = FakeContainer("old", guest_container_name(agent_id), OLD_IMAGE)
+    docker.containers["old"] = FakeContainer("old", guest_container_name(agent_id), OLD_IMAGE, agent_id=str(agent_id))
     manager = FakeManager(docker, Path(tmp_path))
     (manager._agent_dir(agent_id) / "workspace").mkdir(parents=True)
     executor = UpgradeExecutor(PostgresUpgradeStore(), docker, manager, ready_timeout=0.05, ready_interval=0)
@@ -514,3 +514,36 @@ async def test_failing_a_pending_run_never_terminates_one_already_in_cutover(db:
     assert await one(db, "SELECT state FROM openclaw_update_runs WHERE id = %(id)s", id=run.id) == "cutover"
     with pytest.raises(OpenClawUpdateInProgressError):
         await assert_no_active_run(agent_id)
+
+
+async def test_recent_succeeded_query_is_bounded_paged_and_uses_completion_time(db: DbConnection) -> None:
+    # Given 101 recent successes created long ago, an old success, a failed rollback and an active run.
+    tenant_id = await tenant(db)
+    agent_id = await agent(db, tenant_id, await member(db, tenant_id))
+    since = datetime(2026, 1, 1, tzinfo=UTC)
+    for index in range(1, 105):
+        notice, _ = await publish(False)
+        state = "failed" if index == 103 else "pending" if index == 104 else "succeeded"
+        await db.execute(
+            "INSERT INTO openclaw_update_runs "
+            "(id, notice_id, agent_id, state, failure_code, created_at, updated_at) "
+            "VALUES (%(id)s, %(notice)s, %(agent)s, %(state)s, %(failure)s, %(created)s, %(updated)s)",
+            {
+                "id": UUID(int=index),
+                "notice": notice.id,
+                "agent": agent_id,
+                "state": state,
+                "failure": "rollback_failed" if index == 103 else None,
+                "created": since - timedelta(days=90),
+                "updated": since - timedelta(days=1) if index == 1 else since,
+            },
+        )
+    # When the production store and DAO traverse bounded keyset pages at the exact time boundary.
+    first = await PostgresUpgradeStore().list_recent_succeeded(since, None)
+    second = await runs.list_recent_succeeded(since, first[-1].id)
+    # Then creation time does not hide recent completion, nor do other states enter either page.
+    assert [run.id.int for run in first] == list(range(2, 102))
+    assert [run.id.int for run in second] == [102]
+    active = await PostgresUpgradeStore().active_for_agent(agent_id)
+    assert active is not None
+    assert active.id == UUID(int=104)

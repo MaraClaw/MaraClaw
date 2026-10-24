@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from python_on_whales.exceptions import DockerException
 
+from app.dao.openclaw_update_dao import SUCCEEDED_SWEEP_LIMIT
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
 from app.services.agent_manager import guest_container_name
@@ -102,6 +104,7 @@ class FakeManager:
 
     def __init__(self, docker: FakeDocker, root: Path) -> None:
         self.docker: FakeDocker = docker
+        self.docker_client: FakeDocker = docker
         self.root: Path = root
         self.starts: list[tuple[str, bool]] = []
         self.fail_start: bool = False
@@ -140,9 +143,25 @@ class FakeStore:
     agents: dict[uuid.UUID, AgentRecord]
     runs: dict[uuid.UUID, OpenClawUpdateRunRecord]
     requeued: list[uuid.UUID] = field(default_factory=list[uuid.UUID])
+    updated_at: dict[uuid.UUID, datetime] = field(default_factory=dict[uuid.UUID, datetime])
 
     async def list_active(self) -> list[OpenClawUpdateRunRecord]:
         return [run for run in self.runs.values() if run.active]
+
+    async def list_recent_succeeded(self, since: datetime, after: uuid.UUID | None) -> list[OpenClawUpdateRunRecord]:
+        return sorted(
+            (
+                run
+                for run in self.runs.values()
+                if run.state == "succeeded"
+                and self.updated_at.get(run.id, run.created_at or since) >= since
+                and (after is None or run.id > after)
+            ),
+            key=lambda run: run.id,
+        )[:SUCCEEDED_SWEEP_LIMIT]
+
+    async def active_for_agent(self, agent_id: uuid.UUID) -> OpenClawUpdateRunRecord | None:
+        return next((run for run in self.runs.values() if run.agent_id == agent_id and run.active), None)
 
     async def get_run(self, run_id: uuid.UUID) -> OpenClawUpdateRunRecord | None:
         return self.runs.get(run_id)
@@ -197,6 +216,7 @@ class FakeStore:
             agent, container_id=new_container_id, container_port=port, openclaw_image_id=image_id, status="running"
         )
         self.runs[run_id] = replace(run, state="succeeded")
+        self.updated_at[run_id] = datetime.now(UTC)
         return True
 
     async def pin_image(self, agent_id: uuid.UUID, image_id: str) -> None:

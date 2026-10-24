@@ -20,6 +20,7 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_manager import agent_manager, guest_model_ref
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
@@ -31,6 +32,7 @@ from app.services.openclaw_hot_cache import (
     recently_ensured,
     set_cached_bundle,
 )
+from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
@@ -43,6 +45,10 @@ def _bundle_usable(bundle: ModelBundle | None) -> bool:
 
 class NoCompanyModelError(RuntimeError):
     """The tenant pool has no usable model for this OpenClaw guest."""
+
+
+class GuestConfigWriteError(RuntimeError):
+    """Turn preparation failed before the guest configuration was ready."""
 
 
 def requires_primary(messages: Sequence[GatewayMessageRecord]) -> bool:
@@ -102,7 +108,7 @@ async def prepare_openclaw_message(
     content: str,
     history: list[OpenAIMessage] | None = None,
 ) -> PreparedOpenClawMessage:
-    """Ensure models and rewrite guest config before the destination transaction.
+    """Ensure models and rewrite guest config before queue insertion.
 
     Raises ``OpenClawUpdateGateError`` before any config or model side effect.
     """
@@ -129,15 +135,19 @@ async def prepare_openclaw_message(
     pending = await gateway_message_dao.list_pending(agent.id)
     apply_model = applied_guest_model(choice.slot, choice.model, bundle, pending)
     try:
-        _ = agent_manager.write_guest_config(
-            agent,
-            primary=bundle.primary,
-            secondary=bundle.secondary,
-            fallback=bundle.fallback,
-            selected=apply_model,
-        )
-    except Exception as exc:
-        logger.warning("[OpenClaw] guest config write failed for {}: {}", agent.id, exc)
+        async with guest_write_section(agent.id):
+            try:
+                _ = agent_manager.write_guest_config(
+                    agent,
+                    primary=bundle.primary,
+                    secondary=bundle.secondary,
+                    fallback=bundle.fallback,
+                    selected=apply_model,
+                )
+            except Exception as exc:
+                raise GuestConfigWriteError("Guest configuration could not be updated. Please try again.") from exc
+    except WorkspaceLockTimeoutError as exc:
+        raise GuestConfigWriteError("Guest configuration could not be updated. Please try again.") from exc
     return PreparedOpenClawMessage(
         agent, content, choice.slot, guest_model_ref(choice.model), choice.complexity, choice.reason
     )

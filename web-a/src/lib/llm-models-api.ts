@@ -1,5 +1,13 @@
 import { apiRequest } from '@/lib/http'
 
+export {
+  REASONING_EFFORTS,
+  isReasoningEffort,
+  reasoningEffortLabel,
+  reasoningEffortsFor,
+  type ReasoningEffort,
+} from '@/lib/reasoning-efforts'
+
 export type LlmProvider = {
   provider: string
   display_name: string
@@ -9,37 +17,6 @@ export type LlmProvider = {
   reasoning_efforts?: string[]
   supports_tool_choice: boolean
   default_max_tokens: number
-}
-
-/** Always available in the Models form, even if a stale engine omits it. */
-export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh'] as const
-
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
-
-const PROVIDER_REASONING_EFFORTS: Record<string, readonly string[]> = {
-  openai: REASONING_EFFORTS,
-  'openai-response': REASONING_EFFORTS,
-  azure: REASONING_EFFORTS,
-  grok: REASONING_EFFORTS,
-  openrouter: REASONING_EFFORTS,
-  anthropic: REASONING_EFFORTS,
-  gemini: ['none', 'low', 'medium', 'high'],
-  deepseek: REASONING_EFFORTS,
-  qwen: REASONING_EFFORTS,
-}
-
-export function reasoningEffortLabel(effort: string): string {
-  if (effort === 'none') return 'None'
-  if (effort === 'xhigh') return 'Extra High'
-  if (effort === 'low') return 'Low'
-  if (effort === 'medium') return 'Medium'
-  if (effort === 'high') return 'High'
-  return effort
-}
-
-export function reasoningEffortsFor(provider: string, fromApi?: string[]): string[] {
-  if (fromApi && fromApi.length > 0) return fromApi
-  return [...(PROVIDER_REASONING_EFFORTS[provider] ?? REASONING_EFFORTS)]
 }
 
 export const GROK_PROVIDER: LlmProvider = {

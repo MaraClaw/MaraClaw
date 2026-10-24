@@ -1,6 +1,6 @@
 """Canonical reasoning-effort mapping for provider-native request fields.
 
-Org admins pick one of ``none`` / ``low`` / ``medium`` / ``high`` / ``xhigh``.
+Org admins pick one of ``none`` / ``low`` / ``medium`` / ``high`` / ``xhigh`` / ``max`` / ``ultra``.
 Each provider gets a different request shape (and some clamp levels they do
 not expose). This module is the only place those translations live.
 """
@@ -12,9 +12,9 @@ from typing import Literal
 from app.core.json_types import JsonObject
 from app.services.llm.registry import normalize_provider
 
-ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "max", "ultra"]
 
-CANONICAL_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = ("none", "low", "medium", "high", "xhigh")
+CANONICAL_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = ("none", "low", "medium", "high", "xhigh", "max", "ultra")
 
 # What the Models UI may offer. Values missing from a provider are still
 # accepted and clamped in ``native_reasoning_effort``.
@@ -22,20 +22,52 @@ _PROVIDER_EFFORTS: dict[str, tuple[ReasoningEffort, ...]] = {
     "openai": CANONICAL_REASONING_EFFORTS,
     "openai-response": CANONICAL_REASONING_EFFORTS,
     "azure": CANONICAL_REASONING_EFFORTS,
-    "grok": CANONICAL_REASONING_EFFORTS,
+    "grok": ("none", "low", "medium", "high", "xhigh"),
     "openrouter": CANONICAL_REASONING_EFFORTS,
     "anthropic": CANONICAL_REASONING_EFFORTS,
     "gemini": ("none", "low", "medium", "high"),
     "deepseek": CANONICAL_REASONING_EFFORTS,
-    "qwen": CANONICAL_REASONING_EFFORTS,
+    "qwen": ("none", "low", "medium", "high", "xhigh"),
 }
 
 # Native value sent on the wire after clamping.
 _NATIVE_EFFORT: dict[str, dict[ReasoningEffort, str]] = {
-    "gemini": {"none": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "high"},
-    "deepseek": {"none": "none", "low": "low", "medium": "high", "high": "high", "xhigh": "max"},
-    "qwen": {"none": "none", "low": "low", "medium": "medium", "high": "xhigh", "xhigh": "xhigh"},
-    "grok": {"none": "low", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
+    "gemini": {
+        "none": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+        "ultra": "high",
+    },
+    "deepseek": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+        "ultra": "max",
+    },
+    "qwen": {
+        "none": "none",
+        "low": "low",
+        "medium": "medium",
+        "high": "xhigh",
+        "xhigh": "xhigh",
+        "max": "xhigh",
+        "ultra": "xhigh",
+    },
+    "grok": {
+        "none": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "xhigh",
+        "ultra": "xhigh",
+    },
 }
 
 
@@ -61,7 +93,7 @@ def native_reasoning_effort(provider: str, effort: ReasoningEffort) -> str:
     table = _NATIVE_EFFORT.get(key)
     if table is not None and table:
         return table[effort]
-    return effort
+    return "max" if effort == "ultra" else effort
 
 
 def reasoning_effort_fields(provider: str, effort: object) -> JsonObject:

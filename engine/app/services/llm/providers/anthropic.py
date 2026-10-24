@@ -148,10 +148,6 @@ class AnthropicClient(LLMClient):
         thinking = kwargs.pop("thinking", None)
         if thinking:
             payload["thinking"] = thinking
-            # For thinking models, temperature must be 1.0 or omitted in some cases
-            # But usually it's best to let user specify or default to 1.0 if not set
-            if "temperature" not in kwargs:
-                payload["temperature"] = 1.0
 
         if tools is not None and tools:
             anthropic_tools: list[dict[str, object]] = []

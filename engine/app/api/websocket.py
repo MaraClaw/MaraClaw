@@ -28,6 +28,7 @@ from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
 from app.services.openclaw_routing import (
+    GuestConfigWriteError,
     NoCompanyModelError,
     enqueue_prepared_openclaw_message,
     prepare_openclaw_message,
@@ -388,6 +389,16 @@ class WebSocketChatHandler:
             except OpenClawUpdateGateError as gate:
                 await self.websocket.send_json({"type": "turn_rejected", **gate.rejection()})
                 continue
+            except GuestConfigWriteError:
+                logger.warning("[WS] Guest config preparation failed for {}", self.agent_id)
+                await self.websocket.send_json(
+                    {
+                        "type": "turn_rejected",
+                        "reason": "guest_config_failed",
+                        "content": "Guest configuration could not be updated. Please try again.",
+                    }
+                )
+                continue
 
             try:
                 async with connection_ctx():
@@ -443,6 +454,11 @@ class WebSocketChatHandler:
             rejection.update(reason="no_company_model", content=str(exc))
         except OpenClawUpdateGateError as gate:
             rejection.update(gate.rejection())
+        except GuestConfigWriteError:
+            logger.warning("[WS] Guest config preparation failed for {}", self.agent_id)
+            rejection.update(
+                reason="guest_config_failed", content="Guest configuration could not be updated. Please try again."
+            )
         except AgentExpired as exc:
             rejection.update(reason="agent_expired", content=exc.message)
         except QuotaExceeded as exc:

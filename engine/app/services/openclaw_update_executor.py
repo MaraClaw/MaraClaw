@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -33,6 +34,7 @@ from app.services.openclaw_update_store import UpgradeStore
 READY_TIMEOUT_SECONDS = 120.0
 READY_INTERVAL_SECONDS = 2.0
 READY_PASSES = 2
+ARTIFACT_LOOKBACK = timedelta(days=30)
 
 NOT_RUNNING = "not_running"
 PULL_FAILED = "pull_failed"
@@ -116,6 +118,18 @@ class UpgradeExecutor:
         self.manager: UpgradeManager = manager
         self.ready_timeout: float = ready_timeout
         self.ready_interval: float = ready_interval
+        self._artifact_cursor: UUID | None = None
+
+    async def reconcile_success_artifacts(self) -> None:
+        """Visit one bounded succeeded page; advance past skipped/clean runs to avoid starvation."""
+        runs = await self.store.list_recent_succeeded(datetime.now(UTC) - ARTIFACT_LOOKBACK, self._artifact_cursor)
+        for run in runs:
+            self._artifact_cursor = run.id
+            agent_dir = self.manager._agent_dir(run.agent_id)
+            async with setup_workspace_lock(agent_dir):
+                await self._cleanup_success(run, agent_dir)
+        if not runs:
+            self._artifact_cursor = None
 
     async def process(self, run_id: UUID) -> None:
         """Advance one active run. Blocking Docker/filesystem work runs in unabandoned threads."""
@@ -174,6 +188,9 @@ class UpgradeExecutor:
         except Exception:
             logger.exception("[OpenClawUpdate] cutover failed run={}", run.id)
             await self._rollback(started, agent_dir, CUTOVER_FAILED)
+        else:
+            # Cleanup failures after publication must never trigger rollback of a succeeded run.
+            await self._cleanup_success(started, agent_dir)
 
     async def _swap(self, run: OpenClawUpdateRunRecord, agent: AgentRecord, plan: _Plan) -> None:
         await to_thread.run_sync(self.docker.set_restart, plan.old_id, "no")
@@ -198,7 +215,6 @@ class UpgradeExecutor:
         )
         if not published:
             raise _CutoverError(PUBLISH_CONFLICT)
-        await self._cleanup_success(run, plan.agent_dir, plan.old_id)
 
     async def _owned_container(self, agent_id: UUID, reference: str) -> ContainerInfo | None:
         container = await to_thread.run_sync(self.docker.inspect, reference)
@@ -206,14 +222,24 @@ class UpgradeExecutor:
             require_guest_owner(agent_id, reference, container.agent_id)
         return container
 
-    async def _remove_owned(self, agent_id: UUID, reference: str) -> None:
-        container = await self._owned_container(agent_id, reference)
-        if container is not None:
+    async def _remove_owned(self, run: OpenClawUpdateRunRecord, live_id: str | None) -> None:
+        reference = run.journal.get("old_container_id")
+        if reference is None or reference == live_id:
+            return
+        container = await self._owned_container(run.agent_id, reference)
+        if container is not None and container.id != live_id:
             await to_thread.run_sync(self.docker.remove, container.id)
 
-    async def _cleanup_success(self, run: OpenClawUpdateRunRecord, agent_dir: Path, old_id: str) -> None:
+    async def _cleanup_success(self, candidate: OpenClawUpdateRunRecord, agent_dir: Path) -> None:
+        """Caller holds the exclusive workspace lock, including the immediate publish path."""
+        run = await self.store.get_run(candidate.id)
+        if run is None or run.state != "succeeded":
+            return
+        if await self.store.active_for_agent(run.agent_id) is not None:
+            return
+        agent = await self.store.get_agent(run.agent_id)
         for cleanup in (
-            lambda: self._remove_owned(run.agent_id, old_id),
+            lambda: self._remove_owned(run, agent.container_id if agent is not None else None),
             lambda: to_thread.run_sync(drop_snapshot, agent_dir, run.id),
         ):
             try:

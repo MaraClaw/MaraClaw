@@ -16,6 +16,8 @@ from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
 
 class UpgradeStore(Protocol):
     async def list_active(self) -> list[OpenClawUpdateRunRecord]: ...
+    async def list_recent_succeeded(self, since: datetime, after: UUID | None) -> list[OpenClawUpdateRunRecord]: ...
+    async def active_for_agent(self, agent_id: UUID) -> OpenClawUpdateRunRecord | None: ...
     async def get_run(self, run_id: UUID) -> OpenClawUpdateRunRecord | None: ...
     async def get_agent(self, agent_id: UUID) -> AgentRecord | None: ...
     async def begin_cutover(self, run_id: UUID, journal: RunJournal) -> bool: ...
@@ -40,6 +42,12 @@ class UpgradeStore(Protocol):
 class PostgresUpgradeStore:
     async def list_active(self) -> list[OpenClawUpdateRunRecord]:
         return list(await openclaw_update_run_dao.list_active())
+
+    async def list_recent_succeeded(self, since: datetime, after: UUID | None) -> list[OpenClawUpdateRunRecord]:
+        return list(await openclaw_update_run_dao.list_recent_succeeded(since, after))
+
+    async def active_for_agent(self, agent_id: UUID) -> OpenClawUpdateRunRecord | None:
+        return await openclaw_update_run_dao.active_for_agent(agent_id)
 
     async def get_run(self, run_id: UUID) -> OpenClawUpdateRunRecord | None:
         return await openclaw_update_run_dao.get(run_id)

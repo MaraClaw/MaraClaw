@@ -1,8 +1,11 @@
+from unittest.mock import AsyncMock
+
 import pytest
 from tests.test_background_llm import background_case, tool_response
 
+from app.dao.agent_dao import agent_dao
 from app.services.llm import caller
-from app.services.llm.background_guard import ScheduleLeaseLostError
+from app.services.llm.background_guard import BackgroundCallOutcome, ScheduleLeaseLostError
 from test_finish_protocol import _finish_response
 
 
@@ -101,4 +104,91 @@ async def test_background_usage_await_revocation_stops_next_round(monkeypatch):
     assert state.usage == [51]
     assert len(state.client.messages_seen) == 3
     assert state.created == ["fake-model"]
+    assert state.client.closed
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+async def test_daily_cap_stops_background_without_fallback(monkeypatch, guarded):
+    # Given: an agent-wide quota refusal with a configured fallback.
+    state = background_case(monkeypatch, [_finish_response("forbidden")], fallback=True)
+    charge = AsyncMock(return_value=None)
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+
+    # When: either background contract reaches dispatch.
+    result = await caller.call_agent_llm_with_tools(
+        state.agent.id, "system", "user", turn=state.turn, guard=state.guard if guarded else None
+    )
+
+    # Then: quota denial is a failure, not an invitation to try another model.
+    if guarded:
+        assert isinstance(result, BackgroundCallOutcome)
+        assert result.status == "failure"
+    else:
+        assert result != "forbidden"
+    assert state.created == ["fake-model"]
+    assert state.client.messages_seen == []
+    assert state.client.closed
+
+
+async def test_daily_cap_midloop_flushes_usage_without_fallback(monkeypatch):
+    # Given: the budget permits only the first background provider request.
+    state = background_case(monkeypatch, [tool_response(), _finish_response("forbidden")], fallback=True)
+    charge = AsyncMock(side_effect=[state.agent, None])
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+
+    # When: a tool result would otherwise trigger the next request.
+    result = await caller.call_agent_llm_with_tools(
+        state.agent.id, "system", "user", turn=state.turn, guard=state.guard
+    )
+
+    # Then: prior usage is preserved and neither model dispatches again.
+    assert result.status == "failure"
+    assert len(state.client.messages_seen) == 1
+    assert state.usage == [17]
+    assert state.created == ["fake-model"]
+    assert state.client.closed
+
+
+@pytest.mark.parametrize("fallback_allowed", [False, True])
+async def test_background_failover_is_charged_before_each_request(monkeypatch, fallback_allowed):
+    # Given: a retryable primary failure and a separately charged fallback budget.
+    state = background_case(monkeypatch, [RuntimeError("503 unavailable"), _finish_response("done")], fallback=True)
+    charge = AsyncMock(side_effect=[state.agent, state.agent if fallback_allowed else None])
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+    complete = state.client.complete
+
+    async def charged_complete(**kwargs):
+        assert charge.await_count == len(state.client.messages_seen) + 1
+        return await complete(**kwargs)
+
+    monkeypatch.setattr(state.client, "complete", charged_complete)
+
+    # When: primary fails before any tool side effect.
+    result = await caller.call_agent_llm_with_tools(
+        state.agent.id, "system", "user", turn=state.turn, guard=state.guard
+    )
+
+    # Then: each provider request consumes its own daily call.
+    assert result.status == ("success" if fallback_allowed else "failure")
+    assert charge.await_count == 2
+    assert len(state.client.messages_seen) == (2 if fallback_allowed else 1)
+    assert state.client.closed
+
+
+async def test_background_rechecks_ownership_after_daily_charge(monkeypatch):
+    # Given: ownership is lost while the quota transaction is awaited.
+    state = background_case(monkeypatch, [_finish_response("forbidden")])
+
+    async def charge(_agent_id):
+        state.guard.held = False
+        return state.agent
+
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+
+    # When: charging completes after ownership loss.
+    with pytest.raises(ScheduleLeaseLostError):
+        await caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=state.guard)
+
+    # Then: the charged request is never dispatched by the stale owner.
+    assert state.client.messages_seen == []
     assert state.client.closed

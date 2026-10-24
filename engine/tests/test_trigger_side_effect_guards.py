@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from tests.test_background_llm import background_case, tool_response
 
+from app.dao.agent_dao import agent_dao
 from app.records.chat import ChatSessionRecord
 from app.services.llm import caller
 from app.services.llm.background_guard import ScheduleLeaseLostError
@@ -38,6 +39,7 @@ async def test_guard_stops_second_model_round_without_becoming_error_string(monk
         return "result"
 
     monkeypatch.setattr(caller, "_get_agent_config", lambda *_a, **_k: _async_return((3, None)))
+    monkeypatch.setattr(agent_dao, "consume_llm_call", AsyncMock(return_value=object()))
     monkeypatch.setattr(caller, "_get_user_name", lambda *_a: _async_return(None))
     monkeypatch.setattr("app.services.agent_context.build_agent_context", lambda *_a, **_k: _async_return(("", "")))
     monkeypatch.setattr(caller, "create_fresh_llm_client_from_model", fresh)

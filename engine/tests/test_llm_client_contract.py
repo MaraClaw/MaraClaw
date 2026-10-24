@@ -249,7 +249,11 @@ def test_provider_registry_derivatives_and_aliases_match_current_behavior():
     assert manifest_by_provider["zhipu"]["aliases"] == ["zai", "z.ai", "z_ai"]
     assert manifest_by_provider["openai"]["default_model"] == "gpt-6.1-sol"
     assert manifest_by_provider["anthropic"]["default_model"] == "claude-opus-5-5"
+    expected_efforts = ["none", "low", "medium", "high", "xhigh", "max", "ultra"]
+    for provider in ("openai", "openai-response", "azure", "openrouter", "anthropic", "deepseek"):
+        assert manifest_by_provider[provider]["reasoning_efforts"] == expected_efforts
     assert manifest_by_provider["grok"]["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh"]
+    assert manifest_by_provider["qwen"]["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh"]
     assert manifest_by_provider["gemini"]["reasoning_efforts"] == ["none", "low", "medium", "high"]
     assert manifest_by_provider["ollama"]["reasoning_efforts"] == []
 

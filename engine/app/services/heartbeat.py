@@ -16,6 +16,7 @@ from app.core.logging import logger, new_trace_id
 from app.core.tool_types import ToolDefinition
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
+from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.storage import agent_storage_key, get_storage_backend
 
 _HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
@@ -340,6 +341,12 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     await client.close()
                     reply = _token_limit_msg
                     break
+
+            try:
+                await consume_agent_llm_call(agent_id)
+            except QuotaExceeded:
+                reply = ""
+                break
 
             try:
                 response = await client.complete(
@@ -720,6 +727,12 @@ async def run_agent_oneshot(
                     await client.close()
                     reply = _token_limit_msg
                     break
+
+            try:
+                await consume_agent_llm_call(agent_id)
+            except QuotaExceeded:
+                reply = ""
+                break
 
             try:
                 response = await client.complete(

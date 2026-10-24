@@ -32,6 +32,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
@@ -366,7 +367,9 @@ async def wecom_event_webhook(
     agent_id: uuid.UUID, request: Request, msg_signature: str = "", timestamp: str = "", nonce: str = ""
 ) -> Response:
     """Handle WeCom message callback (POST request with encrypted XML)."""
-    body_bytes = await request.body()
+    body_bytes = await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE)
+    if body_bytes is None:
+        return Response(status_code=413)
 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
     if not config:

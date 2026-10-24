@@ -14,7 +14,9 @@ from app.services import openclaw_update_exclusion as exclusion
 
 def open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     @asynccontextmanager
-    async def free_lock(_directory: Path, *, shared: bool = False) -> AsyncGenerator[None]:
+    async def free_lock(
+        _directory: Path, *, shared: bool = False, timeout_seconds: float | None = None
+    ) -> AsyncGenerator[None]:
         yield
 
     monkeypatch.setattr(exclusion, "assert_no_active_run", AsyncMock())
