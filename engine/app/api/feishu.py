@@ -26,6 +26,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -499,6 +500,9 @@ async def feishu_event_webhook(
 ) -> JsonObject:
     """Handle Feishu event callback for a specific agent's bot."""
     from app.services.channels.feishu_auth import FeishuAuthenticationError, authenticate_feishu_callback
+
+    if await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE) is None:
+        raise HTTPException(status_code=413, detail="Webhook payload too large")
 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
     if not config or (config.extra_config or {}).get("connection_mode") == "websocket":

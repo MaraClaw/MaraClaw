@@ -21,6 +21,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
@@ -390,6 +391,9 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
 @router.post("/channel/teams/{agent_id}/webhook", response_model=None)
 async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response | OkAcknowledgement:
     """Handle Microsoft Teams Bot Framework callbacks."""
+    if await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE) is None:
+        return Response(status_code=413)
+
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
     if not config:
         return Response(status_code=404)
