@@ -60,6 +60,7 @@ from app.services.agent_lifecycle import (
 from app.services.agent_manager import agent_manager as agent_manager
 from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
+from app.services.company_transfer_retention import assert_agent_deletion_allowed
 from app.services.enterprise_llm import (
     assert_distinct_model_slots,
     assert_models_in_tenant_pool,
@@ -873,7 +874,8 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
             detail="System agents cannot be deleted. Disable the related feature (e.g. OKR) in Company Settings instead.",
         )
 
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        await assert_agent_deletion_allowed(db, agent)
         teardown = await snapshot_agent_teardown([agent])
         await agent_dao.delete_with_related(agent_id)
         schedule_agent_teardown(teardown)
