@@ -117,6 +117,7 @@ class Runtime:
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
+            from app.services.company_transfer_cleanup import start_transfer_cleanup_reconciler
             from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
@@ -124,6 +125,12 @@ class Runtime:
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
                 self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")
+
+            async def reconcile_transfers() -> None:
+                await asyncio.gather(*(task for task, finite in self.tasks.required.values() if finite))
+                await start_transfer_cleanup_reconciler()
+
+            self.tasks.start("transfer_cleanup", reconcile_transfers(), requirement="loop")
         self.readiness.initialized = True
 
     @staticmethod

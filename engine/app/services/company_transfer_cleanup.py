@@ -1,7 +1,7 @@
 import sqlite3
 from typing import assert_never
 
-from anyio import to_thread
+from anyio import sleep, to_thread
 from fastapi import HTTPException
 
 from app.core.json_types import str_from_row
@@ -11,17 +11,19 @@ from app.dao.agent_dao import agent_dao
 from app.dao.company_transfer_cleanup_dao import company_transfer_cleanup_dao as cleanup
 from app.dao.company_transfer_dao import company_transfer_dao
 from app.dao.llm_dao import llm_model_dao
+from app.db.errors import DbError
 from app.db.session import connection_ctx
 from app.records.company_transfer import TransferChoice
 from app.records.company_transfer_cleanup import TransferCleanupRecord
 from app.services.agent_manager import _guest_config_fingerprints, agent_manager
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
+from app.services.company_transfer_connectors import stop_free_transfer_connectors
 from app.services.company_transfer_credentials import scrub_credentials
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_no_active_run
 
 
 async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
-    async with setup_workspace_lock(agent_manager._agent_dir(item.agent_id)):
+    async with setup_workspace_lock(agent_manager._agent_dir(item.agent_id), timeout_seconds=0):
         if not await cleanup.is_pending(item.agent_id):
             return None
         await assert_no_active_run(item.agent_id)
@@ -44,6 +46,9 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
         source_names = frozenset(str_from_row(row["mcp_server_name"]) for row in names)
         match item.choice:
             case TransferChoice.FREE:
+                connector_error = await stop_free_transfer_connectors(agent.id)
+                if connector_error is not None:
+                    return connector_error
                 await to_thread.run_sync(
                     lambda: scrub_credentials(
                         agent_manager._agent_dir(agent.id), free=True, source_tool_names=source_names
@@ -74,11 +79,38 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
 
 
 async def reconcile_transfer_cleanup() -> None:
-    for item in await cleanup.pending():
+    try:
+        pending = await cleanup.pending()
+    except (DbError, RuntimeError, OSError) as exc:
+        logger.opt(exception=exc).warning("Transfer runtime cleanup queue unavailable")
+        return
+    for item in pending:
         try:
             error = await complete_cleanup(item)
-        except (OSError, sqlite3.Error, ValueError, HTTPException, OpenClawUpdateGateError) as exc:
+        except WorkspaceLockTimeoutError:
+            error = "workspace_busy"
+        except (
+            DbError,
+            RuntimeError,
+            OSError,
+            sqlite3.Error,
+            ValueError,
+            HTTPException,
+            OpenClawUpdateGateError,
+        ) as exc:
             error = type(exc).__name__
+            logger.opt(exception=exc).warning("Transfer runtime cleanup failed agent_id={}", item.agent_id)
         if error is not None:
             logger.warning("Transfer runtime cleanup pending agent_id={} error={}", item.agent_id, error)
-            await cleanup.record_attempt(item.agent_id, error)
+            try:
+                await cleanup.record_attempt(item.agent_id, error)
+            except (DbError, RuntimeError, OSError) as exc:
+                logger.opt(exception=exc).warning(
+                    "Transfer runtime cleanup attempt recording failed agent_id={} error={}", item.agent_id, error
+                )
+
+
+async def start_transfer_cleanup_reconciler() -> None:
+    while True:
+        await reconcile_transfer_cleanup()
+        await sleep(1)

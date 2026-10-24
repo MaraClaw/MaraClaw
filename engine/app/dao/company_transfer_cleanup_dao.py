@@ -17,7 +17,7 @@ class CompanyTransferCleanupDAO(BaseDAO[TransferCleanupRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT agent_id,transfer_request_id,choice FROM company_transfer_runtime_cleanup "
-                "WHERE state='pending' ORDER BY created_at,agent_id LIMIT 100"
+                "WHERE state='pending' ORDER BY attempts,created_at,agent_id LIMIT 100"
             )
         return [TransferCleanupRecord.from_row(row) for row in rows]
 
@@ -38,8 +38,8 @@ class CompanyTransferCleanupDAO(BaseDAO[TransferCleanupRecord]):
         async with connection_ctx() as db:
             await db.execute(
                 "UPDATE company_transfer_runtime_cleanup SET attempts=attempts+1,last_error=%(error)s, "
-                "state=CASE WHEN %(error)s IS NULL THEN 'completed' ELSE 'pending' END, "
-                "completed_at=CASE WHEN %(error)s IS NULL THEN now() ELSE NULL END "
+                "state=CASE WHEN %(error)s::text IS NULL THEN 'completed' ELSE 'pending' END, "
+                "completed_at=CASE WHEN %(error)s::text IS NULL THEN now() ELSE NULL END "
                 "WHERE agent_id=%(id)s AND state='pending'",
                 {"id": agent_id, "error": error},
             )
