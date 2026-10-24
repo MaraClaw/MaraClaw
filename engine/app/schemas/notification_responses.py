@@ -10,6 +10,7 @@ class NotificationResponse(TypedDict):
     ref_id: str | None
     sender_name: str | None
     is_read: bool
+    archived_at: str | None
     created_at: str | None
 
 

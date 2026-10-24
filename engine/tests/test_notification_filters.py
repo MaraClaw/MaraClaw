@@ -97,6 +97,20 @@ async def test_invalid_categories_reject_before_dao_calls(
         call.assert_not_called()
 
 
+@pytest.mark.parametrize("view", ["", "all", "ACTIVE", " archived ", "unknown"])
+async def test_invalid_views_reject_before_dao_calls(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, view: str
+) -> None:
+    # Given
+    listing = AsyncMock()
+    monkeypatch.setattr(notification_api.notification_dao, "list_for_user", listing)
+    # When
+    response = await client.get("/api/notifications", params={"view": view})
+    # Then
+    assert response.status_code == 422
+    listing.assert_not_called()
+
+
 @pytest.mark.parametrize(("category", "types"), FILTERS)
 async def test_list_uses_validated_category_and_current_user(
     client: httpx.AsyncClient,

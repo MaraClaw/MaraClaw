@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar, final
+from typing import ClassVar, Literal, assert_never, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -21,6 +21,7 @@ _NOTIFICATION_COLUMNS = (
     "ref_id",
     "sender_name",
     "is_read",
+    "archived_at",
     "created_at",
 )
 
@@ -47,6 +48,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         self,
         user_id: UUID,
         *,
+        view: Literal["active", "archived"] = "active",
         unread_only: bool = False,
         types: Sequence[str] | None = None,
         limit: int = 50,
@@ -54,6 +56,13 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
     ) -> Sequence[NotificationRecord]:
         params: dict[str, object] = {"user_id": user_id, "limit": limit, "offset": offset}
         clauses = ["user_id = %(user_id)s"]
+        match view:
+            case "active":
+                clauses.append("archived_at IS NULL")
+            case "archived":
+                clauses.append("archived_at IS NOT NULL")
+            case unreachable:
+                assert_never(unreachable)
         if unread_only:
             clauses.append("is_read IS FALSE")
         if types is not None:
@@ -76,7 +85,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         types: Sequence[str] | None = None,
     ) -> int:
         params: dict[str, object] = {"user_id": user_id}
-        clauses = ["user_id = %(user_id)s", "is_read IS FALSE"]
+        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL"]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
@@ -106,7 +115,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
 
     async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[str] | None = None) -> None:
         params: dict[str, object] = {"user_id": user_id}
-        clauses = ["user_id = %(user_id)s", "is_read IS FALSE"]
+        clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL"]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
             params["types"] = list(types)
@@ -116,6 +125,23 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 f"UPDATE notifications SET is_read = TRUE WHERE {where}",
                 params,
             )
+
+    async def archive_for_user(self, notification_id: UUID, user_id: UUID) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE notifications SET archived_at = COALESCE(archived_at, now()) "
+                "WHERE id = %(id)s AND user_id = %(user_id)s RETURNING id",
+                {"id": notification_id, "user_id": user_id},
+            )
+            return row is not None
+
+    async def restore_for_user(self, notification_id: UUID, user_id: UUID) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE notifications SET archived_at = NULL WHERE id = %(id)s AND user_id = %(user_id)s RETURNING id",
+                {"id": notification_id, "user_id": user_id},
+            )
+            return row is not None
 
     async def delete_system_task_failed(
         self,

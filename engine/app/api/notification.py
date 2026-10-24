@@ -1,7 +1,7 @@
-"""Notification API - list, count, mark-read, and broadcast."""
+"""Notification API - list, archive, read state, and broadcast."""
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -46,11 +46,13 @@ async def list_notifications(
     offset: int = Query(0, ge=0),
     unread_only: bool = Query(False),
     category: str | None = Query(None),
+    view: Literal["active", "archived"] = Query("active"),
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[NotificationResponse]:
     """List notifications for the current user, newest first."""
     notifications = await notification_dao.list_for_user(
         current_user.id,
+        view=view,
         unread_only=unread_only,
         types=_types_for_category(category),
         limit=limit,
@@ -66,6 +68,7 @@ async def list_notifications(
             "ref_id": str(n.ref_id) if n.ref_id else None,
             "sender_name": n.sender_name,
             "is_read": n.is_read,
+            "archived_at": n.archived_at.isoformat() if n.archived_at else None,
             "created_at": n.created_at.isoformat() if n.created_at else None,
         }
         for n in notifications
@@ -90,6 +93,26 @@ async def mark_read(
 ) -> NotificationReadResponse:
     """Mark a single notification as read."""
     await notification_dao.mark_read_for_user(notification_id, current_user.id)
+    return {"ok": True}
+
+
+@router.post("/notifications/{notification_id}/archive")
+async def archive_notification(
+    notification_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    """Archive a notification belonging to the authenticated membership."""
+    if not await notification_dao.archive_for_user(notification_id, current_user.id):
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
+@router.post("/notifications/{notification_id}/restore")
+async def restore_notification(
+    notification_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    """Restore a notification without changing whether it has been read."""
+    if not await notification_dao.restore_for_user(notification_id, current_user.id):
+        raise HTTPException(404, "Notification not found")
     return {"ok": True}
 
 

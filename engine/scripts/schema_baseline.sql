@@ -1146,6 +1146,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 	ref_id UUID, 
 	sender_name VARCHAR(100), 
 	is_read BOOLEAN NOT NULL, 
+	archived_at TIMESTAMP WITH TIME ZONE,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
@@ -1157,6 +1158,12 @@ CREATE INDEX IF NOT EXISTS ix_notifications_agent_id ON notifications (agent_id)
 CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);
 
 CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
+
+CREATE INDEX IF NOT EXISTS ix_notifications_user_active ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS ix_notifications_user_archived ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS broadcast_emails (
     id UUID PRIMARY KEY,

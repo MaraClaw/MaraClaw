@@ -86,11 +86,17 @@ async def test_notification_list_preserves_nullable_and_populated_fields(client,
             "ref_id": str(AGENT_ID) if populated else None,
             "sender_name": "Sender" if populated else None,
             "is_read": populated,
+            "archived_at": None,
             "created_at": STAMP.isoformat() if populated else None,
         },
     ]
     listing.assert_awaited_once_with(
-        member.id, unread_only=True, types=["plaza_comment", "plaza_reply", "mention", "broadcast"], limit=2, offset=3
+        member.id,
+        unread_only=True,
+        types=["plaza_comment", "plaza_reply", "mention", "broadcast"],
+        limit=2,
+        offset=3,
+        view="active",
     )
 
 

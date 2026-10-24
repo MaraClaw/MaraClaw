@@ -1,6 +1,7 @@
 """Exercise the real notification router/DAO with an in-memory SQL-semantic connection."""
 
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 from typing import override
 from uuid import UUID
 
@@ -36,6 +37,18 @@ class _RecipientCursor(_Cursor):
     @override
     async def execute(self, query: str, params: Params = None) -> None:
         sql = " ".join(query.split())
+        if sql.startswith("UPDATE notifications SET archived_at ="):
+            assert isinstance(params, Mapping)
+            self.raw.executed.append((sql, dict(params)))
+            for row in self.raw.notifications:
+                if row.id == params["id"] and row.user_id == params["user_id"]:
+                    row.archived_at = (
+                        None
+                        if "SET archived_at = NULL" in sql
+                        else row.archived_at or datetime(2026, 10, 24, tzinfo=UTC)
+                    )
+                    self.rows = [{"id": row.id}]
+            return
         if not (sql.startswith("UPDATE notifications SET is_read = TRUE") and "id = %(id)s" in sql):
             await super().execute(query, params)
             return
@@ -162,3 +175,21 @@ async def test_owner_can_read_all_private_notifications_without_changing_other_a
         OWNER_SIBLING_ID,
         OWNER_READ_ID,
     }
+
+
+@OTHER_RECIPIENTS
+@pytest.mark.parametrize("operation", ["archive", "restore"])
+async def test_archive_mutations_hide_foreign_ownership(
+    client: httpx.AsyncClient, populated_db: NotificationConnection, actor: UserRecord, operation: str
+) -> None:
+    # Given
+    before = [(row.id, row.is_read, row.archived_at) for row in populated_db.notifications]
+    # When
+    foreign = await client.post(f"/api/notifications/{PRIVATE_ID}/{operation}", headers={"x-test-user": str(actor.id)})
+    missing = await client.post(
+        f"/api/notifications/{UUID(int=999)}/{operation}", headers={"x-test-user": str(actor.id)}
+    )
+    # Then
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json() == missing.json()
+    assert [(row.id, row.is_read, row.archived_at) for row in populated_db.notifications] == before
