@@ -293,18 +293,17 @@ async def create_agent(
         access_mode = "custom"
 
     async with connection_ctx() as db:
-        if department_ids:
-            # Hold the deletion mutex from validation through every grant insert.
-            await lock_tenants(db, (target_tenant_id, current_user.tenant_id))
-            await lock_user(db, current_user.id, current_user.tenant_id)
-            actor = await user_dao.get_with_identity(current_user.id, fresh=True)
-            if actor is None or not actor.is_active or (actor.identity is not None and not actor.identity.is_active):
-                raise HTTPException(403, "User is inactive")
-            from app.core.security import raise_if_password_change_required
+        await lock_tenants(db, (target_tenant_id, current_user.tenant_id))
+        await lock_user(db, current_user.id, current_user.tenant_id)
+        actor = await user_dao.get_with_identity(current_user.id, fresh=True)
+        if actor is None or not actor.is_active or (actor.identity is not None and not actor.identity.is_active):
+            raise HTTPException(403, "User is inactive")
+        from app.core.security import raise_if_password_change_required
 
-            raise_if_password_change_required(actor)
-            if target_tenant_id != actor.tenant_id and actor.role not in ("platform_admin", "org_admin"):
-                raise HTTPException(403, "Organization access denied")
+        raise_if_password_change_required(actor)
+        if target_tenant_id != actor.tenant_id and actor.role not in ("platform_admin", "org_admin"):
+            raise HTTPException(403, "Organization access denied")
+        if department_ids:
             departments = await org_department_dao.get_many(list(department_ids))
             if len(departments) != len(department_ids) or any(
                 department.tenant_id != target_tenant_id for department in departments

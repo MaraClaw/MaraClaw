@@ -29,6 +29,7 @@ async def decide(request_id: UUID, reviewer_id: UUID, decision: AdmissionDecisio
         reviewer = await user_dao.get(reviewer_id)
         if applicant is None or reviewer is None:
             raise HTTPException(404, "Membership not found")
+        reviewer = await require_genesis(reviewer_id, snapshot.target_tenant_id)
         fenced_ids = frozenset[UUID]()
         if snapshot.status == AdmissionStatus.PENDING and decision.decision == "approved":
             fenced_ids = await fence_owned_agents(applicant)
