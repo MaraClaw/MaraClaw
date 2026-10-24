@@ -29,13 +29,21 @@ let base
 let closedContexts = 0
 
 async function scenario(options, exercise) {
+  browser = await chromium.launch({ executablePath: chromium.executablePath(), headless: true, args: ['--enable-automation', '--remote-debugging-port=0'] })
+  const cdp = await browser.newBrowserCDPSession()
+  try {
+    const { arguments: args } = await cdp.send('Browser.getBrowserCommandLine')
+    const profile = args.find((arg) => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length)
+    const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')
+    skillBrowser = await omowright.connect(`http://127.0.0.1:${port}`)
+  } finally { await cdp.detach() }
   const context = await browser.newContext({
     ...(options.width === 390 ? devices['iPhone 14'] : { viewport: { width: options.width ?? 1440, height: 1080 } }),
     colorScheme: options.scheme ?? 'light', reducedMotion: 'reduce',
   })
   context.setDefaultTimeout(10_000)
   const errors = []
-  const state = { user: { ...admin, ...options.user }, policy: { ...original }, getStatus: options.getStatus ?? 200, putStatus: 200, getGate: options.getGate, putGate: null, saved: null, requests: [] }
+  const state = { user: { ...admin, ...options.user }, policy: { ...original, ...options.policy }, getStatus: options.getStatus ?? 200, putStatus: 200, getGate: options.getGate, putGate: null, saved: null, requests: [] }
   try {
     await context.addInitScript(() => localStorage.setItem('maraclaw-admin-token', 'synthetic-settings-token'))
     const page = await context.newPage()
@@ -84,6 +92,8 @@ async function scenario(options, exercise) {
     for (const request of state.requests) request.gate?.resolve()
     await Promise.allSettled(state.requests.map((request) => request.delivered.promise))
     await context.close()
+    await skillBrowser.close(); skillBrowser = undefined
+    await browser.close(); browser = undefined
     closedContexts++
   }
 }
@@ -91,14 +101,6 @@ async function scenario(options, exercise) {
 try {
   await server.listen()
   base = server.resolvedUrls.local[0]
-  browser = await chromium.launch({ headless: true, args: ['--enable-automation', '--remote-debugging-port=0'] })
-  const cdp = await browser.newBrowserCDPSession()
-  try {
-    const { arguments: args } = await cdp.send('Browser.getBrowserCommandLine')
-    const profile = args.find((arg) => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length)
-    const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')
-    skillBrowser = await omowright.connect(`http://127.0.0.1:${port}`)
-  } finally { await cdp.detach() }
 
   for (const [role, platform, allowed] of [
     ['org_admin', false, false], ['platform_admin', false, true], ['org_admin', true, true],
@@ -174,6 +176,33 @@ try {
       await capture('success-end')
       await page.reload()
       await expect(amount).toHaveValue('0.31')
+    })
+  }
+
+  for (const width of [390, 1440]) for (const scheme of ['light', 'dark']) {
+    for (const [currency, minor, decimal, invalid] of [
+      ['USD', Number.MAX_SAFE_INTEGER, '90071992547409.91', '90071992547409.92'],
+      ['EUR', 2500, '25.00', '1.001'], ['GBP', 29, '0.29', '1.001'],
+      ['VND', 123, '123', '1.0'], ['JPY', Number.MAX_SAFE_INTEGER, '9007199254740991', '0.01'],
+      ['KWD', Number.MAX_SAFE_INTEGER, '9007199254740.991', '9007199254740.992'],
+    ]) await scenario({ name: `currency-${currency}-${width}-${scheme}`, width, scheme, policy: { currency, fee_amount_minor: minor } }, async (page, state, capture) => {
+      const amount = page.getByLabel('Fee amount', { exact: true })
+      const saved = page.getByRole('region', { name: 'Current saved policy' })
+      await expect(amount).toHaveValue(decimal)
+      await expect(saved).toContainText(`${currency} ${decimal}`)
+      await amount.fill(invalid)
+      await page.getByRole('button', { name: 'Save transfer policy', exact: true }).click()
+      await expect(amount).toHaveAttribute('aria-invalid', 'true')
+      assert.equal(state.requests.filter((request) => request.method === 'PUT').length, 0)
+      await capture('invalid-amount')
+      await amount.fill(decimal)
+      await page.getByRole('button', { name: 'Save transfer policy', exact: true }).click()
+      await expect(page.getByRole('status').filter({ hasText: 'Transfer policy saved.' })).toBeVisible()
+      assert.deepEqual(state.requests.find((request) => request.method === 'PUT').body, { ...original, currency, fee_amount_minor: minor })
+      await page.reload()
+      await expect(amount).toHaveValue(decimal)
+      await expect(saved).toContainText(`${currency} ${decimal}`)
+      await capture('saved-reloaded')
     })
   }
 

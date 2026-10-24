@@ -92,7 +92,7 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
       <section aria-labelledby={`${id}-saved`} className="rounded-xl border border-border bg-background p-4">
         <h3 id={`${id}-saved`} className="text-sm font-semibold">Current saved policy</h3>
         <dl className="mt-3 flex flex-col gap-3 text-sm">
-          <div><dt className="text-muted-foreground">Transfer fee</dt><dd className="mt-1 font-medium tabular-nums">{policy.currency} {formatMinorAmount(policy.fee_amount_minor)}</dd></div>
+          <div><dt className="text-muted-foreground">Transfer fee</dt><dd className="mt-1 font-medium tabular-nums">{policy.currency} {formatMinorAmount(policy.fee_amount_minor, policy.currency)}</dd></div>
           <div><dt className="text-muted-foreground">Payment instructions</dt><dd className="mt-1 whitespace-pre-wrap leading-relaxed">{policy.instructions}</dd></div>
         </dl>
       </section>
@@ -107,13 +107,13 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${id}-amount`}>Fee amount</Label>
               <Input id={`${id}-amount`} inputMode="decimal" autoComplete="off" aria-required="true" aria-invalid={Boolean(errors.amount)} aria-describedby={`${id}-amount-help ${errors.amount ? `${id}-amount-error` : ''}`} {...form.register('amount')} />
-              <p id={`${id}-amount-help`} className="text-xs text-muted-foreground">Up to 2 decimal places. 1.00 is stored as 100 minor units. Zero is allowed.</p>
+              <p id={`${id}-amount-help`} className="text-xs text-muted-foreground">USD, EUR, GBP: up to 2 decimal places. VND, JPY: whole numbers only. KWD: up to 3 decimal places. Zero is allowed.</p>
               {errors.amount ? <p id={`${id}-amount-error`} role="alert" className="text-sm text-destructive">{errors.amount.message}</p> : null}
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${id}-currency`}>Currency</Label>
               <Input id={`${id}-currency`} className="uppercase" autoComplete="off" autoCapitalize="characters" spellCheck={false} aria-required="true" aria-invalid={Boolean(errors.currency)} aria-describedby={`${id}-currency-help ${errors.currency ? `${id}-currency-error` : ''}`} {...form.register('currency')} />
-              <p id={`${id}-currency-help`} className="text-xs text-muted-foreground">3 letters, saved in uppercase.</p>
+              <p id={`${id}-currency-help`} className="text-xs text-muted-foreground">USD, EUR, GBP, VND, JPY, or KWD. Saved in uppercase.</p>
               {errors.currency ? <p id={`${id}-currency-error`} role="alert" className="text-sm text-destructive">{errors.currency.message}</p> : null}
             </div>
           </div>

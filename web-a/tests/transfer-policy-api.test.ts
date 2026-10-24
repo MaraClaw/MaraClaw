@@ -9,7 +9,7 @@ import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { fetchTransferPolicy, updateTransferPolicy } from '../src/lib/transfer-policy-api.ts'
 import { createFixture } from './helpers.ts'
 
-const policy = { fee_amount_minor: 3719, currency: 'EUR', instructions: 'Arrange payment with the platform team.\nInclude the request reference.' }
+const policy = { fee_amount_minor: 3719, currency: 'EUR', instructions: 'Arrange payment with the platform team.\nInclude the request reference.' } as const
 
 test('policy read uses the admin endpoint, cancellation signal and server values', async (t) => {
   // Given
@@ -54,6 +54,7 @@ for (const malformed of [
   null, {}, { ...policy, fee_amount_minor: -1 }, { ...policy, fee_amount_minor: 1.5 },
   { ...policy, fee_amount_minor: Number.MAX_SAFE_INTEGER + 1 }, { ...policy, fee_amount_minor: '3719' },
   { ...policy, currency: 'usd' }, { ...policy, currency: 'US' }, { ...policy, currency: 'U1D' },
+  { ...policy, currency: 'CAD' }, { ...policy, currency: 'XXX' },
   { ...policy, instructions: '' }, { ...policy, instructions: ' \n ' }, { ...policy, instructions: 'x'.repeat(4001) },
 ]) for (const method of ['GET', 'PUT']) {
   test(`${method} rejects malformed policy ${JSON.stringify(malformed).slice(0, 100)}`, async (t) => {
@@ -64,6 +65,21 @@ for (const malformed of [
     // Then
     await assert.rejects(result, z.ZodError)
   })
+}
+
+for (const currency of ['USD', 'EUR', 'GBP', 'VND', 'JPY', 'KWD'] as const) {
+  for (const fee_amount_minor of [0, Number.MAX_SAFE_INTEGER]) {
+    test(`${currency} ${fee_amount_minor} survives a policy API replacement without conversion`, async (t) => {
+      // Given
+      const replacement = { ...policy, currency, fee_amount_minor }
+      const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(replacement))
+      // When
+      const result = await updateTransferPolicy(replacement)
+      // Then
+      assert.deepEqual(result, replacement)
+      assert.equal(fetch.mock.calls.length, 1)
+    })
+  }
 }
 
 for (const status of [403, 422, 503]) {

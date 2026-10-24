@@ -37,7 +37,7 @@ test('currency input normalizes before the full replacement payload is construct
   assert.deepEqual(result, { fee_amount_minor: 3719, currency: 'GBP', instructions: draft.instructions })
 })
 
-for (const currency of ['', 'US', 'USDD', 'U1D', '€UR']) {
+for (const currency of ['', 'US', 'USDD', 'U1D', '€UR', 'CAD', 'XXX']) {
   test(`invalid currency ${JSON.stringify(currency)} blocks submission`, () => {
     // Given / When
     const result = transferPolicyDraftSchema.safeParse({ ...draft, currency })
@@ -64,14 +64,55 @@ test('instructions accept the exact limit and preserve user line breaks', () => 
   assert.equal(result.instructions, instructions)
 })
 
-for (const minor of [0, 1, 29, 3719, Number.MAX_SAFE_INTEGER]) {
-  test(`server amount ${minor} populates a lossless editable decimal`, () => {
-    // Given
-    const policy = { fee_amount_minor: minor, currency: 'CAD', instructions: draft.instructions }
-    // When
-    const editable = transferPolicyToDraft(policy)
+for (const currency of ['USD', 'EUR', 'GBP', 'VND', 'JPY', 'KWD'] as const) {
+  for (const minor of [0, 1, 29, 3719, Number.MAX_SAFE_INTEGER]) {
+    test(`server ${currency} amount ${minor} populates a lossless editable decimal`, () => {
+      // Given
+      const policy = { fee_amount_minor: minor, currency, instructions: draft.instructions }
+      // When
+      const editable = transferPolicyToDraft(policy)
+      // Then
+      assert.deepEqual(transferPolicyDraftSchema.parse(editable), policy)
+      assert.equal(editable.amount, formatMinorAmount(minor, currency))
+    })
+  }
+}
+
+for (const [currency, amount, minor] of [
+  ['VND', '123', 123], ['JPY', '00123', 123], ['KWD', '1.234', 1234], ['KWD', '0.001', 1],
+  ['KWD', '12.3', 12300], ['USD', '0.01', 1], ['JPY', '9007199254740991', Number.MAX_SAFE_INTEGER],
+  ['VND', '9007199254740991', Number.MAX_SAFE_INTEGER], ['KWD', '9007199254740.991', Number.MAX_SAFE_INTEGER],
+] as const) {
+  test(`${currency} ${amount} uses its currency exponent without rounding`, () => {
+    // Given / When
+    const result = transferPolicyDraftSchema.parse({ ...draft, currency, amount })
     // Then
-    assert.deepEqual(transferPolicyDraftSchema.parse(editable), policy)
-    assert.equal(editable.amount, formatMinorAmount(minor))
+    assert.equal(result.fee_amount_minor, minor)
+  })
+}
+
+for (const [currency, amount] of [
+  ['VND', '1.0'], ['JPY', '0.01'], ['JPY', '9007199254740992'], ['VND', '9007199254740992'],
+  ['KWD', '1.2345'], ['KWD', '9007199254740.992'], ['USD', '1.001'],
+] as const) {
+  test(`${currency} ${amount} rejects excess precision or unsafe minor units`, () => {
+    // Given / When
+    const result = transferPolicyDraftSchema.safeParse({ ...draft, currency, amount })
+    // Then
+    assert.equal(result.success, false)
+    if (!result.success) assert.deepEqual(result.error.issues[0]?.path, ['amount'])
+  })
+}
+
+for (const [currency, minor, amount] of [
+  ['USD', 1, '0.01'], ['EUR', 3719, '37.19'], ['GBP', 0, '0.00'], ['VND', 123, '123'],
+  ['JPY', Number.MAX_SAFE_INTEGER, '9007199254740991'], ['KWD', 1, '0.001'],
+  ['KWD', Number.MAX_SAFE_INTEGER, '9007199254740.991'],
+] as const) {
+  test(`${currency} ${minor} formats the saved amount with the currency exponent`, () => {
+    // Given / When
+    const result = formatMinorAmount(minor, currency)
+    // Then
+    assert.equal(result, amount)
   })
 }
