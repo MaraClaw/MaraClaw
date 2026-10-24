@@ -23,6 +23,8 @@ const scheduleSchema = createSchema.extend({
 const nextRuns = new Map([
   ['UTC', '2026-01-15T09:00:00Z'], ['Asia/Shanghai', savedSchedule.next_run_at],
   ['America/New_York', '2026-01-15T14:00:00Z'],
+  ['Etc/GMT-8', '2026-01-15T01:00:00Z'], ['Etc/GMT-7', '2026-01-15T02:00:00Z'],
+  ['Etc/GMT+5', '2026-01-15T14:00:00Z'],
 ])
 
 export async function prepareSchedules(page: Page, initial: readonly ScheduleOut[] = [], creator = true) {
@@ -77,6 +79,7 @@ export async function prepareSchedules(page: Page, initial: readonly ScheduleOut
 export async function fillSchedule(page: Page) {
   await page.getByLabel('Name', { exact: true }).fill(savedSchedule.name)
   await page.getByLabel('Instruction', { exact: true }).fill(savedSchedule.instruction)
-  await page.getByLabel('Cron', { exact: true }).fill(savedSchedule.cron_expr)
-  await page.getByLabel('IANA timezone', { exact: true }).fill(savedSchedule.timezone)
+  await page.getByLabel('Repeat', { exact: true }).selectOption('daily')
+  await page.getByLabel('Time', { exact: true }).fill('09:00')
+  await page.getByLabel('Timezone', { exact: true }).selectOption('Etc/GMT-8')
 }

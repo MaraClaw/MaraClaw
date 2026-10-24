@@ -5,11 +5,13 @@ import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { TimezoneSelect } from '@/components/timezone-select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ScheduleRunHistory } from './schedule-run-history'
 import { ScheduleRunReceipt } from './schedule-run-receipt'
+import { ScheduleRecurrenceFields } from './schedule-recurrence-fields'
 import {
   createSchedule,
   deleteSchedule,
@@ -20,8 +22,10 @@ import {
 } from '@/lib/schedules-api'
 import type { AgentOut } from '@/lib/workspace-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import { emptyScheduleDraft, scheduleChanges, type ScheduleDraft } from '@/lib/schedule-editor'
+import { createScheduleDraft, scheduleChanges, type ScheduleDraft } from '@/lib/schedule-editor'
+import { describeScheduleRecurrence, recognizeScheduleRecurrence } from '@/lib/schedule-recurrence'
 import { formatScheduleNextRun, scheduleTimezoneError } from '@/lib/schedule-time'
+import { timezoneLabel } from '@/lib/timezone-catalog'
 import { useAuth } from '@/hooks/use-auth'
 
 export function AgentSchedulesPage() {
@@ -34,11 +38,12 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
   const { user } = useAuth()
   const isCreator = user?.id === agent.creator_id
   const queryClient = useQueryClient()
-  const [draft, setDraft] = useState(emptyScheduleDraft)
+  const [draft, setDraft] = useState(() => createScheduleDraft(user?.timezone))
   const [editing, setEditing] = useState<ScheduleOut | null>(null)
+  const [editorVersion, setEditorVersion] = useState(0)
   const [timezoneError, setTimezoneError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const timezoneInput = useRef<HTMLInputElement>(null)
+  const timezoneInput = useRef<HTMLSelectElement>(null)
   const [historyId, setHistoryId] = useState<string | null>(null)
   const runIntents = useRef(new Map<string, string>())
   const mounted = useRef(true)
@@ -56,7 +61,8 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
       : createSchedule(agent.id, { ...values, is_enabled: true }),
     onSuccess() {
       setEditing(null)
-      setDraft(emptyScheduleDraft)
+      setDraft(createScheduleDraft(user?.timezone))
+      setEditorVersion((version) => version + 1)
       void queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] })
     },
     onError(error) {
@@ -118,16 +124,14 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               <Label htmlFor="schedule-name">Name</Label>
               <Input id="schedule-name" required value={draft.name} onChange={scope.effect((event) => setDraft({ ...draft, name: event.target.value }))} />
             </div>
+            <ScheduleRecurrenceFields key={editorVersion} cron={draft.cron_expr} timezone={draft.timezone}
+              onChange={scope.effect((cron_expr) => setDraft({ ...draft, cron_expr }))} />
             <div className="grid gap-2">
-              <Label htmlFor="schedule-cron">Cron</Label>
-              <Input id="schedule-cron" required value={draft.cron_expr} onChange={scope.effect((event) => setDraft({ ...draft, cron_expr: event.target.value }))} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="schedule-timezone">IANA timezone</Label>
-              <Input id="schedule-timezone" ref={timezoneInput} value={draft.timezone} placeholder="Asia/Shanghai" autoComplete="off"
+              <Label htmlFor="schedule-timezone">Timezone</Label>
+              <TimezoneSelect id="schedule-timezone" ref={timezoneInput} value={draft.timezone}
                 aria-invalid={Boolean(timezoneError)} aria-describedby={`schedule-timezone-help${timezoneError ? ' schedule-timezone-error' : ''}`}
                 onChange={scope.effect((event) => { setDraft({ ...draft, timezone: event.target.value }); setTimezoneError(null) })} />
-              <p id="schedule-timezone-help" className="text-xs text-muted-foreground">Cron runs in this timezone, including daylight saving changes. Use an IANA name such as Asia/Shanghai, America/New_York, or UTC.</p>
+              <p id="schedule-timezone-help" className="text-xs text-muted-foreground">Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. New schedules use your Settings preference, or GMT +0 (UTC).</p>
               {timezoneError ? <p id="schedule-timezone-error" role="status" className="text-sm text-destructive">{timezoneError}</p> : null}
             </div>
             <div className="grid gap-2">
@@ -137,7 +141,8 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
             <div className="flex gap-2">
               <Button type="submit">{save.isPending ? 'Saving...' : editing ? 'Save schedule' : 'Add schedule'}</Button>
               {editing ? <Button type="button" variant="outline" onClick={scope.effect(() => {
-                setEditing(null); setDraft(emptyScheduleDraft); setTimezoneError(null); setSaveError(null)
+                setEditing(null); setDraft(createScheduleDraft(user?.timezone)); setTimezoneError(null); setSaveError(null)
+                setEditorVersion((version) => version + 1)
               })}>Cancel edit</Button> : null}
             </div>
           </fieldset>
@@ -158,7 +163,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
             <div className="min-w-0 break-words">
               <p className="text-sm font-medium">{item.name}</p>
               <p className="text-xs text-muted-foreground">
-                {item.cron_expr} · {item.timezone} · next {formatScheduleNextRun(item)}
+                {describeScheduleRecurrence(recognizeScheduleRecurrence(item.cron_expr))} · {timezoneLabel(item.timezone)} · next {formatScheduleNextRun(item)}
               </p>
               <p aria-live="polite" className="text-sm text-muted-foreground">{runMessages[item.id]}</p>
               {isCreator && acceptedRun?.scheduleId === item.id ? <ScheduleRunReceipt key={acceptedRun.runId}
@@ -178,6 +183,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                   onClick={() => {
                     if (!scope.isCurrent()) return
                     setEditing(item)
+                    setEditorVersion((version) => version + 1)
                     setDraft({ name: item.name, cron_expr: item.cron_expr, instruction: item.instruction, timezone: item.timezone })
                     setTimezoneError(null)
                     setSaveError(null)
