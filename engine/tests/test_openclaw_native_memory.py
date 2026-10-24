@@ -24,21 +24,16 @@ const preserved = {
   'workspace/memory/2026-10-23.md': 'Keep the daily workspace memory.\n',
   'MEMORY.md': 'Keep the root memory file.\n',
   'memory/archive.md': 'Keep the root memory directory.\n',
-  'memory/tencentdb.sqlite': 'SQLite format 3\0legacy-state',
-  '.bootstrap-tencentdb-version': '1.0.3',
-  'extensions/memory-tencentdb/data/memory.sqlite': 'SQLite format 3\0plugin-state',
-  'extensions/memory-tencentdb/.installed': 'preserve installation evidence',
+  'memory/archive.sqlite': Buffer.from([0, 255, 128, 10]),
+  'extensions/custom-memory-fixture/data/memory.sqlite': Buffer.from([0, 254, 129, 10]),
+  'extensions/custom-memory-fixture/package.json': JSON.stringify({
+    name: 'custom-memory-fixture', version: '1.0.0', type: 'module', openclaw: {extensions: ['./index.js']},
+  }),
+  'extensions/custom-memory-fixture/openclaw.plugin.json': JSON.stringify({
+    id: 'custom-memory-fixture', activation: {onStartup: true}, configSchema: {type: 'object', properties: {}},
+  }),
+  'extensions/custom-memory-fixture/index.js': "export default {id:'custom-memory-fixture',register(){}};",
 };
-for (const id of ['memory-tencentdb', 'custom-memory-fixture']) {
-  preserved[`extensions/${id}/package.json`] = JSON.stringify({
-    name: id, version: '1.0.3', type: 'module', openclaw: {extensions: ['./index.js']},
-  });
-  preserved[`extensions/${id}/openclaw.plugin.json`] = JSON.stringify({
-    id, ...(id === 'memory-tencentdb' ? {kind: 'context-engine'} : {}),
-    activation: {onStartup: true}, configSchema: {type: 'object', properties: {}},
-  });
-  preserved[`extensions/${id}/index.js`] = `export default {id:'${id}',register(){}};`;
-}
 for (const [relative, content] of Object.entries(preserved)) {
   const path = `${root}/${relative}`;
   fs.mkdirSync(require('node:path').dirname(path), {recursive: true});
@@ -54,19 +49,10 @@ function run(args) {
 function plugins() {
   return JSON.parse(run(['plugins', 'list', '--json'])).plugins;
 }
-const omitted = structuredClone(config);
-delete omitted.plugins.entries['memory-tencentdb'];
-fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(omitted));
-const before = plugins().find(plugin => plugin.id === 'memory-tencentdb');
-assert.equal(before.enabled, true);
-assert.equal(before.status, 'loaded');
 fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
 run(['config', 'validate']);
 const discovered = plugins();
-const retired = discovered.find(plugin => plugin.id === 'memory-tencentdb');
 const custom = discovered.find(plugin => plugin.id === 'custom-memory-fixture');
-assert.equal(retired.enabled, false);
-assert.equal(retired.status, 'disabled');
 assert.equal(custom.enabled, true);
 assert.equal(custom.status, 'loaded');
 run(['memory', 'index', '--force']);
@@ -76,17 +62,16 @@ assert(search.results.some(result => result.path === 'MEMORY.md'
 const miss = JSON.parse(run(['memory', 'search', '--query', 'unobtainium93642', '--json']));
 assert.equal(miss.results.length, 0);
 for (const [relative, content] of Object.entries(preserved)) {
-  assert.equal(fs.readFileSync(`${root}/${relative}`, 'utf8'), content, relative);
+  assert.deepEqual(fs.readFileSync(`${root}/${relative}`), Buffer.from(content), relative);
 }
 console.log(JSON.stringify({version: run(['--version']).trim(),
-  before: {enabled: before.enabled, status: before.status},
-  retired: {enabled: retired.enabled, status: retired.status},
-  custom: {enabled: custom.enabled, status: custom.status}, search, missing: miss.results.length}));
+  custom: {enabled: custom.enabled, status: custom.status}, search, missing: miss.results.length,
+  preservedFiles: Object.keys(preserved).length, configValid: true}));
 """
 
 
 @pytest.mark.skipif(os.environ.get("OPENCLAW_NATIVE_RUNTIME_TEST") != "1", reason="opt-in disposable Docker CLI proof")
-def test_native_memory_search_and_legacy_retirement_with_pinned_cli(
+def test_native_memory_search_and_custom_plugin_with_pinned_cli(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Given
@@ -101,7 +86,7 @@ def test_native_memory_search_and_legacy_retirement_with_pinned_cli(
         json.dumps(
             {
                 "plugins": {
-                    "entries": {"memory-tencentdb": {"enabled": True}, "custom-memory-fixture": {"enabled": True}},
+                    "entries": {"custom-memory-fixture": {"enabled": True}},
                 },
             }
         ),
@@ -147,7 +132,6 @@ def test_native_memory_search_and_legacy_retirement_with_pinned_cli(
     assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
     assert "2026.10.6" in evidence["version"]
-    assert evidence["before"] == {"enabled": True, "status": "loaded"}
-    assert evidence["retired"] == {"enabled": False, "status": "disabled"}
     assert evidence["custom"] == {"enabled": True, "status": "loaded"}
     assert evidence["missing"] == 0
+    print(result.stdout.strip())  # noqa: T201 - retain successful runtime evidence for opt-in pytest -s runs.

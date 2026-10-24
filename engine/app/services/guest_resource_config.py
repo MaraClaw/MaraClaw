@@ -40,13 +40,10 @@ def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
         ("skills", "entries", previous.get("skills", {}).get("entries", {})),
         ("plugins", "entries", previous.get("plugins", {}).get("entries", {})),
     ):
-        retained: JsonObject = {
-            name: value for name, value in entries.items() if section != "plugins" or name != "memory-tencentdb"
-        }
         managed = json_object_from(generated.get(section))
         managed_entries = json_object_from(managed.get(key))
-        if retained or managed_entries:
-            result[section] = {**managed, key: {**retained, **managed_entries}}
+        if entries or managed_entries:
+            result[section] = {**managed, key: {**entries, **managed_entries}}
 
     skill_load = previous.get("skills", {}).get("load", {})
     if "extraDirs" in skill_load:
@@ -54,12 +51,4 @@ def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
         load: JsonObject = {"extraDirs": [*skill_load["extraDirs"]], **json_object_from(skills.get("load"))}
         result["skills"] = {**skills, "load": load}
 
-    if (
-        "memory-tencentdb" in previous.get("plugins", {}).get("entries", {})
-        or (path.parent / "extensions" / "memory-tencentdb").exists()
-    ):
-        # OpenClaw auto-discovers persisted extensions; retain a named tombstone without deleting their data.
-        plugins = json_object_from(result.get("plugins"))
-        entries = json_object_from(plugins.get("entries"))
-        result["plugins"] = {**plugins, "entries": {**entries, "memory-tencentdb": {"enabled": False}}}
     return result

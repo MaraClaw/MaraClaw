@@ -112,11 +112,11 @@ def test_publish_script_uses_configured_image_and_tag(tmp_path: Path, push_lates
     env["MARACLAW_OPENCLAW_IMAGE"] = "workspace/openclaw:custom"
     env["DOCKERHUB_NAMESPACE"] = "unused-namespace"
     env["OPENCLAW_PUBLISH_IMAGE"] = "acme/openclaw-guest"
-    env["IMAGE_TAG"] = "2026.7.1-2-tdai"
+    env["IMAGE_TAG"] = "2026.7.1-2-custom"
     env["PUSH_LATEST"] = "1" if push_latest else "0"
     expected_commands = [
-        "tag workspace/openclaw:custom acme/openclaw-guest:2026.7.1-2-tdai",
-        "push acme/openclaw-guest:2026.7.1-2-tdai",
+        "tag workspace/openclaw:custom acme/openclaw-guest:2026.7.1-2-custom",
+        "push acme/openclaw-guest:2026.7.1-2-custom",
     ]
     if push_latest:
         expected_commands.extend(
