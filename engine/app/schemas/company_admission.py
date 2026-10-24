@@ -34,6 +34,13 @@ class RequestDetail(RequestSummary):
     decided_by_user_id: UUID | None
 
 
+class ApplicantPage(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: list[RequestSummary]
+    next_cursor: str | None
+
+
 class ReviewPage(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
