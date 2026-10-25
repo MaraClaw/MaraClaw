@@ -11,7 +11,7 @@ A Linkup query is an **instruction to a retrieval system**, not a question to an
 
 ## How to call it
 
-MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. Use only this proxy for Linkup requests.
 
 POST to `$LINKUP_API_BASE/v1/search` with a natural-language query and a `depth`. The same endpoint supports **structured JSON output**, **domain filters** (`includeDomains`/`excludeDomains`), and **date filters** (`fromDate`/`toDate`).
 

@@ -7,7 +7,7 @@ description: ONLY when the user explicitly wants a thorough, exhaustive, or comp
 
 The Research endpoint is an autonomous agent that investigates the web iteratively for minutes, cross-checks claims across sources, and returns a synthesized, cited answer. Reach for it only when a single `deep` search can't cover the job - many entities, many facets, verification needed, or a report-style deliverable.
 
-MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. Use only this proxy for Linkup requests.
 
 ## Choose mode and depth explicitly
 

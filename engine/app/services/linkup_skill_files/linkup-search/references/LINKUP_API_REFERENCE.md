@@ -459,7 +459,7 @@ This is a key advantage over raw LLM generation.
 
 # Authentication
 
-MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. Use only this proxy for Linkup requests.
 
 Header:
 

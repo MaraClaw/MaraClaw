@@ -2,7 +2,7 @@
 
 Use this document to decide when to use the `/research` and `/extract` endpoints instead of the synchronous `/search` API.
 
-MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. All `/v1/...` requests below must use that proxy with `-H "Authorization: Bearer $LINKUP_PROXY_TOKEN"`, as shown in `SKILL.md`. The SDK-style `client` examples illustrate orchestration only, not an alternative transport; execute those requests through the same proxy.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. All `/v1/...` requests below must use that proxy with `-H "Authorization: Bearer $LINKUP_PROXY_TOKEN"`, as shown in `SKILL.md`. The SDK-style `client` examples illustrate orchestration only, not an alternative transport; execute those requests through the same proxy.
 
 For individual query construction on the standard Search API, use `LINKUP_AGENT_QUERY_MENTAL_MODEL.md` and `LINKUP_PROMPT_OPTIMIZER_KNOWLEDGE.md`. For workflow orchestration, use `LINKUP_WORKFLOW_GUIDE.md`.
 

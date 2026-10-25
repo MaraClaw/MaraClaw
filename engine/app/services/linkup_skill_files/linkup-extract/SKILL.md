@@ -7,7 +7,7 @@ description: Use to pull many structured records from ONE known listing page - t
 
 The Extract endpoint turns a known web page into a table of structured records. Give it a seed URL plus a natural-language description of the rows you want, and it returns one JSON object per line (NDJSON), handling pagination automatically. It's built for 10s–1000s of records from a single listing page.
 
-MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. Use only this proxy for Linkup requests.
 
 ## When to use Extract
 
