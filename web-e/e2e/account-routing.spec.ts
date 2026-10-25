@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import type { UserOut } from '../src/lib/types/auth'
+import type { ChangePasswordResponse, UserOut } from '../src/lib/types/auth'
+import type { OnboardingStatus } from '../src/lib/onboarding-api'
 
 const tokenKey = 'maraclaw-enduser-token'
 const syntheticToken = 'account-routing-synthetic-session'
@@ -34,7 +35,7 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
         expect(route.request().method()).toBe('PUT')
         passwordRequests.push(route.request().postDataJSON())
         requiresPassword = false
-        await route.fulfill({ json: { ok: true, must_change_password: false } })
+        await route.fulfill({ json: { ok: true, must_change_password: false, access_token: syntheticToken } satisfies ChangePasswordResponse })
         break
       case '/api/auth/providers':
       case '/api/auth/my-tenants':
@@ -46,6 +47,9 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
       case '/api/notifications/unread-count':
         await route.fulfill(requiresPassword ? passwordRequired : { json: { unread_count: 0 } })
         break
+      case '/api/company-admissions/mine/page':
+        await route.fulfill(requiresPassword ? passwordRequired : { json: { items: [], next_cursor: null } })
+        break
       case '/api/agents/':
         onboardingRequests.push(path)
         await route.fulfill(requiresPassword ? passwordRequired : { json: [] })
@@ -53,7 +57,8 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
       case '/api/onboarding/status':
         onboardingRequests.push(path)
         await route.fulfill(requiresPassword ? passwordRequired : {
-          json: { exists: false, status: 'not_started', current_step: 'welcome' },
+          json: { exists: false, status: 'not_started', current_step: 'welcome', entry_mode: null,
+            personal_assistant_agent_id: null, completed_at: null } satisfies OnboardingStatus,
         })
         break
       default:
@@ -111,7 +116,7 @@ for (const path of ['/app', '/app/agents', '/app/onboarding', '/app/agents/restr
   })
 }
 
-for (const path of ['/app', '/app/agents']) {
+for (const path of ['/app', '/app/agents', '/app/notifications']) {
   test(`${path} opens onboarding for an ordinary first-run member`, async ({ page }) => {
     // Given
     const { onboardingRequests } = await prepareMember(page, false)

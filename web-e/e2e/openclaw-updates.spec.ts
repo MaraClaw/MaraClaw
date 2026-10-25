@@ -27,6 +27,7 @@ async function prepare(page: Page) {
     switch (path) {
       case '/api/member/auth/me': return route.fulfill({ json: originalUser })
       case '/api/tenants/me': return route.fulfill({ json: originalCompany })
+      case '/api/company-admissions/mine/page': return route.fulfill({ json: { items: [], next_cursor: null } })
       case '/api/onboarding/status': return route.fulfill({ json: { status: 'completed' } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 1 } })
       case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: NotificationKind.OpenClawUpdate, is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })

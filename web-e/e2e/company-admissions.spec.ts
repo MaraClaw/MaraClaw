@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { AdmissionDetail } from '../src/lib/types/company-admissions'
+import type { NotificationRow } from '../src/lib/notifications-api'
+import { completedOnboarding } from './admission-access-fixture'
 
 const tokenKey = 'maraclaw-enduser-token'
 const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
@@ -34,7 +36,7 @@ async function prepare(page: Page, detail: AdmissionDetail = pending, tenantId: 
       case '/api/tenants/join':
       case '/api/tenants/transfer': await route.fulfill({ status: 202, json: { status: 'pending', request: pending } }); break
       case '/api/auth/switch-tenant': await route.fulfill({ json: { access_token: 'target-token' } }); break
-      case '/api/onboarding/status': await route.fulfill({ json: { status: 'completed' } }); break
+      case '/api/onboarding/status': await route.fulfill({ json: completedOnboarding }); break
       case '/api/notifications/unread-count': await route.fulfill({ json: { count: 1 } }); break
       default: await route.fulfill({ json: [] })
     }
@@ -176,7 +178,7 @@ test('an admission notification opens its persisted result and marking read clea
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/read')) { read = true; await route.fulfill({ json: { ok: true } }); return }
     if (path.endsWith('/unread-count')) { await route.fulfill({ json: { count: read ? 0 : 1 } }); return }
-    await route.fulfill({ json: [{ id: 'notice', title: 'Admission decided', body: null, link: `/app/admissions/${pending.id}`, is_read: read, archived_at: null }] })
+    await route.fulfill({ json: [{ id: 'notice', title: 'Admission decided', body: null, link: `/app/admissions/${pending.id}`, type: 'company_admission_resolved', is_read: read, created_at: '2026-10-25T12:00:00Z', archived_at: null } satisfies NotificationRow] })
   })
   await page.goto('/app/notifications')
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()

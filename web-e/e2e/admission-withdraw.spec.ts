@@ -123,6 +123,7 @@ test('withdrawal invalidates cached pending, withdrawn and keyset history pages'
   const calls: string[] = []
   await page.route('**/api/company-admissions/mine/page*', async (route) => {
     const query = new URL(route.request().url()).searchParams
+    if (query.get('limit') === '100') return route.fallback()
     const status = query.get('status')
     const older = query.get('cursor')
     calls.push(`${status ?? 'all'}:${older ?? 'root'}`)

@@ -32,9 +32,15 @@ export async function prepareAdmission(page: Page, initial: AdmissionDetail = pe
         return route.fulfill({ json: detail })
       case '/api/company-admissions/mine':
         return route.fulfill({ json: [detail] })
+      case '/api/company-admissions/transfers/mine':
+        return route.fulfill({ json: [] })
       case '/api/company-admissions/mine/page': {
         expect(request.method()).toBe('GET')
         const query = new URL(request.url()).searchParams
+        if (query.get('limit') === '100') {
+          expect(query.get('status')).toBe('pending')
+          return route.fulfill({ json: { items: detail.status === 'pending' ? [detail] : [], next_cursor: null } })
+        }
         expect(query.get('limit')).toBe('50')
         expect(query.has('offset')).toBe(false)
         const status = query.get('status')

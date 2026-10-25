@@ -1,18 +1,21 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LogOut } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
+import { AdmissionAccessGate } from '@/components/layout/admission-access-gate'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
+import { useAdmissionAccess } from '@/hooks/use-admission-access'
 import { useQuery, useWorkspaceSession, WorkspaceSessionContext } from '@/hooks/session-workspace'
 import { createSessionQueryScope } from '@/hooks/session-query-scope'
 import { notificationUnreadOptions } from '@/hooks/notification-options'
 import { authSession, type SessionOwner } from '@/lib/auth-session'
 import { fetchMyTenant } from '@/lib/auth-api'
+import { isAdmissionAccessPath } from '@/lib/admission-access'
 import { cn } from '@/lib/utils'
 
 const nav: { to: string; label: string; icon: NavIconName }[] = [
@@ -102,6 +105,8 @@ function AppShellFrame() {
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
   const unreadQuery = useQuery(notificationUnreadOptions('all'))
   const unread = unreadQuery.data ?? 0
+  const { workspaceAllowed } = useAdmissionAccess()
+  const visibleNav = workspaceAllowed ? nav : nav.filter((item) => isAdmissionAccessPath(item.to))
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">
@@ -116,7 +121,7 @@ function AppShellFrame() {
           </div>
         </Link>
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Workspace">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <WorkspaceNavLink key={item.to} item={item} unread={unread} />
           ))}
         </nav>
@@ -135,7 +140,7 @@ function AppShellFrame() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 border-b border-border px-4 py-3 md:hidden">
           <div className="flex items-center justify-between">
-            <Link to="/app/agents" className="flex items-center gap-2">
+            <Link to={workspaceAllowed ? '/app/agents' : '/app/notifications'} className="flex items-center gap-2">
               <MaraClawLogo className="size-8" />
               <span className="font-display text-sm font-semibold">Workspace</span>
             </Link>
@@ -146,7 +151,7 @@ function AppShellFrame() {
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
             aria-label="Workspace"
           >
-            {nav.map((item) => (
+            {visibleNav.map((item) => (
               <WorkspaceNavLink key={item.to} item={item} unread={unread} compact />
             ))}
           </nav>
@@ -157,7 +162,7 @@ function AppShellFrame() {
               Loading your organization’s workspace…
             </div>
           ) : (
-            <Outlet />
+            <AdmissionAccessGate />
           )}
         </main>
       </div>

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/app-shell'
+import { AdmissionInboxGate } from '@/components/layout/admission-access-gate'
 import { OnboardingGate } from '@/components/layout/onboarding-gate'
 import { AgentLayout } from '@/components/layout/agent-layout'
 import { ProtectedRoute } from '@/routes/protected'
@@ -65,10 +66,12 @@ export function AppRouter() {
               <Route path="admissions" element={<AdmissionsPage />} />
               <Route path="admissions/:id" element={<AdmissionDetailPage />} />
               <Route path="admissions/transfers/:id" element={<TransferDetailPage />} />
+              <Route element={<AdmissionInboxGate />}>
+                <Route path="notifications" element={<NotificationsPage />} />
+              </Route>
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />
-                <Route path="notifications" element={<NotificationsPage />} />
                 <Route path={openclawUpdateRoute} element={<OpenClawUpdateDetailPage />} />
                 <Route path="plaza" element={<PlazaPage />} />
                 <Route path="okr" element={<OkrPage />} />

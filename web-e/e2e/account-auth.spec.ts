@@ -47,6 +47,9 @@ async function prepareAuth(page: Page) {
       case '/api/notifications/unread-count':
         await route.fulfill({ json: { unread_count: 0 } })
         break
+      case '/api/company-admissions/mine/page':
+        await route.fulfill({ json: { items: [], next_cursor: null } })
+        break
       case '/api/tenants/me':
         await route.fulfill({ json: { id: member.tenant_id, name: 'Company', slug: 'company' } })
         break

@@ -57,6 +57,9 @@ async function prepareMember(page: Page, user: UserOut = originalUser, replaceme
       case '/api/tenants/me':
         await route.fulfill({ json: sessionUser.tenant_id === fallback.id ? fallback : company })
         break
+      case '/api/company-admissions/mine/page':
+        await route.fulfill({ json: { items: [], next_cursor: null } })
+        break
       case '/api/company-admissions/transfer-quote':
         await route.fulfill({ json: { ...quote, source_eligible: user.tenant_id === fallback.id } })
         break
