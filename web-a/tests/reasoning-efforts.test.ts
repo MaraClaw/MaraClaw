@@ -7,6 +7,8 @@ import {
   isReasoningEffort,
   reasoningEffortLabel,
   reasoningEffortsFor,
+  availableReasoningEffort,
+  reasoningEffortWrite,
   type ReasoningEffort,
 } from '../src/lib/reasoning-efforts.ts'
 
@@ -33,15 +35,72 @@ for (const effort of ['max', 'ultra']) {
 }
 
 for (const provider of ['openai', 'openai-response', 'azure', 'openrouter', 'anthropic', 'deepseek']) {
-  for (const fromApi of [undefined, []]) {
-    test(`${provider} offers seven presets when provider metadata is ${fromApi ? 'empty' : 'missing'}`, () => {
+    test(`${provider} offers legacy presets only when provider metadata is missing`, () => {
       // Given / When
-      const options = reasoningEffortsFor(provider, fromApi)
+      const options = reasoningEffortsFor(provider)
       // Then
       assert.deepEqual(options, ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     })
-  }
 }
+
+for (const provider of ['openai', 'grok', 'gemini', 'custom-provider']) {
+  test(`${provider} hides the selector when explicit capabilities are empty`, () => {
+    // Given / When
+    const options = reasoningEffortsFor(provider, [])
+    // Then
+    assert.deepEqual(options, [])
+  })
+}
+
+for (const [fromApi, selected, expected] of [
+  [undefined, 'ultra', 'ultra'],
+  [[], 'ultra', undefined],
+  [['medium'], 'ultra', 'medium'],
+  [['high', 'none'], undefined, 'none'],
+  [['high', 'low'], undefined, 'high'],
+  [['medium', 'high'], 'high', 'high'],
+] as const) {
+  test(`normalizes ${selected} against ${JSON.stringify(fromApi)} capabilities`, () => {
+    // Given
+    const efforts = reasoningEffortsFor('openai', fromApi)
+    // When
+    const selection = availableReasoningEffort(selected, efforts)
+    // Then
+    assert.equal(selection, expected)
+  })
+}
+
+for (const [efforts, expected] of [
+  [[], { reasoning_effort: null }],
+  [['medium'], { reasoning_effort: 'medium' }],
+  [['none', 'low'], { reasoning_effort: 'none' }],
+] as const) {
+  test(`submits only available effort for ${JSON.stringify(efforts)} capabilities`, () => {
+    // Given: a stale value left by a previous provider/model
+    const selected = 'ultra'
+    // When
+    const body = reasoningEffortWrite(selected, efforts)
+    // Then
+    assert.deepEqual(body, expected)
+  })
+}
+
+test('capability transitions clear stale state and explicitly clear the saved effort', () => {
+  // Given
+  const capabilities = [undefined, [], ['medium'], [], undefined] as const
+  let selected: string | undefined = 'ultra'
+  // When
+  const submissions = capabilities.map((fromApi) => {
+    const efforts = reasoningEffortsFor('openai', fromApi)
+    selected = availableReasoningEffort(selected, efforts)
+    return reasoningEffortWrite(selected, efforts)
+  })
+  // Then
+  assert.deepEqual(submissions, [
+    { reasoning_effort: 'ultra' }, { reasoning_effort: null },
+    { reasoning_effort: 'medium' }, { reasoning_effort: null }, { reasoning_effort: 'none' },
+  ])
+})
 
 for (const [provider, expected] of [
   ['grok', ['none', 'low', 'medium', 'high', 'xhigh']],

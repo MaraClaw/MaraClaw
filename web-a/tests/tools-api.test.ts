@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
+import { z } from 'zod'
 
 import { adminSession } from '../src/lib/admin-session.ts'
 import { ApiError } from '../src/lib/http.ts'
@@ -79,7 +80,7 @@ test('createTool sends required metadata without synthesizing config or defaults
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/tools')
   assert.equal(options?.method, 'POST')
-  assert.equal(options?.body, '{"name":"custom-tool","display_name":"Custom tool"}')
+  assert.deepEqual(JSON.parse(String(options?.body)), { name: 'custom-tool', display_name: 'Custom tool' })
   assert.deepEqual(options?.headers, { Accept: 'application/json', Authorization: 'Bearer synthetic-tools-token', 'Content-Type': 'application/json' })
   assert.deepEqual(result, { id: 'tool-1', name: 'custom-tool' })
 })
@@ -100,7 +101,7 @@ test('createTool sends snake-case optional metadata and tenant scope only in the
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/tools')
   assert.equal(options?.method, 'POST')
-  assert.equal(options?.body, JSON.stringify(input))
+  assert.deepEqual(JSON.parse(String(options?.body)), input)
 })
 
 for (const input of [
@@ -117,7 +118,7 @@ for (const input of [
     const [url, options] = fetch.mock.calls[0]?.arguments ?? []
     assert.equal(url, '/api/tools/tool%2Fa%20%3F%23%26%3D')
     assert.equal(options?.method, 'PUT')
-    assert.equal(options?.body, JSON.stringify(input))
+    assert.deepEqual(JSON.parse(String(options?.body)), input)
     assert.deepEqual(result, { ok: true })
   })
 }
@@ -137,7 +138,7 @@ test('updateTool forwards explicitly supplied config unchanged, including masked
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/tools/tool-1')
   assert.equal(options?.method, 'PUT')
-  assert.equal(options?.body, JSON.stringify(input))
+  assert.deepEqual(JSON.parse(String(options?.body)), input)
   assert.deepEqual(result, { ok: true })
 })
 
@@ -178,3 +179,17 @@ test('updateTool preserves API errors from the shared HTTP client', async (conte
   // When / Then
   await assert.rejects(updateTool('missing', { enabled: false }), (error) => error instanceof ApiError && error.status === 404 && error.detail === 'Tool not found')
 })
+
+for (const malformed of [
+  { ...catalogTool, capabilities: { can_edit_details: true, can_delete: true } },
+  { ...catalogTool, config: { nested: { invalid: undefined } }, tenant_id: undefined },
+  { ...catalogTool, mcp_server_url: undefined },
+]) {
+  test('listTools rejects an incomplete engine catalog response', async (context) => {
+    // Given
+    ownToolsSession(context)
+    context.mock.method(globalThis, 'fetch', async () => Response.json([malformed]))
+    // When / Then
+    await assert.rejects(listTools(), z.ZodError)
+  })
+}

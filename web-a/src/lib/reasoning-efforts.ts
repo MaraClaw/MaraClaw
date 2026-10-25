@@ -1,6 +1,5 @@
 const BASE_REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh'] as const
 
-/** Always available in the Models form, even if a stale engine omits it. */
 export const REASONING_EFFORTS = [...BASE_REASONING_EFFORTS, 'max', 'ultra'] as const
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
@@ -35,7 +34,21 @@ export function reasoningEffortLabel(effort: string): string {
   return isReasoningEffort(effort) ? REASONING_EFFORT_LABELS[effort] : effort
 }
 
-export function reasoningEffortsFor(provider: string, fromApi?: string[]): string[] {
-  if (fromApi && fromApi.length > 0) return fromApi
+export function reasoningEffortsFor(provider: string, fromApi?: readonly string[]): readonly string[] {
+  if (fromApi !== undefined) return fromApi
   return [...(PROVIDER_REASONING_EFFORTS[provider] ?? REASONING_EFFORTS)]
+}
+
+export function availableReasoningEffort(
+  selected: string | undefined,
+  efforts: readonly string[],
+): ReasoningEffort | undefined {
+  const available = efforts.filter(isReasoningEffort)
+  if (isReasoningEffort(selected) && available.includes(selected)) return selected
+  return available.includes('none') ? 'none' : available[0]
+}
+
+export function reasoningEffortWrite(selected: string | undefined, efforts: readonly string[]) {
+  const effort = availableReasoningEffort(selected, efforts)
+  return { reasoning_effort: effort ?? null }
 }

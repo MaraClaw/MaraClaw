@@ -16,12 +16,13 @@ export const transferPolicySchema = z.object({
 export type TransferPolicy = z.infer<typeof transferPolicySchema>
 
 export async function fetchTransferPolicy(signal?: AbortSignal): Promise<TransferPolicy> {
-  return transferPolicySchema.parse(await apiRequest<unknown>('/api/admin/transfer-policy', { signal }))
+  return apiRequest('/api/admin/transfer-policy', { schema: transferPolicySchema, signal })
 }
 
 export async function updateTransferPolicy(policy: TransferPolicy): Promise<TransferPolicy> {
-  return transferPolicySchema.parse(await apiRequest<unknown>('/api/admin/transfer-policy', {
+  return apiRequest('/api/admin/transfer-policy', {
+    schema: transferPolicySchema,
     method: 'PUT',
     body: policy,
-  }))
+  })
 }

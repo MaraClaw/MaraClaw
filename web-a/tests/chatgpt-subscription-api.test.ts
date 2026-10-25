@@ -131,6 +131,23 @@ test('complete drops sensitive transport error messages', async (context) => {
   })
 })
 
+test('complete scrubs malformed responses even when they echo the callback', async (context) => {
+  // Given
+  ownSession(context)
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ status: callback, attempt_id: 'attempt-one' }))
+  // When
+  const pending = completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback })
+  // Then
+  await assert.rejects(pending, (error) => {
+    assert.ok(error instanceof ChatGPTSubscriptionError)
+    assert.equal(error.status, null)
+    assert.equal(JSON.stringify(error).includes('synthetic-private-code'), false)
+    assert.equal(String(error).includes('synthetic-private-code'), false)
+    assert.equal(Object.hasOwn(error, 'cause'), false)
+    return true
+  })
+})
+
 test('status forwards caller cancellation through the owned transport', async (context) => {
   // Given
   ownSession(context)

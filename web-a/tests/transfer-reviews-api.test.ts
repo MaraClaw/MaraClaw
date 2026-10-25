@@ -16,7 +16,7 @@ test('only active platform admins or the matching active default-org genesis can
   assert.equal(canReviewTransferPayments({ ...genesis, role: 'platform_admin', is_genesis: false }), true)
   assert.equal(canReviewTransferPayments({ ...genesis, is_platform_admin: true }), true)
   assert.equal(canReviewTransferPayments(genesis, tenant), true)
-  for (const user of [null, adminUser(), { ...genesis, is_genesis: false }, { ...genesis, role: 'member' }, { ...genesis, is_active: false }, { ...genesis, tenant_id: null }]) {
+  for (const user of [null, adminUser(), { ...genesis, is_genesis: false }, { ...genesis, role: 'member' }, { ...genesis, is_active: false }, { ...genesis, tenant_id: null }] as const) {
     assert.equal(canReviewTransferPayments(user, tenant), false)
     assert.equal(canInspectReviewTenant(user), false)
   }
@@ -32,7 +32,7 @@ test('destination admission links require own-target genesis rights and always e
   // When / Then
   assert.equal(canOpenTransferAdmission(targetGenesis, admittedTransfer), true)
   assert.equal(canOpenTransferAdmission(targetGenesis, pendingTransfer), false)
-  for (const user of [{ ...targetGenesis, is_platform_admin: true }, { ...targetGenesis, role: 'platform_admin' }, { ...targetGenesis, is_genesis: false }, { ...targetGenesis, tenant_id: pendingTransfer.source_tenant_id }]) {
+  for (const user of [{ ...targetGenesis, is_platform_admin: true }, { ...targetGenesis, role: 'platform_admin' }, { ...targetGenesis, is_genesis: false }, { ...targetGenesis, tenant_id: pendingTransfer.source_tenant_id }] as const) {
     assert.equal(canOpenTransferAdmission(user, admittedTransfer), false)
   }
 })

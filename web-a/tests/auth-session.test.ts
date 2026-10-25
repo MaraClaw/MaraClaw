@@ -112,7 +112,7 @@ for (const source of ['response', 'user', 'identity'] as const) {
       must_change_password: source === 'response',
       user: { ...base.user, must_change_password: source === 'user' },
       identity: {
-        id: 'identity-b', email: null, phone: null, is_active: true,
+        id: 'a2222222-2222-4222-8222-222222222222', email: null, phone: null, is_active: true,
         is_platform_admin: false, email_verified: true, must_change_password: source === 'identity',
         created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
       },
@@ -137,7 +137,7 @@ test('a successful member login is rejected without admitting an admin session',
   // Given
   const { policy, storage } = createFixture(null)
   const base = tokenResponse()
-  const response = { ...base, user: { ...base.user, role: 'member', is_platform_admin: false } }
+  const response: TokenResponse = { ...base, user: { ...base.user, role: 'member', is_platform_admin: false } }
   const auth = createAuthSession(policy, {
     fetchCurrentUser: async () => adminUser(), loginRequest: async () => response,
   })
@@ -167,4 +167,81 @@ test('tenant selection remains tokenless and belongs to the requesting generatio
   assert.equal(storage.getItem(TOKEN_KEY), null)
   assert.strictEqual(policy.capture(), owner)
   assert.equal(auth.isLoginCurrent(result), true)
+})
+
+test('password replacement validates the new token and clears the forced-password gate', async () => {
+  // Given
+  const { policy, storage } = createFixture()
+  const tokens: string[] = []
+  const auth = createAuthSession(policy, {
+    fetchCurrentUser: async (token) => {
+      tokens.push(token)
+      if (token === 'token-a') throw new ApiError(401, 'revoked password session')
+      return adminUser()
+    },
+    loginRequest: async () => tokenResponse(),
+  })
+  auth.applySession({ ...tokenResponse('token-a'), must_change_password: true })
+  const previous = policy.capture()
+  // When
+  const installed = await auth.refreshReplacement(previous, 'password-token')
+  // Then
+  assert.deepEqual(tokens, ['password-token'])
+  assert.ok(installed && policy.isCurrent(installed))
+  assert.equal(policy.isCurrent(previous), false)
+  assert.equal(storage.getItem(TOKEN_KEY), 'password-token')
+  assert.equal(auth.getSnapshot().user?.must_change_password, false)
+})
+
+for (const transition of ['logout', 'replacement'] as const) {
+  test(`a password result arriving after ${transition} cannot install credentials`, async () => {
+    // Given
+    const { policy, storage } = createFixture()
+    const tokens: string[] = []
+    const auth = createAuthSession(policy, {
+      fetchCurrentUser: async (token) => { tokens.push(token); return adminUser() },
+      loginRequest: async () => tokenResponse(),
+    })
+    const previous = policy.capture()
+    if (transition === 'logout') auth.logout()
+    else auth.applySession(tokenResponse())
+    // When
+    const installed = await auth.refreshReplacement(previous, 'late-password-token')
+    // Then
+    assert.equal(installed, null)
+    assert.deepEqual(tokens, [])
+    assert.equal(storage.getItem(TOKEN_KEY), transition === 'logout' ? null : 'token-b')
+  })
+
+  test(`password validation completing after ${transition} cannot restore its owner`, async () => {
+    // Given
+    const { policy, storage } = createFixture()
+    const me = Promise.withResolvers<UserOut>()
+    const auth = createAuthSession(policy, {
+      fetchCurrentUser: () => me.promise, loginRequest: async () => tokenResponse(),
+    })
+    const pending = auth.refreshReplacement(policy.capture(), 'password-token')
+    // When
+    if (transition === 'logout') auth.logout()
+    else auth.applySession(tokenResponse())
+    const retained = auth.getSnapshot()
+    me.resolve(adminUser())
+    // Then
+    assert.equal(await pending, null)
+    assert.strictEqual(auth.getSnapshot(), retained)
+    assert.equal(storage.getItem(TOKEN_KEY), transition === 'logout' ? null : 'token-b')
+  })
+}
+
+test('a password result without a token expires the inactive caller', async () => {
+  // Given
+  const { policy, storage } = createFixture()
+  const auth = createAuthSession(policy, {
+    fetchCurrentUser: async () => adminUser(), loginRequest: async () => tokenResponse(),
+  })
+  // When
+  const installed = await auth.refreshReplacement(policy.capture(), undefined)
+  // Then
+  assert.equal(installed, null)
+  assert.equal(storage.getItem(TOKEN_KEY), null)
 })

@@ -1,22 +1,22 @@
-import { apiRequest } from '@/lib/http'
-import type { LoginRequest, MultiTenantResponse, TokenResponse, UserOut } from '@/lib/types/auth'
+import { z } from 'zod'
+import { apiRequest } from './http.ts'
+import {
+  AuthUserSchema, ChangePasswordResponseSchema,
+  ForgotPasswordResponseSchema, ResetPasswordResponseSchema,
+} from './engine-contracts.generated.ts'
+import { adminMultiTenantResponseSchema, adminTokenResponseSchema } from './types/auth.ts'
+import type { LoginRequest, MultiTenantResponse, TokenResponse } from './types/auth.ts'
+import type { AuthUser, ChangePasswordResponse, ForgotPasswordResponse, ResetPasswordResponse } from './engine-contracts.generated.ts'
 
-export type OkMessageResponse = {
-  ok: boolean
-  message?: string
-}
-
-export type ChangePasswordResponse = {
-  ok: boolean
-  must_change_password?: boolean
-  message?: string
-}
+export type { ChangePasswordResponse } from './engine-contracts.generated.ts'
+const loginResponseSchema = z.union([adminTokenResponseSchema, adminMultiTenantResponseSchema])
 
 export async function loginRequest(
   body: LoginRequest,
   signal?: AbortSignal,
 ): Promise<TokenResponse | MultiTenantResponse> {
-  return apiRequest<TokenResponse | MultiTenantResponse>('/api/auth/login', {
+  return apiRequest('/api/auth/login', {
+    schema: loginResponseSchema,
     method: 'POST',
     body,
     token: null,
@@ -24,8 +24,9 @@ export async function loginRequest(
   })
 }
 
-export async function fetchCurrentUser(token: string, signal?: AbortSignal): Promise<UserOut> {
-  return apiRequest<UserOut>('/api/auth/me', {
+export async function fetchCurrentUser(token: string, signal?: AbortSignal): Promise<AuthUser> {
+  return apiRequest('/api/auth/me', {
+    schema: AuthUserSchema,
     method: 'GET',
     token,
     signal,
@@ -35,8 +36,9 @@ export async function fetchCurrentUser(token: string, signal?: AbortSignal): Pro
 export async function forgotPasswordRequest(
   email: string,
   signal?: AbortSignal,
-): Promise<OkMessageResponse> {
-  return apiRequest<OkMessageResponse>('/api/auth/forgot-password', {
+): Promise<ForgotPasswordResponse> {
+  return apiRequest('/api/auth/forgot-password', {
+    schema: ForgotPasswordResponseSchema,
     method: 'POST',
     body: { email },
     token: null,
@@ -47,8 +49,9 @@ export async function forgotPasswordRequest(
 export async function resetPasswordRequest(
   body: { token: string; new_password: string },
   signal?: AbortSignal,
-): Promise<OkMessageResponse> {
-  return apiRequest<OkMessageResponse>('/api/auth/reset-password', {
+): Promise<ResetPasswordResponse> {
+  return apiRequest('/api/auth/reset-password', {
+    schema: ResetPasswordResponseSchema,
     method: 'POST',
     body,
     token: null,
@@ -60,7 +63,8 @@ export async function changePasswordRequest(
   body: { old_password: string; new_password: string },
   signal?: AbortSignal,
 ): Promise<ChangePasswordResponse> {
-  return apiRequest<ChangePasswordResponse>('/api/auth/me/password', {
+  return apiRequest('/api/auth/me/password', {
+    schema: ChangePasswordResponseSchema,
     method: 'PUT',
     body,
     signal,

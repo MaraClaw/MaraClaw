@@ -41,29 +41,41 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
     publish({ owner, status: owner.token ? 'loading' : 'anonymous', user: null })
   }
 
-  async function refreshUser() {
+  async function refreshUser(): Promise<SessionOwner | null> {
     const owner = policy.capture()
     refreshController?.abort()
     const controller = new AbortController()
     refreshController = controller
     if (!owner.token) {
       reset(owner)
-      return
+      return null
     }
     const signal = AbortSignal.any([owner.signal, controller.signal])
     const token = owner.token
     try {
       const me = await runOwned(policy, owner, () => api.fetchCurrentUser(token, signal))
-      if (signal.aborted) return
+      if (signal.aborted) return null
       if (!isAdminUser(me)) {
         policy.expire(owner)
-        return
+        return null
       }
       publish({ owner, status: 'authenticated', user: me })
+      return owner
     } catch (error) {
-      if (error instanceof StaleSessionError || signal.aborted || !policy.isCurrent(owner)) return
+      if (error instanceof StaleSessionError || signal.aborted || !policy.isCurrent(owner)) return null
       policy.expire(owner)
+      return null
     }
+  }
+
+  async function refreshReplacement(expectedOwner: SessionOwner, token: string | undefined): Promise<SessionOwner | null> {
+    if (!policy.isCurrent(expectedOwner)) return null
+    if (!token) {
+      policy.expire(expectedOwner)
+      return null
+    }
+    policy.replace(token)
+    return refreshUser()
   }
 
   function applySession(session: TokenResponse) {
@@ -128,6 +140,8 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
     login,
     applySession,
     refreshUser,
+    refreshReplacement,
+    isCurrent: policy.isCurrent,
     logout: () => { policy.logout() },
     isLoginCurrent(result: LoginResult) {
       const owner = loginOwners.get(result)

@@ -7,13 +7,15 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifications'
-import { useSessionCurrent } from '@/hooks/use-auth'
+import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { safeNotificationLink } from '@/lib/notification-links'
 import { NOTIFICATIONS_PAGE_SIZE, type NotificationView } from '@/lib/notifications-api'
+import { canReviewAgentDeletions } from '@/lib/types/auth'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function NotificationsPage() {
+  const { user } = useAuth()
   const [offset, setOffset] = useState(0)
   const [view, setView] = useState<NotificationView>('active')
   const heading = useRef<HTMLHeadingElement>(null)
@@ -80,7 +82,8 @@ export function NotificationsPage() {
 
       {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label="Notifications" aria-busy={pending}>
         {items.map((item) => {
-          const link = safeNotificationLink(item.link)
+          const safeLink = safeNotificationLink(item.link)
+          const link = safeLink?.startsWith('/agent-deletion-requests') && !canReviewAgentDeletions(user) ? null : safeLink
           return <li key={item.id}>
             <Card className={item.is_read ? 'bg-card' : 'bg-accent'}>
               <CardContent className="flex flex-col gap-4">

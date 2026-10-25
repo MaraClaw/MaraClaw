@@ -44,29 +44,25 @@ export function groupDepartmentAssignments(assignments: DepartmentsResponse['ass
 
 export async function listDepartments(tenantId: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ tenant_id: tenantId })
-  return departmentsSchema.parse(
-    await apiRequest<unknown>(`/api/departments?${query}`, { signal }),
-  )
+  return apiRequest(`/api/departments?${query}`, { schema: departmentsSchema, signal })
 }
 
 export async function createDepartment(tenantId: string, input: { readonly name: string }) {
   const query = new URLSearchParams({ tenant_id: tenantId })
-  return departmentSchema.parse(
-    await apiRequest<unknown>(`/api/departments?${query}`, {
-      method: 'POST',
-      body: input,
-    }),
-  )
+  return apiRequest(`/api/departments?${query}`, {
+    schema: departmentSchema,
+    method: 'POST',
+    body: input,
+  })
 }
 
 export async function renameDepartment(tenantId: string, departmentId: string, input: { readonly name: string }) {
   const query = new URLSearchParams({ tenant_id: tenantId })
-  return departmentSchema.parse(
-    await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, {
-      method: 'PATCH',
-      body: input,
-    }),
-  )
+  return apiRequest(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, {
+    schema: departmentSchema,
+    method: 'PATCH',
+    body: input,
+  })
 }
 
 export async function deleteDepartment(tenantId: string, departmentId: string): Promise<void> {
@@ -80,20 +76,18 @@ export async function setUserDepartment(
   departmentId: string | null,
 ) {
   const query = new URLSearchParams({ tenant_id: tenantId })
-  return userDepartmentSchema.parse(
-    await apiRequest<unknown>(`/api/users/${encodeURIComponent(userId)}/department?${query}`, {
-      method: 'PUT',
-      body: { department_id: departmentId },
-    }),
-  )
+  return apiRequest(`/api/users/${encodeURIComponent(userId)}/department?${query}`, {
+    schema: userDepartmentSchema,
+    method: 'PUT',
+    body: { department_id: departmentId },
+  })
 }
 
 export async function setUserDepartments(tenantId: string, userId: string, departmentIds: readonly string[]) {
   const query = new URLSearchParams({ tenant_id: tenantId })
-  return userDepartmentsSchema.parse(
-    await apiRequest<unknown>(`/api/users/${encodeURIComponent(userId)}/departments?${query}`, {
-      method: 'PUT',
-      body: { department_ids: departmentIds },
-    }),
-  )
+  return apiRequest(`/api/users/${encodeURIComponent(userId)}/departments?${query}`, {
+    schema: userDepartmentsSchema,
+    method: 'PUT',
+    body: { department_ids: departmentIds },
+  })
 }

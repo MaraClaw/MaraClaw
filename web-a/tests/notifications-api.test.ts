@@ -6,12 +6,39 @@ import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import {
   fetchNotifications, fetchNotificationUnreadCount, markNotificationRead, markAllNotificationsRead,
-  archiveNotification, restoreNotification, notificationSchema,
+  archiveNotification, restoreNotification, NotificationKind, notificationSchema,
 } from '../src/lib/notifications-api.ts'
 
 const notification = {
-  id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: 'broadcast', title: 'Maintenance', body: 'Details\nNext line',
+  id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: NotificationKind.Broadcast, title: 'Maintenance', body: 'Details\nNext line',
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: '2026-10-20T12:00:00+00:00', archived_at: null,
+}
+
+test('notification list preserves every canonical kind as its original wire string', async (t) => {
+  // Given
+  const kinds = [
+    'mention', 'plaza_reply', 'plaza_comment', 'broadcast', 'approval_pending', 'approval_resolved',
+    'autonomy_l2', 'company_admission_pending', 'company_admission_resolved', 'company_admission_created',
+    'agent_deletion_requested', 'agent_deletion_resolved', 'agent_ownership_transferred',
+    'organization_welcome', 'system_alert', 'system', 'openclaw_update',
+  ]
+  const response = kinds.map((type) => ({ ...notification, type }))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  // When
+  const rows = await fetchNotifications()
+  // Then
+  assert.deepEqual(rows, response)
+})
+
+for (const type of ['future_type', '', null, 17, undefined]) {
+  test(`notification list rejects unknown, invalid or missing kind ${JSON.stringify(type)}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json([{ ...notification, type }]))
+    // When
+    const result = fetchNotifications()
+    // Then
+    await assert.rejects(result, z.ZodError)
+  })
 }
 
 test('notifications fetch the requested page and parse nullable fields without changing content', async (t) => {
