@@ -1,4 +1,4 @@
-"""Immutable image capture on pull: the id comes from the pulled digest, never from the mutable tag."""
+"""Immutable upgrade image capture from local images or freshly pulled registry manifests."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import override
 
 import pytest
 from python_on_whales import DockerClient, Image
+from python_on_whales.exceptions import DockerException, NoSuchImage
 
 from app.services.openclaw_update_docker import UpgradeDocker, _repository
 
@@ -54,14 +55,73 @@ def _docker(monkeypatch: pytest.MonkeyPatch, *pull_lines: str, cached: bool = Tr
         return iter([(reference, line.encode()) for line in daemon.pull_lines])
 
     def inspect(reference: str) -> Image:
-        if not cached and not daemon.pulled:
-            raise OSError("No such image")
         daemon.inspected.append(reference)
+        if not cached and not daemon.pulled:
+            raise NoSuchImage(["docker", "image", "inspect", reference], 1, stderr=b"No such image")
         return _KnownImage(client, PULLED_ID if "@" in reference else RETARGETED_ID)
 
     monkeypatch.setattr(client.image, "pull", pull)
     monkeypatch.setattr(client.image, "inspect", inspect)
     return UpgradeDocker(client), daemon
+
+
+@pytest.mark.parametrize("reference", ["openclaw:2026.10.7", "openclaw"])
+def test_local_image_returns_immutable_id_without_pulling(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    # Given a cached local image distinct from the registry's image.
+    docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}")
+    # When an upgrade resolves the local reference.
+    image_id = docker.pull(reference)
+    # Then one local inspection supplies the immutable id without a pull.
+    assert image_id == RETARGETED_ID
+    assert daemon.inspected == [reference]
+    assert daemon.pulled == []
+
+
+@pytest.mark.parametrize("reference", ["openclaw:2026.10.7", "openclaw"])
+def test_missing_local_image_requires_build_without_pulling(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    # Given a local target absent from the worker's Docker daemon.
+    docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}", cached=False)
+    # When an upgrade resolves the missing reference.
+    with pytest.raises(OSError, match=r"build-openclaw-local-dockerfile\.sh") as raised:
+        _ = docker.pull(reference)
+    # Then the error identifies the target and its cause; no registry pull is attempted.
+    assert reference in str(raised.value)
+    assert isinstance(raised.value.__cause__, NoSuchImage)
+    assert daemon.inspected == [reference]
+    assert daemon.pulled == []
+
+
+@pytest.mark.parametrize("reference", ["ns/openclaw:1", "ns/openclaw", "registry.example:5000/ns/openclaw:1"])
+def test_cached_registry_image_is_still_pulled(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    # Given a cached namespaced image whose tag differs from the registry manifest.
+    docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}")
+    # When an upgrade resolves the registry reference.
+    image_id = docker.pull(reference)
+    # Then it uses the freshly pulled manifest rather than the cached mutable tag.
+    assert image_id == PULLED_ID
+    assert daemon.pulled == [reference]
+    assert daemon.inspected == [f"{_repository(reference)}@{DIGEST}"]
+
+
+@pytest.mark.parametrize("reference", ["ns/openclaw:1", "registry.example:5000/ns/openclaw:1"])
+def test_registry_pull_failure_does_not_use_cached_image(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    # Given a cached registry image and a failing registry pull.
+    docker, daemon = _docker(monkeypatch)
+    failure = DockerException(["docker", "pull", reference], 1, stderr=b"pull access denied")
+
+    def pull(reference: str, *, stream_logs: bool) -> Iterator[tuple[str, bytes]]:
+        assert stream_logs
+        daemon.pulled.append(reference)
+        raise failure
+
+    monkeypatch.setattr(docker.client.image, "pull", pull)
+    # When an upgrade attempts the required fresh pull.
+    with pytest.raises(DockerException) as raised:
+        _ = docker.pull(reference)
+    # Then the registry failure propagates without inspecting a cached fallback.
+    assert raised.value is failure
+    assert daemon.pulled == [reference]
+    assert daemon.inspected == []
 
 
 def test_pull_returns_the_pulled_digests_image_even_if_the_tag_moved(monkeypatch: pytest.MonkeyPatch):
@@ -75,16 +135,22 @@ def test_pull_returns_the_pulled_digests_image_even_if_the_tag_moved(monkeypatch
 def test_pull_without_a_reported_digest_fails_instead_of_trusting_the_tag(monkeypatch: pytest.MonkeyPatch):
     docker, daemon = _docker(monkeypatch, "Status: Image is up to date")
     with pytest.raises(OSError, match="no digest"):
-        _ = docker.pull("openclaw:1")
+        _ = docker.pull("ns/openclaw:1")
     assert daemon.inspected == []
 
 
-def test_digest_pinned_reference_is_pulled_before_it_is_inspected(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("reference", [f"ns/openclaw@{DIGEST}", f"openclaw@{DIGEST}"])
+def test_digest_pinned_reference_is_pulled_before_it_is_inspected(
+    monkeypatch: pytest.MonkeyPatch, reference: str
+) -> None:
     # Given a digest-pinned image that is not cached locally: inspect only succeeds after a pull.
     docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}", cached=False)
-    assert docker.pull(f"ns/openclaw@{DIGEST}") == PULLED_ID
-    assert daemon.pulled == [f"ns/openclaw@{DIGEST}"]
-    assert daemon.inspected == [f"ns/openclaw@{DIGEST}"]
+    # When an upgrade resolves either a bare or namespaced digest pin.
+    image_id = docker.pull(reference)
+    # Then it pulls before inspecting the exact pinned manifest.
+    assert image_id == PULLED_ID
+    assert daemon.pulled == [reference]
+    assert daemon.inspected == [reference]
 
 
 @pytest.mark.parametrize(
