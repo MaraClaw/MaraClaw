@@ -1,6 +1,17 @@
 from test_client_route_resolution import Extractor, Token, group_end, split_tokens, template_tokens, top_level
 
 
+def routing_neutral_field_spread(expression: list[Token]) -> bool:
+    if len(expression) == 12 and expression[1].kind == "word" and expression[1].text in {"owner", "signal", "token"}:
+        field = expression[1].text
+        return [token.text for token in expression] == f"( {field} === undefined ? {{ }} : {{ {field} }} )".split()
+    if len(expression) != 18 or expression[1].kind != "word" or expression[3].text not in {"owner", "signal", "token"}:
+        return False
+    reference, field = expression[1].text, expression[3].text
+    expected = f"( {reference} . {field} === undefined ? {{ }} : {{ {field} : {reference} . {field} }} )".split()
+    return [token.text for token in expression] == expected
+
+
 def neutral_object(tokens: list[Token], parameters: set[str]) -> bool:
     if not tokens or tokens[0].text != "{" or group_end(tokens, 0) != len(tokens) - 1:
         return False
