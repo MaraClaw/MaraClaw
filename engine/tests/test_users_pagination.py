@@ -40,10 +40,11 @@ def _cursor(**changes: object) -> str:
     return urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
-async def _request(actor: UserRecord, params: Mapping[str, str | int]) -> httpx.Response:
+async def _request(actor: UserRecord | None, params: Mapping[str, str | int]) -> httpx.Response:
     app = FastAPI()
     app.include_router(users_api.router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: actor
+    if actor is not None:
+        app.dependency_overrides[get_current_user] = lambda: actor
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         return await client.get("/api/users/page", params=params)
 
@@ -64,10 +65,16 @@ async def test_own_tenant_when_org_admin_supplies_foreign_filter(page_query: Asy
     page_query.assert_awaited_once_with(TENANT, search="Alice", after=None, limit=50)
 
 
-@pytest.mark.parametrize("role", ["member", "agent_admin", "guest"])
+@pytest.mark.parametrize("role", ["member", "agent_admin"])
 async def test_rejects_non_admin_when_requesting_page(page_query: AsyncMock, role: str):
     response = await _request(_actor(role), {})
     assert response.status_code == 403
+    page_query.assert_not_awaited()
+
+
+async def test_rejects_anonymous_when_requesting_page(page_query: AsyncMock) -> None:
+    response = await _request(None, {})
+    assert response.status_code == 401
     page_query.assert_not_awaited()
 
 
