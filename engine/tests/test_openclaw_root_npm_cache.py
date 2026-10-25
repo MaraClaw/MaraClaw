@@ -5,7 +5,7 @@ import pytest
 
 from test_openclaw_officecli_dockerfile import DOCKERFILE, _instructions
 
-INSTALL: Final = 'npm install -g "$OPENCLAW_TARBALL"'
+INSTALL: Final = 'npm install -g --allow-scripts="$OPENCLAW_TARBALL" "$OPENCLAW_TARBALL"'
 CLEANUP: Final = "rm -rf /root/.npm"
 VALID_SOURCE: Final = (
     f'USER root\nRUN npm pack "openclaw@${{OPENCLAW_VERSION}}" \\\n'

@@ -9,10 +9,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = REPO_ROOT / "build-openclaw-local-dockerfile.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile.openclaw"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-OPENCLAW_VERSION = "2026.10.6"
-OPENCLAW_SHA256 = "sha256:b13fc9f1221e185451573a435ff31bdeb8c5875f569e6f41008198708ca2359f"
-GOGCLI_VERSION = "0.46.0"
-GOGCLI_SHA256 = "sha256:9ae69d117cef895aa1c50b5859d7d3def45c5580886b25dc1c7f3cfe128ed0dd"
+OPENCLAW_VERSION = "2026.10.7"
+OPENCLAW_SHA256 = "sha256:45dc6dadab3ca4e5286262226d6b61554309435a5e83b5d25c803a3a12ef2f81"
+GOGCLI_VERSION = "0.47.0"
+GOGCLI_SHA256 = "sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
@@ -244,6 +244,7 @@ def test_openclaw_dockerfile_pins_bookworm_packages_without_hadolint_ignore() ->
 def test_openclaw_dockerfile_verifies_openclaw_npm_tarball_before_install() -> None:
     # Given
     content = DOCKERFILE.read_text(encoding="utf-8")
+    install_command = 'npm install -g --allow-scripts="$OPENCLAW_TARBALL" "$OPENCLAW_TARBALL"'
 
     # When
     checksum_block = "\n".join(
@@ -258,7 +259,10 @@ def test_openclaw_dockerfile_verifies_openclaw_npm_tarball_before_install() -> N
     assert 'npm pack "openclaw@${OPENCLAW_VERSION}"' in checksum_block
     assert 'printf \'%s  %s\\n\' "${OPENCLAW_SHA256#sha256:}" "$OPENCLAW_TARBALL"' in checksum_block
     assert "sha256sum -c /tmp/openclaw.tgz.sha256" in checksum_block
-    assert 'npm install -g "$OPENCLAW_TARBALL"' in checksum_block
+    assert install_command in checksum_block
+    assert content.index("sha256sum -c /tmp/openclaw.tgz.sha256") < content.index(install_command)
+    assert content.index(install_command) < content.index("\nUSER node\n")
+    assert "--dangerously-allow-all-scripts" not in content
     assert 'npm install -g "openclaw@${OPENCLAW_VERSION}"' not in content
 
 

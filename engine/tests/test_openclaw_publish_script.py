@@ -7,7 +7,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_SCRIPT = REPO_ROOT / "publish-openclaw-local-dockerfile.sh"
-OPENCLAW_VERSION = "2026.10.6"
+OPENCLAW_VERSION = "2026.10.7"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:

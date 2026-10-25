@@ -117,7 +117,7 @@ def test_native_memory_search_and_custom_plugin_with_pinned_cli(
             "NODE_COMPILE_CACHE=/tmp/node-compile-cache",
             "-e",
             "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/bun-transpiler-cache",
-            "openclaw:2026.10.6",
+            "openclaw:2026.10.7",
             "-e",
             _RUNTIME_PROBE,
         ],
@@ -131,7 +131,7 @@ def test_native_memory_search_and_custom_plugin_with_pinned_cli(
     # Then
     assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
-    assert "2026.10.6" in evidence["version"]
+    assert "2026.10.7" in evidence["version"]
     assert evidence["custom"] == {"enabled": True, "status": "loaded"}
     assert evidence["missing"] == 0
     print(result.stdout.strip())  # noqa: T201 - retain successful runtime evidence for opt-in pytest -s runs.
